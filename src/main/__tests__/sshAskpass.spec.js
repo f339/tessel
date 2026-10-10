@@ -615,7 +615,13 @@ describe.runIf(onWindows)('the helper (tessel-askpass.exe)', () => {
     exe = res.ok ? res.file : null
   }, 60_000)
   // The served pipe's helper may take a moment to end after close().
-  afterAll(() => rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }))
+  // A just-built .exe can stay locked a few seconds more (antivirus scan,
+  // helper still exiting): a temp folder left behind is not a failure.
+  afterAll(() => {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
+    } catch {}
+  })
   const opened = []
   afterEach(() => {
     for (const b of opened.splice(0)) b.close()
