@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { defineComponent, h, nextTick, reactive, ref } from 'vue'
 import { RELEASE_MS, _resetPagesForTests, pageOf } from '../browser/pageHost'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import postcss from 'postcss'
 
 vi.mock('../components/DesignModePanel.vue', async () => {
   const { defineComponent, h } = await import('vue')
@@ -137,6 +140,27 @@ describe('the page layer (browser/pageHost.js)', () => {
     // Shown (never 'visible': a hidden workspace layer hides it).
     expect(box.style.visibility).toBe('')
     expect(wrapper.find('.browser-pane').classes()).toContain('maximized')
+  })
+
+  // A maximized pane is its own stacking layer (z-index 100) over the page
+  // layer (1): its see-through page area lay over the page and took the
+  // wheel, the clicks and the keyboard (a maximized page did not scroll).
+  // The maximized browser pane whose page is hosted stays at the panes' level.
+  it('maximized: its page area does not lie over its page (style.css)', async () => {
+    ctx.maximizedId.value = 'b1'
+    await nextTick()
+    const el = wrapper.find('.browser-pane').element
+    const rules = []
+    postcss.parse(readFileSync(join(__dirname, '..', 'style.css'), 'utf8')).walkRules((rule) => {
+      if (rule.parent && rule.parent.type !== 'root') return
+      const z = rule.nodes.find((d) => d.type === 'decl' && d.prop === 'z-index')
+      if (z && rule.selectors.some((sel) => /^\.pane\.maximized/.test(sel) && el.matches(sel))) rules.push(z.value)
+    })
+    // The last rule that matches it wins (the more precise one, also last).
+    expect(rules.length).toBeGreaterThan(1)
+    expect(rules[rules.length - 1]).toBe('auto')
+    // Its page is in the page layer (the case the rule is for).
+    expect(el.classList.contains('hosted')).toBe(true)
   })
 
   it('another workspace shown: the page stays as it is, hidden with its layer', async () => {
