@@ -5488,6 +5488,15 @@ button.act-stat:hover,
   color: var(--text-dim);
 }
 
+/* A team message's sender (pane, agent, model, host, branch); details on hover. */
+.act-sender {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: help;
+}
+
 .act-open {
   height: 24px;
   padding: 0 10px;

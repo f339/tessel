@@ -246,6 +246,9 @@ export function summarize(events, opts = {}) {
           status: e.status,
           source: e.source || 'you',
           from: e.from || '',
+          // Who sent it, as Tessel recorded it (src/shared/senderIdentity.js);
+          // older events have none.
+          ...(e.sender && typeof e.sender === 'object' ? { sender: e.sender } : {}),
           scope: e.scope || 'workspace',
           preview: e.preview || '',
           text: e.text || e.preview || ''

@@ -738,8 +738,9 @@ describe('two Tessel windows in one project', () => {
     const url = (s) => 'data:text/javascript;base64,' + Buffer.from(s).toString('base64')
     const agentNames = url(fs.readFileSync(join(__dirname, '..', '..', 'shared', 'agentNames.js'), 'utf8'))
     const safeJson = url(fs.readFileSync(join(__dirname, '..', 'safeJson.js'), 'utf8'))
+    const senderIdentity = url(fs.readFileSync(join(__dirname, '..', '..', 'shared', 'senderIdentity.js'), 'utf8'))
     const channel = url(
-      fs.readFileSync(join(__dirname, '..', 'teamChannel.js'), 'utf8').replace("'./safeJson'", JSON.stringify(safeJson)).replace("'../shared/agentNames'", JSON.stringify(agentNames))
+      fs.readFileSync(join(__dirname, '..', 'teamChannel.js'), 'utf8').replace("'./safeJson'", JSON.stringify(safeJson)).replace("'../shared/agentNames'", JSON.stringify(agentNames)).replace("'../shared/senderIdentity'", JSON.stringify(senderIdentity))
     )
     const fileRead = url(fs.readFileSync(join(__dirname, '..', 'fileRead.js'), 'utf8'))
     const notices = url(

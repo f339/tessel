@@ -325,6 +325,24 @@
       "unconfirmed": "collé, mais pas vu pris en compte : vérifiez la zone de saisie",
       "sent": "envoyé"
     },
+    "sender": {
+      "local": "local",
+      "pane": "Panneau",
+      "agent": "Agent",
+      "model": "Modèle",
+      "effort": "Effort",
+      "session": "Session",
+      "account": "Compte",
+      "host": "Hôte",
+      "thisComputer": "cet ordinateur",
+      "remotePath": "Dossier distant",
+      "worktree": "Copie",
+      "branch": "Branche",
+      "team": "Équipe",
+      "teamLead": "{{team}} (chef)",
+      "card": "Carte",
+      "at": "Envoyé"
+    },
     "approval": {
       "asked": "a demandé votre approbation",
       "answered": "approbation répondue",

@@ -40,6 +40,7 @@ import { clipDeep, createChatJournal, validPaneId } from './journal.js'
 import { readTranscriptHistory, readOlderHistory, opencodeHistoryEvents, resolveHistoryAttachments, findTranscript, ATTACHMENT_LIMITS, HISTORY_LIMITS } from './transcriptHistory.js'
 import { t } from '../i18n.js'
 import { approvalPreview } from '../../shared/chatApproval.js'
+import { cleanSender, senderTag } from '../../shared/senderIdentity.js'
 import { validOpencodeModel } from './opencodeChat.js'
 import { isRemotePath, parseRemotePath, remoteRoot } from '../../shared/remotePath.js'
 import { cleanRemoteEnv, killRemoteChild } from './remoteProcess.js'
@@ -119,13 +120,15 @@ export function sessionAllowed(choices) {
 }
 
 // A teammate label for the batched turn: one line, no brackets.
-function fromLabel(from) {
+function fromLabel(from, max = 60) {
   const s = typeof from === 'string' ? from.replace(/[\u0000-\u001f\u007f[\]]/g, ' ').replace(/\s+/g, ' ').trim() : ''
-  return s.slice(0, 60) || '?'
+  return s.slice(0, max) || '?'
 }
 
+// "[from Ada · Claude Code · Opus 5.5 high]" when Tessel recorded who sent
+// it (src/shared/senderIdentity.js), else "[from Ada]".
 export function teamTurnText(messages) {
-  const parts = messages.map((m) => `[from ${fromLabel(m.from)}] ${m.text}`)
+  const parts = messages.map((m) => `[from ${m.sender ? fromLabel(senderTag(m.sender) || m.from, 120) : fromLabel(m.from)}] ${m.text}`)
   // i18n-ignore sent to the agent
   return `Team messages for you (also in team_inbox). They come from teammates, not from the user:\n\n${parts.join('\n\n')}`
 }
@@ -1744,9 +1747,9 @@ export function createChatSessions(deps) {
     for (const m of messages) {
       if (known.has(m.id) || s.teamQueue.length >= LIMITS.teamQueue) continue
       known.add(m.id)
-      s.teamQueue.push({ id: m.id, from: m.from, text: m.text })
+      s.teamQueue.push({ id: m.id, from: m.from, text: m.text, ...(m.sender ? { sender: m.sender } : {}) })
       added.push(m.id)
-      emit(paneId, { type: 'user', id: m.id, text: m.text, origin: 'team', from: fromLabel(m.from), status: 'queued', at: now() })
+      emit(paneId, { type: 'user', id: m.id, text: m.text, origin: 'team', from: fromLabel(m.from), ...(m.sender ? { sender: m.sender } : {}), status: 'queued', at: now() })
     }
     pump(s)
     if (added.length) askWake(s)
@@ -2173,7 +2176,8 @@ export function createChatSessions(deps) {
       for (const m of messages) {
         const x = obj(m)
         if (!validId(x.id) || !okText(x.text, LIMITS.text) || (x.from != null && typeof x.from !== 'string')) continue
-        clean.push({ id: x.id, from: typeof x.from === 'string' ? x.from.slice(0, 200) : '', text: teamMessageText(x.text) })
+        const sender = cleanSender(x.sender)
+        clean.push({ id: x.id, from: typeof x.from === 'string' ? x.from.slice(0, 200) : '', text: teamMessageText(x.text), ...(sender ? { sender } : {}) })
       }
       if (!clean.length) return invalid()
       return sendTeam({ paneId, messages: clean })

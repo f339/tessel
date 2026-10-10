@@ -328,6 +328,8 @@ export function createJournalAdapter({ now = Date.now, epoch = 'tessel', fence =
           body.blocks[0].text = body.blocks[0].text.replace(/^(?:\(message [\w.:-]{1,120}(?:, reply to [\w.:-]{1,120})?\)\s*)+/, '')
           body.sentAs = 'team'
           if (ev.from) body.from = String(ev.from)
+          // Who sent it, as Tessel recorded it (src/shared/senderIdentity.js).
+          if (ev.sender && typeof ev.sender === 'object') body.sender = ev.sender
         }
         put(itemId, body, {}, at)
         lastUserItemId = itemId

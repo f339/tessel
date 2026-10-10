@@ -9,6 +9,7 @@ import BrandIcon from './BrandIcon.vue'
 import { summarize, cardsFor, parseJournal } from '../../../shared/activity'
 import { formatDuration } from '../timeFormat'
 import { t, intlLocale } from '../i18n'
+import { senderSummary, senderDetails } from '../senderIdentity'
 
 const props = defineProps({
   events: { type: Array, required: true },
@@ -264,6 +265,14 @@ function taskLine(x) {
         note: x.branch ? t('activity.task.branch', 'branch {{branch}}', { branch: x.branch }) : ''
       }
   }
+}
+
+// A message's sender, recorded by Tessel from the sending pane: one compact
+// line, every detail on hover (null for older events, which have none).
+function senderOf(x) {
+  if (x.kind !== 'message' || !x.sender) return null
+  const line = senderSummary(x.sender)
+  return line ? { line, details: senderDetails(x.sender) } : null
 }
 
 function describe(x) {
@@ -552,6 +561,7 @@ const messagesSub = computed(() =>
             <span class="act-text">
               <strong>{{ describe(x).who }}</strong> {{ describe(x).text }}
               <span v-if="describe(x).note" class="act-dim"> · {{ describe(x).note }}</span>
+              <span v-if="senderOf(x)" class="act-sender" data-test="act-sender" :title="senderOf(x).details">{{ senderOf(x).line }}</span>
             </span>
             <span v-if="openRows.has(rowKey(x))" class="act-full">{{ x.text || x.preview }}</span>
           </li>

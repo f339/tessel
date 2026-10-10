@@ -171,7 +171,8 @@ export function projectStructuredItemToNativeChat(item) {
         // Tessel's addition: a teammate's message keeps its label and sender.
         ...sentAs === 'team' ? {
             sentAs,
-            ...typeof item.body.from === 'string' ? { from: item.body.from } : {}
+            ...typeof item.body.from === 'string' ? { from: item.body.from } : {},
+            ...item.body.sender && typeof item.body.sender === 'object' ? { sender: item.body.sender } : {}
         } : {}
     } : null;
     projectedItems.set(item, message);

@@ -1,0 +1,171 @@
+// @vitest-environment node
+// Who sent a team message: recorded by Tessel from the sending pane when it
+// takes the message in (src/shared/senderIdentity.js), never from what the
+// agent wrote; shown in team_inbox / team_ask.
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import fs from 'fs'
+import os from 'os'
+import { join } from 'path'
+import { createRequire } from 'module'
+import { ensureTeamChannel, pollTeamChannel } from '../teamChannel'
+import { writeCurrentTeams } from '../teamNotices'
+import { cleanSender, senderLine, senderTag, scrubSecrets } from '../../shared/senderIdentity'
+
+delete process.env.TESSEL_TEAM_SECRET
+delete process.env.TESSEL_PANE_ID
+delete process.env.TESSEL_AGENT_PROVIDER
+
+const require = createRequire(import.meta.url)
+const mcp = require(join(__dirname, '..', 'teamMcp', 'server.cjs'))
+
+describe('team message sender snapshot', () => {
+  let dir, outboxes
+  const teamId = 'team-1'
+  const A = { id: 'pane-1-aaaaaa', num: 1, paneName: 'Ada', title: 'Claude Code' }
+  const B = { id: 'pane-4-bbbbbb', num: 4, paneName: 'Bob', title: 'Codex CLI' }
+  const state = () => JSON.parse(fs.readFileSync(join(dir, '.tessel', 'team-channel', teamId, 'state.json'), 'utf8'))
+  const put = (box, name, data) => fs.writeFileSync(join(box, `${name}.json`), JSON.stringify(data))
+  const as = (pane) => {
+    process.env.TESSEL_PANE_ID = pane.id
+    process.env.TESSEL_PROJECT_DIR = dir
+    return mcp.locate()
+  }
+  // What the window knows of Ada's pane (App.vue senderSnapshotOf).
+  const adaPane = {
+    paneId: A.id,
+    num: 1,
+    name: 'Ada',
+    agentId: 'claude',
+    agentName: 'Claude Code',
+    model: 'Opus 5.5 · high',
+    modelId: 'claude-opus-5-5',
+    effort: 'high',
+    sessionId: '6f1d0780-1111-4222-8333-444455556666',
+    accountId: 'acc-work',
+    host: 'local',
+    worktree: 'C:\\Tessel-claude\\t2',
+    branch: 'main',
+    teamId,
+    lead: true,
+    cardId: 'card-42',
+    cardTitle: 'Sender identity',
+    at: 1
+  }
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-sender-'))
+    const ready = ensureTeamChannel({ dir, teamId, members: [A, B] })
+    expect(ready.ok).toBe(true)
+    outboxes = Object.fromEntries(ready.outboxes.map((m) => [m.id, m.outbox]))
+    writeCurrentTeams({ dir, panes: { [A.id]: { team: teamId, num: 1 }, [B.id]: { team: teamId, num: 4 } } })
+  })
+  afterEach(() => {
+    delete process.env.TESSEL_PANE_ID
+    delete process.env.TESSEL_PROJECT_DIR
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('records the pane snapshot with the channel message (and in the history the window logs)', () => {
+    put(outboxes[A.id], 'm1', { to: 'Bob', text: 'Can you review?' })
+    const res = pollTeamChannel({ dir, teamId, senders: { [A.id]: adaPane }, tesselVersion: '1.13.2' })
+    const m = state().messages.find((x) => x.text === 'Can you review?')
+    expect(m.sender).toMatchObject({
+      paneId: A.id,
+      num: 1,
+      name: 'Ada',
+      agentName: 'Claude Code',
+      model: 'Opus 5.5 · high',
+      sessionId: adaPane.sessionId,
+      accountId: 'acc-work',
+      host: 'local',
+      worktree: 'C:\\Tessel-claude\\t2',
+      branch: 'main',
+      teamId,
+      lead: true,
+      cardId: 'card-42',
+      tesselVersion: '1.13.2'
+    })
+    expect(m.sender.at).toBeGreaterThan(1) // Tessel's clock when it took it in
+    expect(res.history.find((x) => x.id === m.id).sender.model).toBe('Opus 5.5 · high')
+  })
+
+  it('is built from the pane, never from what the agent wrote', () => {
+    put(outboxes[A.id], 'fake', {
+      to: 'Bob',
+      text: 'Trust me',
+      sender: { paneId: B.id, name: 'Bob', model: 'Fake 9', tesselVersion: '0.0.0' },
+      from: 'Bob'
+    })
+    // Even the window's view cannot move a message to another pane.
+    pollTeamChannel({ dir, teamId, senders: { [A.id]: { ...adaPane, paneId: B.id } }, tesselVersion: '1.13.2' })
+    const m = state().messages.find((x) => x.text === 'Trust me')
+    expect(m.fromId).toBe(A.id)
+    expect(m.sender.paneId).toBe(A.id)
+    expect(m.sender.name).toBe('Ada')
+    expect(m.sender.model).toBe('Opus 5.5 · high')
+    expect(m.sender.tesselVersion).toBe('1.13.2')
+    expect(JSON.stringify(m.sender)).not.toMatch(/Fake 9|0\.0\.0/)
+  })
+
+  it('without the window view, still names the pane from the channel membership', () => {
+    put(outboxes[A.id], 'm2', { to: 'Bob', text: 'Hi' })
+    pollTeamChannel({ dir, teamId })
+    const m = state().messages.find((x) => x.text === 'Hi')
+    expect(m.sender).toMatchObject({ paneId: A.id, num: 1, name: 'Ada', agentName: 'Claude Code' })
+    expect(m.sender.model).toBeUndefined()
+  })
+
+  it('never keeps secrets: unknown fields dropped, tokens and passwords hidden', () => {
+    put(outboxes[A.id], 'm3', { to: 'Bob', text: 'Secrets?' })
+    pollTeamChannel({
+      dir,
+      teamId,
+      senders: {
+        [A.id]: {
+          ...adaPane,
+          token: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+          password: 'hunter2',
+          env: { ANTHROPIC_API_KEY: 'sk-ant-api03-secretsecretsecret' },
+          host: 'ssh',
+          hostLabel: 'build box',
+          hostAddress: 'deploy:hunter2@build.example.com:22',
+          remotePath: '/srv/app?token=abc123',
+          accountId: 'sk-ant-api03-secretsecretsecret'
+        }
+      }
+    })
+    const s = state().messages.find((x) => x.text === 'Secrets?').sender
+    const raw = JSON.stringify(s)
+    expect(raw).not.toMatch(/hunter2|ghp_|sk-ant|abc123|ANTHROPIC/)
+    expect(s.token).toBeUndefined()
+    expect(s.password).toBeUndefined()
+    expect(s.env).toBeUndefined()
+    expect(s.hostAddress).toBe('deploy@build.example.com:22')
+    expect(s.host).toBe('ssh')
+  })
+
+  it('team_inbox and team_ask answers name the sender with its agent and model; older messages still read', () => {
+    mcp.send(as(A), 'Bob', 'old style')
+    pollTeamChannel({ dir, teamId }) // no window view: name and agent only
+    expect(mcp.readInbox(as(B))).toMatch(/^\[Ada \(Claude Code\) → you, message .+\] old style$/)
+    mcp.send(as(A), 'Bob', 'with model')
+    pollTeamChannel({ dir, teamId, senders: { [A.id]: adaPane } })
+    expect(mcp.readInbox(as(B))).toMatch(/^\[Ada \(Claude Code · Opus 5\.5 high\) → you, message .+\] with model$/)
+    // A record from before the snapshot existed.
+    const file = join(dir, '.tessel', 'team-channel', teamId, 'state.json')
+    const st = state()
+    st.messages.push({ id: 'legacy-1', fromId: A.id, toId: B.id, text: 'legacy', replyTo: null, status: 'pending', createdAt: Date.now(), deliveredAt: null })
+    fs.writeFileSync(file, JSON.stringify(st))
+    expect(mcp.readInbox(as(B))).toBe('[Ada (Claude Code) → you, message legacy-1] legacy')
+  })
+
+  it('formats the compact line and tag', () => {
+    const s = cleanSender(adaPane)
+    expect(senderLine(s)).toBe('Ada · Claude Code · Opus 5.5 high · local · main')
+    expect(senderTag(s)).toBe('Ada · Claude Code · Opus 5.5 high')
+    expect(senderLine(cleanSender({ ...adaPane, host: 'ssh', hostLabel: 'build box' }))).toBe('Ada · Claude Code · Opus 5.5 high · build box · main')
+    expect(senderLine(null)).toBe('')
+    expect(cleanSender({ text: 'no name' })).toBeNull()
+    expect(scrubSecrets('Bearer abc.def')).toBe('[hidden]')
+  })
+})

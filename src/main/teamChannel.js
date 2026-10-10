@@ -7,6 +7,7 @@ import { resolveAgentAddress } from '../shared/agentNames'
 import { join, resolve, isAbsolute } from 'path'
 import { randomBytes, createHash } from 'crypto'
 import { writeJsonSafe, readJsonSafe } from './safeJson'
+import { cleanSender } from '../shared/senderIdentity'
 
 const ID_RE = /^(?!\.)(?!.*\.\.)[A-Za-z0-9._-]{1,100}$/
 const MAX_FILE = 64 * 1024
@@ -171,9 +172,26 @@ function appendError(state, id, toId, error) {
   })
 }
 
+// Who sent it, from Tessel's side only: the outbox it came from names the
+// pane, the window's view of that pane (senders[paneId]: model, session,
+// host, copy, card...) completes it. Anything in the message itself is
+// ignored, so an agent cannot pass for another.
+function senderOf(sender, senders, tesselVersion) {
+  const seen = senders && typeof senders === 'object' && !Array.isArray(senders) ? senders[sender.id] : null
+  return cleanSender({
+    name: sender.paneName || sender.title,
+    agentName: sender.title,
+    num: sender.num,
+    ...(seen && typeof seen === 'object' ? seen : {}),
+    paneId: sender.id,
+    tesselVersion: typeof tesselVersion === 'string' ? tesselVersion : '',
+    at: Date.now()
+  })
+}
+
 const askId = (data) => (data && typeof data.ask === 'string' && /^q-[a-z0-9-]{4,40}$/.test(data.ask) ? data.ask : null)
 
-function ingest(root, state) {
+function ingest(root, state, { senders = null, tesselVersion = '' } = {}) {
   let changed = false
   for (const sender of activeMembers(state)) {
     const outbox = join(root, 'outbox', sender.token)
@@ -228,6 +246,7 @@ function ingest(root, state) {
           if (!recipients.length) error = 'recipient is not an active teammate or is ambiguous. Valid names: ' + activeMembers(state).map((m) => m.paneName || m.title).join(', ')
           else {
             const replyTo = typeof data.reply_to === 'string' ? data.reply_to.slice(0, 80) : null
+            const from = senderOf(sender, senders, tesselVersion)
             for (const toId of recipients)
               state.messages.push({
                 id: `${id}-${toId}`,
@@ -238,6 +257,7 @@ function ingest(root, state) {
                 // A question its sender waits on (team_ask): the answer is
                 // the reply to this message.
                 ...(askId(data) ? { askId: askId(data) } : {}),
+                ...(from ? { sender: from } : {}),
                 status: 'pending',
                 createdAt: Date.now(),
                 deliveredAt: null
@@ -267,13 +287,15 @@ function ingest(root, state) {
 // messages are returned separately, including for unavailable active members.
 // On restart the renderer treats either held status as uncertain; a later
 // message to that pane also waits until the draft is explicitly resolved.
-export function pollTeamChannel({ dir, teamId, availableIds } = {}) {
+// senders: { paneId: snapshot } the window's view of each member's pane
+// (src/renderer/src/senderIdentity.js), recorded with the messages it sends.
+export function pollTeamChannel({ dir, teamId, availableIds, senders, tesselVersion } = {}) {
   try {
     const root = location({ dir, teamId })
     if (!root || !fs.existsSync(join(root, 'state.json')))
       return { ok: false, error: 'Team channel is not set up.' }
     const state = readState(root)
-    ingest(root, state)
+    ingest(root, state, { senders, tesselVersion })
     const available = Array.isArray(availableIds) ? new Set(availableIds) : null
     const held = state.messages.filter((m) => isHeld(m) && state.members[m.toId]?.active)
     // Background inbox readers are not limited by the terminal delivery batch.

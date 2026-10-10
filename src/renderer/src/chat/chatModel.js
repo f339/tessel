@@ -248,6 +248,7 @@ export function chatReducer(state, event, { cwd = '' } = {}) {
         text: String(event.text ?? ''),
         origin: event.origin === 'team' ? 'team' : 'user',
         from: event.from != null ? String(event.from) : '',
+        ...(event.sender && typeof event.sender === 'object' ? { sender: event.sender } : {}),
         status: USER_STATUSES.has(event.status) ? event.status : 'sent',
         at: event.at || null
       }

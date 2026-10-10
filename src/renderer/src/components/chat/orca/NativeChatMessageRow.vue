@@ -32,6 +32,7 @@ import NativeChatMessageTimestamp from './NativeChatMessageTimestamp.vue'
 import NativeChatAgentControls from './NativeChatAgentControls.vue'
 import NativeChatImageAttachments from './NativeChatImageAttachments.vue'
 import ProviderFrameRow from './ProviderFrameRow.vue'
+import { senderSummary, senderDetails } from '../../../senderIdentity'
 
 const props = defineProps({
   message: { type: Object, required: true },
@@ -109,6 +110,13 @@ const teamFromLabel = computed(() => {
     ? t('chat.user.fromTeammate', 'From {{from}} (teammate)', { from: who })
     : t('chat.user.fromTeam', 'From a teammate')
 })
+// Who sent it, as Tessel recorded it from the sending pane: one line after
+// the name (agent, model, host, branch), every detail on hover. Older
+// messages have none.
+const teamSender = computed(() => {
+  const s = isTeam.value && props.message.sender && typeof props.message.sender === 'object' ? props.message.sender : null
+  return s ? { line: senderSummary({ ...s, name: '' }), details: senderDetails(s) } : null
+})
 const queuedText = computed(() =>
   props.queuedReason ? props.queuedReason : isTeam.value ? t('chat.user.teamQueued', 'Waiting: delivered when the turn ends') : t('chat.user.queued', 'Queued: will send when the turn ends')
 )
@@ -145,9 +153,10 @@ function scrollToTop() {
       :class="{ 'is-team': isTeam }"
       data-test="nc-user-row"
     >
-      <div v-if="isTeam" class="nc-team-from" data-test="nc-team-from">
+      <div v-if="isTeam" class="nc-team-from" data-test="nc-team-from" :title="teamSender ? teamSender.details : undefined">
         <Users class="nc-team-from-icon" aria-hidden="true" />
         <span>{{ teamFromLabel }}</span>
+        <span v-if="teamSender && teamSender.line" class="nc-team-sender" data-test="nc-team-sender">· {{ teamSender.line }}</span>
       </div>
       <!-- User turns get a distinct muted fill (not the card/canvas color) so
            the prompt reads apart from the assistant's body copy. -->
@@ -276,6 +285,11 @@ function scrollToTop() {
   font-size: 11px;
   font-weight: 600;
   color: var(--accent, var(--nc-foreground));
+}
+.nc-team-sender {
+  font-weight: 400;
+  color: var(--nc-muted-foreground, var(--muted, inherit));
+  opacity: 0.85;
 }
 .nc-team-from-icon {
   width: 12px;

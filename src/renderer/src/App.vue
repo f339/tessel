@@ -106,6 +106,7 @@ import { tasks as boardTasks, setTasks, updateTask, removeTask, addTask, deleted
 import { taskHistory, setTaskHistory, backfillHistory, setHistoryDescriber } from './taskHistory'
 import { restoredSideTab } from './sideTabs'
 import { paneModels } from './paneModels'
+import { buildSenderSnapshot } from './senderIdentity'
 import { sleepBlocker } from '../../shared/agentSleep'
 import { updateBlocker, planUpdate, autoUpdateMoment } from '../../shared/agentUpdatePlan'
 import { describeWaitingText } from './agentUpdateWhy'
@@ -5757,6 +5758,35 @@ function agentInfo(leaf) {
   return leaf ? { title: leaf.paneName || leaf.title || t('app.pane.agent', 'Agent'), agentId: leaf.agentId || null } : null
 }
 
+// Who sends from this pane, as Tessel sees it (src/renderer/src/senderIdentity.js):
+// its header's model, session, host, copy, team and card. Never read from
+// the message, so the record cannot be faked by the agent writing it.
+function senderSnapshotOf(leaf, team = null) {
+  if (!leaf) return null
+  const ws = wsOfLeaf(leaf.id)
+  const teamId = (team && team.id) || leaf.team || null
+  const card = taskOfPane(leaf.id)
+  return buildSenderSnapshot(leaf, {
+    agentName: leaf.agentId ? programLabel(leaf) : '',
+    model: paneModels[leaf.id] || leaf.headerModel || '',
+    host: leaf.remoteHostId ? { label: remoteHostLabel(leaf.remoteHostId), address: remoteHostWho(leaf.remoteHostId).address || '' } : null,
+    branch: ws && gitKeyOf(ws) ? wsBranches[gitKeyOf(ws)] || '' : '',
+    teamId,
+    lead: !!(teamId && teamById(teamId)?.leadId === leaf.id),
+    card: card ? { id: card.id, title: card.title } : null
+  })
+}
+// Each member's sender snapshot, given to the channel with each poll: it is
+// recorded with the messages it takes in from their outboxes.
+function channelSenders(team) {
+  const out = {}
+  for (const l of teamMembers(team.id)) {
+    const s = senderSnapshotOf(l, team)
+    if (s) out[l.id] = s
+  }
+  return out
+}
+
 function logMessage(leafId, status, text, meta = {}) {
   const leaf = findLeaf(leafId)
   recordActivity({
@@ -5769,6 +5799,7 @@ function logMessage(leafId, status, text, meta = {}) {
     scope: meta.scope || 'workspace',
     teamId: meta.teamId || null,
     wsId: wsOfLeaf(leafId)?.id || null,
+    ...(meta.sender ? { sender: meta.sender } : {}),
     preview: String(text || '')
       .replace(/\s+/g, ' ')
       .slice(0, 160),
@@ -6950,7 +6981,7 @@ function runMemberMessage(team, from, req) {
   log.push(now)
   const isLead = lead && lead.id === from.id
   const head = isLead ? `[From your lead ${paneLabel(from)}]` : `[From ${paneLabel(from)}, team "${team.name}"]` // i18n-ignore
-  const meta = { source: isLead ? 'lead' : 'agent', scope: 'team', teamId: team.id, from: from.paneName || from.title, waitIdle: true }
+  const meta = { source: isLead ? 'lead' : 'agent', scope: 'team', teamId: team.id, from: from.paneName || from.title, sender: senderSnapshotOf(from, team), waitIdle: true }
   const skipped = []
   for (const l of to) {
     if (limits[l.id]) {
@@ -8004,7 +8035,8 @@ async function unreadAtLaunch(id, teamId) {
   const dir = team && team.channelDir
   if (!dir || !window.shellApi.channel || !window.shellApi.channel.poll) return 0
   try {
-    // availableIds []: only the counts, nothing handed out for delivery.
+    // availableIds []: only the counts, nothing handed out for delivery (a
+    // message taken in now gets its sender from the channel's membership).
     const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: [] })
     return (res && res.ok && res.unreadCounts && res.unreadCounts[id]) || 0
   } catch {
@@ -8792,6 +8824,9 @@ function logTeamMessages(team, res) {
       scope: 'team-chat',
       teamId: team.id,
       wsId: teamWsId(team.id),
+      // Who sent it, as Tessel recorded it from the sending pane (none on
+      // messages from before this record existed).
+      ...(m.sender && typeof m.sender === 'object' ? { sender: m.sender } : {}),
       preview: m.text.replace(/\s+/g, ' ').slice(0, 160),
       text: m.text.slice(0, 8000)
     }
@@ -9860,7 +9895,7 @@ async function deliverChannel(team, members, round = teamRound) {
     if (window.shellApi.channel.acks) await window.shellApi.channel.acks({ dir, teamId: team.id })
     if (roundGone(round)) return
     teamStepIs('channel read', team)
-    const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
+    const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id), senders: channelSenders(team) })
     if (roundGone(round)) return
     if (res && res.ok) {
       // Complete counts per member from the channel (the delivery list is
@@ -9898,7 +9933,7 @@ async function deliverChannel(team, members, round = teamRound) {
     await syncTeamBoard(team, dir, members, round)
     return
   }
-  const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id) })
+  const res = await window.shellApi.channel.poll({ dir, teamId: team.id, availableIds: members.map((m) => m.id), senders: channelSenders(team) })
   if (!res || !res.ok) return
   const who = Object.fromEntries((res.participants || []).map((p) => [p.id, p]))
   const textOf = (d) => {
@@ -9970,6 +10005,7 @@ async function deliverChannel(team, members, round = teamRound) {
       scope: 'team',
       teamId: team.id,
       from: from ? from.paneName || from.title : null,
+      ...(d.sender && typeof d.sender === 'object' ? { sender: d.sender } : {}),
       waitIdle: true,
       ...hooks(d, key)
     })
@@ -10014,6 +10050,9 @@ async function pushToChats(team, dir, res) {
     ;(byPane[d.toId] = byPane[d.toId] || []).push({
       id: d.id,
       from: label,
+      // Who sent it (recorded by Tessel): shown on the chat's message and,
+      // shortened, in the line the agent reads.
+      ...(d.sender && typeof d.sender === 'object' ? { sender: d.sender } : {}),
       text: `(message ${d.id}${d.replyTo ? `, reply to ${d.replyTo}` : ''}) ${d.text}` // i18n-ignore
     })
   }

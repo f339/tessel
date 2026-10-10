@@ -39,7 +39,7 @@ const path = require('path')
 const crypto = require('crypto')
 const { randomUUID } = crypto
 
-const VERSION = '1.11.4'
+const VERSION = '1.11.5'
 const MAX_TEXT = 6000
 
 // --- An agent on an SSH host --------------------------------------------------
@@ -280,6 +280,18 @@ function label(ctx, id) {
   return m ? `${memberName(m)} (${m.title})` : 'a former teammate'
 }
 
+// The sender as Tessel recorded it from the sending pane when it took the
+// message in (never what the message says): "Ada (Claude Code · Opus 5.5
+// high)". Older messages, and Tessel's own, keep the plain label.
+function senderLabel(ctx, m) {
+  const s = m && m.fromId !== 'tessel' && m.sender && typeof m.sender === 'object' ? m.sender : null
+  if (!s) return label(ctx, m && m.fromId)
+  const one = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f[\]()]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '')
+  const name = one(s.name, 80) || label(ctx, m.fromId)
+  const rest = [one(s.agentName, 60), one(s.model, 80).replace(/\s*·\s*/g, ' ')].filter(Boolean).join(' · ')
+  return rest ? `${name} (${rest})` : name
+}
+
 function isReceipt(m) {
   return m.fromId === 'tessel' && /^Delivered to /.test(m.text)
 }
@@ -288,7 +300,7 @@ function isReceipt(m) {
 function readInbox(ctx) {
   const shown = markRead(ctx, unread(ctx)).filter((m) => !isReceipt(m))
   return shown
-    .map((m) => `[${label(ctx, m.fromId)} → you, message ${m.id}${m.replyTo ? `, reply to ${m.replyTo}` : ''}] ${m.text}`)
+    .map((m) => `[${senderLabel(ctx, m)} → you, message ${m.id}${m.replyTo ? `, reply to ${m.replyTo}` : ''}] ${m.text}`)
     .join('\n')
 }
 
@@ -603,7 +615,7 @@ async function ask(ctx, args, signal = null) {
     const r = answerTo(ctx, qid)
     if (r.answer) {
       markRead(ctx, [r.answer])
-      return { ok: true, text: `Answer from ${label(ctx, r.answer.fromId)} (message ${r.answer.id}): ${r.answer.text}` }
+      return { ok: true, text: `Answer from ${senderLabel(ctx, r.answer)} (message ${r.answer.id}): ${r.answer.text}` }
     }
     if (r.refused) return { error: `The question was not sent: ${r.refused.text}` }
     if (Date.now() >= until) break
@@ -2046,7 +2058,7 @@ function hookMain() {
       if (ctx.error) return
       const prefix = '[Tessel] New team messages:\n'
       const suffix = '\nReply with team_send. Read team_inbox for any remaining messages.'
-      const format = (m) => `[${label(ctx, m.fromId)} → you, message ${m.id}${m.replyTo ? `, reply to ${m.replyTo}` : ''}] ${m.text}`
+      const format = (m) => `[${senderLabel(ctx, m)} → you, message ${m.id}${m.replyTo ? `, reply to ${m.replyTo}` : ''}] ${m.text}`
       const selected = []
       let remaining = 16000 - prefix.length - suffix.length
       let oversized = false
