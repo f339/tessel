@@ -42,8 +42,29 @@ export function isActivityText(text) {
   return typeof text === 'string' && text.length <= MAX_TEXT && /^\s*\[/.test(text) && /\]\s*$/.test(text)
 }
 
-// The stored log's text -> its events, checked and bounded ([] when it is
-// not a list).
+// The log without exact copies of an event (the first one kept, in order).
+// A log loaded twice into the same window (a hot reload of the interface in
+// development) once held every event twice; read again, it is whole once.
+// Two real events are never identical in every field (time to the
+// millisecond, kind, pane, text...). The full comparison runs only for events
+// with the same time, kind and pane.
+export function dedupeEvents(events) {
+  const seen = new Map() // "t|type|paneId" -> [JSON of the events kept]
+  const out = []
+  for (const e of events) {
+    const key = `${e.t}|${e.type}|${e.paneId || ''}` // i18n-ignore
+    const json = JSON.stringify(e)
+    const same = seen.get(key)
+    if (same && same.includes(json)) continue
+    if (same) same.push(json)
+    else seen.set(key, [json])
+    out.push(e)
+  }
+  return out
+}
+
+// The stored log's text -> its events, checked, without copies, and bounded
+// ([] when it is not a list).
 export function parseActivityText(text, now = Date.now()) {
   if (typeof text !== 'string' || !text.trim()) return []
   let data
@@ -52,7 +73,7 @@ export function parseActivityText(text, now = Date.now()) {
   } catch {
     return []
   }
-  return Array.isArray(data) ? trimEvents(data.filter(isEvent), now) : []
+  return Array.isArray(data) ? trimEvents(dedupeEvents(data.filter(isEvent)), now) : []
 }
 
 // The log -> the text to store (checked and bounded like the main process

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { parseActivityText, activityText, isActivityText, MAX_EVENTS } from '../../../shared/activity'
+import { parseActivityText, activityText, isActivityText, dedupeEvents, MAX_EVENTS } from '../../../shared/activity'
 
 describe('saving the activity log', () => {
   beforeEach(() => {
@@ -41,6 +41,31 @@ describe('saving the activity log', () => {
     expect(store.activity.map((e) => e.action || e.type)).toEqual(['old', 'message', 'early'])
   })
 
+  it('a second load (App started again by a hot reload) does not add the saved log again', async () => {
+    const now = Date.now()
+    const saved = [{ t: now - 5000, type: 'task', action: 'old' }, { t: now - 4000, type: 'message', paneId: 'p1', text: 'hi' }]
+    const load = vi.fn(async () => ({ text: JSON.stringify(saved) }))
+    window.shellApi = { activity: { load, save: vi.fn(async () => ({ ok: true })) } }
+    const store = await import('../activityStore')
+    await store.loadActivity()
+    store.recordActivity({ type: 'task', action: 'new' })
+    await store.loadActivity()
+    expect(load).toHaveBeenCalledTimes(1)
+    expect(store.activity.map((e) => e.action || e.text)).toEqual(['old', 'hi', 'new'])
+  })
+
+  it('a log saved with every event twice is read back once', async () => {
+    const now = Date.now()
+    const log = [
+      { t: now - 3000, type: 'agent.state', paneId: 'p1', state: 'working' },
+      { t: now - 2000, type: 'message', paneId: 'p2', msgId: 'm1', text: 'hi' }
+    ]
+    window.shellApi = { activity: { load: vi.fn(async () => ({ text: JSON.stringify([...log, ...log]) })), save: vi.fn(async () => ({ ok: true })) } }
+    const store = await import('../activityStore')
+    await store.loadActivity()
+    expect(store.activity).toHaveLength(2)
+  })
+
   it('still takes a list (an older main process)', async () => {
     window.shellApi = { activity: { load: vi.fn(async () => [{ t: Date.now(), type: 'task' }]), save: vi.fn() } }
     const store = await import('../activityStore')
@@ -73,6 +98,14 @@ describe('the log as text', () => {
     const now = 1e12
     expect(JSON.parse(activityText([{ t: now, type: 'a' }, { bad: 1 }], now))).toEqual([{ t: now, type: 'a' }])
   })
+  it('drops only exact copies of an event', () => {
+    const a = { t: 1, type: 'agent.state', paneId: 'p1', state: 'idle' }
+    const b = { t: 1, type: 'agent.state', paneId: 'p1', state: 'working' } // same time and pane, another state
+    const c = { t: 1, type: 'agent.state', paneId: 'p2', state: 'idle' } // another pane
+    expect(dedupeEvents([a, b, c, { ...a }, { ...b }, c])).toEqual([a, b, c])
+    expect(parseActivityText(JSON.stringify([a, a, b]), 2)).toEqual([a, b])
+  })
+
   it('accepts only a JSON list as text to store', () => {
     expect(isActivityText('[]')).toBe(true)
     expect(isActivityText(' [{"t":1}]\n')).toBe(true)

@@ -29,7 +29,15 @@ export function activityChanged() {
 // Events recorded before the saved log finished loading are kept after it.
 // The log comes as JSON text (a string crosses from the main process at once;
 // thousands of objects took a third of a second to copy) and is checked here.
-export async function loadActivity() {
+// Loaded once per window: a second call (App's start run again by a hot
+// reload in development) gets the first one's result, it does not put the
+// saved log in front of the log a second time.
+let loading = null
+export function loadActivity() {
+  if (!loading) loading = readSavedActivity()
+  return loading
+}
+async function readSavedActivity() {
   try {
     const res = window.shellApi.activity ? await window.shellApi.activity.load({ text: true }) : []
     const saved = res && typeof res.text === 'string' ? parseActivityText(res.text) : res
