@@ -78,10 +78,13 @@ export default defineConfig({
       format: 'es'
     },
     // Dev: the app's modules are compiled when the server starts, not while
-    // the window waits on a black page (a cold start took over 30 s).
+    // the window waits on a black page (a cold start took over 30 s). The
+    // paths are relative to the renderer's root (src/renderer), like Vite
+    // resolves them: with the project's root in them, the dev server said
+    // "Failed to load url /src/renderer/src/main.js" and warmed nothing up.
     server: {
       warmup: {
-        clientFiles: ['./src/renderer/src/main.js', './src/renderer/src/App.vue', './src/renderer/src/components/**/*.vue']
+        clientFiles: ['./src/main.js', './src/App.vue', './src/components/**/*.vue']
       }
     }
   }
