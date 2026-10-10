@@ -139,8 +139,34 @@ describe('SidePanel.vue', () => {
     setTaskHistory([])
   })
 
-  it('a saved layout opens on its tab again, Task history included', () => {
+  it('Conversations: a tab of its own after Agents, its threads from the activity log, an agent name goes to its pane', async () => {
+    const now = Date.now()
+    const activity = [
+      { t: now - 60000, type: 'message', paneId: 'p1', agent: { title: 'Ada', agentId: 'claude' }, status: 'sent', source: 'you', scope: 'chat', wsId: 'ws1', text: 'Add the tab', preview: 'Add the tab' },
+      { t: now - 30000, type: 'reply', paneId: 'p1', agent: { title: 'Ada', agentId: 'claude' }, kind: 'chat', wsId: 'ws1', text: 'Done.', preview: 'Done.' }
+    ]
+    const projects = [{ id: 'ws1', name: 'proj', panes: [{ id: 'p1', kind: 'agent', agentId: 'claude', title: 'Ada', state: 'idle' }] }]
+    const w = mount(SidePanel, { props: { tab: 'tasks', root: ROOT, workspaceId: 'ws1', projects, activity, teams: [], fullscreen: true }, attachTo: document.body })
+    const ids = w.findAll('.side-tab').map((x) => x.attributes('data-test'))
+    expect(ids.indexOf('side-tab-conversations')).toBe(ids.indexOf('side-tab-history') + 1)
+    expect(w.find('[data-test="side-tab-conversations"]').attributes('title')).toBe('Conversations')
+    expect(w.find('[data-test="conversations"]').exists()).toBe(false) // created when first shown
+    await w.find('[data-test="side-tab-conversations"]').trigger('click')
+    expect(w.emitted('update:tab')).toEqual([['conversations']])
+    await w.setProps({ tab: 'conversations' })
+    expect(w.find('[data-test="conversations"]').isVisible()).toBe(true)
+    expect(w.find('[data-test="cv-thread-you:p1"]').exists()).toBe(true)
+    expect(w.findAll('[data-test="cv-line"]')).toHaveLength(2)
+    await w.find('[data-test="cv-thread-you:p1"] [data-test="cv-from"]').trigger('click')
+    expect(w.emitted('update:fullscreen')).toEqual([[false]])
+    expect(w.emitted('focus-pane')).toEqual([['p1']])
+    w.unmount()
+  })
+
+  it('a saved layout opens on its tab again, Task history and Conversations included', () => {
     expect(SIDE_TABS).toContain('taskHistory')
+    expect(SIDE_TABS).toContain('conversations')
+    expect(restoredSideTab('conversations')).toBe('conversations')
     expect(restoredSideTab('taskHistory')).toBe('taskHistory')
     expect(restoredSideTab('history')).toBe('history')
     expect(restoredSideTab('web-abc', [{ id: 'web-abc' }])).toBe('web-abc')
