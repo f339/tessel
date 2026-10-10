@@ -2535,7 +2535,7 @@ const updateOpen = ref(false)
 const updateInstalling = ref(false)
 // This version's GitHub release page ("Release notes" on the update card).
 const updateReleaseUrl = computed(() =>
-  updateStatus.value.version ? `https://github.com/mindkind1337/tessel/releases/tag/v${updateStatus.value.version}` : '' // i18n-ignore
+  updateStatus.value.version ? `https://github.com/f339/tessel/releases/tag/v${updateStatus.value.version}` : '' // i18n-ignore
 )
 let unsubUpdate = null
 
