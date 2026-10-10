@@ -67,7 +67,13 @@ describe.runIf(process.platform === 'win32' && !!findCsc())('native helpers', ()
     launcher = l.ok ? l.file : null
     helper = h.ok ? h.file : null
   }, 120_000)
-  afterAll(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }))
+  // A just-built .exe can stay locked a few seconds more (antivirus scan,
+  // helper still exiting): a temp folder left behind is not a failure.
+  afterAll(() => {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
+    } catch {}
+  })
 
   it('the launcher passes the command line through untouched (no cmd.exe parsing)', async () => {
     expect(launcher).toBeTruthy()

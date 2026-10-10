@@ -1,0 +1,34 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Tessel is a Windows app: node-pty ships a win32-x64 prebuild, and the
+    # specs check Windows paths, shells and the askpass/cli launchers.
+    runs-on: windows-latest
+    # npm ci downloads no Electron binary (electron 42 fetches it on first
+    # use, and no spec loads the real electron).
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # .npmrc (legacy-peer-deps) is read from the repo: electron-vite 5 caps
+      # its Vite peer at ^7 while we run Vite 8.
+      - run: npm ci
+
+      - run: npx vitest run

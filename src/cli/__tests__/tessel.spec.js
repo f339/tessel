@@ -281,7 +281,11 @@ describe.runIf(process.platform === 'win32' && !!findCsc())('over the helper’s
   }, 60_000)
   afterEach(() => {
     if (srv) srv.stop()
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
+    // A just-built .exe can stay locked a few seconds more (antivirus scan,
+    // helper still exiting): a temp folder left behind is not a failure.
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
+    } catch {}
   })
 
   it('serves tessel-cli-… pipes and carries requests and answers', async () => {
@@ -293,7 +297,8 @@ describe.runIf(process.platform === 'win32' && !!findCsc())('over the helper’s
     const note = ['ligne 1', 'ligne 2'].join('\n')
     const ok = await sendRequest(rt, 'task.add', { title: 'Café ☕ docs', note })
     expect(ok).toEqual({ ok: true, result: { id: 't', title: 'Café ☕ docs', project: 'x' } })
-    expect(task).toHaveBeenCalledWith({ title: 'Café ☕ docs', note, cwd: null })
+    // Handlers also get { signal } (aborted when the command goes away).
+    expect(task).toHaveBeenCalledWith({ title: 'Café ☕ docs', note, cwd: null }, { signal: expect.anything() })
     const bad = await sendRequest({ ...rt, token: '1'.repeat(64) }, 'task.add', { title: 'x' })
     expect(bad.error.code).toBe('unauthorized')
     expect(task).toHaveBeenCalledTimes(1)

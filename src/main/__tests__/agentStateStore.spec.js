@@ -381,7 +381,9 @@ describe('local agent status spool and snapshots', () => {
     const second = await store.scan()
     expect(second.stats.examined).toBe(33)
     expect(second.states[paneId].state).toBe('working')
-  })
+    // 161 files written and scanned twice: slow when the whole suite (or a CI
+    // runner) loads the disk.
+  }, 20_000)
 
   it('cleans expired unmatched events without recursive deletion', async () => {
     const store = make()
