@@ -2,7 +2,9 @@
 // The right side panel (after Orca's): one panel, a tab bar at its top —
 // Dashboard (every agent of every project), Files (the explorer), Changes
 // (source control), Tasks (the task board), Task history (finished tasks,
-// their time and cost), Agents (the agent session history), then the web pages opened with + (SideBrowser.vue, one tab each,
+// their time and cost), Agents (the agent session history), Conversations
+// (what the agents of a team said to each other and to you), then the web
+// pages opened with + (SideBrowser.vue, one tab each,
 // x or a middle-click closes one). At the right end of the bar: + (a new web
 // page) and Fullscreen (the panel over the whole workspace; Esc restores it).
 // A page's tab dragged onto the pane grid becomes a browser pane there, and a
@@ -15,6 +17,7 @@ import { refreshStatus, statusOf, changeCount, rootKey } from '../scmState'
 import ChangesPanel from './ChangesPanel.vue'
 import TaskBoard from './TaskBoard.vue'
 import SessionHistoryPanel from './SessionHistoryPanel.vue'
+import ConversationsPanel from './ConversationsPanel.vue'
 import AgentDashboard from './AgentDashboard.vue'
 import SideBrowser from './SideBrowser.vue'
 import AgentSessionHistoryIcon from './AgentSessionHistoryIcon.vue'
@@ -25,7 +28,7 @@ import { displayUrl } from '../../../shared/browserUrl'
 import TaskHistoryPanel from './TaskHistoryPanel.vue'
 import { SIDE_TABS } from '../sideTabs'
 import { statusMatters } from '../explorerChanges'
-import { Files, GitBranch, ListChecks, LayoutDashboard, Maximize2, Minimize2, Plus, Globe, X, ReceiptText } from 'lucide-vue-next'
+import { Files, GitBranch, ListChecks, LayoutDashboard, Maximize2, Minimize2, Plus, Globe, X, ReceiptText, MessagesSquare } from 'lucide-vue-next'
 
 const props = defineProps({
   tab: { type: String, default: 'tasks' },
@@ -49,7 +52,11 @@ const props = defineProps({
   fullscreen: { type: Boolean, default: false },
   // The web pages opened with +: [{ id, url, title }] (App keeps and saves
   // them; a page's tab id is its id).
-  browsers: { type: Array, default: () => [] }
+  browsers: { type: Array, default: () => [] },
+  // The Conversations tab: the activity log (activityStore.js's events) and
+  // App's teams ([{ id, name, color }]).
+  activity: { type: Array, default: () => [] },
+  teams: { type: Array, default: () => [] }
 })
 const emit = defineEmits([
   'update:tab',
@@ -86,7 +93,8 @@ const TABS = [
   { id: 'changes', key: 'explorer.side.changes', label: 'Changes', shortcut: 'Ctrl+Shift+G', icon: GitBranch },
   { id: 'tasks', key: 'explorer.side.tasks', label: 'Tasks', shortcut: 'Ctrl+Shift+K', icon: ListChecks },
   { id: 'taskHistory', key: 'taskHistory.tab', label: 'Task history — time and cost', shortcut: '', icon: ReceiptText }, // i18n-ignore
-  { id: 'history', key: 'explorer.side.history', label: 'Agent Session History', shortcut: '', icon: AgentSessionHistoryIcon } // i18n-ignore
+  { id: 'history', key: 'explorer.side.history', label: 'Agent Session History', shortcut: '', icon: AgentSessionHistoryIcon }, // i18n-ignore
+  { id: 'conversations', key: 'conversations.tab', label: 'Conversations', shortcut: '', icon: MessagesSquare }
 ]
 const tabLabel = (tab) => t(tab.key, tab.label)
 const isBrowser = (id) => props.browsers.some((b) => b.id === id)
@@ -389,6 +397,18 @@ onBeforeUnmount(() => {
         @resume="(s) => emit('resume-session', s)"
         @focus-pane="focusPane"
         @open-editor="(file) => emit('open-editor', file)"
+        @toast="(t) => emit('toast', t)"
+      />
+      <ConversationsPanel
+        v-if="shown.conversations"
+        v-show="current() === 'conversations'"
+        :events="activity"
+        :teams="teams"
+        :projects="projects"
+        :workspace-id="workspaceId"
+        :now="now"
+        :active="current() === 'conversations'"
+        @focus-pane="focusPane"
         @toast="(t) => emit('toast', t)"
       />
       <template v-for="b in browsers" :key="b.id">

@@ -473,6 +473,10 @@ const chatInterrupted = reactive({})
 // Chats whose background work (shells, sub-agents, monitors) still runs:
 // the number of tasks, from their events (else the pane's own count).
 const chatBackground = reactive({})
+// Conversations recorded in the activity log (see "Conversations" below).
+const sentForYouTexts = new Map() // paneId -> texts Tessel sent for you, not recorded again
+const chatTurnsSeen = new Map() // paneId -> Set of user message ids recorded
+const chatReplies = new Map() // paneId -> Map messageId -> text so far
 function chatPaneState(leaf) {
   // What the events said, else the pane's own status (after a reload).
   const st = chatStatus[leaf.id] || leaf.liveStatus
@@ -613,10 +617,14 @@ function deliverToChat(leafId, text, meta = {}) {
   const origin = meta.source === 'you' ? 'user' : 'team'
   const done = (ok) => {
     logMessage(leafId, ok ? 'sent' : 'failed', text, meta)
+    if (!ok) forgetSentForYou(leafId, text)
     if (ok && meta.onDelivered) meta.onDelivered()
     if (!ok && meta.onFailed) meta.onFailed()
   }
   if (!api) return done(false)
+  // Logged above as your message: the chat's own 'user' event for it is
+  // not recorded a second time (recordChatTurn).
+  if (origin === 'user') sentForYou(leafId, text)
   const call = origin === 'user' ? api.send({ paneId: leafId, text }) : api.sendTeam({ paneId: leafId, messages: [{ id: newId('msg'), from: 'Tessel', text }] })
   Promise.resolve(call)
     .then((r) => done(!!(r && r.ok)))
@@ -2823,6 +2831,9 @@ function buildCommands() {
   })
   add(agentsGroup, taskPanelOpen.value && sideTab.value === 'history' ? t('app.cmd.hideSessionHistory', 'Hide Agent Session History') : t('app.cmd.showSessionHistory', 'Show Agent Session History'), () => toggleSideTab('history'), {
     hint: t('app.cmd.sessionHistoryHint', 'Browse, search and resume past agent conversations')
+  })
+  add(agentsGroup, taskPanelOpen.value && sideTab.value === 'conversations' ? t('conversations.cmd.hide', 'Hide Conversations') : t('conversations.cmd.show', 'Show Conversations'), () => toggleSideTab('conversations'), {
+    hint: t('conversations.cmd.hint', 'What the agents of a team said to each other and to you')
   })
   add(agentsGroup, taskPanelOpen.value && sideTab.value === 'taskHistory' ? t('taskHistory.cmd.hide', 'Hide Task history') : t('taskHistory.cmd.show', 'Show Task history'), () => toggleSideTab('taskHistory'), {
     hint: t('taskHistory.cmd.hint', 'Finished tasks with their time, tokens and estimated cost')
@@ -8847,6 +8858,7 @@ function logTeamMessages(team, res) {
       continue
     }
     const to = findLeaf(m.toId)
+    const sender = findLeaf(m.fromId)
     const event = {
       t: m.createdAt || Date.now(),
       type: 'message',
@@ -8856,6 +8868,10 @@ function logTeamMessages(team, res) {
       status: read ? 'read' : 'unread',
       source: 'agent',
       from: who(m.fromId),
+      // The sender itself (the Conversations tab shows its logo and goes to
+      // its pane): names are reused, so not by name.
+      fromPaneId: m.fromId,
+      fromAgentId: sender && sender.agentId ? sender.agentId : null,
       scope: 'team-chat',
       teamId: team.id,
       wsId: teamWsId(team.id),
@@ -8929,9 +8945,25 @@ function applyReport(task, r, from, teamId) {
     detail: r.outcome === 'succeeded' ? 'succeeded' : 'failed'
   })
   const giver = task.createdBy && task.createdBy !== from.id ? findLeaf(task.createdBy) : null
-  if (giver && teamId && giver.team === teamId) {
-    const files = r.files && r.files.length ? `
+  const filesLine = r.files && r.files.length ? `
 Files: ${r.files.slice(0, 20).join(', ')}${r.files.length > 20 ? ' …' : ''}` : '' // i18n-ignore
+  const reportText = `${r.summary || ''}${filesLine}`
+  recordActivity({
+    type: 'reply',
+    paneId: from.id,
+    agent: agentInfo(from),
+    kind: 'report',
+    outcome: r.outcome,
+    text: reportText.slice(0, 8000),
+    preview: chatPreview(reportText),
+    wsId: task.wsId,
+    teamId: teamId || from.team || null,
+    taskTitle: task.title,
+    taskId: task.id,
+    ...(giver ? { toPaneId: giver.id, to: paneLabel(giver) } : {})
+  })
+  if (giver && teamId && giver.team === teamId) {
+    const files = filesLine
     tellAgents([giver], `[Tessel] ${paneLabel(from)} finished card ${task.id} "${task.title}": ${r.outcome}.
 ${r.summary}${files}`, teamId, { wake: true }) // i18n-ignore
   }
@@ -8945,6 +8977,18 @@ ${r.summary}${files}`, teamId, { wake: true }) // i18n-ignore
 function askDecision(task, r, from) {
   updateTask(task.id, { gate: { question: r.question, options: r.options || [], status: 'pending', by: from.id, askedAt: Date.now() } })
   recordActivity({ type: 'task', action: 'gate', paneId: from.id, agent: agentInfo(from), title: task.title, wsId: task.wsId, by: paneLabel(from), detail: r.question })
+  recordActivity({
+    type: 'reply',
+    paneId: from.id,
+    agent: agentInfo(from),
+    kind: 'decision',
+    text: String(r.question || '').slice(0, 8000),
+    preview: chatPreview(r.question),
+    wsId: task.wsId,
+    teamId: from.team || null,
+    taskTitle: task.title,
+    taskId: task.id
+  })
   const needs = t('app.board.needsDecision', '{{pane}} needs your decision', { pane: paneLabel(from) })
   inboxNote('attention', needs, r.question, from.id)
   const text = t('app.board.needsDecisionOn', '{{pane}} needs your decision on "{{title}}": {{question}}', { pane: paneLabel(from), title: task.title, question: r.question })
@@ -8960,6 +9004,20 @@ function resolveDecision(taskId, answer) {
   updateTask(task.id, { gate: { ...task.gate, status: 'resolved', answer: text.slice(0, 500), resolvedAt: Date.now() } })
   recordActivity({ type: 'task', action: 'decided', paneId: task.gate.by, title: task.title, wsId: task.wsId, detail: text })
   const asker = task.gate.by ? findLeaf(task.gate.by) : null
+  recordActivity({
+    type: 'message',
+    paneId: task.gate.by,
+    agent: agentInfo(asker),
+    status: 'sent',
+    source: 'you',
+    scope: 'decision',
+    text: text.slice(0, 8000),
+    preview: chatPreview(text),
+    wsId: task.wsId,
+    teamId: asker?.team || null,
+    taskTitle: task.title,
+    taskId: task.id
+  })
   if (asker) {
     const msg = `[Tessel] The user decided on card ${task.id} "${task.title}" (${task.gate.question}): ${text}` // i18n-ignore
     if (asker.team && teamById(asker.team)) tellAgents([asker], msg, asker.team)
@@ -10188,12 +10246,95 @@ watch(
   },
   { deep: true }
 )
+// --- Conversations: what you and a chat agent say to each other --------------
+// Your turns and the agent's replies go in the activity log (the Conversations
+// tab of the side panel turns them into threads, src/shared/conversations.js).
+// Your turns: 'message' events (source 'you', scope 'chat'); the agent's
+// replies: 'reply' events (kind 'chat'), one per message, written when its
+// turn ends (an assistant event carries the whole message so far).
+function chatPreview(text) {
+  return String(text || '').replace(/\s+/g, ' ').slice(0, 160)
+}
+// Texts Tessel sends to a chat for you (deliverToChat logs them itself):
+// the chat's 'user' event for them is skipped.
+function sentForYou(paneId, text) {
+  const list = sentForYouTexts.get(paneId) || []
+  list.push(text)
+  if (list.length > 50) list.shift()
+  sentForYouTexts.set(paneId, list)
+}
+function forgetSentForYou(paneId, text) {
+  const list = sentForYouTexts.get(paneId)
+  const i = list ? list.indexOf(text) : -1
+  if (i >= 0) list.splice(i, 1)
+  return i >= 0
+}
+function recordChatTurn(paneId, ev) {
+  if (ev.origin !== 'user' || (ev.status !== 'sent' && ev.status !== 'queued') || typeof ev.text !== 'string') return
+  const leaf = findLeaf(paneId)
+  if (!leaf || leaf.kind !== 'chat') return
+  // A held message gets a 'sent' row of its own when it goes: once each.
+  if (ev.id) {
+    const seen = chatTurnsSeen.get(paneId) || new Set()
+    if (seen.has(ev.id)) return
+    seen.add(ev.id)
+    if (seen.size > 500) seen.delete(seen.values().next().value)
+    chatTurnsSeen.set(paneId, seen)
+  }
+  if (forgetSentForYou(paneId, ev.text)) return
+  const text = ev.text.trim()
+  if (!text) return
+  recordActivity({
+    type: 'message',
+    paneId,
+    agent: agentInfo(leaf),
+    status: 'sent',
+    source: 'you',
+    scope: 'chat',
+    teamId: leaf.team || null,
+    wsId: wsOfLeaf(paneId)?.id || null,
+    preview: chatPreview(text),
+    text: text.slice(0, 8000)
+  })
+}
+function noteChatReply(paneId, ev) {
+  // Sub-agents' messages (agentId) are theirs, not the conversation's.
+  if (ev.agentId || !ev.messageId || typeof ev.text !== 'string') return
+  const replies = chatReplies.get(paneId) || new Map()
+  replies.set(ev.messageId, ev.text)
+  chatReplies.set(paneId, replies)
+}
+function flushChatReplies(paneId) {
+  const replies = chatReplies.get(paneId)
+  if (!replies) return
+  chatReplies.delete(paneId)
+  const leaf = findLeaf(paneId)
+  if (!leaf || leaf.kind !== 'chat') return
+  for (const raw of replies.values()) {
+    const text = raw.trim()
+    if (!text) continue
+    recordActivity({
+      type: 'reply',
+      paneId,
+      agent: agentInfo(leaf),
+      kind: 'chat',
+      text: text.slice(0, 8000),
+      preview: chatPreview(text),
+      wsId: wsOfLeaf(paneId)?.id || null,
+      teamId: leaf.team || null
+    })
+  }
+}
 onMounted(() => {
   const chat = window.shellApi.chat
   if (!chat || !chat.onEvent) return
   offChatEvents = chat.onEvent((e) => {
     const ev = e && e.event
     if (!ev) return
+    // The conversation itself (a replayed 'history' carries no such events).
+    if (ev.type === 'user' && e.paneId) recordChatTurn(e.paneId, ev)
+    if (ev.type === 'assistant' && e.paneId) noteChatReply(e.paneId, ev)
+    if (ev.type === 'turnEnd' && e.paneId) flushChatReplies(e.paneId)
     if (ev.type === 'status' && e.paneId && typeof ev.state === 'string') {
       chatStatus[e.paneId] = ev.state
       // A chat on an SSH host that lost its connection: opened again (resumed)
@@ -10202,7 +10343,10 @@ onMounted(() => {
       else if (ev.state !== 'asleep') delete chatDisconnected[e.paneId]
       if (ev.state === 'working') delete chatInterrupted[e.paneId]
       // No process any more (or a new one): its background work is over.
-      if (!['idle', 'working', 'approval'].includes(ev.state)) chatBackground[e.paneId] = 0
+      if (!['idle', 'working', 'approval'].includes(ev.state)) {
+        chatBackground[e.paneId] = 0
+        chatReplies.delete(e.paneId)
+      }
     }
     if (ev.type === 'backgroundTasks' && e.paneId) chatBackground[e.paneId] = Number.isSafeInteger(ev.running) && ev.running > 0 ? ev.running : 0
     // Its last turn was interrupted (Esc, Stop): said so until the next one.
@@ -11710,6 +11854,8 @@ onBeforeUnmount(() => {
           :root="sideRoot"
           :can-insert="canInsertPath"
           :agent-panes="agentPanes"
+          :activity="activity"
+          :teams="teams"
           :workspace-id="currentWsId"
           :remote="sideRemote"
           :open-session-ids="openSessionIds"

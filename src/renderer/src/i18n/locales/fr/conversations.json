@@ -1,0 +1,71 @@
+{
+  "conversations": {
+    "tab": "Conversations",
+    "title": "Conversations",
+    "titleShort": "Conversations",
+    "subtitle": "Entre les agents d'une équipe, et avec vous",
+    "you": "Vous",
+    "anAgent": "Un agent",
+    "formerTeam": "Une ancienne équipe",
+    "withAgent": "Vous et {{agent}}",
+    "onCard": "sur « {{title}} »",
+    "cmd": {
+      "show": "Afficher les conversations",
+      "hide": "Masquer les conversations",
+      "hint": "Ce que les agents d'une équipe se sont dit, et vous ont dit"
+    },
+    "scope": {
+      "workspace": "Espace de travail",
+      "all": "Tout",
+      "aria": "Portée des conversations"
+    },
+    "period": {
+      "label": "Période",
+      "24h": "24 h",
+      "7d": "7 jours",
+      "30d": "30 jours"
+    },
+    "participant": {
+      "label": "Agent",
+      "all": "Tous les agents"
+    },
+    "notices": "Avis de Tessel",
+    "noticesHint": "Afficher aussi ce que Tessel a dit aux agents (équipe, cartes, livraisons)",
+    "search": "Chercher dans les conversations",
+    "clearSearch": "Effacer la recherche",
+    "count_one": "{{count}} message",
+    "count_other": "{{count}} messages",
+    "threads_one": "{{count}} conversation",
+    "threads_other": "{{count}} conversations",
+    "empty": "Rien n'a encore été dit. Les messages entre les agents d'une équipe, et ceux que vous échangez avec un agent par Tessel (chat natif, notes, décisions sur une carte), apparaissent ici.",
+    "noMatch": "Aucun message ne correspond.",
+    "team": "Équipe",
+    "teamThread": "Équipe « {{name}} »",
+    "lead": "chef",
+    "showEarlier": "Afficher les {{count}} messages précédents",
+    "showMore": "Afficher tout",
+    "showLess": "Réduire",
+    "copy": "Copier la conversation",
+    "copied": "Conversation copiée",
+    "copyFailed": "La conversation n'a pas pu être copiée",
+    "goToPane": "Aller à son panneau",
+    "paneClosed": "Son panneau est fermé",
+    "status": {
+      "held": "en attente d'envoi",
+      "skipped": "non envoyé : limite d'utilisation",
+      "failed": "non envoyé",
+      "unconfirmed": "envoyé, pas vu pris en compte",
+      "unread": "pas encore lu",
+      "partly": "lu par {{read}} sur {{total}}"
+    },
+    "reply": {
+      "decision": "vous demande de décider",
+      "report": "rapporte : terminé",
+      "reportFailed": "rapporte : n'a pas pu terminer"
+    },
+    "export": {
+      "team": "Équipe « {{name}} »"
+    },
+    "last": "Dernier message {{when}}"
+  }
+}
