@@ -34,12 +34,11 @@ A new tab in the right side panel, right after **Agents**, shows what was said:
   to its pane.
 - Command palette: **Show Conversations**.
 
-### Arrange your projects (next release, 1.13.4)
+### Arrange your projects (1.13.4)
 
 Drag a project's name in the left sidebar to put it where you want; a line
 shows where it will land, and **Esc** cancels. **Alt+↑** and **Alt+↓** on a
-project move it from the keyboard. The order is saved. This is in the source
-code now and comes to the installer with the next release.
+project move it from the keyboard. The order is saved.
 
 ### Agents can start their own team (1.13.3)
 
