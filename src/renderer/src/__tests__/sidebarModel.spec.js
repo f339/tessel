@@ -14,7 +14,11 @@ import {
   cardTargetPane,
   portProbes,
   compareCards,
-  paneRow
+  paneRow,
+  projectDropIndex,
+  moveToIndex,
+  mergeProjectOrder,
+  orderWorkspaces
 } from '../sidebarModel'
 
 const NOW = 1_000_000_000
@@ -310,5 +314,48 @@ describe('chat agents (no terminal) in the sidebar', () => {
     expect(main.status).toBe('permission')
     expect(main.attention.cls).toBe(1)
     expect(portProbes([p])).toEqual([{ id: 'ws1::', pids: [11, 12], path: 'C:\\repo' }])
+  })
+})
+
+describe('projects in your order (drag, Alt+Up/Down)', () => {
+  const groups = [
+    { top: 0, bottom: 100 },
+    { top: 100, bottom: 130 },
+    { top: 130, bottom: 400 }
+  ]
+
+  it('a drop goes before the group whose upper half it is over, else at the end', () => {
+    expect(projectDropIndex(groups, -5)).toBe(0)
+    expect(projectDropIndex(groups, 49)).toBe(0)
+    expect(projectDropIndex(groups, 51)).toBe(1)
+    expect(projectDropIndex(groups, 114)).toBe(1)
+    expect(projectDropIndex(groups, 116)).toBe(2)
+    expect(projectDropIndex(groups, 300)).toBe(3)
+    expect(projectDropIndex([], 10)).toBe(0)
+  })
+
+  it('moves a project before the one at an index, or to the end; the same order when it stays', () => {
+    const order = ['a', 'b', 'c', 'd']
+    expect(moveToIndex(order, 'c', 0)).toEqual(['c', 'a', 'b', 'd'])
+    expect(moveToIndex(order, 'a', 2)).toEqual(['b', 'a', 'c', 'd'])
+    expect(moveToIndex(order, 'a', 4)).toEqual(['b', 'c', 'd', 'a'])
+    expect(moveToIndex(order, 'b', 9)).toEqual(['a', 'c', 'd', 'b'])
+    expect(moveToIndex(order, 'b', 1)).toBe(order) // just before itself
+    expect(moveToIndex(order, 'b', 2)).toBe(order) // just after itself
+    expect(moveToIndex(order, 'zz', 0)).toBe(order)
+  })
+
+  it('the projects a filter hides keep their places', () => {
+    // b and d hidden; a, c, e shown and arranged e, a, c.
+    expect(mergeProjectOrder(['a', 'b', 'c', 'd', 'e'], ['e', 'a', 'c'])).toEqual(['e', 'b', 'a', 'd', 'c'])
+    expect(mergeProjectOrder(['a', 'b'], ['b', 'a'])).toEqual(['b', 'a'])
+    expect(mergeProjectOrder(['a', 'b'], ['b', 'gone', 'a'])).toEqual(['b', 'a'])
+  })
+
+  it('puts the workspaces in that order, keeping any not named', () => {
+    const ws = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+    expect(orderWorkspaces(ws, ['c', 'a', 'b']).map((w) => w.id)).toEqual(['c', 'a', 'b'])
+    expect(orderWorkspaces(ws, ['b', 'nope']).map((w) => w.id)).toEqual(['b', 'a', 'c'])
+    expect(orderWorkspaces(ws, ['c', 'a', 'b'])[0]).toBe(ws[2]) // the same objects
   })
 })

@@ -9604,12 +9604,46 @@ body.explorer-sash-dragging * {
 
 /* WorktreeList */
 .osb-list {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
   padding: 1px 8px 8px 4px;
   outline: none;
+}
+
+/* A project dragged to a new place (WorkspaceSidebar.vue): the line where it
+   lands, the project itself faded while it moves. */
+.osb-drop-line {
+  position: absolute;
+  z-index: 3;
+  left: 6px;
+  right: 8px;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+  pointer-events: none;
+}
+.osb-drop-line::before {
+  content: '';
+  position: absolute;
+  left: -3px;
+  top: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.osb-section-header.dragging {
+  opacity: 0.45;
+}
+body.osb-project-dragging,
+body.osb-project-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
 }
 
 /* The list itself takes keyboard focus for the arrow keys: no frame around
