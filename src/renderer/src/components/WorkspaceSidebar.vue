@@ -47,7 +47,10 @@ import {
   cardTargetPane,
   isAgentPane,
   hiddenWorktreesLabel,
-  projectWorktreeVisibility
+  projectWorktreeVisibility,
+  projectDropIndex,
+  moveToIndex,
+  mergeProjectOrder
 } from '../sidebarModel'
 import { t } from '../i18n'
 import { trackPointerDrag } from '../browser/webviewPassthrough'
@@ -103,7 +106,10 @@ const emit = defineEmits([
   'cleanup-worktrees',
   'port-open',
   'port-copy',
-  'port-stop'
+  'port-stop',
+  // Every project's id in the order you arranged (drag a project's header,
+  // or Alt+Up/Down on it): App puts its workspaces in that order.
+  'reorder-projects'
 ])
 
 // --- Options (persisted in settings, Orca's defaults) -------------------------
@@ -135,6 +141,147 @@ function toggleGroup(key) {
   const list = settings.sidebarCollapsedGroups
   settings.sidebarCollapsedGroups = list.includes(key) ? list.filter((k) => k !== key) : [...list, key]
 }
+
+// --- Projects in your order ---------------------------------------------------------
+// Drag a project's header up or down the list (a line shows where it lands,
+// the list scrolls at its edges, Esc cancels), or press Alt+Up / Alt+Down on
+// it. The drag starts only once the pointer has moved: a click still folds the
+// project, a double-click still renames it. Arranged while projects are in
+// Recent order, the order becomes Manual, so what you arranged stays.
+const DRAG_THRESHOLD = 4
+const shownProjectIds = () => rows.value.filter((r) => r.type === 'header' && r.project).map((r) => r.project.id)
+const projectDrag = ref(null) // { id, active, index, line } while a header is held
+let justDragged = false
+function reorderProjects(shownOrder) {
+  const all = props.projects.map((p) => p.id)
+  if (settings.sidebarProjectOrderBy !== 'manual') settings.sidebarProjectOrderBy = 'manual'
+  emit('reorder-projects', mergeProjectOrder(all, shownOrder))
+}
+// The shown projects' extents on screen, in order: a header to the next one,
+// the last one to the end of the list.
+function projectGroups() {
+  const list = listEl.value
+  if (!list) return []
+  const headers = [...list.querySelectorAll('[data-repo-header-id]')]
+  const end = Math.max(0, ...[...list.children].filter((el) => !el.classList.contains('osb-drop-line')).map((el) => el.getBoundingClientRect().bottom))
+  return headers.map((h, i) => ({
+    id: h.dataset.repoHeaderId,
+    el: h,
+    top: h.getBoundingClientRect().top,
+    bottom: i + 1 < headers.length ? headers[i + 1].getBoundingClientRect().top : end
+  }))
+}
+function onHeaderPointerDown(r, e) {
+  if (!r.project || e.button !== 0 || !grouped.value || projectDrag.value) return
+  if (e.target && e.target.closest && e.target.closest('input, button, textarea, [data-repo-header-actions]')) return
+  if (editingId.value === r.project.id) return
+  const header = e.currentTarget
+  const startX = e.clientX
+  const startY = e.clientY
+  projectDrag.value = { id: r.project.id, active: false, index: -1, line: null }
+  // Until it moves, only watched: no capture (a click or a double-click on
+  // the header stays what it was).
+  const pending = (ev) => {
+    if (Math.abs(ev.clientX - startX) < DRAG_THRESHOLD && Math.abs(ev.clientY - startY) < DRAG_THRESHOLD) return
+    unwatch()
+    startProjectDrag(header, ev)
+  }
+  const unwatch = () => {
+    window.removeEventListener('pointermove', pending)
+    window.removeEventListener('pointerup', stopPending)
+    window.removeEventListener('pointercancel', stopPending)
+    window.removeEventListener('blur', stopPending)
+  }
+  const stopPending = () => {
+    unwatch()
+    if (projectDrag.value && !projectDrag.value.active) projectDrag.value = null
+  }
+  window.addEventListener('pointermove', pending)
+  window.addEventListener('pointerup', stopPending)
+  window.addEventListener('pointercancel', stopPending)
+  window.addEventListener('blur', stopPending)
+}
+function startProjectDrag(header, ev) {
+  const drag = projectDrag.value
+  if (!drag) return
+  drag.active = true
+  document.body.classList.add('osb-project-dragging')
+  const onKey = (k) => {
+    if (k.key !== 'Escape') return
+    k.preventDefault()
+    k.stopPropagation()
+    drag.cancelled = true
+    stop()
+  }
+  window.addEventListener('keydown', onKey, true)
+  // Ends even when let go over a browser page or outside the window.
+  const stop = trackPointerDrag(
+    { currentTarget: header, pointerId: ev.pointerId },
+    {
+      onMove: moveProjectDrag,
+      onEnd: () => {
+        window.removeEventListener('keydown', onKey, true)
+        endProjectDrag()
+      }
+    }
+  )
+  moveProjectDrag(ev)
+}
+function moveProjectDrag(ev) {
+  const drag = projectDrag.value
+  const list = listEl.value
+  if (!drag || !drag.active || !list || !ev) return
+  // Near the list's top or bottom edge: it scrolls.
+  const box = list.getBoundingClientRect()
+  if (ev.clientY < box.top + 28) list.scrollTop -= 12
+  else if (ev.clientY > box.bottom - 28) list.scrollTop += 12
+  const groups = projectGroups()
+  const order = groups.map((g) => g.id)
+  const index = projectDropIndex(groups, ev.clientY)
+  drag.index = index
+  // The line only where the project would really move.
+  if (moveToIndex(order, drag.id, index) === order) drag.line = null
+  else {
+    const y = index < groups.length ? groups[index].top : groups.length ? groups[groups.length - 1].bottom : box.top
+    drag.line = y - box.top + list.scrollTop
+  }
+}
+function endProjectDrag() {
+  const drag = projectDrag.value
+  projectDrag.value = null
+  document.body.classList.remove('osb-project-dragging')
+  if (!drag || !drag.active) return
+  // The click that ends the drag does not fold the project.
+  justDragged = true
+  setTimeout(() => (justDragged = false), 0)
+  if (drag.cancelled || drag.index < 0) return
+  const order = shownProjectIds()
+  const next = moveToIndex(order, drag.id, drag.index)
+  if (next !== order) reorderProjects(next)
+}
+function onHeaderClick(r) {
+  if (justDragged) return
+  toggleGroup(r.key)
+}
+// Alt+Up / Alt+Down on a project's header: one place up or down; the header
+// keeps the keyboard.
+function moveProjectBy(project, step) {
+  if (!project || !grouped.value) return
+  const order = shownProjectIds()
+  const at = order.indexOf(project.id)
+  if (at < 0) return
+  const next = moveToIndex(order, project.id, step < 0 ? at - 1 : at + 2)
+  if (next === order) return
+  reorderProjects(next)
+  nextTick(() => {
+    const el = listEl.value && [...listEl.value.querySelectorAll('[data-repo-header-id]')].find((n) => n.dataset.repoHeaderId === project.id)
+    if (el) {
+      el.focus()
+      if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest' })
+    }
+  })
+}
+onBeforeUnmount(() => document.body.classList.remove('osb-project-dragging'))
 
 // A project's "Hiding N discovered worktrees" line (after Orca's
 // ImportedWorktreesVisibilityLine.tsx and NewExternalWorktreesInboxLine.tsx,
@@ -1078,19 +1225,29 @@ defineExpose({
         tabindex="0"
         @keydown="onListKey"
       >
+        <!-- Where a dragged project lands. -->
+        <div v-if="projectDrag && projectDrag.active && projectDrag.line !== null" class="osb-drop-line" :style="{ top: projectDrag.line + 'px' }" aria-hidden="true" data-test="project-drop-line"></div>
         <template v-for="r in rows" :key="r.key">
           <div v-if="r.type === 'header'" class="osb-group" :class="{ first: r === rows[0] }">
             <div
               class="osb-section-header"
-              :class="{ current: r.project && r.project.id === currentId, flat: !r.project }"
+              :class="{
+                current: r.project && r.project.id === currentId,
+                flat: !r.project,
+                dragging: !!(r.project && projectDrag && projectDrag.active && projectDrag.id === r.project.id)
+              }"
               role="button"
               tabindex="0"
               :aria-expanded="r.count > 0 ? !r.collapsed : undefined"
+              :aria-keyshortcuts="r.project ? 'Alt+ArrowUp Alt+ArrowDown' : undefined"
               :data-repo-header-id="r.project ? r.project.id : undefined"
               :data-ws-drop-id="r.project ? r.project.id : undefined"
-              @click="toggleGroup(r.key)"
+              @pointerdown="onHeaderPointerDown(r, $event)"
+              @click="onHeaderClick(r)"
               @keydown.enter.prevent="toggleGroup(r.key)"
               @keydown.space.prevent="toggleGroup(r.key)"
+              @keydown.alt.up.prevent="moveProjectBy(r.project, -1)"
+              @keydown.alt.down.prevent="moveProjectBy(r.project, 1)"
               @contextmenu.prevent="r.project && openProjectActions(r.project, $event)"
             >
               <div class="osb-section-title">

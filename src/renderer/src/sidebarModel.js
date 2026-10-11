@@ -604,6 +604,52 @@ export function buildSidebarRows(projects, options = {}, now = Date.now()) {
   return rows
 }
 
+// --- Projects in your order (drag a project, Alt+Up/Down) -----------------------
+// Where a dragged project lands: the groups shown, in order, as their
+// extent on screen ([{ top, bottom }], a project's header and its rows);
+// -> the index it goes before (groups.length: at the end). Over a group's
+// upper half it goes before that group, over its lower half after it.
+export function projectDropIndex(groups, y) {
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i]
+    if (y < (g.top + g.bottom) / 2) return i
+  }
+  return groups.length
+}
+
+// The order with `id` moved before the item at `index` of the order as it is
+// (index = order.length: at the end). The same array when nothing moves.
+export function moveToIndex(order, id, index) {
+  const from = order.indexOf(id)
+  if (from < 0) return order
+  const to = Math.max(0, Math.min(order.length, index))
+  if (to === from || to === from + 1) return order
+  const out = order.filter((x) => x !== id)
+  out.splice(to > from ? to - 1 : to, 0, id)
+  return out
+}
+
+// Every project's id in the new order, from the order of those shown: the
+// shown ones take each other's places, the ones a filter hides keep theirs.
+export function mergeProjectOrder(allIds, shownOrder) {
+  const shown = new Set(shownOrder)
+  const queue = shownOrder.filter((id) => allIds.includes(id))
+  return allIds.map((id) => (shown.has(id) && queue.length ? queue.shift() : id))
+}
+
+// The workspaces (App's list) in the order of these ids; any not named keep
+// their order after them. Unknown ids are ignored.
+export function orderWorkspaces(workspaces, ids) {
+  const byId = new Map(workspaces.map((w) => [w.id, w]))
+  const out = []
+  for (const id of ids || []) {
+    const w = byId.get(id)
+    if (w && !out.includes(w)) out.push(w)
+  }
+  for (const w of workspaces) if (!out.includes(w)) out.push(w)
+  return out
+}
+
 // Arrow keys in the list: the card above or below the current one (Orca's
 // navigateWorktree), wrapping at the ends.
 export function neighborCard(rows, currentKey, direction) {

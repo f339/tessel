@@ -12,7 +12,7 @@ import SidePanel from './components/SidePanel.vue'
 import WorkspaceSidebar from './components/WorkspaceSidebar.vue'
 import WorktreeCleanupDialog from './components/sidebar/WorktreeCleanupDialog.vue'
 import StatusBar from './components/StatusBar.vue'
-import { buildProjectCards, cardTargetPane, portProbes } from './sidebarModel'
+import { buildProjectCards, cardTargetPane, portProbes, orderWorkspaces } from './sidebarModel'
 import { createProjectWorktrees } from './projectWorktrees'
 import { prAgentTargets } from './prAgentTargets'
 import { withWorktreePath } from './prAgentPrompts'
@@ -4594,6 +4594,14 @@ async function createWorkspace() {
 function renameWorkspace(id, name) {
   const ws = wsById(id)
   if (ws) ws.name = name
+}
+
+// Projects arranged in the sidebar (dragged, or Alt+Up/Down): the workspaces
+// take that order, saved with the layout.
+function reorderWorkspaces(ids) {
+  const next = orderWorkspaces(workspaces.value, ids)
+  if (next.every((w, i) => w === workspaces.value[i])) return
+  workspaces.value.splice(0, workspaces.value.length, ...next)
 }
 
 function removeWorkspace(id, confirmed = false, editorChecked = false) {
@@ -11772,6 +11780,7 @@ onBeforeUnmount(() => {
         @select="selectWorkspace"
         @create="openAddProject"
         @rename="renameWorkspace"
+        @reorder-projects="reorderWorkspaces"
         @remove="removeWorkspace"
         @folder="setWorkspaceFolder"
         @toggle="toggleSidebar"
