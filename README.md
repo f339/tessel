@@ -11,10 +11,81 @@ and French** (Settings → Appearance → Language).
 
 _Formerly **Shell Panels**._
 
+## What this version adds
+
+This is **f339/tessel**, a version of
+[Tessel by mindkind1337](https://github.com/mindkind1337/tessel) built on its
+1.13.2 release. Everything under [Features](#features) below is here too, plus
+the following.
+
+### Conversations tab (1.13.3)
+
+A new tab in the right side panel, right after **Agents**, shows what was said:
+
+- **Between the agents of a team**: every team-channel message, who sent it to
+  whom, and whether it was read. A message sent to the whole team is one bubble
+  that names every recipient.
+- **Between you and each agent**: what you typed in its chat, notes and
+  reviews, your decisions on its cards, its answers and its reports.
+- Chat-style bubbles: yours on the right, each agent in a color of its own with
+  its logo and program ("Ada · Claude Code"), the newest message at the top.
+- Filters by workspace, period and agent, a search box, Tessel's own notices on
+  request, **Copy** a whole thread as text, and a click on an agent's name to go
+  to its pane.
+- Command palette: **Show Conversations**.
+
+### Arrange your projects (next release, 1.13.4)
+
+Drag a project's name in the left sidebar to put it where you want; a line
+shows where it will land, and **Esc** cancels. **Alt+↑** and **Alt+↓** on a
+project move it from the keyboard. The order is saved. This is in the source
+code now and comes to the installer with the next release.
+
+### Agents can start their own team (1.13.3)
+
+Ask an agent that is in no team to set one up: it creates the team and becomes
+its lead (team tools `team_bootstrap` and `team_create`), then hands out cards
+and messages to its teammates as usual.
+
+### Fullscreen follows you (1.13.3)
+
+While a pane is maximized, going to another pane (from the sidebar, the task
+board, a notification, the command palette…) maximizes that pane instead of
+leaving it hidden behind. Agents started in the background never take over the
+screen.
+
+### Skills server for agents (optional)
+
+[`skills-mcp/`](skills-mcp) is an MCP server that gives agents extra tools: web
+search, reading, writing, searching and editing files, git, shell, npm, Python,
+Docker, zip and tar archives, JSON, YAML and TOML, PDF text, HTTP requests,
+ports and processes, and Antigravity skills. Set it up once:
+
+```
+cd skills-mcp
+npm install
+claude mcp add -s user skills -- node "C:\path\to\tessel\skills-mcp\server.cjs"
+codex mcp add skills -- node "C:\path\to\tessel\skills-mcp\server.cjs"
+```
+
+### Updates from this page (1.13.3)
+
+The installer from this page updates itself from **this** repository's
+releases, never from the original's, so an update never takes these additions
+away.
+
+### Fixes (1.13.3)
+
+- The activity log is loaded once per window: a reload no longer stores every
+  event twice, and a log that was already doubled is repaired on the next start.
+- French text for the team messages added in this version.
+- The development server no longer prints "Failed to load url
+  /src/renderer/src/main.js" when it starts.
+
 ## Download
 
 **To use Tessel, download the installer** from the
-[Releases page](https://github.com/mindkind1337/tessel/releases/latest):
+[Releases page](https://github.com/f339/tessel/releases/latest):
 `Tessel-Setup-<version>.exe`, then run it. Nothing else is needed (no Node.js,
 no `npm`), and the app updates itself afterwards.
 
