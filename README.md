@@ -18,6 +18,27 @@ This is **f339/tessel**, a version of
 1.13.2 release. Everything under [Features](#features) below is here too, plus
 the following.
 
+### Live Share (1.13.5)
+
+Others join your Tessel from their own Tessel and see your screen live, like
+VS Code Live Share:
+
+- **Share** (people icon in the toolbar) gives an invite code to send to your
+  guests. Each guest waits until you click **Allow**, and you can remove anyone
+  or **Stop sharing** at any time.
+- Guests see the project on your screen as you see it: the same panes, splits
+  and sizes, the active and the fullscreen pane, and they follow you when you
+  switch project. Terminals and agents are live.
+- Guests can type in your terminals and agents, open new ones (they run on your
+  computer) and close panes. **They can run any command on your PC as you**:
+  only share the code with people you trust.
+- Your guests **Join** from the same window by pasting the code. They need this
+  version of Tessel (1.13.5 or later).
+- It goes through a free Cloudflare tunnel (no account; Tessel downloads
+  `cloudflared` the first time you share), and everything is end-to-end
+  encrypted with the invite code's secret, so the tunnel only carries
+  ciphertext. Editor, browser and chat panes are not shared yet.
+
 ### Conversations tab (1.13.3)
 
 A new tab in the right side panel, right after **Agents**, shows what was said:
