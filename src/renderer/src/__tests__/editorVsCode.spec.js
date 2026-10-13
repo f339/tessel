@@ -22,7 +22,7 @@ describe("VS Code's breadcrumbs", () => {
     expect(symbolIcon(4)).toEqual({ name: 'symbol-class', color: '#EE9D28' })
     expect(symbolIcon(11)).toEqual({ name: 'symbol-function', color: '#B180D7' })
     expect(symbolIcon(12)).toEqual({ name: 'symbol-variable', color: '#75BEFF' })
-    expect(symbolIcon(99).name).toBe('symbol-variable')
+    expect(symbolIcon(99).name).toBe('symbol-property') // VS Code's for an unknown kind
   })
 
   it('folders under the project, the file with its icon, then the symbols; a symbol is shown when clicked', async () => {

@@ -48,11 +48,13 @@ export function activeMonacoEditor() {
   return current && !(current.getModel && current.getModel() === null) ? current : null
 }
 
-// A symbol picked in the Outline: shown and selected in its editor.
-export function revealRange(range, { focus = true } = {}) {
+// A symbol picked in the Outline: shown in its editor, the cursor at its
+// start (select: the whole range selected, VS Code's double-click).
+export function revealRange(range, { focus = true, select = false } = {}) {
   const ed = activeMonacoEditor()
   if (!ed || !range) return false
-  ed.setSelection({ startLineNumber: range.startLineNumber, startColumn: range.startColumn, endLineNumber: range.startLineNumber, endColumn: range.startColumn })
+  if (select) ed.setSelection({ startLineNumber: range.startLineNumber, startColumn: range.startColumn, endLineNumber: range.endLineNumber, endColumn: range.endColumn })
+  else ed.setSelection({ startLineNumber: range.startLineNumber, startColumn: range.startColumn, endLineNumber: range.startLineNumber, endColumn: range.startColumn })
   ed.revealRangeInCenterIfOutsideViewport(range, 0)
   if (focus) ed.focus()
   return true

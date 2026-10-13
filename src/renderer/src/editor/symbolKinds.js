@@ -1,46 +1,48 @@
-// VS Code's icon and colour for each kind of symbol (its SymbolKind, 0 to
-// 25), as its Outline, breadcrumbs and suggestions show them: the codicon
-// (symbolIcons / Codicon.symbol*) and the dark theme's default colour
-// (symbolIcon.*Foreground; null: the text's colour).
-const PURPLE = '#B180D7'
-const ORANGE = '#EE9D28'
-const BLUE = '#75BEFF'
-const KINDS = [
-  ['symbol-file', null], // File
-  ['symbol-module', null], // Module
-  ['symbol-namespace', null], // Namespace
-  ['symbol-package', null], // Package
-  ['symbol-class', ORANGE], // Class
-  ['symbol-method', PURPLE], // Method
-  ['symbol-property', null], // Property
-  ['symbol-field', BLUE], // Field
-  ['symbol-constructor', PURPLE], // Constructor
-  ['symbol-enum', ORANGE], // Enum
-  ['symbol-interface', BLUE], // Interface
-  ['symbol-function', PURPLE], // Function
-  ['symbol-variable', BLUE], // Variable
-  ['symbol-constant', null], // Constant
-  ['symbol-string', null], // String
-  ['symbol-number', null], // Number
-  ['symbol-boolean', null], // Boolean
-  ['symbol-array', null], // Array
-  ['symbol-object', null], // Object
-  ['symbol-key', null], // Key
-  ['symbol-null', null], // Null
-  ['symbol-enum-member', BLUE], // EnumMember
-  ['symbol-struct', null], // Struct
-  ['symbol-event', ORANGE], // Event
-  ['symbol-operator', null], // Operator
-  ['symbol-type-parameter', null] // TypeParameter
+// A symbol's icon as VS Code draws it (SymbolKinds.toIcon in
+// editor/common/languages.ts): the codicon of its kind (VS Code's SymbolKind,
+// 0-25) and its colour in VS Code's dark themes (symbolIcons.ts); null: the
+// text's own colour. Used by the Outline and the editor's breadcrumbs.
+const NAMES = [
+  'symbol-file',
+  'symbol-module',
+  'symbol-namespace',
+  'symbol-package',
+  'symbol-class',
+  'symbol-method',
+  'symbol-property',
+  'symbol-field',
+  'symbol-constructor',
+  'symbol-enum',
+  'symbol-interface',
+  'symbol-function',
+  'symbol-variable',
+  'symbol-constant',
+  'symbol-string',
+  'symbol-number',
+  'symbol-boolean',
+  'symbol-array',
+  'symbol-object',
+  'symbol-key',
+  'symbol-null',
+  'symbol-enum-member',
+  'symbol-struct',
+  'symbol-event',
+  'symbol-operator',
+  'symbol-type-parameter'
 ]
+const ORANGE = '#EE9D28' // class, enum, event
+const PURPLE = '#B180D7' // method, function, constructor
+const BLUE = '#75BEFF' // variable, field, interface, enum member
+const COLORS = { 4: ORANGE, 9: ORANGE, 23: ORANGE, 5: PURPLE, 11: PURPLE, 8: PURPLE, 12: BLUE, 7: BLUE, 10: BLUE, 21: BLUE }
 
+// -> { name: the codicon ('symbol-class'…), color: '#RRGGBB' or null }
 export function symbolIcon(kind) {
-  const k = KINDS[kind] || KINDS[12]
-  return { name: k[0], color: k[1] }
+  const k = Number.isInteger(kind) && kind >= 0 && kind < NAMES.length ? kind : 6 // VS Code: symbol-property for an unknown kind
+  return { name: NAMES[k], color: COLORS[k] || null }
 }
 
-// The symbols around a position, outermost first (VS Code's breadcrumbs and
-// the Outline's "Follow Cursor"): those whose range holds it.
+// The symbols around a position, outermost first (VS Code's breadcrumbs):
+// those whose range holds it.
 export function symbolsAt(tree, line, column) {
   const out = []
   const holds = (r) =>

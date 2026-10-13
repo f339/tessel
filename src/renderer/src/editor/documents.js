@@ -15,6 +15,7 @@ import { settings } from '../settings'
 import { pathKey, fileName, autoSaveDelay, minimalEdit, mainEol } from './editorTabs'
 import { pickLanguage } from '../../../shared/editorLanguage'
 import { createSaveQueue } from './saveQueue'
+import { keepSavedVersion } from './localHistory'
 import { t } from '../i18n'
 
 const unknownError = () => t('editor.doc.unknownError', 'unknown error')
@@ -298,6 +299,8 @@ export function saveDoc(path, { trigger = 'user' } = {}) {
     d.external = false
     d.deleted = false
     updateDirty(key)
+    // VS Code's Local History: the version saved, kept (the Timeline shows it).
+    keepSavedVersion(d.path, text)
     return res
   })
 }

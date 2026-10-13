@@ -17,6 +17,8 @@ import { isRemotePath, remoteHostPath } from '../../../shared/remotePath'
 import { t } from '../i18n'
 import FileIcon from './FileIcon.vue'
 import Codicon from './Codicon.vue'
+import ExplorerOutline from './ExplorerOutline.vue'
+import ExplorerTimeline from './ExplorerTimeline.vue'
 
 const props = defineProps({
   root: { type: String, default: null },
@@ -28,7 +30,7 @@ const props = defineProps({
   // The SSH host of a remote project, shown in the folder's header.
   remoteLabel: { type: String, default: '' }
 })
-const emit = defineEmits(['open', 'open-editor', 'open-external', 'terminal-here', 'insert-path', 'toast', 'close', 'activate-editor', 'close-editor', 'save-all', 'close-all'])
+const emit = defineEmits(['open', 'open-editor', 'open-external', 'terminal-here', 'insert-path', 'toast', 'close', 'activate-editor', 'close-editor', 'save-all', 'close-all', 'open-diff'])
 
 // --- VS Code's sections: Open Editors, then the project's folder ---------------------
 // Each folds by its header (kept in Settings); Open Editors shows 9 rows at
@@ -238,9 +240,17 @@ async function loadStatus({ background = false } = {}) {
   const out = {}
   for (const [p, l] of Object.entries(res.files || {})) out[key(p)] = l
   // The same letters: nothing to draw again.
-  if (!sameStatus(status.value, out)) status.value = out
+  if (!sameStatus(status.value, out)) {
+    status.value = out
+    repoChanges.value++
+  }
   repo.value = !!res.repo
 }
+// The Timeline reads a file's history again when the repository changes (a
+// commit, a pull…): one more at each such change seen.
+const repoChanges = ref(0)
+// A file's git letter (the Timeline's "Uncommitted Changes" hover).
+const fileLetter = (p) => statusOf(status.value, key(p))
 // Git status after changes: at most every second (every 4 s on a remote
 // host, where it shares the connection with the user's clicks), one run at
 // a time, the last change always seen (VS Code's git extension debounces
@@ -321,6 +331,7 @@ async function applyChanges() {
   }
   const matters = statusMatters(props.root, paths, ignored.value)
   if (matters) requestStatus()
+  if (matters && paths.some(inGitDir)) repoChanges.value++
   // A sparse checkout's list lives in git's own folder.
   if (paths.some((p) => /[\\/]\.git[\\/](info[\\/]sparse-checkout|config(\.worktree)?)$/i.test(p))) loadSparse()
   const dirs = foldersToReload(nodes, paths, { remote: remote.value, renamed: change.renamedKnown ? [...change.renamed] : null })
@@ -1286,6 +1297,17 @@ function rowTitle(e) {
     </div>
 
     </template>
+
+    <!-- VS Code's Outline and Timeline: the editor in use's symbols and its
+         file's history. -->
+    <ExplorerOutline :fill="!folderShown" />
+    <ExplorerTimeline
+      :fill="!folderShown"
+      :change-tick="repoChanges"
+      :letter-of="fileLetter"
+      @open-diff="(req) => emit('open-diff', req)"
+      @toast="(m) => emit('toast', m)"
+    />
 
     <div v-if="menu.open" class="explorer-menu-back" @mousedown.self="closeMenu" @contextmenu.prevent="closeMenu">
       <div ref="menuEl" class="ctx-menu explorer-menu" role="menu" tabindex="-1" :style="{ left: menu.x + 'px', top: menu.y + 'px' }">

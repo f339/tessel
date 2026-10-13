@@ -30,23 +30,32 @@ export function canGiveSymbols(model) {
   }
 }
 
-let pending = null
+// A language service registered later (its contribution loads after the
+// model is shown): the Outline asks again. -> a function that stops it.
+export function onSymbolProvidersChanged(listener) {
+  try {
+    const sub = StandaloneServices.get(ILanguageFeaturesService).documentSymbolProvider.onDidChange(() => listener())
+    return () => sub.dispose()
+  } catch {
+    return () => {}
+  }
+}
+
 // -> null when no language service gives this file's symbols, else the tree
 // [{ name, detail, kind (VS Code's SymbolKind), deprecated, range,
 //    selectionRange, children }].
+// Each call has its own token: several callers (the Outline, each editor's
+// breadcrumbs) never cancel each other; a caller drops a stale answer itself.
+// The outline model service shares one request per model version anyway.
 export async function documentSymbols(model) {
   if (!canGiveSymbols(model)) return null
-  if (pending) pending.cancel()
   const cts = new CancellationTokenSource()
-  pending = cts
   try {
     const outline = await StandaloneServices.get(IOutlineModelService).getOrCreate(model, cts.token)
-    if (cts.token.isCancellationRequested) return null
     return plain(outline.getTopLevelSymbols())
   } catch {
     return null
   } finally {
-    if (pending === cts) pending = null
     cts.dispose()
   }
 }

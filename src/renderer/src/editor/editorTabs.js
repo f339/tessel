@@ -18,7 +18,10 @@ export const samePath = (a, b) => pathKey(a) === pathKey(b)
 // with a suffix no real path can have (a NUL). Its tab entry carries
 // diff: { root, rel, oldRel, area, full }.
 export const DIFF_SEP = '\u0000'
+// A version kept by Local History against the file (area 'local', its id in
+// commit's place: the explorer's Timeline).
 export function diffTabPath(full, area, commit = null, base = null) {
+  if (area === 'local') return `${full}${DIFF_SEP}diff:local:${String(commit || '')}` // i18n-ignore
   if (area === 'branch') return `${full}${DIFF_SEP}diff:branch:${String(base || '')}..${String(commit || '')}` // i18n-ignore
   if (area === 'commit') return `${full}${DIFF_SEP}diff:commit:${String(commit || '')}` // i18n-ignore
   return `${full}${DIFF_SEP}diff:${area === 'staged' ? 'staged' : 'unstaged'}` // i18n-ignore

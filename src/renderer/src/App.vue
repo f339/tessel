@@ -127,6 +127,7 @@ import {
 } from './editor/documents'
 import { openTab, validSavedFiles, samePath, fileName, docPathOf, diffTabPath } from './editor/editorTabs'
 import { openEditorsOf } from './explorer/openEditors'
+import { localDiffLabel } from './explorer/timeline'
 import { setNotesDelivery } from './notesDelivery'
 import { unsafeMultilinePaste } from './pasteSafety'
 import { t, intlLocale, currentLocale } from './i18n'
@@ -2377,17 +2378,20 @@ function openExplorerFile(file, arg = null) {
 // ("name (diff)" / "name (staged diff)"), like Orca's openDiff.
 // A file of a commit (area 'commit', its commit id): that commit's change, read-only.
 // A file committed on the branch (area 'branch'): its merge base `base` -> `commit`, read-only.
-function openScmDiff({ root, rel, oldRel = null, area, status = null, file, preview = true, line = null, commit = null, base = null } = {}) {
-  if (!root || !rel || !file || !['staged', 'unstaged', 'untracked', 'commit', 'branch'].includes(area)) return null
+// A version Local History kept (area 'local', its id `local`, kept at
+// `localTime`; the explorer's Timeline): that version -> the file, editable.
+function openScmDiff({ root, rel, oldRel = null, area, status = null, file, preview = true, line = null, commit = null, base = null, local = null, localTime = null } = {}) {
+  if (!root || !rel || !file || !['staged', 'unstaged', 'untracked', 'commit', 'branch', 'local'].includes(area)) return null
   if ((area === 'commit' || area === 'branch') && !/^[0-9a-f]{7,64}$/.test(String(commit || ''))) return null
   if (area === 'branch' && !/^[0-9a-f]{7,64}$/.test(String(base || ''))) return null
-  const path = diffTabPath(file, area, commit, base)
+  if (area === 'local' && !/^[a-z0-9]{6,32}$/.test(String(local || ''))) return null
+  const path = diffTabPath(file, area, area === 'local' ? local : commit, base)
   const leaf = openInTesselEditor({ file: path, line: Number.isInteger(line) ? line : null, preview })
   if (!leaf) return null
+  const extra =
+    area === 'commit' ? { commit } : area === 'branch' ? { commit, base } : area === 'local' ? { local, localTime: Number.isFinite(localTime) ? localTime : null } : {}
   leaf.files = leaf.files.map((f) =>
-    samePath(f.path, path)
-      ? { ...f, mode: f.mode === 'rich' ? 'rich' : 'diff', diff: { root, rel, oldRel: oldRel || null, area, status, full: file, ...(area === 'commit' ? { commit } : {}), ...(area === 'branch' ? { commit, base } : {}) } }
-      : f
+    samePath(f.path, path) ? { ...f, mode: f.mode === 'rich' ? 'rich' : 'diff', diff: { root, rel, oldRel: oldRel || null, area, status, full: file, ...extra } } : f
   )
   return leaf
 }
@@ -2439,6 +2443,7 @@ function diffTabLabel(f) {
   const name = fileName(docPathOf(f))
   if (f.diff.area === 'commit') return t('editor.tab.commitDiff', '{{name}} ({{commit}})', { name, commit: String(f.diff.commit || '').slice(0, 7) })
   if (f.diff.area === 'staged') return t('editor.tab.stagedDiff', '{{name}} (staged diff)', { name })
+  if (f.diff.area === 'local') return localDiffLabel(name, f.diff.localTime)
   return t('editor.tab.diff', '{{name}} (diff)', { name })
 }
 const openEditors = computed(() => {

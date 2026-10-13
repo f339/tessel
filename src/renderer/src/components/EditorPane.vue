@@ -19,6 +19,7 @@ import { settings } from '../settings'
 import { editorOptionsFor, diffOptionsFor } from '../editor/editorOptions'
 import { loadMonaco, textmateIfLoaded, outlineIfLoaded } from '../editor/loadMonaco'
 import { setActiveEditor, noteEdited, noteCursor, clearActiveEditor } from '../editor/activeEditor'
+import { localDiffLabel } from '../explorer/timeline'
 import {
   docs,
   getDoc,
@@ -168,6 +169,7 @@ function tabLabel(f) {
     })
   if (f.diff.area === 'commit')
     return t('editor.tab.commitDiff', '{{name}} ({{commit}})', { name: baseLabel(f), commit: String(f.diff.commit || '').slice(0, 7) })
+  if (f.diff.area === 'local') return localDiffLabel(baseLabel(f), f.diff.localTime)
   return f.diff.area === 'staged'
     ? t('editor.tab.stagedDiff', '{{name}} (staged diff)', { name: baseLabel(f) })
     : t('editor.tab.diff', '{{name}} (diff)', { name: baseLabel(f) })
@@ -569,14 +571,23 @@ async function enterDiffTab(f) {
   diffBinary.value = false
   let r = null
   try {
-    r = await window.shellApi.scm.fileVersions({
-      root: dff.root,
-      path: dff.rel,
-      area: dff.area,
-      oldPath: dff.oldRel || undefined,
-      commit: dff.commit || undefined,
-      base: dff.base || undefined
-    })
+    // A version Local History kept (the explorer's Timeline): it -> the file
+    // (its document on the right, editable).
+    if (dff.area === 'local') {
+      const lh = window.shellApi.localHistory
+      const kept = lh && lh.read ? await lh.read({ path: dff.full, id: dff.local }) : null
+      if (!kept || !kept.ok) r = { ok: false, error: t('editor.diff.localUnreadable', 'This version of the file could not be read.') }
+      else if (!docReady) r = { ok: false, error: (d && d.error) || t('editor.diff.unreadable', 'The diff could not be read.') }
+      else r = { ok: true, original: String(kept.text || ''), modified: '', exists: true }
+    } else
+      r = await window.shellApi.scm.fileVersions({
+        root: dff.root,
+        path: dff.rel,
+        area: dff.area,
+        oldPath: dff.oldRel || undefined,
+        commit: dff.commit || undefined,
+        base: dff.base || undefined
+      })
   } catch (err) {
     r = { ok: false, error: err && err.message }
   }
@@ -612,8 +623,9 @@ async function enterDiffTab(f) {
   if (oldO) oldO.dispose()
   if (oldM) oldM.dispose()
   diffBusy.value = false
-  // Review notes are for the changes not committed yet, not a past commit.
-  if (dff.area !== 'commit' && dff.area !== 'branch') attachNotes(dff)
+  // Review notes are for the changes not committed yet, not a past commit
+  // (nor a version Local History kept).
+  if (dff.area !== 'commit' && dff.area !== 'branch' && dff.area !== 'local') attachNotes(dff)
   updateRichText()
   // Orca opens a diff at its first change.
   if (!props.node.reveal) {
