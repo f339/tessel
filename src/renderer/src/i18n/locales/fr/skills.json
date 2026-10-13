@@ -1,6 +1,6 @@
 {
   "skills": {
-    "title": "Compétences",
+    "title": "Skills",
     "close": "Fermer (Échap)",
     "intro": "Les compétences sont des dossiers d'instructions (un SKILL.md) et de fichiers que les agents chargent quand une tâche en a besoin. Chaque agent les lit dans ses propres dossiers de compétences, pour tous les projets ou pour un seul projet.",
     "loading": "Chargement…",

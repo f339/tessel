@@ -173,7 +173,7 @@ describe('Skills dialog', () => {
     setMessages('fr', fr)
     const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
     await flushPromises()
-    expect(wrapper.text()).toContain('Compétences')
+    expect(wrapper.text()).toContain('Les compétences sont des dossiers')
     expect(wrapper.text()).toContain('Tous les projets')
     expect(wrapper.text()).toContain('Synchronisée depuis votre compte Claude')
     wrapper.unmount()

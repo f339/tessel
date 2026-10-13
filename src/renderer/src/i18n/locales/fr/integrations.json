@@ -224,7 +224,7 @@
       }
     },
     "addNotListed": "{{agent}} ne le liste pas.",
-    "skills": "Compétences",
+    "skills": "Skills",
     "skillsHint": "Compétences des agents : instructions et fichiers que les agents chargent quand une tâche en a besoin"
   },
   "tools": {
