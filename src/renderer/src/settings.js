@@ -241,6 +241,18 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // Editors and the project's folder.
   explorerOpenEditorsShown: true,
   explorerFolderShown: true,
+  // VS Code's Outline and Timeline under the folder: folded at first, their
+  // height (the sash above each), the Outline's options (its "..." menu) and
+  // the Timeline's sources (its filter).
+  explorerOutlineShown: false,
+  explorerTimelineShown: false,
+  explorerOutlineHeight: 220,
+  explorerTimelineHeight: 220,
+  explorerOutlineFollowCursor: true,
+  explorerOutlineFilterOnType: true,
+  explorerOutlineSortBy: 'position', // 'position' | 'name' | 'kind'
+  explorerTimelineGit: true,
+  explorerTimelineLocal: true,
 
   // Terminal rendering and interaction. gpuAcceleration: 'auto' (WebGL
   // unless the graphics are software-only; the normal renderer if WebGL
@@ -421,6 +433,11 @@ export function loadSettings(saved) {
     }
     if (key === 'sidebarGroupBy' && !['repo', 'none'].includes(v)) continue
     if (key === 'fileIcons' && !['color', 'mono', 'off'].includes(v)) continue
+    if (key === 'explorerOutlineSortBy' && !['position', 'name', 'kind'].includes(v)) continue
+    if (key === 'explorerOutlineHeight' || key === 'explorerTimelineHeight') {
+      if (typeof v === 'number' && Number.isFinite(v)) settings[key] = clamp(Math.round(v), 44, 2000)
+      continue
+    }
     if (key === 'sidebarSortBy' && !SIDEBAR_SORTS.includes(v)) continue
     if (key === 'sidebarProjectOrderBy' && !['manual', 'recent'].includes(v)) continue
     if (key === 'agentActivityDisplayMode' && !['compact', 'full'].includes(v)) continue

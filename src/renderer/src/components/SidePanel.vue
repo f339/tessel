@@ -358,6 +358,7 @@ onBeforeUnmount(() => {
         @open-external="(file) => emit('open-external', file)"
         @terminal-here="(dir) => emit('terminal-here', dir)"
         @insert-path="(text) => emit('insert-path', text)"
+        @open-diff="(req) => emit('open-diff', req)"
         @toast="(t) => emit('toast', t)"
         @close="emit('close')"
       />
