@@ -156,6 +156,13 @@ Corporation.
   in Tessel: `src/main/agentTerminal.js`, `src/shared/terminalRules.js`,
   `src/shared/terminalOutput.js`, `src/renderer/src/agentTerminal` and
   `src/renderer/src/components/AgentCommandApproval.vue`
+- The file icons (VS Code's default "Seti" icon theme: its font, colours and
+  file associations, and the built-in languages' file types), from
+  `extensions/theme-seti` and `extensions/*/package.json`, with how VS Code
+  picks an icon (`src/vs/editor/common/services/getIconClasses.ts`,
+  `src/vs/workbench/services/themes/browser/fileIconThemeData.ts`); in Tessel:
+  `src/renderer/src/fileIcons` (made by `scripts/gen-file-icons.mjs`) and
+  `src/renderer/src/components/FileIcon.vue`
 - License source: https://github.com/microsoft/vscode/blob/2dca67a07aba/LICENSE.txt
 
 ```text
@@ -180,4 +187,36 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+## Seti UI
+
+VS Code's file icon font and colours (`src/renderer/src/fileIcons/seti.woff`
+and `seti.json`) come from Seti UI, through VS Code's `theme-seti`.
+
+- Project: https://github.com/jesseweed/seti-ui
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2014 Jesse Weed
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```

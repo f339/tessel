@@ -162,6 +162,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   editorAutoSave: false,
   editorAutoSaveDelayMs: 1000,
   editorMinimap: false,
+  // File icons in the explorer, the editor's tabs, Source Control and Go to
+  // file: VS Code's (Seti), 'color' (each type its colour, as in VS Code),
+  // 'mono' (the text's colour) or 'off'.
+  fileIcons: 'color',
   editorWordWrap: true,
   editorPreviewTabs: true,
   diffSideBySide: false,
@@ -409,6 +413,7 @@ export function loadSettings(saved) {
       continue
     }
     if (key === 'sidebarGroupBy' && !['repo', 'none'].includes(v)) continue
+    if (key === 'fileIcons' && !['color', 'mono', 'off'].includes(v)) continue
     if (key === 'sidebarSortBy' && !SIDEBAR_SORTS.includes(v)) continue
     if (key === 'sidebarProjectOrderBy' && !['manual', 'recent'].includes(v)) continue
     if (key === 'agentActivityDisplayMode' && !['compact', 'full'].includes(v)) continue

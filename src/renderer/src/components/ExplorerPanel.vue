@@ -15,6 +15,7 @@ import { statusMatters, foldersToReload, sameEntries, sameStatus, rememberIgnore
 import { settings } from '../settings'
 import { isRemotePath, remoteHostPath } from '../../../shared/remotePath'
 import { t } from '../i18n'
+import FileIcon from './FileIcon.vue'
 
 const props = defineProps({
   root: { type: String, default: null },
@@ -1038,7 +1039,7 @@ function rowTitle(e) {
           @dragstart="onDragStart($event, h)"
         >
           <svg v-if="h.dir" class="explorer-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 4h4.4l1.4 1.5h6.6v7.7H1.8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /></svg>
-          <svg v-else class="explorer-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 1.8h5l3 3v9.4H4z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /></svg>
+          <FileIcon v-else class="explorer-icon" :name="h.name" />
           <span class="explorer-name">{{ h.name }}</span>
           <span class="explorer-hit-dir">{{ dirOf(h.rel) }}</span>
           <span v-if="ignoredOf(h.path)" class="explorer-ignored" :title="t('explorer.ignored', 'Ignored by .gitignore')">⊘</span>
@@ -1137,8 +1138,8 @@ function rowTitle(e) {
           <span v-if="row.depth" class="explorer-guides" aria-hidden="true" :style="{ left: guideX(0) + 'px', width: row.depth * INDENT + 'px' }"></span>
           <span v-if="inGuide(i)" class="explorer-guide-active" aria-hidden="true" :style="{ left: guideX(guide.depth) + 'px' }"></span>
           <span class="explorer-twistie" aria-hidden="true"><svg v-if="row.dir" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10.072 8.024L5.715 3.667l.618-.62L11 7.716v.618L6.333 13l-.618-.619 4.357-4.357z" /></svg></span>
-          <svg v-if="row.dir" class="explorer-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 4h4.4l1.4 1.5h6.6v7.7H1.8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /></svg>
-          <svg v-else class="explorer-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 1.8h5l3 3v9.4H4z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /></svg>
+          <!-- VS Code's file icons; a folder has none (its arrow says it). -->
+          <FileIcon v-if="!row.dir" class="explorer-icon" :name="row.name" />
           <span v-if="row.chain.length > 1" class="explorer-name">
             <template v-for="(c, s) in row.chain" :key="c.path">
               <span v-if="s" class="explorer-crumb-sep">/</span>

@@ -1,0 +1,32 @@
+/* VS Code's Seti icon font (MIT: Seti UI, Copyright (c) 2014 Jesse Weed;
+   VS Code theme-seti, Copyright (c) Microsoft Corporation). */
+@font-face {
+  font-family: 'tessel-seti';
+  src: url('./seti.woff') format('woff');
+  font-weight: normal;
+  font-style: normal;
+  font-display: block;
+}
+
+/* As VS Code draws it: a 16 px box, the glyph at 150 % of the text size,
+   coloured by the file's type. */
+.file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  font-family: 'tessel-seti';
+  font-size: 150%;
+  font-style: normal;
+  font-weight: normal;
+  line-height: 1;
+  -webkit-font-smoothing: antialiased;
+  speak: never;
+  user-select: none;
+}
+.file-icon.mono {
+  color: currentColor !important;
+  opacity: 0.85;
+}

@@ -11,7 +11,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ArrowUp, ChevronRight, Folder, Home, LoaderCircle, Search } from 'lucide-vue-next'
 import { t } from '../../i18n'
-import { getFileTypeIcon } from '../../fileTypeIcons'
+import FileIcon from '../FileIcon.vue'
 import { joinRemote, parentRemote, remoteCrumbs, isPathInput, resolveTypedPath, filterRemoteEntries, enterAction } from '../../addProject'
 
 const props = defineProps({
@@ -250,7 +250,7 @@ onBeforeUnmount(() => {
             @dblclick="onRowDoubleClick(entry)"
           >
             <Folder v-if="entry.dir" :size="14" class="rfb-icon" aria-hidden="true" />
-            <component :is="getFileTypeIcon(entry.name)" v-else :size="14" class="rfb-icon dim" aria-hidden="true" />
+            <FileIcon v-else class="rfb-icon" :name="entry.name" />
             <span class="rfb-name">{{ entry.name }}</span>
             <ChevronRight v-if="entry.dir" :size="14" class="rfb-icon dim" aria-hidden="true" />
           </button>

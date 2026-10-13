@@ -5,6 +5,7 @@
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { fuzzyFilter } from '../../../shared/fuzzy'
 import { t } from '../i18n'
+import FileIcon from './FileIcon.vue'
 
 const props = defineProps({
   root: { type: String, default: null }, // the workspace's project folder
@@ -107,6 +108,7 @@ function dirOf(rel) {
           @mouseenter="index = i"
           @click="choose(i, $event.ctrlKey)"
         >
+          <FileIcon class="finder-icon" :name="rel" />
           <span class="finder-name">{{ nameOf(rel) }}</span>
           <span class="finder-dir">{{ dirOf(rel) }}</span>
         </button>

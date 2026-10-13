@@ -7177,6 +7177,15 @@ button.act-stat:hover,
   color: var(--text-strong);
 }
 
+/* VS Code's file icon before the name (components/FileIcon.vue). */
+.finder-icon {
+  align-self: center;
+  margin-right: -4px;
+}
+.ed-tab-icon {
+  margin-left: -2px;
+}
+
 .finder-dir {
   overflow: hidden;
   color: var(--text-dim);

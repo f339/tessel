@@ -87,7 +87,9 @@ describe('compact Files tree', () => {
     expect(row('top.md').find('.explorer-guide-active').exists()).toBe(false)
     expect(row('a/b/c').find('.explorer-twistie svg').exists()).toBe(true)
     expect(row('x.txt').find('.explorer-twistie svg').exists()).toBe(false)
-    expect(row('x.txt').get('.explorer-icon').attributes('width')).toBe('16')
+    // VS Code's file icons: a file has its type's icon, a folder none.
+    expect(row('x.txt').get('.explorer-icon').classes()).toContain('file-icon')
+    expect(row('a/b/c').find('.explorer-icon').exists()).toBe(false)
   })
 
   it('the stylesheet: 22 px rows, 13 px text, a 16 px twistie, guides on hover', () => {

@@ -2149,6 +2149,17 @@ function previewSound() {
                   </option>
                 </ThemedSelect>
               </div>
+              <div class="set-row" data-setting="fileIcons">
+                <label class="set-label" for="appearance-file-icons">
+                  {{ t('settings.appearance.fileIcons', 'File icons') }}
+                  <span class="set-hint">{{ t('settings.appearance.fileIconsHint', "VS Code's icons in the file explorer, the editor's tabs, Source Control and Go to file.") }}</span>
+                </label>
+                <ThemedSelect id="appearance-file-icons" v-model="settings.fileIcons" class="set-select">
+                  <option value="color">{{ t('settings.appearance.fileIconsColor', 'In colour, like VS Code') }}</option>
+                  <option value="mono">{{ t('settings.appearance.fileIconsMono', 'One colour') }}</option>
+                  <option value="off">{{ t('settings.appearance.fileIconsOff', 'None') }}</option>
+                </ThemedSelect>
+              </div>
               <div class="set-row" data-setting="ui-zoom">
                 <div class="set-label">
                   {{ t('settings.appearance.zoom', 'UI Zoom') }}

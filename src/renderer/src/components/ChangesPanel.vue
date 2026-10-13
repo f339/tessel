@@ -24,7 +24,7 @@ import ThemedSelect from './ui/ThemedSelect.vue'
 import { ref, computed, watch, inject, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ExternalLink, Folder, FolderOpen, List, ListTree, Loader2, RefreshCw } from 'lucide-vue-next'
 import { sectionTreeRows, sectionListRows, getSourceControlDirectoryActionPaths } from '../../../shared/sourceControlTree'
-import { getFileTypeIcon } from '../fileTypeIcons'
+import FileIcon from './FileIcon.vue'
 import ScmHistoryPanel from './ScmHistoryPanel.vue'
 import PanelState from './ui/PanelState.vue'
 import { tasks } from '../taskBoardStore'
@@ -1464,7 +1464,8 @@ function draftStore() {
                 @dblclick="openDiff(node.entry, true)"
                 @keydown="onRowKeydown($event, node)"
               >
-                <component :is="isNestedRepo(node.entry.path) ? Folder : getFileTypeIcon(node.entry.path)" :size="14" class="sc-file-icon" :style="{ color: STATUS_COLORS[node.entry.status] }" />
+                <Folder v-if="isNestedRepo(node.entry.path)" :size="14" class="sc-file-icon" :style="{ color: STATUS_COLORS[node.entry.status] }" />
+                <FileIcon v-else class="sc-file-icon" :name="node.entry.path" />
                 <div class="sc-row-text">
                   <span class="sc-row-line">
                     <span class="sc-row-name explorer-name">{{ fileName(node.entry.path) }}</span>
@@ -1585,7 +1586,7 @@ function draftStore() {
                 @dblclick="openDiff(node.entry, true)"
                 @keydown="onRowKeydown($event, node)"
               >
-                <component :is="getFileTypeIcon(node.entry.path)" :size="14" class="sc-file-icon" :style="{ color: STATUS_COLORS[node.entry.status] }" />
+                <FileIcon class="sc-file-icon" :name="node.entry.path" />
                 <div class="sc-row-text">
                   <span class="sc-row-line">
                     <span class="sc-row-name explorer-name">{{ fileName(node.entry.path) }}</span>

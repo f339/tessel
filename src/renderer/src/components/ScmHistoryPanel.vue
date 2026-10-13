@@ -17,7 +17,7 @@ import {
   CIRCLE_STROKE_WIDTH
 } from '../../../shared/gitHistoryGraph'
 import { STATUS_COLORS, STATUS_LABELS } from '../../../shared/sourceControl'
-import { getFileTypeIcon } from '../fileTypeIcons'
+import FileIcon from './FileIcon.vue'
 import { t, intlLocale } from '../i18n'
 import { dateTimeFormat } from '../../../shared/intlCache'
 import PanelState from './ui/PanelState.vue'
@@ -324,7 +324,7 @@ const historyHeight = moduleRef(256)
                   @click="openFile(row.vm.historyItem, e, false)"
                   @dblclick="openFile(row.vm.historyItem, e, true)"
                 >
-                  <component :is="getFileTypeIcon(e.path)" :size="14" class="sc-file-icon" :style="{ color: STATUS_COLORS[e.status] }" />
+                  <FileIcon class="sc-file-icon" :name="e.path" />
                   <span class="sch-file-name">
                     <span class="sch-file-base">{{ baseName(e.path) }}</span>
                     <span v-if="dirOf(e.path)" class="sch-file-dir">{{ dirOf(e.path) }}</span>

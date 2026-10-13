@@ -44,6 +44,7 @@ import { notesFor, addNote, deleteNote, updateNote, clearDelivered } from '../re
 import { scmRevision } from '../scmState'
 import { installDiffNotes } from '../editor/diffNotes'
 import LucideIcon from './LucideIcon.vue'
+import FileIcon from './FileIcon.vue'
 import RichView from './RichView.vue'
 import NotesSendMenu from './NotesSendMenu.vue'
 import DiffNoteDraft from './DiffNoteDraft.vue'
@@ -1000,6 +1001,7 @@ onBeforeUnmount(() => {
           @mouseup.middle="closeTab(f.path)"
           @dblclick="pin(f.path)"
         >
+          <FileIcon class="ed-tab-icon" :name="docPathOf(f)" />
           <span class="ed-tab-name">{{ tabLabel(f) }}</span>
           <span v-if="!f.diff && docOf(f) && docOf(f).deleted" class="ed-tab-tag">{{ t('editor.tabs.deleted', 'deleted') }}</span>
           <button

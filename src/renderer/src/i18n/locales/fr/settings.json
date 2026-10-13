@@ -334,6 +334,11 @@
     "appearance": {
       "theme": "Thème",
       "themeHint": "S'applique immédiatement. Vos sessions continuent.",
+      "fileIcons": "Icônes de fichiers",
+      "fileIconsHint": "Les icônes de VS Code dans l'explorateur de fichiers, les onglets de l'éditeur, le contrôle de code source et Aller au fichier.",
+      "fileIconsColor": "En couleur, comme VS Code",
+      "fileIconsMono": "Une seule couleur",
+      "fileIconsOff": "Aucune",
       "zoom": "Zoom de l'interface",
       "zoomHint": "Met toute l'interface de l'application à l'échelle.",
       "zoomOut": "Zoom arrière",
