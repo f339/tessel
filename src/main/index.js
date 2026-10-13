@@ -4040,11 +4040,27 @@ function createWindow() {
     if (isSafeExternal(url)) shell.openExternal(url)
     return { action: 'deny' }
   })
+  // The dev window's own server (electron.vite.config.mjs: 127.0.0.1, a port
+  // checked free), never another program's on "localhost".
+  const devOrigin = (() => {
+    try {
+      return process.env.ELECTRON_RENDERER_URL ? new URL(process.env.ELECTRON_RENDERER_URL).origin : null
+    } catch {
+      return null
+    }
+  })()
+  const isDevServerPage = (url) => {
+    try {
+      return !!devOrigin && new URL(url).origin === devOrigin
+    } catch {
+      return false
+    }
+  }
   mainWindow.webContents.on('will-navigate', (event, url) => {
     // The dev server's page only in the dev build (the installed app never
     // loads a page from the network: another local program could use that
-    // port).
-    if (url !== mainWindow.webContents.getURL() && !(!app.isPackaged && url.startsWith('http://localhost:5173'))) {
+    // port), at the exact address electron-vite started it on.
+    if (url !== mainWindow.webContents.getURL() && !(!app.isPackaged && isDevServerPage(url))) {
       event.preventDefault()
       if (isSafeExternal(url)) shell.openExternal(url)
     }

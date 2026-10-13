@@ -1,8 +1,9 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import vue from '@vitejs/plugin-vue'
 import { askpassPlugin } from './scripts/build-askpass.mjs'
+import { DEV_HOST, DEV_PORT, freeDevPort } from './scripts/devPort.mjs'
 
-export default defineConfig({
+const config = {
   main: {
     // node-pty is a native module: keep it external so it is required at
     // runtime from node_modules instead of being bundled.
@@ -82,7 +83,17 @@ export default defineConfig({
     server: {
       warmup: {
         clientFiles: ['./src/renderer/src/main.js', './src/renderer/src/App.vue', './src/renderer/src/components/**/*.vue']
-      }
+      },
+      // Its own address and port, checked free (scripts/devPort.mjs): another
+      // dev server on "localhost:5173" never answers Tessel's window.
+      host: DEV_HOST,
+      port: DEV_PORT,
+      strictPort: true
     }
   }
+}
+
+export default defineConfig(async ({ command }) => {
+  if (command === 'serve') config.renderer.server.port = await freeDevPort()
+  return config
 })
