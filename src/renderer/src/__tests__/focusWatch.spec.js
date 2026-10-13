@@ -77,7 +77,8 @@ describe('focus watch', () => {
     function pageSetup() {
       document.body.innerHTML = `
         <div class="pane" data-pane-id="pane-1"><textarea class="xterm-helper-textarea"></textarea></div>
-        <div class="pane browser-pane" data-pane-id="pane-web"><div data-test="browser-agent">Ada is driving</div><webview class="bp-webview" tabindex="0"></webview></div>`
+        <div class="pane browser-pane" data-pane-id="pane-web"><div data-test="browser-agent">Ada is driving</div></div>
+        <div class="browser-host"><div class="bp-box" data-browser-page="pane-web"><webview class="bp-webview" tabindex="0"></webview></div></div>`
       const lines = []
       let t = 1000
       const clock = { now: () => t, add: (ms) => (t += ms) }
@@ -115,7 +116,7 @@ describe('focus watch', () => {
       pageTakes(page)
       await settle()
       expect(document.activeElement).toBe(page)
-      page.getClientRects = () => []
+      page.parentElement.style.visibility = 'hidden' // its workspace is not shown
       term.focus()
       clock.add(2000)
       pageTakes(page)

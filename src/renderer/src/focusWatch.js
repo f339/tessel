@@ -139,6 +139,26 @@ export function installFocusWatch({ win = typeof window !== 'undefined' ? window
   let windowFocusAt = -Infinity
   const onWindowFocus = () => (windowFocusAt = now())
   const isPage = (el) => !!el && el.tagName === 'WEBVIEW'
+  // A page lives in its pane's box of the page layer (browser/pageHost.js),
+  // not in the pane: the box names the pane.
+  function pagePaneId(page) {
+    const box = page.closest ? page.closest('.bp-box') : null
+    return (box && box.dataset && box.dataset.browserPage) || paneIdOf(page)
+  }
+  function pagePane(page) {
+    const id = pagePaneId(page)
+    if (id && /^[\w-]+$/.test(id)) {
+      const el = doc.querySelector(`.pane[data-pane-id="${id}"]`) // i18n-ignore
+      if (el) return el
+    }
+    return page.closest ? page.closest('.browser-pane') : null
+  }
+  function pageHidden(page) {
+    if (!page.getClientRects().length) return true
+    if (page.closest && page.closest('.ws-layer.hidden')) return true
+    const style = win.getComputedStyle ? win.getComputedStyle(page) : null
+    return !!style && (style.visibility === 'hidden' || style.display === 'none')
+  }
   const onPointerMove = (e) => {
     lastPointer = { x: e.clientX, y: e.clientY }
     pointerIn = isPage(e.target) ? e.target : null
@@ -168,9 +188,9 @@ export function installFocusWatch({ win = typeof window !== 'undefined' ? window
     if (lastCall && lastCall.el === page && lastCall.what === 'focus' && t - lastCall.at < 500) return false
     // Only a page an agent drives (its badge shows) or one out of sight: a
     // page the user may have clicked keeps the keyboard.
-    const box = page.closest ? page.closest('.browser-pane') : null
-    const driven = !!(box && box.querySelector('[data-test="browser-agent"]'))
-    const hidden = !page.getClientRects().length || !!(page.closest && page.closest('.ws-layer.hidden'))
+    const pane = pagePane(page)
+    const driven = !!(pane && pane.querySelector('[data-test="browser-agent"]'))
+    const hidden = pageHidden(page)
     if (!driven && !hidden) return false
     if (t - lastGesture < gestureMs) return false
     // The window just came back (a click on the page from another program,
@@ -189,7 +209,7 @@ export function installFocusWatch({ win = typeof window !== 'undefined' ? window
       lastLine = t
       lines++
       try {
-        log(`focus: a browser page (${paneIdOf(page) || 'side panel'}) took the keyboard without a click; given back to ${describeEl(back)}`) // i18n-ignore
+        log(`focus: a browser page (${pagePaneId(page) || '?'}${pageHidden(page) ? ', out of sight' : ''}) took the keyboard without a click; given back to ${describeEl(back)}`) // i18n-ignore
       } catch {
         /* the log is gone */
       }
