@@ -67,7 +67,7 @@ describe('Open Editors', () => {
     })
     expect(list.map((e) => [e.kind, e.name, e.folder, e.dirty, e.preview, e.active])).toEqual([
       ['file', 'a.ts', 'src', true, false, true],
-      ['file', 'README.md', '', false, true, false],
+      ['file', 'README.md', 'C:\\p', false, true, false], // at the root: the root, as VS Code
       ['file', 'b.ts (diff)', 'src', false, false, false],
       ['page', 'Anticheat · Analyse', 'http://localhost:8471/', false, false, false]
     ])
@@ -75,7 +75,9 @@ describe('Open Editors', () => {
   })
   it('folders outside the project: the home folder as ~', () => {
     expect(folderLabel('/home/me/ox-update/README.md', '/srv/fx', '/home/me')).toBe('~/ox-update')
-    expect(folderLabel('D:\\other\\x.txt', 'C:\\p', 'C:\\Users\\me')).toBe('D:/other')
+    expect(folderLabel('D:\\other\\x.txt', 'C:\\p', 'C:\\Users\\me')).toBe('D:\\other')
+    expect(folderLabel('C:\\p\\src\\ui\\a.ts', 'C:\\p')).toBe('src\\ui')
+    expect(folderLabel('ssh://ssh-1a2b/srv/fx/README.md', 'ssh://ssh-1a2b/srv/fx')).toBe('/srv/fx')
   })
 })
 

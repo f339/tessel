@@ -7997,12 +7997,9 @@ button.act-stat:hover,
   color: var(--accent);
 }
 
-/* Git-ignored: italic, dim, with a small ⊘. */
-.explorer-row.ignored .explorer-name,
-.explorer-row.ignored .explorer-icon {
-  color: var(--text-dim);
-  font-style: italic;
-  opacity: 0.75;
+/* Git-ignored: VS Code's grey label (gitDecoration.ignoredResourceForeground). */
+.explorer-row.ignored .explorer-name {
+  color: #8c8c8c;
 }
 
 .explorer-ignored {
@@ -8216,7 +8213,10 @@ button.act-stat:hover,
   align-items: center;
   gap: 5px;
   height: 22px;
-  padding-right: 8px;
+  /* VS Code's modern UI (modernUI/padding.css, roundedCorners.css): each row
+     inset 4 px from the edges, its highlight rounded 4 px. */
+  margin: 0 4px;
+  border-radius: 4px;
   color: var(--text);
   font-size: 13px;
   line-height: 22px;
@@ -8240,7 +8240,9 @@ button.act-stat:hover,
   width: 16px;
   height: 100%;
   margin-right: 6px;
-  color: var(--text-dim);
+  color: inherit;
+  /* VS Code's .monaco-tl-twistie. */
+  transform: translateX(3px);
 }
 
 .explorer-row.open > .explorer-twistie > svg {
@@ -8265,14 +8267,14 @@ button.act-stat:hover,
 .explorer-guides {
   background-image: repeating-linear-gradient(
     to right,
-    var(--explorer-guide, color-mix(in srgb, var(--text-dim) 32%, transparent)) 0 1px,
+    var(--explorer-guide, rgba(88, 88, 88, 0.4)) 0 1px,
     transparent 1px var(--explorer-indent, 8px)
   );
 }
 
 .explorer-guide-active {
   width: 1px;
-  background: var(--explorer-guide-active, color-mix(in srgb, var(--text-dim) 85%, transparent));
+  background: var(--explorer-guide-active, #585858);
 }
 
 /* Compact folders: "a / b / c", each folder its own target. */
@@ -8291,24 +8293,40 @@ button.act-stat:hover,
   opacity: 0.5;
 }
 
+/* VS Code Dark 2026's list colours: hover, selection elsewhere, selection
+   while the tree has the keyboard, and the keyboard's outline. */
 .explorer-row:hover {
-  background: var(--surface-3);
+  background: rgba(255, 255, 255, 0.078);
 }
 
 .explorer-row.selected {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.explorer-files:focus-within .explorer-row.selected,
+.open-editor.active {
+  background: rgba(255, 255, 255, 0.133);
+}
+
+.explorer-files:focus-visible .explorer-row.selected {
+  outline: 1px solid rgba(57, 148, 188, 0.7);
+  outline-offset: -1px;
 }
 
 /* VS Code's explorer sections: "Open Editors", then the project's folder,
    each folded by its header; their buttons show while the pointer is on the
    explorer (or the keyboard in the header). */
 .explorer-section-head {
+  position: relative;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 2px;
-  min-height: 24px;
-  padding: 1px 6px 1px 2px;
+  /* VS Code's modern UI pane header: 28 px, inset 4 px, rounded, 12 px semi
+     bold, a line above every section but the first. */
+  height: 28px;
+  margin: 0 4px;
+  padding: 0 0 0 4px;
+  border-radius: 4px;
   color: var(--text-strong);
   cursor: pointer;
   font-size: 12px;
@@ -8316,8 +8334,31 @@ button.act-stat:hover,
   -webkit-user-select: none;
   user-select: none;
 }
+.explorer-section-head:hover {
+  background: rgba(255, 255, 255, 0.078);
+}
+.explorer-head.explorer-section-head::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 4px;
+  left: 4px;
+  height: 1px;
+  background: var(--border);
+  pointer-events: none;
+}
 .explorer-section-head .explorer-twistie {
-  margin-right: 2px;
+  margin: 0 2px;
+  transform: none;
+}
+.explorer-section-head .tb-icon {
+  width: 22px;
+  height: 22px;
+  padding: 3px;
+  border-radius: 4px;
+}
+.explorer-section-head .tb-icon:hover:not(:disabled) {
+  background: rgba(90, 93, 94, 0.31);
 }
 .explorer-section-head .explorer-twistie.open > svg {
   transform: rotate(90deg);
@@ -8330,61 +8371,70 @@ button.act-stat:hover,
   white-space: nowrap;
 }
 .explorer-section-head .explorer-actions {
+  gap: 0;
   margin-left: auto;
-  opacity: 0;
-  transition: opacity 0.1s;
+  visibility: hidden;
 }
-.explorer:hover .explorer-section-head .explorer-actions,
+/* A section's buttons while the pointer or the keyboard is in that section
+   (VS Code's pane:hover / pane.focused). */
+.explorer-open-editors:hover .explorer-actions,
+.explorer-section-head:hover .explorer-actions,
 .explorer-section-head:focus-within .explorer-actions,
-.explorer-section-head .explorer-actions:has(.on) {
-  opacity: 1;
+.explorer:has(.explorer-files:hover, .explorer-files:focus-within) .explorer-head .explorer-actions {
+  visibility: visible;
 }
 .explorer-section-head:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
+/* VS Code's count badge (the open editors' unsaved count). */
 .explorer-badge {
+  box-sizing: border-box;
   flex: 0 0 auto;
+  min-width: 18px;
   margin-left: 6px;
-  padding: 0 7px;
-  border-radius: 9px;
-  background: var(--accent);
+  padding: 2px 4px;
+  border-radius: 11px;
+  background: #307e9f;
   color: #fff;
   font-size: 11px;
-  font-weight: 500;
-  line-height: 17px;
+  font-weight: normal;
+  line-height: 11px;
+  text-align: center;
 }
 .explorer-open-editors {
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--border);
 }
 .open-editors-list {
   overflow-y: auto;
   padding-bottom: 2px;
 }
+/* VS Code's open editors rows (openeditors.css): 8 px in, the close (or
+   unsaved) button, the icon, the name and its folder. */
 .open-editor {
-  padding-left: 4px;
+  gap: 0;
+  padding-left: 8px;
 }
-.open-editor.active {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+.open-editor .explorer-icon {
+  margin-right: 6px;
 }
 .open-editor-close {
   display: inline-flex;
-  flex: 0 0 18px;
+  flex: 0 0 20px;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
+  width: 20px;
+  height: 20px;
+  margin-right: 2px;
+  padding: 2px;
   border: 0;
   border-radius: 4px;
   background: none;
-  color: var(--text);
+  color: inherit;
   cursor: pointer;
 }
 .open-editor-close:hover {
-  background: var(--surface-3);
-  color: var(--text-strong);
+  background: rgba(90, 93, 94, 0.31);
 }
 .open-editor .open-editor-dot,
 .open-editor .open-editor-x {
@@ -8412,11 +8462,12 @@ button.act-stat:hover,
 .open-editor-folder {
   flex: 1 1 auto;
   min-width: 0;
-  margin-left: 4px;
+  margin-left: 0.5em;
   overflow: hidden;
-  color: var(--text-dim);
-  font-size: 0.92em;
+  font-size: 0.9em;
+  opacity: 0.7;
   text-overflow: ellipsis;
+  white-space: pre;
 }
 .open-editor-globe {
   flex: 0 0 16px;
@@ -8435,13 +8486,27 @@ button.act-stat:hover,
   position: absolute;
   right: 0;
   left: 0;
+  margin: 0;
+  border-radius: 0;
   background: var(--surface);
 }
-.explorer-sticky-row:hover {
-  background: var(--surface-3);
+.explorer-sticky-row:hover,
+.explorer-sticky-row.selected,
+.explorer-files:focus-within .explorer-sticky-row.selected {
+  background: var(--surface);
 }
-.explorer-sticky-row.selected {
-  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+.explorer-sticky-row::before {
+  content: '';
+  position: absolute;
+  inset: 0 4px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+.explorer-sticky-row:hover::before {
+  background: rgba(255, 255, 255, 0.078);
+}
+.explorer-sticky-row.selected::before {
+  background: rgba(255, 255, 255, 0.075);
 }
 .explorer-sticky-row.last {
   box-shadow: 0 4px 4px -3px rgba(0, 0, 0, 0.5);
@@ -8463,15 +8528,20 @@ button.act-stat:hover,
   text-overflow: ellipsis;
 }
 
+/* VS Code's decoration (iconlabel.css ::after): the git letter or a folder's
+   dot, 90 %, semi bold, 16 px from the row's end. */
 .explorer-git {
   flex: 0 0 auto;
-  font-family: 'Cascadia Mono', Consolas, monospace;
-  font-size: 11px;
+  margin: auto 16px 0 5px;
+  font-size: 90%;
+  font-weight: 600;
+  opacity: 0.75;
+  text-align: center;
 }
 
 .explorer-row.git-M .explorer-name,
 .explorer-row.git-M .explorer-git {
-  color: #e2c08d;
+  color: #e5ba7d;
 }
 
 .explorer-row.git-A .explorer-name,
@@ -8483,14 +8553,14 @@ button.act-stat:hover,
 
 .explorer-row.git-D .explorer-name,
 .explorer-row.git-D .explorer-git {
-  color: #f07178;
+  color: #f48771;
 }
 
 .explorer-row.git-R .explorer-name,
 .explorer-row.git-R .explorer-git,
 .explorer-row.git-C .explorer-name,
 .explorer-row.git-C .explorer-git {
-  color: #7fb8e8;
+  color: #73c991;
 }
 
 .explorer-edit {

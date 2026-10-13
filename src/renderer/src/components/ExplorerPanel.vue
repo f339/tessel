@@ -1014,6 +1014,9 @@ function rowTitle(e) {
         <span class="explorer-section-title">{{ t('explorer.openEditors', 'Open Editors') }}</span>
         <span v-if="unsavedCount" class="explorer-badge" data-test="open-editors-unsaved">{{ unsavedLabel }}</span>
         <span class="explorer-actions" @click.stop>
+          <button class="tb-icon" :title="t('explorer.newFile', 'New file')" :aria-label="t('explorer.newFile', 'New file')" data-test="open-editors-new-file" :disabled="!root" @click="newFromHead(false)">
+            <Codicon name="new-file" />
+          </button>
           <button class="tb-icon" :title="t('explorer.saveAll', 'Save all')" :aria-label="t('explorer.saveAll', 'Save all')" data-test="open-editors-save-all" :disabled="!unsavedCount" @click="emit('save-all')">
             <Codicon name="save-all" />
           </button>
@@ -1134,8 +1137,7 @@ function rowTitle(e) {
           <FileIcon v-else class="explorer-icon" :name="h.name" />
           <span class="explorer-name">{{ h.name }}</span>
           <span class="explorer-hit-dir">{{ dirOf(h.rel) }}</span>
-          <span v-if="ignoredOf(h.path)" class="explorer-ignored" :title="t('explorer.ignored', 'Ignored by .gitignore')">⊘</span>
-          <span v-else-if="letterOf(h)" class="explorer-git">{{ h.dir ? '•' : letterOf(h) }}</span>
+          <span v-if="!ignoredOf(h.path) && letterOf(h)" class="explorer-git">{{ h.dir ? '•' : letterOf(h) }}</span>
         </div>
       </template>
       <template v-else>
@@ -1181,7 +1183,7 @@ function rowTitle(e) {
           :key="'sticky:' + s.row.path"
           class="explorer-row explorer-sticky-row dir open"
           :class="{ last: k === sticky.length - 1, selected: selected === s.row.path, ignored: ignoredOf(s.row.path), ['git-' + (letterOf(s.row.entry) || 'none')]: true }"
-          :style="{ top: s.top + 'px', paddingLeft: rowPadding(s.row.depth) + 'px' }"
+          :style="{ top: s.top + 'px', paddingLeft: rowPadding(s.row.depth) + 4 + 'px' }"
           :title="rowTitle(s.row.entry)"
           @click="onStickyClick(s, k)"
           @contextmenu="onRowContext($event, s.row)"
@@ -1256,8 +1258,7 @@ function rowTitle(e) {
             </template>
           </span>
           <span v-else class="explorer-name">{{ row.name }}</span>
-          <span v-if="ignoredOf(row.path)" class="explorer-ignored" :title="t('explorer.ignored', 'Ignored by .gitignore')">⊘</span>
-          <span v-else-if="letterOf(row.entry)" class="explorer-git">{{ row.dir ? '•' : letterOf(row.entry) }}</span>
+          <span v-if="!ignoredOf(row.path) && letterOf(row.entry)" class="explorer-git">{{ row.dir ? '•' : letterOf(row.entry) }}</span>
         </div>
         <div v-else-if="kind === 'row'" class="explorer-edit" :style="{ paddingLeft: rowPadding(row.depth) + 22 + 'px' }">
           <input :ref="setEditEl" v-model="edit.value" class="explorer-edit-input" @keydown.enter.prevent="commitEdit" @keydown.escape.prevent="edit = null" @blur="commitEdit" />

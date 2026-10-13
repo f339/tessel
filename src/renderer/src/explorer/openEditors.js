@@ -4,19 +4,24 @@
 // preview (italic), the one in use. Pure: App.vue gives the panes, ExplorerPanel
 // draws the rows.
 import { docPathOf, fileName, samePath } from '../editor/editorTabs'
+import { isRemotePath, remoteHostPath } from '../../../shared/remotePath'
 
-// "C:\p\src\a.ts" under "C:\p" -> "src"; at the root -> ""; elsewhere: its
-// folder, the home folder as "~".
+// As VS Code labels them: "C:\p\src\a.ts" under "C:\p" -> "src"; at the
+// root -> the root itself ("C:\p"); elsewhere: its folder, the home folder as
+// "~". Windows paths keep their backslashes, a host's its slashes.
 export function folderLabel(path, root, home = '') {
-  const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '')
+  const shown = (p) => (isRemotePath(p) ? remoteHostPath(p) || p : String(p || ''))
+  const norm = (p) => shown(p).replace(/\\/g, '/').replace(/\/+$/, '')
+  const windows = /^[a-z]:[\\/]/i.test(shown(root) || shown(path))
+  const out = (v) => (windows ? v.replace(/\//g, '\\') : v)
   const p = norm(path)
   const dir = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''
   const r = norm(root)
-  if (r && (dir.toLowerCase() === r.toLowerCase())) return ''
-  if (r && dir.toLowerCase().startsWith(r.toLowerCase() + '/')) return dir.slice(r.length + 1)
+  if (r && dir.toLowerCase() === r.toLowerCase()) return out(r)
+  if (r && dir.toLowerCase().startsWith(r.toLowerCase() + '/')) return out(dir.slice(r.length + 1))
   const h = norm(home)
-  if (h && (dir.toLowerCase() === h.toLowerCase() || dir.toLowerCase().startsWith(h.toLowerCase() + '/'))) return '~' + dir.slice(h.length)
-  return dir
+  if (h && (dir.toLowerCase() === h.toLowerCase() || dir.toLowerCase().startsWith(h.toLowerCase() + '/'))) return out('~' + dir.slice(h.length))
+  return out(dir)
 }
 
 // leaves: the workspace's panes in order ({ id, kind, files, activePath,

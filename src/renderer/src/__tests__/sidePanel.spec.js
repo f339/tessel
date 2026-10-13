@@ -286,14 +286,14 @@ describe('SidePanel.vue', () => {
     w.unmount()
   })
 
-  it('Files: the tree with git letters, ignored entries dimmed with ⊘', async () => {
+  it("Files: the tree with git letters, ignored entries greyed as in VS Code (no letter)", async () => {
     const w = make('files')
     await flushPromises()
     expect(calls.find(([n, q]) => n === 'status' && q.ignored)).toBeTruthy()
     const rows = w.findAll('.explorer-row')
     expect(rows.map((r) => r.find('.explorer-name').text())).toEqual(['dist', 'a.js', 'new.md'])
     expect(rows[0].classes()).toContain('ignored')
-    expect(rows[0].find('.explorer-ignored').attributes('title')).toBe('Ignored by .gitignore')
+    expect(rows[0].find('.explorer-git').exists()).toBe(false)
     expect(rows[1].find('.explorer-git').text()).toBe('M')
     expect(rows[2].classes()).toContain('git-U')
     w.unmount()
