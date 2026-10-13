@@ -88,6 +88,7 @@ import { createLogger, describe } from './logger'
 import { guardIpc, mainFrameSender } from './ipcGuard'
 import { cleanEnv } from './cleanEnv'
 import { createPtyClient } from './ptyClient'
+import { watchLoopLag } from './loopLag'
 import { listProcesses, treeOf, waitForExit, killPids, listProcessNames, runningWork } from './processTree'
 import { pipeName } from './ptyProtocol'
 import { createUpdater } from './updater'
@@ -310,6 +311,10 @@ if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
 // Logs: %APPDATA%\\tessel\\logs\\tessel.log (rotated, 1 MB x 4).
 const log = createLogger({ dir: join(app.getPath('userData'), 'logs') })
+
+// This process's stalls in the log (loopLag.js), next to the terminal host's
+// in pty-host.log: both at once point at the whole PC, one alone at it.
+watchLoopLag({ log: (msg) => log.warn('app', `main process: ${msg}`) })
 
 // Every IPC channel below (and the register*(ipcMain) modules') answers only
 // the main window's own page, never a browser page or a frame (ipcGuard.js).
@@ -3869,16 +3874,22 @@ ipcMain.handle('scrollback:load', () => {
 // terminals keep running and the app re-attaches.)
 let quitting = false
 let shutdownDone = false
-// Save every terminal's recent output (64 KB each) for the next start.
+// What is kept of each terminal: its last 64 KB, from at most 1000 rows of
+// history (about 650 rows of agent output fill 64 KB).
+const SAVED_CHARS = 64 * 1024
+const SAVED_ROWS = 1000
+// Save every terminal's recent output for the next start.
 async function saveScrollback() {
   try {
     // No host running (it stopped or crashed): nothing to save, and starting
     // an empty one would replace the output saved before.
     if (!(await host.connectIfRunning())) return
-    const res = await host.request('dump', {}, 4000)
+    // Only what is kept: the host serializes that much, not each terminal's
+    // whole history (outputSave.js). An older host sends it all: cut here too.
+    const res = await host.request('dump', { scrollback: SAVED_ROWS, maxChars: SAVED_CHARS }, 4000)
     const keep = {}
     for (const [id, text] of Object.entries(res.buffers || {})) {
-      keep[id] = String(text).slice(-64 * 1024)
+      keep[id] = String(text).slice(-SAVED_CHARS)
     }
     if (!Object.keys(keep).length && fs.existsSync(scrollbackFile())) return
     const tmp = scrollbackFile() + '.tmp'
@@ -4074,7 +4085,13 @@ function createWindow() {
     process.env.ELECTRON_RENDERER_URL
       ? win.loadURL(process.env.ELECTRON_RENDERER_URL)
       : win.loadFile(join(__dirname, '../renderer/index.html'))
-  loadPage().catch((err) => log.error('window', `the page did not load: ${err.message}`))
+  // Still loading after a minute: said in the log (on 2026-10-13 the window
+  // waited 28 minutes on the dev server, blank, and nothing said so).
+  const slowLoad = setTimeout(
+    () => log.warn('window', `the page is still loading after 60 s (${process.env.ELECTRON_RENDERER_URL || 'renderer/index.html'})`),
+    60000
+  )
+  loadPage().catch((err) => log.error('window', `the page did not load: ${err.message}`)).finally(() => clearTimeout(slowLoad))
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {
     logCrashContext(`renderer gone: reason=${details.reason} exitCode=${details.exitCode}`)

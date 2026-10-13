@@ -23,6 +23,8 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import { PROTOCOL } from './ptyProtocol'
 import { buildInputModeReset } from '../shared/terminalModeReset'
 import { createSshHostBridge } from './ssh/sshHostBridge'
+import { createOutputSaver } from './outputSave'
+import { watchLoopLag } from './loopLag'
 
 // Each terminal also feeds a headless (invisible) terminal. When the app
 // re-attaches or saves output, it gets that terminal's finished screen and
@@ -44,12 +46,13 @@ function makeScreen(cols, rows) {
 }
 
 // The screen + scrollback as text with colours, once pending output is parsed.
-function snapshot(entry) {
+// rows: how much of the history (all of it by default).
+function snapshot(entry, rows = SCROLLBACK) {
   return new Promise((resolve) => {
     try {
       entry.screen.vt.write('', () => {
         try {
-          resolve(entry.screen.ser.serialize({ scrollback: SCROLLBACK }))
+          resolve(entry.screen.ser.serialize({ scrollback: rows }))
         } catch {
           resolve('')
         }
@@ -74,6 +77,21 @@ if (!PIPE || !TOKEN) {
 const ptys = new Map() // id -> { child, meta, buffer, exited, exitCode, signal }
 const clients = new Set()
 let idleTimer = null
+
+// The app's saves of every terminal's output (outputSave.js).
+const saver = createOutputSaver({ snapshot, log: (msg) => say('warn', msg) })
+
+// This process's stalls in the log (loopLag.js): while it is stuck it reads no
+// terminal, so every agent hangs at its next screen write.
+watchLoopLag({
+  log: (msg) => say('warn', msg),
+  extra: () => `${ptys.size} terminal(s), ${clients.size} app connection(s)`
+})
+
+// Each change of a terminal's screen: its saved output is read again.
+function changed(entry) {
+  entry.rev++
+}
 
 function broadcast(msg) {
   const line = JSON.stringify(msg) + '\n'
@@ -249,7 +267,8 @@ function handle(sock, msg) {
         exitCode: null,
         signal: null,
         holding: 0, // snapshots in progress
-        held: [] // output that arrived meanwhile
+        held: [], // output that arrived meanwhile
+        rev: 0 // changes of the screen (outputSave.js)
       }
       ptys.set(msg.id, entry)
       child.onData((data) => {
@@ -261,6 +280,7 @@ function handle(sock, msg) {
           return
         }
         entry.screen.vt.write(data)
+        changed(entry)
         broadcast({ op: 'data', id: msg.id, data })
       })
       child.onExit(({ exitCode, signal }) => {
@@ -287,6 +307,7 @@ function handle(sock, msg) {
         p.holding--
         if (p.holding) return
         const held = p.held.splice(0)
+        if (held.length) changed(p)
         for (const data of held) {
           p.screen.vt.write(data)
           broadcast({ op: 'data', id: msg.id, data })
@@ -311,6 +332,7 @@ function handle(sock, msg) {
         try {
           p.child.resize(msg.cols | 0, msg.rows | 0)
           p.screen.vt.resize(msg.cols | 0, msg.rows | 0)
+          changed(p)
         } catch {
           /* resize race */
         }
@@ -326,6 +348,7 @@ function handle(sock, msg) {
       if (p) {
         try {
           p.screen.vt.write(buildInputModeReset({ keepFocusReporting: p.meta.backend === 'conpty' }))
+          changed(p)
         } catch {
           /* screen already disposed */
         }
@@ -342,9 +365,12 @@ function handle(sock, msg) {
       reply({ ok: true })
       return
     case 'dump':
-      // Screen + scrollback of every terminal (saved by the app when it quits).
-      Promise.all([...ptys].map(async ([id, p]) => [id, await snapshot(p)])).then((pairs) =>
-        reply({ ok: true, buffers: Object.fromEntries(pairs) })
+      // Screen + scrollback of every terminal, saved by the app every 30 s and
+      // when it quits: msg.scrollback rows of history, the last msg.maxChars
+      // of each (outputSave.js; an older app asks neither: all of it).
+      saver.save(ptys, { scrollback: msg.scrollback, maxChars: msg.maxChars }).then(
+        (buffers) => reply({ ok: true, buffers }),
+        (err) => reply({ ok: false, error: err.message })
       )
       return
     case 'shutdown':
