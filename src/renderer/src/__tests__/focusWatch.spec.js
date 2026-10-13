@@ -107,23 +107,31 @@ describe('focus watch', () => {
       expect(lines[0]).toContain('a browser page (pane-web) took the keyboard without a click; given back to textarea.xterm-helper-textarea in pane-1')
     })
 
-    it('a page no agent drives keeps it; one out of sight gives it back even then', async () => {
+    it('a page no agent drives keeps it unless the user is typing; one out of sight gives it back anyway', async () => {
       const { lines, clock, term, page } = pageSetup()
       document.querySelector('[data-test="browser-agent"]').remove()
+      // Typed a while ago: the page keeps it.
       term.focus()
       key(term)
-      clock.add(2000)
+      clock.add(5000)
       pageTakes(page)
       await settle()
       expect(document.activeElement).toBe(page)
-      page.parentElement.style.visibility = 'hidden' // its workspace is not shown
+      // Typing now: given back.
       term.focus()
-      clock.add(2000)
+      key(term)
+      clock.add(500)
       pageTakes(page)
       await settle()
       expect(document.activeElement).toBe(term)
-      expect(lines).toHaveLength(2) // the first one only noted
-      expect(lines[1]).toContain('given back to')
+      // Out of sight, typed a while ago: given back.
+      page.parentElement.style.visibility = 'hidden' // its workspace is not shown
+      clock.add(5000)
+      pageTakes(page)
+      await settle()
+      expect(document.activeElement).toBe(term)
+      expect(lines.filter((l) => l.includes('given back to'))).toHaveLength(2)
+      expect(lines.at(-1)).toContain('out of sight')
     })
 
     it('leaves it to the page after a click on it, a shortcut, the window coming back, or Tessel focusing it', async () => {

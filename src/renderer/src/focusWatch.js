@@ -1,8 +1,8 @@
 // The keyboard stays where the user types.
 //
-// Guard: a browser page (a <webview>) that an agent drives, or one out of
-// sight, gives the keyboard back when it takes it without a click or a
-// shortcut of the user's. An agent clicks a page with Chromium's own mouse
+// Guard: a browser page (a <webview>) that an agent drives, one out of sight,
+// or any page while the user types in a pane, gives the keyboard back when it
+// takes it without a click or a shortcut of the user's. An agent clicks a page with Chromium's own mouse
 // events (src/main/agentBrowser.js), which took the keyboard from the pane
 // the user was typing in, even from a page in another workspace. The page
 // keeps believing it has the keyboard (the agent's focus emulation), so the
@@ -186,12 +186,15 @@ export function installFocusWatch({ win = typeof window !== 'undefined' ? window
     // Asked for: Tessel's own code focused the page, or a shortcut or a click
     // of the user's just now, or the mouse is on the page (a click in it).
     if (lastCall && lastCall.el === page && lastCall.what === 'focus' && t - lastCall.at < 500) return false
-    // Only a page an agent drives (its badge shows) or one out of sight: a
-    // page the user may have clicked keeps the keyboard.
+    // Only a page an agent drives (its badge shows), one out of sight, or any
+    // page while the user is typing in a pane (a page focusing one of its
+    // fields as it reloads): otherwise a page the user may have clicked keeps
+    // the keyboard.
     const pane = pagePane(page)
     const driven = !!(pane && pane.querySelector('[data-test="browser-agent"]'))
     const hidden = pageHidden(page)
-    if (!driven && !hidden) return false
+    const typing = !!lastKey.el && t - lastKey.at <= typingMs
+    if (!driven && !hidden && !typing) return false
     if (t - lastGesture < gestureMs) return false
     // The window just came back (a click on the page from another program,
     // or Chromium putting the keyboard back where it was).
