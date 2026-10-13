@@ -11,6 +11,9 @@ import { join } from 'path'
 import { computed, reactive, ref } from 'vue'
 import * as launcher from '../projectLauncher'
 
+// App.vue's Live Share helper (liveShareWindow.js): nothing shared or joined.
+const noLiveShare = { isGuestWs: () => false, isGuestLeaf: () => false, state: { host: { state: 'off', guests: [] }, guest: { state: 'off' } } }
+
 const source = fs.readFileSync(join(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
 function slice(from, to) {
   const a = source.indexOf(from)
@@ -70,7 +73,7 @@ function load({ projectOpen = 'ask', remoteStatus = {} } = {}) {
     Array,
     String
   }
-  vm.createContext(ctx)
+  vm.createContext(Object.assign(ctx, { liveShare: noLiveShare }))
   vm.runInContext(
     slice('function wsLeafOpts(ws, opts = {})', 'function folderName(') +
       slice('function sameProject(ws, spec)', '// Run a command (or steps) in a new terminal pane') +
@@ -288,7 +291,7 @@ describe('a restored layout', () => {
       wsLeafOpts: (_ws, o = {}) => o,
       firstAwakeLeafId: (tree) => tree.id
     }
-    vm.createContext(ctx)
+    vm.createContext(Object.assign(ctx, { liveShare: noLiveShare }))
     vm.runInContext(`this.run = async function (snaps) {\n${slice('    for (const snap of snaps) {', '    if (workspaces.value.length) {')}\n}`, ctx)
     return ctx.run(snaps).then(() => ctx)
   }

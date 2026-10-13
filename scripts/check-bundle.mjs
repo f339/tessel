@@ -49,6 +49,24 @@ if (!files.some((f) => f.endsWith('ptyHost.js'))) {
     failed = true
   }
 }
+// Live Share's WebSocket library (src/main/liveShare): required at runtime by
+// the main process (not bundled), and present in node_modules.
+const mainText = [path.join(dir, 'index.js'), ...files.filter((f) => f.includes(path.join('main', 'chunks')))]
+  .filter((f) => fs.existsSync(f))
+  .map((f) => fs.readFileSync(f, 'utf8'))
+  .join('\n')
+if (!/require\(["']ws["']\)/.test(mainText)) {
+  console.error('check-bundle: the main process does not require ws at runtime (Live Share)')
+  failed = true
+}
+if (/class WebSocketServer extends/.test(mainText)) {
+  console.error('check-bundle: ws was bundled (it must stay external, loaded from node_modules)')
+  failed = true
+}
+if (!fs.existsSync(path.join('node_modules', 'ws', 'package.json'))) {
+  console.error('check-bundle: node_modules/ws is missing (npm install)')
+  failed = true
+}
 // The tessel command (src/cli): one file, unpacked from the archive, so it
 // must not load a shared chunk (which stays inside app.asar).
 const cliFile = path.join(dir, 'cli.js')

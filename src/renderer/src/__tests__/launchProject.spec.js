@@ -2,6 +2,9 @@ import { describe, it, expect, vi } from 'vitest'
 import fs from 'node:fs'
 import vm from 'node:vm'
 
+// App.vue's Live Share helper (liveShareWindow.js): nothing shared or joined.
+const noLiveShare = { isGuestWs: () => false, isGuestLeaf: () => false, state: { host: { state: 'off', guests: [] }, guest: { state: 'off' } } }
+
 // Execute the real launcher with a delayed worktree backend and user navigation.
 const source = fs.readFileSync('src/renderer/src/App.vue', 'utf8')
 const launcher = source.slice(source.indexOf('async function launch('), source.indexOf('// Agents: built-in list'))
@@ -21,7 +24,7 @@ function setup() {
     createLeaf: vi.fn(async () => ({ id: 'new-pane' })),
     showActive: (ws, id) => { ws.activeId = id }
   }
-  vm.createContext(ctx)
+  vm.createContext(Object.assign(ctx, { liveShare: noLiveShare }))
   vm.runInContext(launcher + '\nthis.launch = launch', ctx)
   return { ctx, origin, other, finish: () => finish({ ok: true, path: 'C:/project-A-copy', branch: 'work' }) }
 }

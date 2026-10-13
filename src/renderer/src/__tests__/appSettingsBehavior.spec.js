@@ -10,6 +10,9 @@ import { t } from '../i18n'
 import { join } from 'path'
 import { DEFAULT_SETTINGS } from '../settings'
 
+// App.vue's Live Share helper (liveShareWindow.js): nothing shared or joined.
+const noLiveShare = { isGuestWs: () => false, isGuestLeaf: () => false, state: { host: { state: 'off', guests: [] }, guest: { state: 'off' } } }
+
 const source = fs.readFileSync(join(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
 function slice(from, to) {
   const a = source.indexOf(from)
@@ -42,7 +45,7 @@ describe('notifications', () => {
       Map,
       Date
     }
-    vm.createContext(Object.assign(ctx, { t })) // App.vue's interface text goes through t()
+    vm.createContext(Object.assign(ctx, { t, liveShare: noLiveShare })) // App.vue's interface text goes through t()
     vm.runInContext(
       slice('// An entry in the notification inbox', '// Alt+Arrow: move focus') +
         '\nthis.api = { inboxNote, notifyAgentDone, terminalBell, sendTestNotification }',
@@ -134,7 +137,7 @@ describe('Confirm before closing running terminals', () => {
       Promise,
       Array
     }
-    vm.createContext(Object.assign(ctx, { t, hasNoTerminal, isAgentLeaf })) // App.vue's interface text goes through t()
+    vm.createContext(Object.assign(ctx, { t, hasNoTerminal, isAgentLeaf, liveShare: noLiveShare })) // App.vue's interface text goes through t()
     vm.runInContext(
       slice('// Asks the main process what runs under a terminal', '// Arrange the workspace as an even grid') +
         '\nthis.closeLeaf = closeLeaf',
@@ -203,7 +206,7 @@ describe('Ask Before Deleting Workspaces', () => {
       window: { shellApi: { killPty: vi.fn() } },
       Math
     }
-    vm.createContext(Object.assign(ctx, { t, hasNoTerminal, isAgentLeaf })) // App.vue's interface text goes through t()
+    vm.createContext(Object.assign(ctx, { t, hasNoTerminal, isAgentLeaf, liveShare: noLiveShare })) // App.vue's interface text goes through t()
     vm.runInContext(slice('function removeWorkspace(', 'function cycleWorkspace(') + '\nthis.removeWorkspace = removeWorkspace', ctx)
     ctx.removeWorkspace('ws1')
     return ctx

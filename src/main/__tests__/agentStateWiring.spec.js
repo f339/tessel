@@ -77,6 +77,8 @@ function wire(hostRecords = new Map()) {
     setTeamSecret,
     revokeTeamSecret,
     agentStateDir: dir,
+    // Live Share is off (liveShare.js; covered by liveShareMain.spec.js).
+    liveShare: null,
     log: { error: vi.fn() }
   })
   return { handlers, records: hostRecords, setup, ptyInfo }
@@ -173,6 +175,7 @@ it('a delayed exit cannot close the new execution registered for the same pane',
     sshAskpass: { paneExited: vi.fn() },
     remoteAgentCheck: { paneExited: vi.fn() },
     flushData: vi.fn(),
+    liveShare: null,
     send,
     log: { warn: vi.fn() }
   }).onExit

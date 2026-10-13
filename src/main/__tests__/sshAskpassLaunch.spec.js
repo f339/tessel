@@ -85,6 +85,8 @@ function harness({ helper = 'fake.exe', createDelay = null, sshMode = { mode: 's
     ptyInfo: new Map(),
     windowsBuildNumber: () => 22631,
     sshAskpass: broker,
+    // Live Share is off (liveShare.js; covered by liveShareMain.spec.js).
+    liveShare: null,
     host: {
       request: (kind, v) => {
         creates.push({ kind, askpass: !!v.env.SSH_ASKPASS, token: v.env.TESSEL_ASKPASS_TOKEN, ...(v.ssh ? { ssh: v.ssh, backend: v.meta.backend } : {}), ...(v.meta && v.meta.agentProvider ? { agent: [v.meta.agentProvider, v.meta.agentLaunchToken] } : {}) })

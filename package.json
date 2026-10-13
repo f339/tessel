@@ -26,7 +26,8 @@
     "electron-updater": "^6.8.9",
     "node-pty": "^1.1.0",
     "shiki": "4.4.3",
-    "ssh2": "1.17.0"
+    "ssh2": "1.17.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
