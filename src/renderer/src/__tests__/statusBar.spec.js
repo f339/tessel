@@ -215,3 +215,16 @@ describe('Resource Manager keeps up on its own', () => {
     w.unmount()
   })
 })
+
+describe('resources table: headings over their values', () => {
+  it("the heading row spaces its columns like the rows and keeps the list's scrollbar room", async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const css = readFileSync(join(__dirname, '..', 'style.css'), 'utf8')
+    const rule = (sel) => (css.match(new RegExp('\\n' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\{([^}]*)\\}')) || [])[1] || ''
+    expect(rule('.sb-res-row')).toMatch(/gap: 8px;/)
+    expect(rule('.sb-res-sort')).toMatch(/gap: 8px;/)
+    expect(rule('.sb-res-sort')).toMatch(/scrollbar-gutter: stable;/)
+    expect(rule('.sb-res-scroll')).toMatch(/scrollbar-gutter: stable;/)
+  })
+})

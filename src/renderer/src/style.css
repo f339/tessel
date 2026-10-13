@@ -12244,6 +12244,11 @@ body.explorer-sash-dragging * {
 .sb-res-sort {
   display: flex;
   align-items: center;
+  /* Its columns over the rows' (their 8 px apart, the same room kept for
+     the list's scrollbar): CPU and the memory heading over their values. */
+  gap: 8px;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
   padding: 4px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   background: color-mix(in srgb, var(--surface-2) 30%, transparent);
@@ -12285,6 +12290,7 @@ body.explorer-sash-dragging * {
 .sb-res-scroll {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .sb-res-row {
