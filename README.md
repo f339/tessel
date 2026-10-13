@@ -31,7 +31,8 @@ working on Tessel itself (see [Build from source](#build-from-source)).
   presets (2×2, 3×2, …), drag a pane by its header to any side of another pane
   or of the whole workspace, maximize one pane.
 - **Workspaces and projects**: the left sidebar groups workspaces by project
-  folder. Switching never stops a running shell or agent, and everything
+  folder; drag projects to put them in your order (or Alt+Up / Alt+Down on
+  one). Switching never stops a running shell or agent, and everything
   (layout, panes, conversations, tasks, terminal output) is restored on the
   next launch.
 - **Git branches in the sidebar**: a project's other worktrees are listed under
@@ -144,6 +145,32 @@ on the same conversation:
 - **Task board**: a kanban beside the panes (`Ctrl+Shift+K`). You and the
   agents add and move cards, so you can see who does what. Tasks are saved
   with the workspace, with the tokens, time and estimated cost of each one.
+- **Conversations**: a tab in the side panel, after Agents, shows what the
+  agents of a team say to each other and to you, with who sent each message
+  and the model it ran on.
+
+### Live Share
+
+Others join your Tessel from their own Tessel and see a project of yours live,
+like VS Code Live Share:
+
+- **Share** (people icon in the toolbar): pick the project to share and send
+  the invite code. Each guest waits until you click **Allow**; both of you see
+  the same six-digit code, so you can check who it is.
+- Guests see that project's panes, splits and sizes, and its terminals and
+  agents live, but not their history. Switching to another project does not
+  show it to them.
+- Guests **only watch** until you let them, one by one: **Type** in your
+  terminals and agents (they can then run any command on your PC as you),
+  **Open** terminals and agents (they run on your computer), **Close** panes
+  (an agent or a busy terminal still asks you first). Remove anyone or **Stop
+  sharing** at any time.
+- Guests **Join** from the same window by pasting the code. A code works for
+  an hour; **New code** makes another.
+- It goes through a free Cloudflare tunnel (no account; Tessel downloads
+  `cloudflared` the first time you share, checked against its published
+  SHA-256), and everything is end-to-end encrypted, so the tunnel only
+  carries ciphertext. Editor, browser and chat panes are not shared yet.
 
 ### Usage and search
 
