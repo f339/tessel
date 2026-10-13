@@ -4,7 +4,7 @@ import { editorFontStack } from '../settings'
 
 export function editorOptionsFor(s) {
   return {
-    fontSize: s.fontSize,
+    fontSize: s.editorFontSize || 14,
     fontFamily: editorFontStack(s),
     wordWrap: s.editorWordWrap ? 'on' : 'off',
     minimap: { enabled: !!s.editorMinimap }

@@ -206,7 +206,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // Like Orca's (Settings > Editor): the editor's own font ('' = the
   // terminal font), and how diffs show whitespace, unchanged lines and long
   // lines.
+  // The editor's font: VS Code's (Consolas 14 px on Windows) unless one is set.
   editorFontFamily: '',
+  editorFontSize: 14,
   diffShowWhitespace: false,
   diffCollapseUnchanged: false,
   diffWordWrap: false,
@@ -305,7 +307,8 @@ export const LIMITS = Object.freeze({
   scrollSensitivity: [0.5, 3],
   fastScrollSensitivity: [1, 10],
   notificationVolume: [0, 100],
-  minimumContrastRatio: [1, 21]
+  minimumContrastRatio: [1, 21],
+  editorFontSize: [6, 100]
 })
 export const UI_ZOOM_STEP = 0.5
 export const GPU_MODES = ['auto', 'on', 'off']
@@ -544,9 +547,11 @@ export function fontStack(family) {
 
 // The editor's font: its own when set (a CSS font list is taken as it is,
 // a single name is quoted), else the terminal's.
+// VS Code's editor font on Windows (its editor.fontFamily default).
+export const VSCODE_EDITOR_FONT = "Consolas, 'Courier New', monospace" // i18n-ignore
 export function editorFontStack(s) {
   const own = String(s.editorFontFamily || '').trim()
-  if (!own) return fontStack(s.fontFamily)
+  if (!own) return VSCODE_EDITOR_FONT
   const first = own.includes(',') || /^["']/.test(own) ? own : `"${own.replace(/"/g, '')}"`
   return `${first}, "Cascadia Mono", Consolas, "Courier New", monospace` // i18n-ignore
 }

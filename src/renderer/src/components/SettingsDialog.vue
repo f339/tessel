@@ -3117,20 +3117,35 @@ function previewSound() {
               <div class="set-row">
                 <label class="set-label" for="settings-editor-font">
                   {{ t('settings.editor.font', 'Editor Font Family') }}
-                  <span class="set-hint">{{ t('settings.editor.fontHint', 'Font used by file editors and diff views. Leave empty to follow the terminal font.') }}</span>
+                  <span class="set-hint">{{ t('settings.editor.fontHint', "Font used by file editors and diff views. Leave empty for VS Code's (Consolas).") }}</span>
                 </label>
                 <input
                   id="settings-editor-font"
                   class="set-number mcp-input"
                   list="settings-editor-fonts"
                   spellcheck="false"
-                  :placeholder="t('settings.editor.fontPlaceholder', 'Same as terminal font')"
+                  :placeholder="t('settings.editor.fontPlaceholder', 'Consolas (like VS Code)')"
                   :value="settings.editorFontFamily"
                   @change="settings.editorFontFamily = $event.target.value.trim()"
                 />
                 <datalist id="settings-editor-fonts">
                   <option v-for="f in FONT_FAMILIES" :key="f" :value="f"></option>
                 </datalist>
+              </div>
+              <div class="set-row">
+                <label class="set-label" for="settings-editor-font-size">
+                  {{ t('settings.editor.fontSize', 'Editor Font Size') }}
+                  <span class="set-hint">{{ t('settings.editor.fontSizeHint', 'In pixels (VS Code: 14)') }}</span>
+                </label>
+                <input
+                  id="settings-editor-font-size"
+                  class="set-number"
+                  type="number"
+                  min="6"
+                  max="100"
+                  :value="settings.editorFontSize"
+                  @change="settings.editorFontSize = Math.min(100, Math.max(6, parseInt($event.target.value, 10) || 14)); $event.target.value = settings.editorFontSize"
+                />
               </div>
               <div class="set-row">
                 <div id="settings-diff-ws-label" class="set-label">

@@ -32,6 +32,12 @@ export const LIGHT_THEME = 'vscode-light'
 // The editor's own background, text, gutter and cursor stay Tessel's.
 const WIDGET_COLOURS =
   /^(editorWidget|editorHoverWidget|editorSuggestWidget|editorStickyScroll|editorStickyScrollHover|input\.|inputOption|inputValidation|focusBorder|widget\.|toolbar\.|editor\.find|editor\.(inactive)?selection|editor\.wordHighlight|editor\.rangeHighlight|editorBracketMatch|editorBracketHighlight|editorBracketPairGuide|editorIndentGuide|editorWhitespace|minimap|scrollbar|editorOverviewRuler|errorForeground|icon\.foreground|list\.|quickInput|keybindingLabel|editorError|editorWarning|editorInfo|editorLink|descriptionForeground|textLink|editorGhostText|editorInlayHint|editorMarkerNavigation|peekView|diffEditor|editorUnicodeHighlight)/
+// Every colour of the theme: the editor drawn exactly as VS Code draws it
+// (its background, text, line numbers, cursor, selection, gutter too).
+export function allColours(dark) {
+  const all = (dark ? vscodeDark : vscodeLight).colors || {}
+  return Object.fromEntries(Object.entries(all).filter(([, v]) => typeof v === 'string' && /^#[0-9a-f]{3,8}$/i.test(v)))
+}
 export function vscodeColours(dark) {
   const all = (dark ? vscodeDark : vscodeLight).colors || {}
   return Object.fromEntries(Object.entries(all).filter(([k, v]) => WIDGET_COLOURS.test(k) && typeof v === 'string' && /^#[0-9a-f]{3,8}$/i.test(v)))
@@ -211,6 +217,7 @@ export function createTextmate({ monaco, maxLineLength = 20000, timeLimitMs = 50
       return () => listeners.delete(fn)
     },
     hasGrammar: (languageId) => providers.has(languageId),
-    colours: (dark) => vscodeColours(dark)
+    colours: (dark) => vscodeColours(dark),
+    allColours: (dark) => allColours(dark)
   }
 }

@@ -8754,14 +8754,27 @@ button.act-stat:hover,
   min-height: 0;
 }
 
-.ed-tabs {
+/* VS Code's editor title (modern UI, workbench tabs.css): a 32 px bar of the
+   editor's colour, 24 px tabs drawn as rounded fills 2 px apart, the active
+   one list.inactiveSelectionBackground, the others the inactive tab text;
+   the editor's actions on the right. Dark 2026's colours. */
+.ed-titlebar {
   display: flex;
   flex: 0 0 auto;
-  height: 30px;
+  align-items: center;
+  height: 32px;
+  padding: 0 4px;
+  background: #121314;
+}
+
+.ed-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
   scrollbar-width: none;
 }
 
@@ -8770,29 +8783,54 @@ button.act-stat:hover,
 }
 
 .ed-tab {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
   flex: 0 0 auto;
+  height: 24px;
   max-width: 240px;
-  padding: 0 4px 0 12px;
-  border-right: 1px solid var(--border);
-  color: var(--text-dim);
+  padding: 0 8px 0 6px;
+  border-radius: 4px;
+  color: #8c8c8c;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 400;
   -webkit-user-select: none;
   user-select: none;
 }
 
+.ed-tab::before {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  z-index: 0;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.ed-tab > * {
+  position: relative;
+  z-index: 1;
+}
+
 .ed-tab:hover {
-  color: var(--text);
-  background: var(--surface-2);
+  color: #bfbfbf;
+}
+
+.ed-tab:hover::before {
+  background: rgba(255, 255, 255, 0.078);
 }
 
 .ed-tab.active {
-  color: var(--text-strong);
-  background: var(--term);
-  box-shadow: inset 0 2px 0 var(--accent);
+  color: #ededed;
+}
+
+.ed-tab.active::before {
+  background: #2c2d2e;
+}
+
+.ed-tab .ed-tab-icon {
+  margin: 0 6px 0 0;
 }
 
 .ed-tab.preview .ed-tab-name {
@@ -8815,6 +8853,7 @@ button.act-stat:hover,
 
 .ed-tab-tag {
   flex: 0 0 auto;
+  margin-left: 6px;
   padding: 0 5px;
   border-radius: 4px;
   background: color-mix(in srgb, var(--danger) 20%, transparent);
@@ -8822,25 +8861,25 @@ button.act-stat:hover,
   font-size: 10px;
 }
 
-/* The close button: the × on hover or on the active tab; a dot while the
-   file has unsaved changes (the × again on hover). */
+/* The tab's action: VS Code's close (a dot while unsaved, the close again on
+   hover), 16 px codicon in a 20 px button. */
 .ed-tab-close {
   display: inline-grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 18px;
-  height: 18px;
-  padding: 0;
+  width: 20px;
+  height: 20px;
+  margin-left: 4px;
+  padding: 2px;
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--text-dim);
+  color: inherit;
   cursor: pointer;
 }
 
 .ed-tab-close:hover {
-  background: var(--surface-3);
-  color: var(--text-strong);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .ed-tab-close .ed-x {
@@ -8852,20 +8891,12 @@ button.act-stat:hover,
   visibility: visible;
 }
 
-.ed-dot {
+.ed-tab-close .ed-dot {
   display: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
-}
-
-.ed-tab-close.dirty {
-  color: var(--text);
 }
 
 .ed-tab-close.dirty .ed-dot {
-  display: block;
+  display: inline-block;
 }
 
 .ed-tab-close.dirty .ed-x,
@@ -8878,8 +8909,58 @@ button.act-stat:hover,
 }
 
 .ed-tab:hover .ed-tab-close.dirty .ed-x {
-  display: block;
+  display: inline-block;
   visibility: visible;
+}
+
+/* The editor's actions (VS Code's title actions): its 22 px buttons. */
+.ed-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  padding-left: 4px;
+  color: #bfbfbf;
+}
+
+/* VS Code's breadcrumbs: 22 px, the editor's colour, its grey text. */
+.ed-crumbs {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+  height: 22px;
+  overflow: hidden;
+  color: #8c8c8c;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.ed-crumbs::before {
+  content: ' ';
+  white-space: pre;
+}
+
+.ed-crumb {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.ed-crumb:hover {
+  color: #bfbfbf;
+}
+
+.ed-crumb .ed-crumb-icon {
+  margin-right: 6px;
+}
+
+.ed-crumb-sep {
+  flex: 0 0 auto;
 }
 
 .ed-banner {
@@ -8915,11 +8996,10 @@ button.act-stat:hover,
   align-items: center;
   gap: 10px;
   flex: 0 0 auto;
-  min-height: 30px;
-  padding: 2px 8px;
-  border-bottom: 1px solid var(--border);
-  background: var(--term);
-  color: var(--text-dim);
+  height: 22px;
+  padding: 0 8px 0 0;
+  background: #121314;
+  color: #8c8c8c;
   font-size: 11.5px;
 }
 
@@ -8967,6 +9047,7 @@ button.act-stat:hover,
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  background: #121314;
 }
 
 .ed-host {

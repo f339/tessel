@@ -17,7 +17,7 @@
 import { ref, computed, watch, inject, nextTick, onMounted, onBeforeUnmount, h, render, getCurrentInstance } from 'vue'
 import { settings } from '../settings'
 import { editorOptionsFor, diffOptionsFor } from '../editor/editorOptions'
-import { loadMonaco, textmateIfLoaded } from '../editor/loadMonaco'
+import { loadMonaco, textmateIfLoaded, outlineIfLoaded } from '../editor/loadMonaco'
 import { setActiveEditor, noteEdited, noteCursor, clearActiveEditor } from '../editor/activeEditor'
 import {
   docs,
@@ -46,6 +46,9 @@ import { scmRevision } from '../scmState'
 import { installDiffNotes } from '../editor/diffNotes'
 import LucideIcon from './LucideIcon.vue'
 import FileIcon from './FileIcon.vue'
+import Codicon from './Codicon.vue'
+import EditorBreadcrumbs from './EditorBreadcrumbs.vue'
+import { symbolsAt } from '../editor/symbolKinds'
 import RichView from './RichView.vue'
 import NotesSendMenu from './NotesSendMenu.vue'
 import DiffNoteDraft from './DiffNoteDraft.vue'
@@ -221,28 +224,30 @@ function applyTheme() {
   const line = cssColor('--surface', dark ? '#181b21' : '#f6f8fa')
   const border = cssColor('--border', dark ? '#252932' : '#d0d7de')
   const accent = cssColor('--accent', '#6c9cff')
-  // VS Code's code colours (editor/textmate.js: its Dark 2026 or Light 2026)
-  // once its grammars are loaded, Monaco's own until then; VS Code's colours
-  // for the find widget, suggestions, hovers, minimap and scrollbars. The
-  // background, text, gutter and cursor stay Tessel's.
+  // The editor exactly as VS Code draws it (editor/textmate.js: its Dark 2026
+  // or Light 2026, every colour: background, text, line numbers, cursor,
+  // selection, find widget, minimap…); Tessel's own colours only until
+  // Monaco's part of it has loaded.
   const tm = textmateIfLoaded()
   monaco.editor.defineTheme('tessel', {
     base: dark ? 'vs-dark' : 'vs',
     inherit: true,
     rules: tm ? tm.rules(dark) : [],
-    colors: {
-      ...(tm ? tm.colours(dark) : { 'editorWidget.background': line, 'editorWidget.border': border, 'editorHoverWidget.background': line, 'editorHoverWidget.border': border }),
-      'editor.background': bg,
-      'editor.foreground': fg,
-      'editorGutter.background': bg,
-      'editorLineNumber.foreground': dim,
-      'editorLineNumber.activeForeground': strong,
-      'editor.lineHighlightBackground': line,
-      'editor.lineHighlightBorder': line,
-      'editorCursor.foreground': accent,
-      'minimap.background': bg,
-      'editorStickyScroll.background': bg
-    }
+    colors: tm
+      ? tm.allColours(dark)
+      : {
+          'editor.background': bg,
+          'editor.foreground': fg,
+          'editorGutter.background': bg,
+          'editorLineNumber.foreground': dim,
+          'editorLineNumber.activeForeground': strong,
+          'editor.lineHighlightBackground': line,
+          'editor.lineHighlightBorder': line,
+          'editorWidget.background': line,
+          'editorWidget.border': border,
+          'editorCursor.foreground': accent,
+          'minimap.background': bg
+        }
   })
   monaco.editor.setTheme('tessel')
 }
@@ -251,8 +256,7 @@ function editorOptions() {
 }
 watch(
   () => [
-    settings.fontSize,
-    settings.fontFamily,
+    settings.editorFontSize,
     settings.editorFontFamily,
     settings.editorWordWrap,
     settings.editorMinimap,
@@ -306,6 +310,7 @@ function showActive() {
   updateRichText()
   applyReveal()
   publishActive()
+  readSymbols()
 }
 
 // The explorer's Outline and Timeline follow the editor in use (VS Code's
@@ -324,10 +329,41 @@ function publishActive() {
 let editedTimer = 0
 function onEdited() {
   clearTimeout(editedTimer)
-  editedTimer = setTimeout(() => noteEdited(props.node.id), 400)
+  editedTimer = setTimeout(() => {
+    noteEdited(props.node.id)
+    readSymbols()
+  }, 400)
 }
 function onCursor(e) {
-  if (e && e.position) noteCursor(props.node.id, e.position.lineNumber, e.position.column)
+  if (e && e.position) {
+    noteCursor(props.node.id, e.position.lineNumber, e.position.column)
+    crumbSymbols.value = symbolsAt(symbolTree, e.position.lineNumber, e.position.column)
+  }
+}
+
+// VS Code's breadcrumbs: the file's folders under the project, then the
+// symbols around the cursor (the language services' document symbols).
+const crumbRoot = computed(() => (ctx.paneFolder ? ctx.paneFolder(props.node) : props.node.startDir) || '')
+const crumbSymbols = ref([])
+let symbolTree = []
+let symbolsSeq = 0
+async function readSymbols() {
+  const seq = ++symbolsSeq
+  const ed = editor
+  const model = ed && ed.getModel()
+  const outline = outlineIfLoaded()
+  const tree = model && outline ? await outline.documentSymbols(model) : null
+  if (seq !== symbolsSeq) return
+  symbolTree = tree || []
+  const pos = ed && ed.getModel() ? ed.getPosition() : null
+  crumbSymbols.value = pos ? symbolsAt(symbolTree, pos.lineNumber, pos.column) : []
+}
+function revealSymbol(s) {
+  if (!editor || !s || !s.selectionRange) return
+  const r = s.selectionRange
+  editor.setSelection({ startLineNumber: r.startLineNumber, startColumn: r.startColumn, endLineNumber: r.startLineNumber, endColumn: r.startColumn })
+  editor.revealRangeInCenterIfOutsideViewport(r, 0)
+  editor.focus()
 }
 watch(isActive, (a) => a && nextTick(publishActive))
 
@@ -899,7 +935,9 @@ onMounted(async () => {
     // Like Orca: long lines are not coloured past this (a guard for huge
     // minified files).
     maxTokenizationLineLength: 20000,
-    scrollBeyondLastLine: false,
+    // VS Code's defaults: room to scroll past the last line, no smooth
+    // scrolling, 4 spaces (each file's own indentation detected).
+    scrollBeyondLastLine: true,
     lineNumbers: 'on',
     renderLineHighlight: 'line',
     // As VS Code by default: coloured bracket pairs, the enclosing scopes
@@ -908,10 +946,9 @@ onMounted(async () => {
     stickyScroll: { enabled: true },
     renderWhitespace: 'selection',
     automaticLayout: true,
-    tabSize: 2,
-    smoothScrolling: true,
+    tabSize: 4,
+    smoothScrolling: false,
     cursorSmoothCaretAnimation: 'off',
-    padding: { top: 4 },
     fixedOverflowWidgets: true
   })
   editor.onDidChangeModelContent(onEdited)
@@ -1023,49 +1060,123 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="ed-body">
-      <div class="ed-tabs" role="tablist" :aria-label="t('editor.tabs.aria', 'Open files')" @wheel.passive="onTabsWheel">
-        <div
-          v-for="f in files"
-          :key="f.path"
-          class="ed-tab"
-          role="tab"
-          :aria-selected="samePath(f.path, node.activePath)"
-          :class="{
-            active: samePath(f.path, node.activePath),
-            preview: f.preview,
-            diff: !!f.diff,
-            dirty: docOf(f) && docOf(f).dirty,
-            deleted: !f.diff && docOf(f) && docOf(f).deleted,
-            failed: !f.diff && defaultMode(f) !== 'image' && docOf(f) && !!docOf(f).error
-          }"
-          :title="f.preview ? t('editor.tabs.previewHint', '{{path}}\nPreview: double-click to keep it open', { path: docPathOf(f) }) : docPathOf(f)"
-          :data-path="docPathOf(f)"
-          :data-diff="f.diff ? f.diff.area : null"
-          @mousedown.left.prevent="activate(f.path)"
-          @mousedown.middle.prevent
-          @mouseup.middle="closeTab(f.path)"
-          @dblclick="pin(f.path)"
-        >
-          <FileIcon class="ed-tab-icon" :name="docPathOf(f)" />
-          <span class="ed-tab-name">{{ tabLabel(f) }}</span>
-          <span v-if="!f.diff && docOf(f) && docOf(f).deleted" class="ed-tab-tag">{{ t('editor.tabs.deleted', 'deleted') }}</span>
-          <button
-            class="ed-tab-close"
-            :class="{ dirty: docOf(f) && docOf(f).dirty }"
-            :title="docOf(f) && docOf(f).dirty ? t('editor.tabs.closeDirty', 'Unsaved changes. Close (Ctrl+W)') : t('editor.tabs.close', 'Close (Ctrl+W)')"
-            :aria-label="
-              docOf(f) && docOf(f).dirty
-                ? t('editor.tabs.closeNameDirty', 'Close {{name}} (unsaved changes)', { name: tabLabel(f) })
-                : t('editor.tabs.closeName', 'Close {{name}}', { name: tabLabel(f) })
-            "
-            @mousedown.stop
-            @click.stop="closeTab(f.path)"
+      <!-- VS Code's editor title: the tabs, then the editor's actions. -->
+      <div class="ed-titlebar">
+        <div class="ed-tabs" role="tablist" :aria-label="t('editor.tabs.aria', 'Open files')" @wheel.passive="onTabsWheel">
+          <div
+            v-for="f in files"
+            :key="f.path"
+            class="ed-tab"
+            role="tab"
+            :aria-selected="samePath(f.path, node.activePath)"
+            :class="{
+              active: samePath(f.path, node.activePath),
+              preview: f.preview,
+              diff: !!f.diff,
+              dirty: docOf(f) && docOf(f).dirty,
+              deleted: !f.diff && docOf(f) && docOf(f).deleted,
+              failed: !f.diff && defaultMode(f) !== 'image' && docOf(f) && !!docOf(f).error
+            }"
+            :title="f.preview ? t('editor.tabs.previewHint', '{{path}}\nPreview: double-click to keep it open', { path: docPathOf(f) }) : docPathOf(f)"
+            :data-path="docPathOf(f)"
+            :data-diff="f.diff ? f.diff.area : null"
+            @mousedown.left.prevent="activate(f.path)"
+            @mousedown.middle.prevent
+            @mouseup.middle="closeTab(f.path)"
+            @dblclick="pin(f.path)"
           >
-            <span class="ed-dot" aria-hidden="true"></span>
-            <svg class="ed-x" width="10" height="10" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-            </svg>
-          </button>
+            <FileIcon class="ed-tab-icon" :name="docPathOf(f)" />
+            <span class="ed-tab-name">{{ tabLabel(f) }}</span>
+            <span v-if="!f.diff && docOf(f) && docOf(f).deleted" class="ed-tab-tag">{{ t('editor.tabs.deleted', 'deleted') }}</span>
+            <button
+              class="ed-tab-close"
+              :class="{ dirty: docOf(f) && docOf(f).dirty }"
+              :title="docOf(f) && docOf(f).dirty ? t('editor.tabs.closeDirty', 'Unsaved changes. Close (Ctrl+W)') : t('editor.tabs.close', 'Close (Ctrl+W)')"
+              :aria-label="
+                docOf(f) && docOf(f).dirty
+                  ? t('editor.tabs.closeNameDirty', 'Close {{name}} (unsaved changes)', { name: tabLabel(f) })
+                  : t('editor.tabs.closeName', 'Close {{name}}', { name: tabLabel(f) })
+              "
+              @mousedown.stop
+              @click.stop="closeTab(f.path)"
+            >
+              <Codicon class="ed-dot" name="circle-filled" />
+              <Codicon class="ed-x" name="close" />
+            </button>
+          </div>
+        </div>
+        <div v-if="activeFile && (diffInfo || (activeDoc && (!activeDoc.error || mode === 'image')))" class="ed-actions" data-test="editor-actions">
+            <button
+              v-if="diffInfo"
+              type="button"
+              class="ed-hbtn"
+              :disabled="!canOpenFile"
+              :title="canOpenFile ? t('editor.diff.openFileTab', 'Open file tab') : t('editor.diff.noFileToOpen', 'This diff has no modified-side file to open')"
+              :aria-label="t('editor.diff.openFile', 'Open file')"
+              data-test="diff-open-file"
+              @click="openDiffTargetFile"
+            >
+              <LucideIcon name="fileText" :size="14" />
+            </button>
+            <NotesSendMenu
+              v-if="diffInfo && fileNotes.length"
+              :scopes="noteScopes"
+              default-scope-id="file"
+              :trigger-label="t('notes.aiNotes', 'AI notes')"
+              :trigger-count="fileNotes.length"
+              trigger-class="ed-notes-pill"
+              @delivered="onNotesDelivered"
+            />
+            <template v-if="isDiffSurface && mode !== 'rich'">
+              <button
+                type="button"
+                class="ed-hbtn"
+                :title="settings.diffSideBySide ? t('editor.diff.toInline', 'Switch to inline diff') : t('editor.diff.toSideBySide', 'Switch to side-by-side diff')"
+                :aria-label="
+                  settings.diffSideBySide ? t('editor.diff.toInline', 'Switch to inline diff') : t('editor.diff.toSideBySide', 'Switch to side-by-side diff')
+                "
+                data-test="diff-layout"
+                @click="toggleSideBySide"
+              >
+                <LucideIcon :name="settings.diffSideBySide ? 'rows2' : 'columns2'" :size="14" />
+              </button>
+              <button
+                type="button"
+                class="ed-hbtn"
+                :title="t('editor.diff.prevHint', 'Previous change (Shift+F7)')"
+                :aria-label="t('editor.diff.prev', 'Previous change')"
+                data-test="diff-prev"
+                @click="goToDiff('previous')"
+              >
+                <LucideIcon name="arrowUp" :size="14" />
+              </button>
+              <button
+                type="button"
+                class="ed-hbtn"
+                :title="t('editor.diff.nextHint', 'Next change (F7)')"
+                :aria-label="t('editor.diff.next', 'Next change')"
+                data-test="diff-next"
+                @click="goToDiff('next')"
+              >
+                <LucideIcon name="arrowDown" :size="14" />
+              </button>
+            </template>
+            <div v-if="toggleModes.length > 1" class="ed-toggle" role="radiogroup" :aria-label="t('editor.view.aria', 'View')" data-test="view-toggle">
+              <button
+                v-for="v in toggleModes"
+                :key="v"
+                type="button"
+                class="ed-toggle-item"
+                role="radio"
+                :aria-checked="toggleValue === v"
+                :aria-label="toggleMeta(v).label"
+                :title="toggleMeta(v).title || toggleMeta(v).label"
+                :data-mode="v"
+                @click="setToggle(v)"
+              >
+                <LucideIcon :name="toggleMeta(v).icon" :size="14" />
+              </button>
+            </div>
         </div>
       </div>
 
@@ -1081,7 +1192,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-if="activeFile && (diffInfo || (activeDoc && (!activeDoc.error || mode === 'image')))" class="ed-bar" data-test="editor-bar">
-        <span class="ed-bar-path" :title="activeDocPath">{{ diffInfo ? diffInfo.rel : '' }}</span>
+        <EditorBreadcrumbs :path="activeDocPath" :root="crumbRoot" :symbols="mode === 'edit' ? crumbSymbols : []" @reveal="revealSymbol" />
         <span v-if="mode !== 'edit' && mode !== 'image' && diffNote && !diffInfo" class="ed-note-inline">{{
           diffBusy ? t('editor.viewer.reading', 'Reading…') : diffNote
         }}</span>
@@ -1093,77 +1204,6 @@ onBeforeUnmount(() => {
         <span v-else-if="!diffInfo && activeDoc && activeDoc.deleted" class="ed-state warn">{{
           t('editor.state.deletedOnDisk', 'Deleted on disk: saving creates it again')
         }}</span>
-        <button
-          v-if="diffInfo"
-          type="button"
-          class="ed-hbtn"
-          :disabled="!canOpenFile"
-          :title="canOpenFile ? t('editor.diff.openFileTab', 'Open file tab') : t('editor.diff.noFileToOpen', 'This diff has no modified-side file to open')"
-          :aria-label="t('editor.diff.openFile', 'Open file')"
-          data-test="diff-open-file"
-          @click="openDiffTargetFile"
-        >
-          <LucideIcon name="fileText" :size="14" />
-        </button>
-        <NotesSendMenu
-          v-if="diffInfo && fileNotes.length"
-          :scopes="noteScopes"
-          default-scope-id="file"
-          :trigger-label="t('notes.aiNotes', 'AI notes')"
-          :trigger-count="fileNotes.length"
-          trigger-class="ed-notes-pill"
-          @delivered="onNotesDelivered"
-        />
-        <template v-if="isDiffSurface && mode !== 'rich'">
-          <button
-            type="button"
-            class="ed-hbtn"
-            :title="settings.diffSideBySide ? t('editor.diff.toInline', 'Switch to inline diff') : t('editor.diff.toSideBySide', 'Switch to side-by-side diff')"
-            :aria-label="
-              settings.diffSideBySide ? t('editor.diff.toInline', 'Switch to inline diff') : t('editor.diff.toSideBySide', 'Switch to side-by-side diff')
-            "
-            data-test="diff-layout"
-            @click="toggleSideBySide"
-          >
-            <LucideIcon :name="settings.diffSideBySide ? 'rows2' : 'columns2'" :size="14" />
-          </button>
-          <button
-            type="button"
-            class="ed-hbtn"
-            :title="t('editor.diff.prevHint', 'Previous change (Shift+F7)')"
-            :aria-label="t('editor.diff.prev', 'Previous change')"
-            data-test="diff-prev"
-            @click="goToDiff('previous')"
-          >
-            <LucideIcon name="arrowUp" :size="14" />
-          </button>
-          <button
-            type="button"
-            class="ed-hbtn"
-            :title="t('editor.diff.nextHint', 'Next change (F7)')"
-            :aria-label="t('editor.diff.next', 'Next change')"
-            data-test="diff-next"
-            @click="goToDiff('next')"
-          >
-            <LucideIcon name="arrowDown" :size="14" />
-          </button>
-        </template>
-        <div v-if="toggleModes.length > 1" class="ed-toggle" role="radiogroup" :aria-label="t('editor.view.aria', 'View')" data-test="view-toggle">
-          <button
-            v-for="v in toggleModes"
-            :key="v"
-            type="button"
-            class="ed-toggle-item"
-            role="radio"
-            :aria-checked="toggleValue === v"
-            :aria-label="toggleMeta(v).label"
-            :title="toggleMeta(v).title || toggleMeta(v).label"
-            :data-mode="v"
-            @click="setToggle(v)"
-          >
-            <LucideIcon :name="toggleMeta(v).icon" :size="14" />
-          </button>
-        </div>
       </div>
 
       <div class="ed-stack">
