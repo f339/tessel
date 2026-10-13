@@ -35,6 +35,8 @@ const props = defineProps({
   workspaceId: { type: String, default: null },
   // sessionId -> paneId: the past conversations open in a pane (Agents tab).
   openSessionIds: { type: Object, default: () => ({}) },
+  // The Files tab's "Open Editors" (App: explorer/openEditors.js).
+  openEditors: { type: Array, default: () => [] },
   // A project on a remote host: { hostId, host, path }. Its root is then an
   // ssh://… path: Files and Changes read it over SSH (src/main/remoteFs.js),
   // under a small badge naming the host.
@@ -53,6 +55,10 @@ const props = defineProps({
 })
 const emit = defineEmits([
   'update:tab',
+  'activate-editor',
+  'close-editor',
+  'save-all',
+  'close-all',
   'close',
   'open',
   'open-editor',
@@ -341,6 +347,12 @@ onBeforeUnmount(() => {
         v-show="current() === 'files'"
         :root="root"
         :can-insert="canInsert"
+        :open-editors="openEditors"
+        :remote-label="remote ? remote.host || '' : ''"
+        @activate-editor="(ed) => emit('activate-editor', ed)"
+        @close-editor="(ed) => emit('close-editor', ed)"
+        @save-all="emit('save-all')"
+        @close-all="emit('close-all')"
         @open="(file, arg) => emit('open', file, arg)"
         @open-editor="(file) => emit('open-editor', file)"
         @open-external="(file) => emit('open-external', file)"

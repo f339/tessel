@@ -103,3 +103,39 @@ export function segmentOf(row, path) {
   const i = row.chain.findIndex((e) => e.path === path)
   return i < 0 ? row.chain.length - 1 : i
 }
+
+// VS Code's sticky scroll for trees (its abstractTree.ts StickyScrollController,
+// workbench.tree.enableStickyScroll, at most 7 lines): the open folders whose
+// rows went above the top stay there, one line each, the deepest pushed up as
+// its last child leaves. items: the tree's lines in order ({ depth }), all
+// rowHeight tall. -> [{ at: item index, top: px from the view's top }]
+export function stickyFolders(items, scrollTop, { rowHeight = ROW_HEIGHT, max = 7 } = {}) {
+  const n = items.length
+  if (!n || scrollTop <= 0) return []
+  // Each line's parent (the nearest line above one level up) and where its
+  // descendants end.
+  const parent = new Array(n).fill(-1)
+  const end = new Array(n).fill(0)
+  const stack = []
+  for (let i = 0; i < n; i++) {
+    const d = items[i].depth || 0
+    while (stack.length && (items[stack[stack.length - 1]].depth || 0) >= d) end[stack.pop()] = i
+    parent[i] = stack.length ? stack[stack.length - 1] : -1
+    stack.push(i)
+  }
+  while (stack.length) end[stack.pop()] = n
+  const out = []
+  for (let level = 0; level < max; level++) {
+    const y = scrollTop + level * rowHeight
+    const under = Math.floor(y / rowHeight)
+    if (under >= n) break
+    if ((items[under].depth || 0) <= level) break
+    let a = under
+    while (a >= 0 && (items[a].depth || 0) > level) a = parent[a]
+    if (a < 0 || a * rowHeight >= y) break
+    const top = Math.min(level * rowHeight, end[a] * rowHeight - scrollTop - rowHeight)
+    out.push({ at: a, top })
+    if (top < level * rowHeight) break
+  }
+  return out
+}

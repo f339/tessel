@@ -7858,7 +7858,6 @@ button.act-stat:hover,
   align-items: center;
   gap: 6px;
   padding: 6px 6px 6px 10px;
-  border-bottom: 1px solid var(--border);
 }
 
 .explorer-title {
@@ -8305,6 +8304,155 @@ button.act-stat:hover,
 
 .explorer-row.selected {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* VS Code's explorer sections: "Open Editors", then the project's folder,
+   each folded by its header; their buttons show while the pointer is on the
+   explorer (or the keyboard in the header). */
+.explorer-section-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  min-height: 24px;
+  padding: 1px 6px 1px 2px;
+  color: var(--text-strong);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.explorer-section-head .explorer-twistie {
+  margin-right: 2px;
+}
+.explorer-section-head .explorer-twistie.open > svg {
+  transform: rotate(90deg);
+}
+.explorer-section-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.explorer-section-head .explorer-actions {
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.explorer:hover .explorer-section-head .explorer-actions,
+.explorer-section-head:focus-within .explorer-actions,
+.explorer-section-head .explorer-actions:has(.on) {
+  opacity: 1;
+}
+.explorer-section-head:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.explorer-badge {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  padding: 0 7px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 17px;
+}
+.explorer-open-editors {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+.open-editors-list {
+  overflow-y: auto;
+  padding-bottom: 2px;
+}
+.open-editor {
+  padding-left: 4px;
+}
+.open-editor.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.open-editor-close {
+  display: inline-flex;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+}
+.open-editor-close:hover {
+  background: var(--surface-3);
+  color: var(--text-strong);
+}
+.open-editor-dot,
+.open-editor-x {
+  display: none;
+}
+.open-editor.dirty .open-editor-dot {
+  display: inline;
+  font-size: 11px;
+}
+.open-editor:hover .open-editor-dot,
+.open-editor.active .open-editor-dot {
+  display: none;
+}
+.open-editor:hover .open-editor-x,
+.open-editor.active .open-editor-x {
+  display: block;
+}
+.open-editor .explorer-name.open-editor-name {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.open-editor.preview .open-editor-name {
+  font-style: italic;
+}
+.open-editor-folder {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 4px;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 0.92em;
+  text-overflow: ellipsis;
+}
+.open-editor-globe {
+  flex: 0 0 16px;
+  color: var(--text-dim);
+}
+
+/* VS Code's sticky scroll: the open folders above the first line stay at the
+   top of the tree (opaque, the last with a shadow). */
+.explorer-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  height: 0;
+}
+.explorer-sticky-row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  background: var(--surface);
+}
+.explorer-sticky-row:hover {
+  background: var(--surface-3);
+}
+.explorer-sticky-row.selected {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface));
+}
+.explorer-sticky-row.last {
+  box-shadow: 0 4px 4px -3px rgba(0, 0, 0, 0.5);
 }
 
 .explorer-icon {

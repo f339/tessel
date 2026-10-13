@@ -126,6 +126,7 @@ import {
   autoSaveSettingsChanged
 } from './editor/documents'
 import { openTab, validSavedFiles, samePath, fileName, docPathOf, diffTabPath } from './editor/editorTabs'
+import { openEditorsOf } from './explorer/openEditors'
 import { setNotesDelivery } from './notesDelivery'
 import { unsafeMultilinePaste } from './pasteSafety'
 import { t, intlLocale, currentLocale } from './i18n'
@@ -2430,6 +2431,45 @@ const sideRemote = computed(() => {
   const ws = currentWs.value
   return ws && ws.remote ? { hostId: ws.remote.hostId, host: remoteHostLabel(ws.remote.hostId), path: ws.remote.path } : null
 })
+// The Files tab's "Open Editors" (VS Code's): the workspace's open files (its
+// editor panes' tabs) and web pages; a click shows one, its × closes it.
+function diffTabLabel(f) {
+  const name = fileName(docPathOf(f))
+  if (f.diff.area === 'commit') return t('editor.tab.commitDiff', '{{name}} ({{commit}})', { name, commit: String(f.diff.commit || '').slice(0, 7) })
+  if (f.diff.area === 'staged') return t('editor.tab.stagedDiff', '{{name}} (staged diff)', { name })
+  return t('editor.tab.diff', '{{name}} (diff)', { name })
+}
+const openEditors = computed(() => {
+  const ws = currentWs.value
+  if (!ws) return []
+  const leaves = []
+  forEachLeaf(ws.tree, (l) => leaves.push(l))
+  return openEditorsOf({ leaves, activeId: ws.activeId, root: sideRoot.value, isDirty: (p) => !!(getDoc(p) && getDoc(p).dirty), label: diffTabLabel })
+})
+function activateOpenEditor(ed) {
+  if (!ed || !findLeaf(ed.paneId)) return
+  focusPane(ed.paneId)
+  const pane = ed.kind === 'file' ? getEditorPane(ed.paneId) : null
+  if (pane && pane.activate) pane.activate(ed.tabPath)
+}
+function closeOpenEditor(ed) {
+  if (!ed || !findLeaf(ed.paneId)) return
+  if (ed.kind === 'page') return closeLeaf(ed.paneId)
+  const pane = getEditorPane(ed.paneId)
+  if (pane && pane.closeTab) pane.closeTab(ed.tabPath)
+}
+function saveAllEditors() {
+  const paths = [...new Set(openEditors.value.filter((e) => e.dirty).map((e) => e.path))]
+  if (paths.length) saveDocs(paths)
+}
+// Close all: every open file (each asks about its unsaved edits); the web
+// pages stay (they are panes of their own).
+async function closeAllEditors() {
+  for (const ed of openEditors.value.filter((e) => e.kind === 'file')) {
+    const pane = getEditorPane(ed.paneId)
+    if (pane && pane.closeTab) await pane.closeTab(ed.tabPath)
+  }
+}
 // The main process reads files only below the remote projects of the saved
 // layout: a remote project added or removed is saved at once (not after the
 // usual short delay), so its Files tab can read it right away.
@@ -11805,6 +11845,11 @@ onBeforeUnmount(() => {
           :workspace-id="currentWsId"
           :remote="sideRemote"
           :open-session-ids="openSessionIds"
+          :open-editors="openEditors"
+          @activate-editor="activateOpenEditor"
+          @close-editor="closeOpenEditor"
+          @save-all="saveAllEditors"
+          @close-all="closeAllEditors"
           @resume-session="resumeSession"
           @close="closeSidePanel"
           @open="openExplorerFile"

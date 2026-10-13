@@ -852,7 +852,8 @@ onMounted(async () => {
       richTimer = setTimeout(updateRichText, 200)
     }
   })
-  paneApi = { focus: focusEditor, closeActiveTab, activePath: () => props.node.activePath }
+  // activate / closeTab: the explorer's Open Editors (App.vue).
+  paneApi = { focus: focusEditor, closeActiveTab, activePath: () => props.node.activePath, activate, closeTab }
   registerEditorPane(props.node.id, paneApi)
   if (rootEl.value) rootEl.value.addEventListener('keydown', onKeydownCapture, true)
   try {

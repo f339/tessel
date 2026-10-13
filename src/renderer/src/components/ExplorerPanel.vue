@@ -10,7 +10,7 @@ import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } 
 import ThemedSelect from './ui/ThemedSelect.vue'
 import PanelState from './ui/PanelState.vue'
 import { statusOf, folderStatus, ignoredSet, isIgnored } from '../explorerStatus'
-import { buildRows, toggledPaths, soleSubfolder, activeGuide, segmentOf, rowPadding, guideX, INDENT, ROW_HEIGHT } from '../explorerRows'
+import { buildRows, toggledPaths, soleSubfolder, activeGuide, segmentOf, rowPadding, guideX, stickyFolders, INDENT, ROW_HEIGHT } from '../explorerRows'
 import { statusMatters, foldersToReload, sameEntries, sameStatus, rememberIgnored, inGitDir, parentOf } from '../explorerChanges'
 import { settings } from '../settings'
 import { isRemotePath, remoteHostPath } from '../../../shared/remotePath'
@@ -20,9 +20,40 @@ import FileIcon from './FileIcon.vue'
 const props = defineProps({
   root: { type: String, default: null },
   // A pane to type paths into (the active one), for "Insert path".
-  canInsert: { type: Boolean, default: false }
+  canInsert: { type: Boolean, default: false },
+  // VS Code's "Open Editors" (explorer/openEditors.js): the workspace's open
+  // files and pages.
+  openEditors: { type: Array, default: () => [] },
+  // The SSH host of a remote project, shown in the folder's header.
+  remoteLabel: { type: String, default: '' }
 })
-const emit = defineEmits(['open', 'open-editor', 'open-external', 'terminal-here', 'insert-path', 'toast', 'close'])
+const emit = defineEmits(['open', 'open-editor', 'open-external', 'terminal-here', 'insert-path', 'toast', 'close', 'activate-editor', 'close-editor', 'save-all', 'close-all'])
+
+// --- VS Code's sections: Open Editors, then the project's folder ---------------------
+// Each folds by its header (kept in Settings); Open Editors shows 9 rows at
+// most (VS Code's explorer.openEditors.visible), then scrolls.
+const OPEN_EDITORS_MAX = 9
+const openEditorsShown = computed(() => settings.explorerOpenEditorsShown !== false)
+const folderShown = computed(() => settings.explorerFolderShown !== false)
+function toggleOpenEditors() {
+  settings.explorerOpenEditorsShown = !openEditorsShown.value
+}
+function toggleFolder() {
+  settings.explorerFolderShown = !folderShown.value
+}
+// New file / folder from the folder's header: the folder unfolds first.
+function newFromHead(folder) {
+  settings.explorerFolderShown = true
+  startNew(displayRoot.value, folder)
+}
+const unsavedCount = computed(() => new Set(props.openEditors.filter((e) => e.dirty).map((e) => key(e.path))).size)
+const unsavedLabel = computed(() => t('explorer.unsaved', '{{count}} unsaved', { count: unsavedCount.value }))
+// An open file's git letter, when it is in this project.
+const editorLetter = (ed) => (ed.kind === 'file' && ed.path ? statusOf(status.value, key(ed.path)) : '')
+const folderTitle = computed(() => {
+  const name = rootName.value || t('explorer.side.files', 'Files')
+  return props.remoteLabel ? t('explorer.remoteTitle', '{{name}} [SSH: {{host}}]', { name, host: props.remoteLabel }) : name
+})
 
 const nodes = reactive({}) // path -> { entries, loading, error }
 const open = reactive({}) // folder path -> true when expanded
@@ -568,6 +599,24 @@ const windowed = computed(() => {
   const end = Math.min(list.length, Math.ceil((scrollTop.value + h) / ROW_HEIGHT) + OVERSCAN)
   return { list: list.slice(start, end), before: start * ROW_HEIGHT, after: (list.length - end) * ROW_HEIGHT, virtual: true }
 })
+// VS Code's sticky scroll: the open folders above the first line stay at the
+// top, one line each (explorerRows.js stickyFolders). A click on one brings
+// its own line back there; its arrow folds it.
+const itemDepths = computed(() => items.value.map((it) => ({ depth: it.kind === 'row' ? it.row.depth : it.depth })))
+const sticky = computed(() => {
+  if (!scrollTop.value) return []
+  const list = items.value
+  return stickyFolders(itemDepths.value, scrollTop.value)
+    .map((s) => ({ ...s, row: list[s.at] && list[s.at].row }))
+    .filter((s) => s.row)
+})
+function onStickyClick(s, level) {
+  selected.value = s.row.path
+  const el = treeEl.value
+  if (!el) return
+  el.scrollTop = Math.max(0, (s.at - level) * ROW_HEIGHT)
+  scrollTop.value = el.scrollTop
+}
 let scrollQueued = false
 const nextFrame = (fn) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(fn) : setTimeout(fn, 16))
 function onTreeScroll(ev) {
@@ -701,10 +750,27 @@ function onContext(ev, e) {
   ev.preventDefault()
   selected.value = e ? e.path : null
   menu.entry = e
-  menu.x = Math.min(ev.clientX, window.innerWidth - 230)
-  menu.y = Math.min(ev.clientY, window.innerHeight - 330)
+  menu.x = ev.clientX
+  menu.y = ev.clientY
   menu.open = true
-  nextTick(() => menuEl.value && menuEl.value.focus())
+  nextTick(() => {
+    const el = menuEl.value
+    if (!el) return
+    keepMenuOnScreen(el, ev.clientX, ev.clientY)
+    el.focus()
+  })
+}
+// The menu stays in the window, as VS Code's: above the pointer when there is
+// no room under it, to its left when there is none on its right, else pushed
+// in (its real size: labels are longer in some languages).
+function keepMenuOnScreen(el, x, y, pad = 4) {
+  const r = el.getBoundingClientRect()
+  const w = r.width
+  const h = r.height
+  const maxX = window.innerWidth - pad
+  const maxY = window.innerHeight - pad
+  if (y + h > maxY) menu.y = y - h >= pad ? y - h : Math.max(pad, maxY - h)
+  if (x + w > maxX) menu.x = x - w >= pad ? x - w : Math.max(pad, maxX - w)
 }
 function closeMenu() {
   menu.open = false
@@ -903,10 +969,83 @@ function rowTitle(e) {
 
 <template>
   <div class="explorer" :aria-label="t('explorer.side.files', 'Files')" @keydown.escape="closeMenu">
-    <div class="explorer-head">
-      <span class="explorer-title" :title="root || ''">{{ rootName || t('explorer.side.files', 'Files') }}</span>
+    <!-- VS Code's explorer: "Open Editors", then the project's folder. -->
+    <section class="explorer-section explorer-open-editors" data-test="open-editors">
+      <div
+        class="explorer-section-head"
+        role="button"
+        tabindex="0"
+        :aria-expanded="openEditorsShown"
+        data-test="open-editors-head"
+        @click="toggleOpenEditors"
+        @keydown.self.enter.prevent="toggleOpenEditors"
+        @keydown.self.space.prevent="toggleOpenEditors"
+      >
+        <span class="explorer-twistie" :class="{ open: openEditorsShown }" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10.072 8.024L5.715 3.667l.618-.62L11 7.716v.618L6.333 13l-.618-.619 4.357-4.357z" /></svg></span>
+        <span class="explorer-section-title">{{ t('explorer.openEditors', 'Open Editors') }}</span>
+        <span v-if="unsavedCount" class="explorer-badge" data-test="open-editors-unsaved">{{ unsavedLabel }}</span>
+        <span class="explorer-actions" @click.stop>
+          <button class="tb-icon" :title="t('explorer.saveAll', 'Save all')" :aria-label="t('explorer.saveAll', 'Save all')" data-test="open-editors-save-all" :disabled="!unsavedCount" @click="emit('save-all')">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 2.5h9l2 2v9h-11z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M5 2.5v3.5h5V2.5M5 13.5V9.5h6v4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /></svg>
+          </button>
+          <button class="tb-icon" :title="t('explorer.closeAll', 'Close all')" :aria-label="t('explorer.closeAll', 'Close all')" data-test="open-editors-close-all" :disabled="!openEditors.length" @click="emit('close-all')">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 5.5h7v7h-7z" stroke="currentColor" stroke-width="1.2" /><path d="M5.5 3.5h7v7" stroke="currentColor" stroke-width="1.2" /><path d="M5.5 7.5l3 3M8.5 7.5l-3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg>
+          </button>
+        </span>
+      </div>
+      <div v-if="openEditorsShown" class="open-editors-list" role="listbox" :aria-label="t('explorer.openEditors', 'Open Editors')" :style="{ maxHeight: OPEN_EDITORS_MAX * ROW_HEIGHT + 'px' }">
+        <div
+          v-for="ed in openEditors"
+          :key="ed.key"
+          class="explorer-row open-editor"
+          :class="{ active: ed.active, dirty: ed.dirty, preview: ed.preview, ['git-' + (editorLetter(ed) || 'none')]: true }"
+          role="option"
+          :aria-selected="ed.active"
+          :title="ed.path || ed.folder"
+          data-test="open-editor"
+          @click="emit('activate-editor', ed)"
+          @mousedown.middle.prevent
+          @mouseup.middle="emit('close-editor', ed)"
+        >
+          <button
+            type="button"
+            class="open-editor-close"
+            :title="t('explorer.closeEditor', 'Close')"
+            :aria-label="t('explorer.closeEditor', 'Close')"
+            data-test="open-editor-close"
+            @click.stop="emit('close-editor', ed)"
+          >
+            <span class="open-editor-dot" aria-hidden="true">●</span>
+            <svg class="open-editor-x" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" /></svg>
+          </button>
+          <FileIcon v-if="ed.kind === 'file'" class="explorer-icon" :name="ed.path" />
+          <svg v-else class="explorer-icon open-editor-globe" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.8" stroke="currentColor" stroke-width="1.2" /><path d="M2.2 8h11.6M8 2.2c1.7 1.6 2.5 3.5 2.5 5.8S9.7 12.2 8 13.8M8 2.2C6.3 3.8 5.5 5.7 5.5 8s.8 4.2 2.5 5.8" stroke="currentColor" stroke-width="1.1" /></svg>
+          <span class="explorer-name open-editor-name">{{ ed.name }}</span>
+          <span class="open-editor-folder">{{ ed.folder }}</span>
+          <span v-if="editorLetter(ed)" class="explorer-git">{{ editorLetter(ed) }}</span>
+        </div>
+      </div>
+    </section>
+    <div
+      class="explorer-head explorer-section-head"
+      role="button"
+      tabindex="0"
+      :aria-expanded="folderShown"
+      data-test="explorer-folder-head"
+      @click="toggleFolder"
+      @keydown.self.enter.prevent="toggleFolder"
+      @keydown.self.space.prevent="toggleFolder"
+    >
+      <span class="explorer-twistie" :class="{ open: folderShown }" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10.072 8.024L5.715 3.667l.618-.62L11 7.716v.618L6.333 13l-.618-.619 4.357-4.357z" /></svg></span>
+      <span class="explorer-title explorer-section-title" :title="root || ''">{{ folderTitle }}</span>
       <span v-if="backgroundLoads > 0 && !rootLoading" class="explorer-spinner explorer-head-spinner" role="status" :aria-label="t('explorer.loading', 'Loading…')" data-test="explorer-reloading"></span>
-      <span class="explorer-actions">
+      <span class="explorer-actions" @click.stop>
+        <button class="tb-icon" :title="t('explorer.newFile', 'New file')" :aria-label="t('explorer.newFile', 'New file')" data-test="explorer-head-new-file" :disabled="!root" @click="newFromHead(false)">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.5 1.8H4v12.4h8V4.3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M8 7v4M6 9h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg>
+        </button>
+        <button class="tb-icon" :title="t('explorer.newFolder', 'New folder')" :aria-label="t('explorer.newFolder', 'New folder')" data-test="explorer-head-new-folder" :disabled="!root" @click="newFromHead(true)">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 4h4.4l1.4 1.5h6.6v7.7H1.8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M8 7.5v4M6 9.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg>
+        </button>
         <button
           class="tb-icon"
           :title="t('explorer.collapseAllFolders', 'Collapse all folders')"
@@ -960,6 +1099,7 @@ function rowTitle(e) {
         </span>
       </span>
     </div>
+    <template v-if="folderShown">
     <div v-if="root" class="explorer-tools">
       <div class="explorer-search">
         <svg class="explorer-search-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4" /><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /></svg>
@@ -1083,6 +1223,22 @@ function rowTitle(e) {
       @scroll="onTreeScroll"
       @contextmenu.self="onContext($event, null)"
     >
+      <div v-if="sticky.length" class="explorer-sticky" data-test="explorer-sticky">
+        <div
+          v-for="(s, k) in sticky"
+          :key="'sticky:' + s.row.path"
+          class="explorer-row explorer-sticky-row dir open"
+          :class="{ last: k === sticky.length - 1, selected: selected === s.row.path, ignored: ignoredOf(s.row.path), ['git-' + (letterOf(s.row.entry) || 'none')]: true }"
+          :style="{ top: s.top + 'px', paddingLeft: rowPadding(s.row.depth) + 'px' }"
+          :title="rowTitle(s.row.entry)"
+          @click="onStickyClick(s, k)"
+          @contextmenu="onRowContext($event, s.row)"
+        >
+          <span class="explorer-twistie" aria-hidden="true" @click.stop="toggleRow(s.row)"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10.072 8.024L5.715 3.667l.618-.62L11 7.716v.618L6.333 13l-.618-.619 4.357-4.357z" /></svg></span>
+          <span class="explorer-name">{{ s.row.chain.map((c) => c.name).join(' / ') }}</span>
+          <span v-if="!ignoredOf(s.row.path) && letterOf(s.row.entry)" class="explorer-git">•</span>
+        </div>
+      </div>
       <div v-if="edit && edit.mode === 'new' && edit.dir === displayRoot" class="explorer-edit" :style="{ paddingLeft: rowPadding(0) + 22 + 'px' }">
         <input
           :ref="setEditEl"
@@ -1174,6 +1330,8 @@ function rowTitle(e) {
       <div v-if="windowed.after" class="explorer-spacer" aria-hidden="true" :style="{ height: windowed.after + 'px' }"></div>
 
     </div>
+
+    </template>
 
     <div v-if="menu.open" class="explorer-menu-back" @mousedown.self="closeMenu" @contextmenu.prevent="closeMenu">
       <div ref="menuEl" class="ctx-menu explorer-menu" role="menu" tabindex="-1" :style="{ left: menu.x + 'px', top: menu.y + 'px' }">

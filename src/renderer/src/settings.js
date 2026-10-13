@@ -234,6 +234,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // Files: a chain of folders each holding a single folder on one row (VS Code's
   // explorer.compactFolders).
   explorerCompactFolders: true,
+  // The Files tab's sections, folded or not (VS Code's explorer): Open
+  // Editors and the project's folder.
+  explorerOpenEditorsShown: true,
+  explorerFolderShown: true,
 
   // Terminal rendering and interaction. gpuAcceleration: 'auto' (WebGL
   // unless the graphics are software-only; the normal renderer if WebGL
