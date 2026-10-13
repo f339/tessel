@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { installFocusWatch, shortStack, describeEl } from '../focusWatch'
 
+// The browser's own focus(), before the watch wraps it.
+const nativeFocus = HTMLElement.prototype.focus
 let off = null
 afterEach(() => {
   if (off) off()
@@ -69,6 +71,91 @@ describe('focus watch', () => {
     a.focus()
     await settle()
     expect(lines).toEqual([])
+  })
+
+  describe('a browser page that takes the keyboard unasked', () => {
+    function pageSetup() {
+      document.body.innerHTML = `
+        <div class="pane" data-pane-id="pane-1"><textarea class="xterm-helper-textarea"></textarea></div>
+        <div class="pane browser-pane" data-pane-id="pane-web"><div data-test="browser-agent">Ada is driving</div><webview class="bp-webview" tabindex="0"></webview></div>`
+      const lines = []
+      let t = 1000
+      const clock = { now: () => t, add: (ms) => (t += ms) }
+      off = installFocusWatch({ log: (s) => lines.push(s), now: clock.now, settleMs: 0 })
+      const term = document.querySelector('.xterm-helper-textarea')
+      const page = document.querySelector('webview')
+      // jsdom draws nothing: give both a place on screen.
+      term.getClientRects = () => [{}]
+      page.getClientRects = () => [{}]
+      page.getBoundingClientRect = () => ({ left: 500, right: 900, top: 0, bottom: 400, width: 400, height: 400 })
+      return { lines, clock, term, page }
+    }
+    // The page takes the keyboard by itself (an agent's click, its own field
+    // focused on load): no focus() from Tessel's code.
+    const pageTakes = (page) => nativeFocus.call(page)
+
+    it('gives it back to where the user was typing, and says so', async () => {
+      const { lines, clock, term, page } = pageSetup()
+      term.focus()
+      key(term)
+      clock.add(2000)
+      pageTakes(page)
+      expect(document.activeElement).toBe(page)
+      await settle()
+      expect(document.activeElement).toBe(term)
+      expect(lines[0]).toContain('a browser page (pane-web) took the keyboard without a click; given back to textarea.xterm-helper-textarea in pane-1')
+    })
+
+    it('a page no agent drives keeps it; one out of sight gives it back even then', async () => {
+      const { lines, clock, term, page } = pageSetup()
+      document.querySelector('[data-test="browser-agent"]').remove()
+      term.focus()
+      key(term)
+      clock.add(2000)
+      pageTakes(page)
+      await settle()
+      expect(document.activeElement).toBe(page)
+      page.getClientRects = () => []
+      term.focus()
+      clock.add(2000)
+      pageTakes(page)
+      await settle()
+      expect(document.activeElement).toBe(term)
+      expect(lines).toHaveLength(2) // the first one only noted
+      expect(lines[1]).toContain('given back to')
+    })
+
+    it('leaves it to the page after a click on it, a shortcut, the window coming back, or Tessel focusing it', async () => {
+      const { lines, clock, term, page } = pageSetup()
+      // The mouse went over the page (a click in it).
+      term.focus()
+      window.dispatchEvent(new MouseEvent('pointermove', { clientX: 520, clientY: 100 }))
+      pageTakes(page)
+      await settle()
+      expect(document.activeElement).toBe(page)
+      // A shortcut.
+      window.dispatchEvent(new MouseEvent('pointermove', { clientX: 10, clientY: 10 }))
+      term.focus()
+      clock.add(2000)
+      key(term, 'ArrowRight', { altKey: true })
+      pageTakes(page)
+      await settle()
+      expect(document.activeElement).toBe(page)
+      // The window comes back from another program.
+      term.focus()
+      clock.add(2000)
+      window.dispatchEvent(new FocusEvent('focus'))
+      pageTakes(page)
+      await settle()
+      expect(document.activeElement).toBe(page)
+      // Tessel's own code.
+      term.focus()
+      clock.add(2000)
+      page.focus()
+      await settle()
+      expect(document.activeElement).toBe(page)
+      expect(lines).toEqual([])
+    })
   })
 
   it('restores focus() and blur() when removed', () => {

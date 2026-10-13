@@ -1,3 +1,13 @@
+// The keyboard stays where the user types.
+//
+// Guard: a browser page (a <webview>) that an agent drives, or one out of
+// sight, gives the keyboard back when it takes it without a click or a
+// shortcut of the user's. An agent clicks a page with Chromium's own mouse
+// events (src/main/agentBrowser.js), which took the keyboard from the pane
+// the user was typing in, even from a page in another workspace. The page
+// keeps believing it has the keyboard (the agent's focus emulation), so the
+// agent's typing still reaches it.
+//
 // Diagnostics: the keyboard leaves a pane while the user types in it, with no
 // click or shortcut of theirs. Each time, one "focus:" line in tessel.log says
 // where it went: another element (with the code that focused it), the pane's
@@ -42,7 +52,7 @@ export function shortStack(stack, max = 5) {
     .join(' < ')
 }
 
-export function installFocusWatch({ win = typeof window !== 'undefined' ? window : null, doc = typeof document !== 'undefined' ? document : null, log, now = () => Date.now(), typingMs = 3000, gestureMs = 600, settleMs = 60, maxLines = 200 } = {}) {
+export function installFocusWatch({ win = typeof window !== 'undefined' ? window : null, doc = typeof document !== 'undefined' ? document : null, log, now = () => Date.now(), typingMs = 3000, gestureMs = 600, settleMs = 60, maxLines = 200, pointerSlack = 48 } = {}) {
   if (!win || !doc || typeof log !== 'function') return () => {}
   let lastKey = { at: 0, pane: null, el: null }
   let lastGesture = -Infinity
@@ -115,15 +125,100 @@ export function installFocusWatch({ win = typeof window !== 'undefined' ? window
       // Still there and the window still has the keyboard: nothing was lost.
       if (to === from && doc.hasFocus()) return
       if (lastKey.el !== from || !typedLately(now())) return
+      // A page that took it unasked gives it back (the guard below says so).
+      if (isPage(to) && giveBack(to)) return
       report({ from, pane, to, keyAt: at, how: 'focus moved' }) // i18n-ignore
     }, settleMs)
   }
   doc.addEventListener('focusout', onFocusOut, true)
 
+  // --- Guard: a page that takes the keyboard unasked gives it back ---------------
+  let lastFocused = null
+  let lastPointer = null
+  let pointerIn = null
+  let windowFocusAt = -Infinity
+  const onWindowFocus = () => (windowFocusAt = now())
+  const isPage = (el) => !!el && el.tagName === 'WEBVIEW'
+  const onPointerMove = (e) => {
+    lastPointer = { x: e.clientX, y: e.clientY }
+    pointerIn = isPage(e.target) ? e.target : null
+  }
+  const onMouseOver = (e) => {
+    if (isPage(e.target)) pointerIn = e.target
+  }
+  const onMouseOut = (e) => {
+    if (isPage(e.target) && pointerIn === e.target && !isPage(e.relatedTarget)) pointerIn = null
+  }
+  // Could the mouse be over this page (the window gets no events from inside
+  // a page: its last position next to the page's edge counts)?
+  function pointerOver(page) {
+    if (pointerIn === page) return true
+    if (!lastPointer || !page.getBoundingClientRect) return false
+    const r = page.getBoundingClientRect()
+    if (!r.width || !r.height) return false
+    const s = pointerSlack
+    return lastPointer.x >= r.left - s && lastPointer.x <= r.right + s && lastPointer.y >= r.top - s && lastPointer.y <= r.bottom + s
+  }
+  function shouldGiveBack(page) {
+    const back = lastFocused
+    if (!back || !back.isConnected || back === page || back === doc.body) return false
+    const t = now()
+    // Asked for: Tessel's own code focused the page, or a shortcut or a click
+    // of the user's just now, or the mouse is on the page (a click in it).
+    if (lastCall && lastCall.el === page && lastCall.what === 'focus' && t - lastCall.at < 500) return false
+    // Only a page an agent drives (its badge shows) or one out of sight: a
+    // page the user may have clicked keeps the keyboard.
+    const box = page.closest ? page.closest('.browser-pane') : null
+    const driven = !!(box && box.querySelector('[data-test="browser-agent"]'))
+    const hidden = !page.getClientRects().length || !!(page.closest && page.closest('.ws-layer.hidden'))
+    if (!driven && !hidden) return false
+    if (t - lastGesture < gestureMs) return false
+    // The window just came back (a click on the page from another program,
+    // or Chromium putting the keyboard back where it was).
+    if (t - windowFocusAt < 1000) return false
+    if (!hidden && pointerOver(page)) return false
+    if (back.getClientRects && !back.getClientRects().length) return false
+    return true
+  }
+  function giveBack(page) {
+    if (!shouldGiveBack(page)) return false
+    const back = lastFocused
+    const t = now()
+    origFocus.call(back, { preventScroll: true })
+    if (lines < maxLines && t - lastLine >= 2000) {
+      lastLine = t
+      lines++
+      try {
+        log(`focus: a browser page (${paneIdOf(page) || 'side panel'}) took the keyboard without a click; given back to ${describeEl(back)}`) // i18n-ignore
+      } catch {
+        /* the log is gone */
+      }
+    }
+    return true
+  }
+  const onFocusIn = (e) => {
+    const el = e.target
+    if (isPage(el)) {
+      if (origFocus) win.setTimeout(() => doc.activeElement === el && giveBack(el), 0)
+      return
+    }
+    if (el && el !== doc.body) lastFocused = el
+  }
+  win.addEventListener('pointermove', onPointerMove, true)
+  win.addEventListener('focus', onWindowFocus)
+  win.addEventListener('mouseover', onMouseOver, true)
+  win.addEventListener('mouseout', onMouseOut, true)
+  doc.addEventListener('focusin', onFocusIn, true)
+
   return () => {
     win.removeEventListener('pointerdown', onPointer, true)
     win.removeEventListener('keydown', onKey, true)
     doc.removeEventListener('focusout', onFocusOut, true)
+    win.removeEventListener('pointermove', onPointerMove, true)
+    win.removeEventListener('focus', onWindowFocus)
+    win.removeEventListener('mouseover', onMouseOver, true)
+    win.removeEventListener('mouseout', onMouseOut, true)
+    doc.removeEventListener('focusin', onFocusIn, true)
     if (proto) {
       proto.focus = origFocus
       proto.blur = origBlur
