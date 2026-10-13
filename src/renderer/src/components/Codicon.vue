@@ -32,6 +32,8 @@ function loadFont() {
 </script>
 
 <script setup>
+// No "codicon-<name>" class: Monaco's stylesheet draws the icon again in a
+// ::before of any element with one (every icon showed twice).
 import { computed } from 'vue'
 
 const props = defineProps({
@@ -43,11 +45,11 @@ const glyph = computed(() => (CODICONS[props.name] ? String.fromCodePoint(CODICO
 </script>
 
 <template>
-  <span class="codicon-glyph" :class="'codicon-' + name" :style="{ fontSize: size + 'px' }" aria-hidden="true">{{ glyph }}</span>
+  <span class="tessel-icon-glyph" :data-icon="name" :style="{ fontSize: size + 'px' }" aria-hidden="true">{{ glyph }}</span>
 </template>
 
 <style>
-.codicon-glyph {
+.tessel-icon-glyph {
   display: inline-block;
   width: 1em;
   height: 1em;

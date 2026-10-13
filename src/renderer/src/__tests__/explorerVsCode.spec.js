@@ -191,3 +191,13 @@ describe('ExplorerPanel like VS Code', () => {
     }
   })
 })
+
+describe('Codicon.vue', () => {
+  it("one glyph, and no codicon-* class (Monaco's stylesheet would draw the icon a second time)", async () => {
+    const { default: Codicon } = await import('../components/Codicon.vue')
+    const w = mount(Codicon, { props: { name: 'new-file' } })
+    expect(w.text()).toBe(String.fromCodePoint(0xea7f))
+    expect(w.classes().some((c) => c.startsWith('codicon-'))).toBe(false)
+    w.unmount()
+  })
+})
