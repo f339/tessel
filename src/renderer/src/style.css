@@ -3763,7 +3763,17 @@ body.pane-dragging * {
 
 /* ================= MCP dialog v2 ================= */
 .mcp-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 4px 0 8px;
+}
+
+/* The MCP window's way to the Skills window, at the right of its tabs. */
+.mcp-skills-link {
+  height: 26px;
+  margin-left: auto;
+  font-size: 11.5px;
 }
 
 .mcp-count {

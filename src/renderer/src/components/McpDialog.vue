@@ -22,7 +22,7 @@ const props = defineProps({
   // Open on this tab ('connections' from Settings > Orchestration).
   initialTab: { type: String, default: 'installed' }
 })
-const emit = defineEmits(['close', 'run', 'tools'])
+const emit = defineEmits(['close', 'run', 'tools', 'skills'])
 
 const ALL_AGENTS = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode', 'cline', 'kimi', 'cursor']
 const AGENT_NAME = {
@@ -602,6 +602,9 @@ onMounted(async () => {
             {{ t('mcp.tab.connections', 'Team connections') }}
           </button>
         </div>
+        <button class="exit-btn mcp-skills-link" :title="t('mcp.skillsHint', 'Agent skills: instructions and files agents load when a task needs them')" @click="emit('skills')">
+          {{ t('mcp.skills', 'Skills') }}
+        </button>
       </div>
 
       <p v-if="message.text" :class="message.kind === 'error' ? 'mcp-error' : 'mcp-notice'">

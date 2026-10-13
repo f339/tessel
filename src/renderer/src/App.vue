@@ -30,6 +30,7 @@ import { validPaneSessionOptions } from '../../shared/agentSessionOptions'
 import { loadModelLists, modelsFor, refreshModels, canProbeModels } from './agentModels'
 import { THEMES } from './themes'
 import McpDialog from './components/McpDialog.vue'
+import SkillsDialog from './components/SkillsDialog.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ToolsDialog from './components/ToolsDialog.vue'
 import SessionsDialog from './components/SessionsDialog.vue'
@@ -796,6 +797,8 @@ const mcpTab = ref('installed') // the tab it opens on
 watch(mcpOpen, (open) => {
   if (!open) mcpTab.value = 'installed'
 })
+// The Skills window (SkillsDialog.vue): agent skills, listed, added, removed.
+const skillsOpen = ref(false)
 const toolsOpen = ref(false)
 const sessionsOpen = ref(false)
 // Launcher's "separate copy" (git worktree) option for agents.
@@ -2822,6 +2825,7 @@ function buildCommands() {
     hint: t('taskHistory.cmd.hint', 'Finished tasks with their time, tokens and estimated cost')
   })
   add(agentsGroup, t('app.cmd.mcp', 'MCP servers'), () => (mcpOpen.value = true), { hint: t('app.cmd.mcpHint', 'Give agents extra tools') })
+  add(agentsGroup, t('app.cmd.skills', 'Skills'), () => (skillsOpen.value = true), { hint: t('app.cmd.skillsHint', 'See, add and remove agent skills') })
   add(agentsGroup, t('app.cmd.installTools', 'Install tools'), openTools, { hint: t('app.cmd.installToolsHint', 'Agents, Git, Node.js and more') })
   add(agentsGroup, t('app.cmd.checkAgentUpdates', 'Check for agent updates'), () => checkAgentUpdates({ force: true }), {
     hint: t('app.cmd.checkAgentUpdatesHint', 'Newer versions of your installed agent CLIs')
@@ -3581,6 +3585,12 @@ const launcherTargetTitle = computed(() => {
 
 function closeMcp() {
   mcpOpen.value = false
+  nextTick(() => {
+    focusActiveInput()
+  })
+}
+function closeSkills() {
+  skillsOpen.value = false
   nextTick(() => {
     focusActiveInput()
   })
@@ -10762,6 +10772,7 @@ function dialogOpen() {
   return (
     settingsOpen.value ||
     mcpOpen.value ||
+    skillsOpen.value ||
     toolsOpen.value ||
     sessionsOpen.value ||
     helpOpen.value ||
@@ -10940,6 +10951,7 @@ function onKey(e, opts = {}) {
     helpOpen.value = false
     settingsOpen.value = false
     mcpOpen.value = false
+    skillsOpen.value = false
     toolsOpen.value = false
     sessionsOpen.value = false
     if (!githubBusy.value) githubOpen.value = false
@@ -11747,7 +11759,26 @@ onBeforeUnmount(() => {
           openTools()
         }
       "
+      @skills="
+        () => {
+          mcpOpen = false
+          skillsOpen = true
+        }
+      "
       @close="closeMcp"
+    />
+
+    <SkillsDialog
+      v-if="skillsOpen"
+      :cwd="currentWs ? currentWs.cwd : null"
+      :agents="agents"
+      @run="
+        (job) => {
+          skillsOpen = false
+          runInPane(job)
+        }
+      "
+      @close="closeSkills"
     />
 
     <UpdateDialog

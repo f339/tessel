@@ -276,7 +276,9 @@
       "newChatOpencodeHint": "OpenCode sans terminal : les messages de l'équipe lui arrivent comme des tours à part",
       "showFloating": "Afficher le terminal flottant",
       "hideFloating": "Masquer le terminal flottant",
-      "floatingHint": "Un terminal par-dessus l'espace de travail, dans le dossier du projet ; il continue de tourner une fois masqué"
+      "floatingHint": "Un terminal par-dessus l'espace de travail, dans le dossier du projet ; il continue de tourner une fois masqué",
+      "skills": "Compétences",
+      "skillsHint": "Voir, ajouter et retirer les compétences des agents"
     },
     "worktree": {
       "createFailed": "Impossible de créer une copie séparée.",

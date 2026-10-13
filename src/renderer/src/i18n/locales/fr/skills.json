@@ -1,0 +1,100 @@
+{
+  "skills": {
+    "title": "Compétences",
+    "close": "Fermer (Échap)",
+    "intro": "Les compétences sont des dossiers d'instructions (un SKILL.md) et de fichiers que les agents chargent quand une tâche en a besoin. Chaque agent les lit dans ses propres dossiers de compétences, pour tous les projets ou pour un seul projet.",
+    "loading": "Chargement…",
+    "scope": {
+      "project": "Ce projet",
+      "user": "Tous les projets"
+    },
+    "managed": {
+      "synced": "Synchronisée depuis votre compte Claude",
+      "system": "Intégrée à l'agent",
+      "nested": "Gérée par l'agent"
+    },
+    "size": {
+      "bytes": "{{n}} o",
+      "kb": "{{n}} Ko",
+      "mb": "{{n}} Mo"
+    },
+    "source": {
+      "github": "Depuis GitHub : {{repo}}",
+      "folder": "Depuis un dossier : {{path}}"
+    },
+    "tab": {
+      "installed": "Installées",
+      "add": "Ajouter"
+    },
+    "installed": {
+      "seenBy": "Vue par {{agents}}",
+      "count_one": "{{count}} compétence",
+      "count_other": "{{count}} compétences",
+      "search": "Rechercher des compétences",
+      "refresh": "Actualiser",
+      "empty": "Aucune compétence pour l'instant.",
+      "addOne": "Ajouter une compétence",
+      "noDescription": "Pas de description.",
+      "link": "Lien",
+      "fromFolder": "Dossier",
+      "open": "Ouvrir le dossier",
+      "update": "Mettre à jour",
+      "remove": "Retirer"
+    },
+    "preview": {
+      "files_one": "{{count}} fichier, {{size}}",
+      "files_other": "{{count}} fichiers, {{size}}",
+      "scripts": "Elle contient des scripts ou des programmes ({{names}}). Tessel ne les exécute jamais, mais un agent qui utilise la compétence peut le faire.",
+      "update": "Mettre à jour {{name}}",
+      "install": "Installer {{name}}",
+      "review": "Lisez-la avant de l'installer : un agent suit ces instructions."
+    },
+    "remove": {
+      "confirm": "Retirer la compétence « {{name}} » ?",
+      "text": "{{agents}} ne l'auront plus. Les agents en cours la perdent à leur prochaine session.",
+      "trash": "Mettre à la Corbeille",
+      "delete": "Supprimer définitivement",
+      "sure": "Supprimer « {{name}} » définitivement ?",
+      "sureText": "Son dossier et tous ses fichiers sont supprimés. C'est irréversible.",
+      "deleted": "« {{name}} » supprimée.",
+      "trashed": "« {{name}} » mise à la Corbeille.",
+      "failed": "Elle n'a pas pu être retirée."
+    },
+    "add": {
+      "pickTitle": "Choisissez un dossier de compétence (avec un SKILL.md)",
+      "chooseAgent": "Choisissez au moins un agent.",
+      "updated": "« {{name}} » mise à jour. Les agents l'utilisent dès leur prochaine session.",
+      "installed": "« {{name}} » installée pour {{agents}}. Les agents l'utilisent dès leur prochaine session.",
+      "from": "Depuis",
+      "folder": "Un dossier",
+      "repo": "Dépôt",
+      "repoHint": "propriétaire/dépôt, propriétaire/dépôt/chemin, ou une adresse github.com",
+      "looking": "Recherche…",
+      "look": "Rechercher",
+      "folderLabel": "Dossier de la compétence",
+      "folderHint": "Un dossier avec un SKILL.md à sa racine",
+      "choose": "Choisir un dossier",
+      "updatingTitle": "Mise à jour :",
+      "several": "Ce dépôt contient plusieurs compétences. Choisissez-en une :",
+      "pick": "Choisir",
+      "to": "Ajouter à",
+      "scope": "L'utiliser dans",
+      "scopeHint": "Ouvrez un dossier de projet pour l'ajouter à un seul projet",
+      "done": "Installée",
+      "exists": "Déjà présente",
+      "failed": "Échec",
+      "replace": "La remplacer",
+      "codexNote": "Codex la reçoit dans le dossier partagé .agents, que lisent aussi OpenCode, Copilot CLI et Gemini CLI.",
+      "installing": "Installation…"
+    },
+    "setup": {
+      "confirm": "Lancer l'installation de cette compétence dans un terminal ?",
+      "confirmText": "Elle télécharge et exécute un programme depuis npm. Ne la lancez que si vous faites confiance à l'auteur de la compétence. Répondez à ses questions dans le terminal.",
+      "run": "Lancer dans un terminal",
+      "pane": "Installation de la compétence : {{name}}",
+      "title": "Elle est fournie avec une commande d'installation.",
+      "body": "Tessel ne la lance pas. Si vous en avez besoin, lancez-la vous-même dans un terminal et répondez-y là.",
+      "button": "Lancer son installation dans un terminal"
+    }
+  }
+}
