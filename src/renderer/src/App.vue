@@ -58,6 +58,9 @@ import { activity, recordActivity, loadActivity, saveActivityNow, activityChange
 import ActivityPanel from './components/ActivityPanel.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import CookieImportDialog from './components/CookieImportDialog.vue'
+import LiveShareDialog from './components/LiveShareDialog.vue'
+import LiveShareAsk from './components/LiveShareAsk.vue'
+import { createLiveShareWindow } from './liveShareWindow'
 import { toastText as cookieImportToast } from './browser/cookieImportText'
 import { askQuitRunning } from './quitConfirm'
 import ImageViewer from './components/ImageViewer.vue'
@@ -1925,7 +1928,9 @@ function scheduleSave() {
 function saveLayoutNow() {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = null
-  if (!persistReady || !workspaces.value.length) return
+  // A Live Share project (another computer's screen) is never saved.
+  const saved = workspaces.value.filter((w) => !w.liveShare)
+  if (!persistReady || !saved.length) return
   // JSON round-trip: IPC can only send plain data, and some values here
   // (custom agents, worktree info) are Vue reactive proxies.
   const snapshot = {
@@ -1940,12 +1945,12 @@ function saveLayoutNow() {
     sideBrowsers: saveSideBrowsers(sideBrowsers.value),
     currentIndex: Math.max(
       0,
-      workspaces.value.findIndex((w) => w.id === currentWsId.value)
+      saved.findIndex((w) => w.id === currentWsId.value)
     ),
     placement: placement.value,
     teams: teams.value,
     settings: { ...settings },
-    workspaces: workspaces.value.map((w) => ({
+    workspaces: saved.map((w) => ({
       id: w.id,
       name: w.name,
       cwd: w.cwd || null,
@@ -1977,6 +1982,11 @@ async function splitLeaf(
   opts = {}
 ) {
   const ws = wsOfLeaf(leafId) || currentWs.value
+  // A Live Share project: the new pane opens on the host's computer.
+  if (liveShare.isGuestWs(ws)) {
+    liveShare.openOnHost(agent ? { kind: 'agent', agent: agent.id } : { kind: 'terminal' })
+    return
+  }
   // A pane you open next to one in a worktree's grid works in that worktree
   // and stays in its grid (paneViews.js).
   if (opts.inheritView && !worktree && !opts.cwd && ws) {
@@ -2051,6 +2061,17 @@ function closeLeaf(leafId, opts = {}) {
   const isEditor = !!(closing && closing.kind === 'editor')
   // An editor or a browser pane: no terminal to stop.
   const noTerminal = hasNoTerminal(closing)
+  // A pane of a Live Share project is the host's: closing it closes it on
+  // the host's computer, for everyone in the session (asked first).
+  if (closing && liveShare.isGuestLeaf(closing) && !opts.force) {
+    askConfirm({
+      title: t('app.close.title', 'Close {{name}}?', { name: closing.paneName || closing.title }),
+      text: t('liveShare.closeHostPane', 'This pane runs on {{host}}’s computer: it closes there too, for everyone in the session.', { host: liveShare.state.guest.host || '?' }),
+      confirmLabel: t('app.close.confirm', 'Close'),
+      danger: true
+    }).then((ok) => ok && closeLeaf(leafId, { ...opts, force: true }))
+    return
+  }
   // Settings > General, "Confirm before closing running terminals" (Orca's):
   // an agent pane, or a terminal where a program runs under the shell.
   if (!opts.force && settings.confirmCloseAgent && ws) {
@@ -2202,6 +2223,29 @@ function setActive(id) {
 }
 
 const maximizedId = ref(null)
+
+// Live Share (liveShareWindow.js): your screen shared with guests, or a host's
+// screen shown here as a Live Share project.
+const liveShare = createLiveShareWindow({
+  workspaces: () => workspaces.value,
+  currentWs: () => currentWs.value,
+  currentWsId: () => currentWsId.value,
+  maximizedId: () => maximizedId.value,
+  setMaximized: (id) => (maximizedId.value = id),
+  makeWorkspace,
+  selectWorkspace,
+  removeWorkspace,
+  findLeaf,
+  closeLeaf,
+  launch: (spec) => launch(spec),
+  selectedShell: () => selectedShell.value,
+  seedBuffer,
+  dropBuffer,
+  showToast
+})
+const liveShareOpen = ref(false)
+onMounted(() => liveShare.init())
+onBeforeUnmount(() => liveShare.dispose())
 
 function toggleMaximize(id) {
   maximizedId.value = maximizedId.value === id ? null : id
@@ -2965,6 +3009,14 @@ function agentById(id) {
 // chosen placement. Agents run inside the default shell.
 async function launch({ kind, id, sessionOptions = null }, targetId = activeId.value, where = placement.value) {
   closeMenus()
+  // In a Live Share project: a terminal or an agent opens on the host's
+  // computer (its own install and settings), and shows here from there.
+  const shareWs = (targetId && wsOfLeaf(targetId)) || currentWs.value
+  if (liveShare.isGuestWs(shareWs)) {
+    if (kind === 'agent' || kind === 'shell') liveShare.openOnHost(kind === 'agent' ? { kind: 'agent', agent: id } : { kind: 'terminal' })
+    else showToast(t('liveShare.onlyTerminals', 'In a Live Share project, only terminals and agents can be opened (on the host’s computer).'), { timeout: 6000 })
+    return
+  }
   // A chat agent (Claude): a pane of its own next to the active one.
   if (kind === 'browser') {
     openInBrowser({ ws: (targetId && wsOfLeaf(targetId)) || currentWs.value, newPane: true, focusAddress: true })
@@ -3712,8 +3764,9 @@ async function restartLeaf(leafId) {
   let ws = wsOfLeaf(leafId)
   if (!ws) return
   let old = findLeafIn(ws.tree, leafId)
-  // An editor pane has no process to restart.
-  if (!old || hasNoTerminal(old)) return
+  // An editor pane has no process to restart; a Live Share pane's runs on
+  // the host's computer.
+  if (!old || hasNoTerminal(old) || liveShare.isGuestLeaf(old)) return
   // Not connected yet (a restored remote pane): Restart connects it.
   if (old.notConnected) {
     await connectLeaf(leafId)
@@ -4493,6 +4546,8 @@ async function seedNewWorkspace(ws) {
 // A project whose last pane closed (or moved away): the launcher, or a fresh
 // terminal as before when "When a project opens" is a terminal.
 function refillEmptiedWorkspace(ws) {
+  // A Live Share project shows the host's panes only.
+  if (liveShare.isGuestWs(ws)) return
   const choice = emptiedWorkspaceChoice(settings.projectOpen, { shells: shells.value, remote: !!ws.remote })
   if (!choice) return
   const shellId = choice.shellId || selectedShell.value
@@ -4608,6 +4663,12 @@ function removeWorkspace(id, confirmed = false, editorChecked = false) {
   const idx = workspaces.value.findIndex((w) => w.id === id)
   if (idx < 0) return
   const ws = workspaces.value[idx]
+  // A Live Share project: closing it leaves the session (the host's panes
+  // keep running there); it goes away when the session has ended.
+  if (liveShare.isGuestWs(ws) && !confirmed && liveShare.state.guest.state === 'joined' && liveShare.state.guest.session === ws.liveShare.session) {
+    liveShare.leave()
+    return
+  }
   // Its editor panes' unsaved files are asked about first.
   if (!editorChecked) {
     const leaves = []
@@ -7928,7 +7989,8 @@ async function sleepTick() {
 }
 function putToSleep(leaf) {
   // Not connected (a restored remote pane): nothing runs, nothing to stop.
-  if (leaf.notConnected || leaf.agentMissing) return
+  // A Live Share pane runs on the host's computer.
+  if (leaf.notConnected || leaf.agentMissing || liveShare.isGuestLeaf(leaf)) return
   leaf.sleeping = { at: Date.now() }
   window.shellApi.killPty(leaf.id)
   if (window.shellApi.log) window.shellApi.log('info', `agent sleep: ${paneLabel(leaf)} asleep (idle ${settings.agentSleepMinutes} min)`)
@@ -11590,6 +11652,25 @@ onBeforeUnmount(() => {
 
         <UsageMenu @details="openSettingsAt('stats')" @accounts="openSettingsAt('accounts')" />
         <NotificationsMenu @focus-pane="focusPane" />
+        <button
+          class="tb-icon"
+          :class="{ on: liveShare.state.host.state === 'sharing' || liveShare.state.guest.state === 'joined' }"
+          :title="
+            liveShare.state.host.state === 'sharing'
+              ? t('liveShare.toolbar.sharing', 'Live Share: sharing your screen ({{count}} joined)', { count: liveShare.state.host.guests.filter((g) => g.state === 'joined').length })
+              : liveShare.state.guest.state === 'joined'
+                ? t('liveShare.toolbar.joined', 'Live Share: in {{host}}’s session', { host: liveShare.state.guest.host || '?' })
+                : t('liveShare.toolbar.title', 'Live Share: share your screen, or join someone’s')
+          "
+          :aria-label="t('liveShare.toolbar.label', 'Live Share')"
+          @click="liveShareOpen = true"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="6" cy="5.2" r="2.3" stroke="currentColor" stroke-width="1.3" />
+            <path d="M1.8 13.2c.5-2.3 2.2-3.6 4.2-3.6s3.7 1.3 4.2 3.6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+            <path d="M10.6 3.2a2.3 2.3 0 010 4.2M12 9.9c1.1.5 1.9 1.6 2.2 3.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+          </svg>
+        </button>
         <div class="menu-group" @pointerdown.stop>
           <button class="tb-icon" :aria-label="t('app.toolbar.issues', 'Issues')" :title="t('app.toolbar.issuesTitle', 'GitHub and Linear issues')" aria-haspopup="menu" :aria-expanded="openMenu === 'issues'" @click="toggleMenu('issues')">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.7" stroke="currentColor" stroke-width="1.3" /><path d="M8 4.5v4M8 11h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" /></svg>
@@ -12060,6 +12141,14 @@ onBeforeUnmount(() => {
       :check-label="confirmState.checkLabel || ''"
       @answer="answerConfirm"
     />
+
+    <LiveShareDialog
+      v-if="liveShareOpen"
+      :open="liveShareOpen"
+      :initial-tab="liveShare.state.guest.state === 'joined' ? 'join' : 'share'"
+      @close="liveShareOpen = false"
+    />
+    <LiveShareAsk :ask="liveShare.state.asks[0] || null" @answer="liveShare.answerAsk" />
 
     <CookieImportDialog
       v-if="cookieImportOpen"

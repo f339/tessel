@@ -23,7 +23,10 @@ export default defineConfig({
         // ssh2 (the SSH client of the terminal host, src/main/ssh): loaded
         // from node_modules at runtime (its optional native parts are tried
         // and skipped there), packaged by electron-builder as a dependency.
-        external: ['electron', /^electron\/.+/, 'node-pty', 'electron-updater', 'ssh2', /^ssh2\/.+/, /^node:/],
+        // ws (Live Share's share server and guest connection,
+        // src/main/liveShare): the same, its optional native helpers
+        // (bufferutil, utf-8-validate) tried and skipped at runtime.
+        external: ['electron', /^electron\/.+/, 'node-pty', 'electron-updater', 'ssh2', /^ssh2\/.+/, 'ws', /^ws\/.+/, /^node:/],
         // Two entry points: the app's main process, and the terminal host it
         // starts as a separate background process.
         input: {

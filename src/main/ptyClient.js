@@ -47,6 +47,15 @@ export function createPtyClient({ pipe, token, startHost, endStuckHost, log, onD
           const w = waiting.get(msg.req)
           waiting.delete(msg.req)
           clearTimeout(w.timer)
+          // Right now, before the output that follows it in this read is
+          // passed on (Live Share's snapshot of a pane, liveShare.js).
+          if (w.onReply) {
+            try {
+              w.onReply(msg)
+            } catch {
+              /* never breaks the terminals */
+            }
+          }
           w.resolve(msg)
         } else if (msg.op === 'data') onData(msg.id, msg.data)
         else if (msg.op === 'exit') onExit(msg.id, msg.exitCode, msg.signal, msg.pid)
@@ -74,14 +83,14 @@ export function createPtyClient({ pipe, token, startHost, endStuckHost, log, onD
     s.on('error', lost)
   }
 
-  function rawRequest(s, body, timeout = 15000) {
+  function rawRequest(s, body, timeout = 15000, onReply = null) {
     return new Promise((resolve, reject) => {
       const req = ++seq
       const timer = setTimeout(() => {
         waiting.delete(req)
         reject(new Error(`terminal host did not answer ${body.op}`))
       }, timeout)
-      waiting.set(req, { resolve, reject, timer })
+      waiting.set(req, { resolve, reject, timer, onReply })
       s.write(JSON.stringify({ ...body, req }) + '\n')
     })
   }
@@ -168,9 +177,11 @@ export function createPtyClient({ pipe, token, startHost, endStuckHost, log, onD
     }
   }
 
-  async function request(op, body = {}, timeout) {
+  // onReply(answer): called as soon as the answer is read, in order with
+  // the output around it (a promise's then runs later).
+  async function request(op, body = {}, timeout, onReply) {
     await ensure()
-    return rawRequest(sock, { op, ...body }, timeout)
+    return rawRequest(sock, { op, ...body }, timeout, onReply)
   }
 
   function send(op, body = {}) {

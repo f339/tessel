@@ -645,6 +645,26 @@ const api = {
       return () => ipcRenderer.removeListener('ssh:credential-resolved', handler)
     }
   },
+  // Live Share (src/main/liveShare.js). Host: start / stop sharing, the
+  // window's layout as it changes, a yes / no for each guest (onAsk), the
+  // guests' requests to open or close a pane (onHostRequest). Guest: join
+  // with an invite code, leave, open a terminal or agent on the host; the
+  // host's panes and layout come with onGuest.
+  liveShare: {
+    state: () => ipcRenderer.invoke('liveShare:state'),
+    start: ({ name } = {}) => ipcRenderer.invoke('liveShare:start', { name }),
+    stop: () => ipcRenderer.invoke('liveShare:stop'),
+    setLayout: (layout) => ipcRenderer.send('liveShare:layout', layout),
+    approve: ({ guestId, yes } = {}) => ipcRenderer.invoke('liveShare:approve', { guestId, yes }),
+    removeGuest: ({ guestId } = {}) => ipcRenderer.invoke('liveShare:removeGuest', { guestId }),
+    join: ({ invite, name } = {}) => ipcRenderer.invoke('liveShare:join', { invite, name }),
+    leave: () => ipcRenderer.invoke('liveShare:leave'),
+    open: ({ kind, agent } = {}) => ipcRenderer.invoke('liveShare:open', { kind, agent }),
+    onHost: (cb) => subscribe('liveShare:host', cb),
+    onGuest: (cb) => subscribe('liveShare:guest', cb),
+    onAsk: (cb) => subscribe('liveShare:ask', cb),
+    onHostRequest: (cb) => subscribe('liveShare:hostRequest', cb)
+  },
   update: {
     status: () => ipcRenderer.invoke('update:status'),
     check: () => ipcRenderer.invoke('update:check'),

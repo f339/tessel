@@ -88,6 +88,7 @@ import { createLogger, describe } from './logger'
 import { guardIpc, mainFrameSender } from './ipcGuard'
 import { cleanEnv } from './cleanEnv'
 import { createPtyClient } from './ptyClient'
+import { registerLiveShare } from './liveShare'
 import { listProcesses, treeOf, waitForExit, killPids, listProcessNames, runningWork } from './processTree'
 import { pipeName } from './ptyProtocol'
 import { createUpdater } from './updater'
@@ -3214,6 +3215,9 @@ function queueData(id, data) {
   if (!flushTimer) flushTimer = setTimeout(flushData, 8)
 }
 
+// Live Share (liveShare.js): this Tessel's screen shared with guests, or the
+// host's panes shown here when this Tessel joined a session.
+let liveShare = null
 const host = createPtyClient({
   pipe: hostPipe,
   token: hostToken(),
@@ -3225,6 +3229,7 @@ const host = createPtyClient({
   onData: (id, data) => {
     installLogs.onData(id, data)
     queueData(id, data)
+    liveShare?.onPtyData(id, data)
   },
   onExit: (id, exitCode, signal, pid) => {
     const info = ptyInfo.get(id)
@@ -3236,6 +3241,7 @@ const host = createPtyClient({
     remoteHosts.paneExited(id, exitCode)
     remoteAgentCheck.paneExited(id)
     flushData() // deliver the last output before the exit notice
+    liveShare?.onPtyExit(id, exitCode)
     if (exitCode && info) {
       log.warn(
         'pty',
@@ -3267,6 +3273,20 @@ const host = createPtyClient({
     ptyInfo.clear()
   }
 })
+liveShare = registerLiveShare({
+  ipcMain,
+  send,
+  host,
+  dataDir: app.getPath('userData'),
+  queueData,
+  sendExit: (id, exitCode) => {
+    flushData()
+    send('pty:exit', { id, exitCode, signal: 0, pid: null })
+  },
+  log
+})
+// A quit that skipped before-quit still ends the tunnel (cloudflared).
+app.on('will-quit', () => liveShare?.stopAll())
 
 // Agents on an SSH host (src/main/remoteAgent/REMOTE_AGENTS.md). The shim goes on each host
 // once per app run, over the Files session; the team tools and hooks of the
@@ -3429,6 +3449,9 @@ ipcMain.handle('pty:create', async (_evt, opts = {}) => {
   })
   const { id, shellId, cols = 80, rows = 24, cwd, projectDir } = opts
   if (!id) throw new Error('pty:create requires an id') // i18n-ignore internal: programming error
+  // A Live Share guest's pane (liveShare.js guestPaneId) is the host's
+  // terminal: never a shell of this computer under its id.
+  if (/^pane-ls\d+-/.test(String(id))) return { ok: false, error: t('main.liveShare.notLocal', 'This pane belongs to a Live Share session: it cannot start a terminal on this computer.') }
   const shell = getShells().find((s) => s.id === shellId) || defaultShell()
   // A pane on a remote host: a shell channel on the host's shared ssh2
   // connection (in the terminal host), or, for a host that needs the system
@@ -3560,6 +3583,7 @@ ipcMain.handle('pty:create', async (_evt, opts = {}) => {
     try { await agentStateStore.register({ paneId: id, provider: agentProvider, launchToken: agentLaunchToken, startedAt: agentStartedAt }) }
     catch { agentStatusWarning = t('main.agents.statusUnavailable', 'Agent status observations are unavailable.') }
   }
+  liveShare?.noteSize(id, cols, rows)
   return {
     ok: true,
     shell: { id: shell.id, name: shell.name },
@@ -3629,6 +3653,7 @@ async function createSshPane(opts, target, spec, shell, startedAt) {
   remoteHosts.paneStarted(id, target.id, { ssh2: true })
   // The host's shim and agents (its shared connection: no new question).
   void remoteAgentCheck.hostStarted(target.id)
+  liveShare?.noteSize(id, cols, rows)
   return {
     ok: true,
     shell: { id: shell.id, name: shell.name },
@@ -3647,6 +3672,7 @@ async function createSshPane(opts, target, spec, shell, startedAt) {
 // Re-attach to a terminal that kept running in the host (after a restart,
 // crash or reload). Returns its recent output to replay.
 ipcMain.handle('pty:attach', async (_evt, id) => {
+  if (liveShare?.isGuestPane(id)) return liveShare.guestAttach(id)
   let res
   try {
     res = await host.request('attach', { id })
@@ -3712,17 +3738,31 @@ ipcMain.handle('pty:reconcile', async (_evt, liveIds = []) => {
   return closed
 })
 
-ipcMain.on('pty:write', (_evt, { id, data }) => host.send('write', { id, data }))
+// A Live Share guest's pane (liveShare.js): typing goes to the host's
+// terminal; its size follows the host's window, never this one.
+ipcMain.on('pty:write', (_evt, { id, data }) => {
+  if (liveShare?.isGuestPane(id)) return liveShare.guestWrite(id, data)
+  host.send('write', { id, data })
+})
 
 // Reset Terminal: the host clears the modes in its own copy of the screen (an
 // older host ignores the unknown op; the pane still resets itself).
-ipcMain.on('pty:resetModes', (_evt, { id } = {}) => host.send('resetModes', { id }))
+ipcMain.on('pty:resetModes', (_evt, { id } = {}) => {
+  if (liveShare?.isGuestPane(id)) return
+  host.send('resetModes', { id })
+})
 
 ipcMain.on('pty:resize', (_evt, { id, cols, rows }) => {
-  if (cols > 0 && rows > 0) host.send('resize', { id, cols, rows })
+  if (liveShare?.isGuestPane(id)) return
+  if (cols > 0 && rows > 0) {
+    host.send('resize', { id, cols, rows })
+    liveShare?.noteSize(id, cols, rows)
+  }
 })
 
 ipcMain.on('pty:kill', (_evt, { id }) => {
+  // Closes it on the host, for everyone (nothing of this computer to end).
+  if (liveShare?.isGuestPane(id)) return liveShare.guestKill(id)
   paneKills.set(id, Date.now())
   if (paneKills.size > 500) paneKills.delete(paneKills.keys().next().value)
   remoteHosts.paneClosing(id)
@@ -3732,6 +3772,7 @@ ipcMain.on('pty:kill', (_evt, { id }) => {
   ptyInfo.delete(id)
   revokeTeamSecret(id)
   agentTerminal.forgetPane(id)
+  liveShare?.forgetPane(id)
 })
 
 // Settings > General, "Confirm before closing running terminals": is a
@@ -3739,6 +3780,8 @@ ipcMain.on('pty:kill', (_evt, { id }) => {
 // { unknown: true } when it can't tell (the renderer then asks).
 ipcMain.handle('pty:runningWork', async (_evt, id) => {
   if (!((typeof id === 'string' && id) || Number.isInteger(id))) return { unknown: true }
+  // The host's terminal (Live Share): nothing of this computer runs there.
+  if (liveShare?.isGuestPane(id)) return { running: false, names: [] }
   let pid = ptyInfo.get(id)?.pid
   if (!pid) {
     const a = await host.request('attach', { id }, 3000).catch(() => null)
@@ -3759,7 +3802,8 @@ ipcMain.handle('pty:runningWork', async (_evt, id) => {
 // See processTree.js for why the host's word is not enough.
 // -> { ok: true } or { ok: false, stuck: [ids still running something] }
 ipcMain.handle('pty:stopAndWait', async (_evt, { ids = [], timeoutMs = 15000 } = {}) => {
-  const list = (Array.isArray(ids) ? ids : []).filter((id) => (typeof id === 'string' && id) || Number.isInteger(id))
+  // A Live Share guest's panes are the host's terminals: not stopped from here.
+  const list = (Array.isArray(ids) ? ids : []).filter((id) => ((typeof id === 'string' && id) || Number.isInteger(id)) && !liveShare?.isGuestPane(id))
   const roots = {} // id -> shell pid
   for (const id of list) {
     let pid = ptyInfo.get(id)?.pid
@@ -3856,6 +3900,8 @@ app.on('session-end', () => {
 
 async function shutdownTerminals() {
   quitting = true
+  // Ends the sharing (guests told, cloudflared killed) or the joined session.
+  liveShare?.stopAll()
   await saveScrollback()
   // Only a host that runs is asked to stop (asking would start a new one).
   if (!(await host.connectIfRunning())) return

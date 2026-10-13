@@ -1,0 +1,88 @@
+{
+  "liveShare": {
+    "title": "Live Share",
+    "close": "Fermer",
+    "closeEsc": "Fermer (Échap)",
+    "unavailable": "Live Share n'est pas disponible dans cette version.",
+    "guest": "Un invité",
+    "wsName": "{{host}} · Live Share",
+    "closeHostPane": "Ce panneau tourne sur l'ordinateur de {{host}} : il s'y ferme aussi, pour tous les participants de la session.",
+    "onlyTerminals": "Dans un projet Live Share, seuls des terminaux et des agents peuvent être ouverts (sur l'ordinateur de l'hôte).",
+    "tabs": {
+      "share": "Partager",
+      "join": "Rejoindre"
+    },
+    "share": {
+      "intro": "D'autres personnes vous rejoignent depuis leur propre Tessel : elles voient en direct le projet affiché sur votre écran. Chacune attend votre accord.",
+      "warning": "Les invités que vous acceptez peuvent taper dans vos terminaux et vos agents : ils peuvent donc lancer n'importe quelle commande sur ce PC en votre nom. N'acceptez que des personnes de confiance.",
+      "name": "Votre nom (vos invités le voient)",
+      "start": "Démarrer le partage",
+      "stop": "Arrêter le partage",
+      "cancel": "Annuler",
+      "failed": "Le partage n'a pas pu démarrer.",
+      "preparing": "Préparation du tunnel Cloudflare…",
+      "downloading": "Téléchargement du tunnel Cloudflare… {{percent}} %",
+      "starting": "Démarrage…",
+      "checking": "Vérification de l'adresse…",
+      "invite": "Code d'invitation : envoyez-le à vos invités",
+      "copy": "Copier",
+      "copied": "Copié",
+      "copyFailed": "Impossible de copier dans le presse-papiers.",
+      "guests": "Invités",
+      "noGuests": "Personne n'a encore rejoint la session.",
+      "guestJoined": "Connecté",
+      "guestWaiting": "Attend votre réponse",
+      "remove": "Retirer"
+    },
+    "join": {
+      "intro": "Collez le code d'invitation que votre hôte vous a envoyé. Ses panneaux s'ouvrent ici, dans un projet Live Share.",
+      "invite": "Code d'invitation",
+      "name": "Votre nom (l'hôte le voit)",
+      "join": "Rejoindre",
+      "failed": "Impossible de rejoindre la session.",
+      "connecting": "Connexion…",
+      "waiting": "En attente de l'accord de l'hôte…",
+      "joined": "Vous avez rejoint le Live Share de {{host}}. Ses panneaux sont ouverts dans le projet Live Share.",
+      "leave": "Quitter",
+      "cancel": "Annuler"
+    },
+    "ask": {
+      "title": "{{name}} veut rejoindre votre Live Share",
+      "text": "Cette personne verra votre écran et pourra taper dans vos terminaux et vos agents.",
+      "allow": "Autoriser",
+      "deny": "Refuser"
+    },
+    "reason": {
+      "denied": "L'hôte a refusé.",
+      "removed": "L'hôte vous a retiré de la session.",
+      "stopped": "L'hôte a arrêté le partage.",
+      "closed": "La connexion s'est fermée.",
+      "refused": "Le code d'invitation n'est plus valide.",
+      "timeout": "L'hôte n'a pas répondu à temps.",
+      "unreachable": "Impossible de joindre l'hôte.",
+      "notTessel": "Cette adresse n'est pas un Live Share Tessel.",
+      "slow": "La connexion était trop lente pour suivre.",
+      "tunnel": "Le tunnel de l'hôte s'est arrêté.",
+      "replaced": "Vous avez rejoint une autre session.",
+      "left": "Vous avez quitté la session.",
+      "error": "La connexion a échoué.",
+      "ended": "La session est terminée."
+    },
+    "toast": {
+      "joined": "{{name}} a rejoint votre Live Share.",
+      "left": "{{name}} a quitté votre Live Share.",
+      "openedAgent": "{{name}} a ouvert {{agent}} dans votre Tessel.",
+      "openedTerminal": "{{name}} a ouvert un terminal dans votre Tessel.",
+      "closed": "{{name}} a fermé {{pane}}.",
+      "ended": "Le Live Share avec {{host}} est terminé : {{reason}}",
+      "opening": "Ouverture sur l'ordinateur de {{host}}…"
+    },
+    "toolbar": {
+      "label": "Live Share",
+      "title": "Live Share : partagez votre écran, ou rejoignez celui de quelqu'un",
+      "sharing_one": "Live Share : vous partagez votre écran ({{count}} connecté)",
+      "sharing_other": "Live Share : vous partagez votre écran ({{count}} connectés)",
+      "joined": "Live Share : dans la session de {{host}}"
+    }
+  }
+}

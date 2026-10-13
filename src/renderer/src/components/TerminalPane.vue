@@ -1441,10 +1441,17 @@ function stickToBottom() {
   setTimeout(again, 150)
 }
 
+// A Live Share pane (the host's terminal, liveShareWindow.js) has the
+// host's size: the guest's window shows it at that size, never resizes it.
+function liveShareSize() {
+  const ls = props.node.backend === 'liveshare' ? props.node.liveShare : null
+  return ls && ls.cols > 1 && ls.rows > 0 ? { cols: ls.cols, rows: ls.rows } : null
+}
+
 function doFit() {
   if (!term || !fit) return
   try {
-    const dims = fit.proposeDimensions()
+    const dims = liveShareSize() || fit.proposeDimensions()
     if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
     // Never shrink to nothing (e.g. while the pane is momentarily unmeasurable).
     if (dims.cols < 2 || dims.rows < 1) return
@@ -1471,6 +1478,11 @@ function notifyPtySize() {
   lastRows = term.rows
   window.shellApi.resizePty(props.node.id, term.cols, term.rows)
 }
+
+watch(
+  () => liveShareSize() && `${props.node.liveShare.cols}x${props.node.liveShare.rows}`,
+  (size) => size && doFit()
+)
 
 function scheduleFit() {
   if (fitTimer) clearTimeout(fitTimer)

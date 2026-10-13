@@ -905,6 +905,12 @@
         "env": "les réglages Tessel du volet n’ont pas pu être écrits sur l’hôte.",
         "tunnelTimeout": "le socket de Tessel sur l’hôte n’était pas prêt à temps."
       }
+    },
+    "liveShare": {
+      "tunnelStopped": "Le tunnel Cloudflare s’est arrêté (code {{code}}). Le partage est terminé.",
+      "unreachable": "L’adresse du tunnel est injoignable. Vérifiez votre connexion Internet et réessayez.",
+      "badInvite": "Ce n’est pas un code d’invitation Live Share de Tessel.",
+      "notLocal": "Ce volet appartient à une session Live Share : il ne peut pas lancer de terminal sur cet ordinateur."
     }
   },
   "main.chat.image.tooLarge": "Cette image dépasse {{mb}} Mo.",
