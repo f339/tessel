@@ -79,10 +79,12 @@ const config = {
       format: 'es'
     },
     // Dev: the app's modules are compiled when the server starts, not while
-    // the window waits on a black page (a cold start took over 30 s).
+    // the window waits on a black page (a cold start took over 30 s). Paths
+    // from the renderer's root (src/renderer): written from the project's
+    // root they pointed nowhere and the warm-up never ran.
     server: {
       warmup: {
-        clientFiles: ['./src/renderer/src/main.js', './src/renderer/src/App.vue', './src/renderer/src/components/**/*.vue']
+        clientFiles: ['./src/main.js', './src/App.vue', './src/components/**/*.vue']
       },
       // Its own address and port, checked free (scripts/devPort.mjs): another
       // dev server on "localhost:5173" never answers Tessel's window.

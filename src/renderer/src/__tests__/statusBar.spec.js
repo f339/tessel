@@ -179,17 +179,19 @@ describe('Resource Manager keeps up on its own', () => {
   })
   afterEach(() => vi.useRealTimers())
 
-  it('reads every 10 s with the popover closed, and stops when the indicator is removed', async () => {
+  it('reads every 30 s with the popover closed, and stops when the indicator is removed', async () => {
     if (!settings.statusBarItems.includes('resource-usage')) settings.statusBarItems = [...settings.statusBarItems, 'resource-usage']
     const focused = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
     const w = mountBar()
     await flushPromises()
     const first = window.shellApi.resourceSnapshot.mock.calls.length
     await vi.advanceTimersByTimeAsync(10000)
+    expect(window.shellApi.resourceSnapshot.mock.calls.length).toBe(first)
+    await vi.advanceTimersByTimeAsync(20000)
     expect(window.shellApi.resourceSnapshot.mock.calls.length).toBe(first + 1)
     settings.statusBarItems = settings.statusBarItems.filter((x) => x !== 'resource-usage')
     await flushPromises()
-    await vi.advanceTimersByTimeAsync(30000)
+    await vi.advanceTimersByTimeAsync(60000)
     expect(window.shellApi.resourceSnapshot.mock.calls.length).toBe(first + 1)
     focused.mockRestore()
     w.unmount()
@@ -207,7 +209,7 @@ describe('Resource Manager keeps up on its own', () => {
     window.dispatchEvent(new Event('focus'))
     await flushPromises()
     expect(window.shellApi.resourceSnapshot.mock.calls.length).toBe(first + 1)
-    await vi.advanceTimersByTimeAsync(10000)
+    await vi.advanceTimersByTimeAsync(30000)
     expect(window.shellApi.resourceSnapshot.mock.calls.length).toBe(first + 2)
     focus.mockRestore()
     w.unmount()

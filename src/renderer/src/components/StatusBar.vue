@@ -141,14 +141,15 @@ async function fetchSnapshot() {
   })()
   return fetching
 }
-// Every 2 s while the popover is open (as Orca), and every 10 s otherwise,
+// Every 2 s while the popover is open (as Orca), and every 30 s otherwise,
 // so the badge and the graphs keep up without a click. Never while the
 // window is minimized, and in the background only while Tessel is the
-// window you use: each reading starts PowerShell to list the processes,
-// which costs a lot on Windows (Orca reads only while its popover is open);
-// the badge catches up as soon as you come back.
+// window you use: each reading starts PowerShell to list every process of
+// the PC, which costs a lot on Windows (Orca reads only while its popover
+// is open; every 10 s was too often on a PC that froze, 2026-10-13); the
+// badge catches up as soon as you come back.
 const OPEN_POLL_MS = 2000
-const BACKGROUND_POLL_MS = 10000
+const BACKGROUND_POLL_MS = 30000
 const inUse = () => document.visibilityState !== 'hidden' && (resourcesOpen.value || document.hasFocus())
 function startPolling() {
   clearInterval(pollTimer)
