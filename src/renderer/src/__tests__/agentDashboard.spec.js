@@ -67,7 +67,7 @@ describe('agentDashboard.js', () => {
     const all = buildDashboard(rows)
     expect(all.counts).toEqual({ waiting: 0, working: 2, done: 0, idle: 1, sleeping: 0 })
     expect(all.groups.map((g) => [g.key, g.rows.map((r) => r.id)])).toEqual([
-      ['working', ['b', 'a']],
+      ['working', ['a', 'b']], // the longest at work on top
       ['idle', ['c']]
     ])
     expect(buildDashboard(rows, { query: 'login' }).groups.flatMap((g) => g.rows.map((r) => r.id))).toEqual(['b'])
@@ -80,6 +80,32 @@ describe('agentDashboard.js', () => {
       ['One', ['a', 'c']],
       ['Two', ['b']]
     ])
+  })
+})
+
+describe('dashboard order', () => {
+  it('in a state, the longest there first: an agent that starts goes under the others', () => {
+    const rows = [
+      { id: 'new', dotState: 'working', num: 1, since: 300 },
+      { id: 'old', dotState: 'working', num: 2, since: 100 },
+      { id: 'mid', dotState: 'working', num: 3, since: 200 },
+      { id: 'unknown', dotState: 'working', num: 0 }
+    ]
+    expect(buildDashboard(rows).groups[0].rows.map((r) => r.id)).toEqual(['old', 'mid', 'new', 'unknown'])
+  })
+
+  it('by project: projects at work first, the one at it the longest on top, then the others in sidebar order', () => {
+    const rows = [
+      { id: 'a', dotState: 'idle', projectId: 'p1', projectName: 'Quiet', since: 1 },
+      { id: 'b', dotState: 'working', projectId: 'p2', projectName: 'Late', since: 500 },
+      { id: 'c', dotState: 'done', projectId: 'p3', projectName: 'Done', since: 2 },
+      { id: 'd', dotState: 'working', projectId: 'p4', projectName: 'Early', since: 100 },
+      { id: 'e', dotState: 'idle', projectId: 'p4', projectName: 'Early', since: 50 },
+      { id: 'f', dotState: 'waiting', projectId: 'p5', projectName: 'Asks', since: 300 }
+    ]
+    const g = buildDashboard(rows, { groupBy: 'project' }).groups
+    expect(g.map((x) => x.label)).toEqual(['Early', 'Asks', 'Late', 'Quiet', 'Done'])
+    expect(g[0].rows.map((r) => r.id)).toEqual(['d', 'e'])
   })
 })
 

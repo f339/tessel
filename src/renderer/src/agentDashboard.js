@@ -34,9 +34,19 @@ function matches(row, q) {
     .some((s) => String(s).toLowerCase().includes(q))
 }
 
-// Within a group: the most recent change of state first, then pane order.
-function byRecent(a, b) {
-  return (b.since || 0) - (a.since || 0) || (a.num || 0) - (b.num || 0)
+// Within a group: the longest in its state first, then pane order. A row
+// only moves when its own state changes, and one that arrives goes under the
+// others: rows never take turns at the top.
+const sinceOf = (r) => (r.since > 0 ? r.since : Infinity)
+function byLongest(a, b) {
+  return sinceOf(a) - sinceOf(b) || (a.num || 0) - (b.num || 0)
+}
+// Grouped by project: projects with an agent at work (or asking you) first,
+// the one at it the longest on top; then the others, in the sidebar's order.
+const ACTIVE = ['waiting', 'working']
+function activeSince(g) {
+  const at = g.rows.filter((r) => ACTIVE.includes(r.bucket)).map(sinceOf)
+  return at.length ? Math.min(...at) : null
 }
 
 // rows: paneRow(...) + { projectId, projectName, branch }.
@@ -59,9 +69,16 @@ export function buildDashboard(rows, { filter = 'all', query = '', groupBy = 'st
     }
     const order = (r) => DASHBOARD_STATES.indexOf(r.bucket)
     groups = [...map.values()]
-    for (const g of groups) g.rows.sort((a, b) => order(a) - order(b) || byRecent(a, b))
+    for (const g of groups) g.rows.sort((a, b) => order(a) - order(b) || byLongest(a, b))
+    const rank = new Map(groups.map((g, i) => [g, { i, at: activeSince(g) }]))
+    groups.sort((a, b) => {
+      const x = rank.get(a)
+      const y = rank.get(b)
+      if ((x.at === null) !== (y.at === null)) return x.at === null ? 1 : -1
+      return (x.at !== null && x.at !== y.at ? x.at - y.at : 0) || x.i - y.i
+    })
   } else {
-    groups = DASHBOARD_STATES.map((s) => ({ key: s, label: s, rows: shown.filter((r) => r.bucket === s).sort(byRecent) })).filter(
+    groups = DASHBOARD_STATES.map((s) => ({ key: s, label: s, rows: shown.filter((r) => r.bucket === s).sort(byLongest) })).filter(
       (g) => g.rows.length
     )
   }
