@@ -203,3 +203,17 @@ describe('Codicon.vue', () => {
     w.unmount()
   })
 })
+
+describe('the window can still be moved', () => {
+  it("Open Editors' list is not taken for an open popup (the toolbar stays a window-drag area)", async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const app = readFileSync(join(__dirname, '..', 'App.vue'), 'utf8')
+    const sel = /const POPUP_SELECTOR =\s*'([^']+)'/.exec(app)[1]
+    document.body.innerHTML = '<div class="open-editors-list" role="listbox"></div>'
+    expect(document.querySelector(sel)).toBeNull()
+    document.body.innerHTML = '<div role="listbox"></div>'
+    expect(document.querySelector(sel)).not.toBeNull()
+    document.body.innerHTML = ''
+  })
+})
