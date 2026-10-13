@@ -220,14 +220,17 @@ function applyTheme() {
   const line = cssColor('--surface', dark ? '#181b21' : '#f6f8fa')
   const border = cssColor('--border', dark ? '#252932' : '#d0d7de')
   const accent = cssColor('--accent', '#6c9cff')
-  // VS Code's code colours (editor/textmate.js: Dark+ or Light+) once its
-  // grammars are loaded; Monaco's own until then.
+  // VS Code's code colours (editor/textmate.js: its Dark 2026 or Light 2026)
+  // once its grammars are loaded, Monaco's own until then; VS Code's colours
+  // for the find widget, suggestions, hovers, minimap and scrollbars. The
+  // background, text, gutter and cursor stay Tessel's.
   const tm = textmateIfLoaded()
   monaco.editor.defineTheme('tessel', {
     base: dark ? 'vs-dark' : 'vs',
     inherit: true,
     rules: tm ? tm.rules(dark) : [],
     colors: {
+      ...(tm ? tm.colours(dark) : { 'editorWidget.background': line, 'editorWidget.border': border, 'editorHoverWidget.background': line, 'editorHoverWidget.border': border }),
       'editor.background': bg,
       'editor.foreground': fg,
       'editorGutter.background': bg,
@@ -235,14 +238,9 @@ function applyTheme() {
       'editorLineNumber.activeForeground': strong,
       'editor.lineHighlightBackground': line,
       'editor.lineHighlightBorder': line,
-      'editorWidget.background': line,
-      'editorWidget.border': border,
-      'editorHoverWidget.background': line,
-      'editorHoverWidget.border': border,
       'editorCursor.foreground': accent,
       'minimap.background': bg,
-      'scrollbarSlider.background': border + '99',
-      'editorOverviewRuler.border': bg
+      'editorStickyScroll.background': bg
     }
   })
   monaco.editor.setTheme('tessel')

@@ -161,7 +161,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // the Changes view side by side instead of inline.
   editorAutoSave: false,
   editorAutoSaveDelayMs: 1000,
-  editorMinimap: false,
+  // On by default, as in VS Code (a minimap left off before it was the
+  // default turns on once: editorMinimapDefault2).
+  editorMinimap: true,
+  editorMinimapDefault2: true,
   // File icons in the explorer, the editor's tabs, Source Control and Go to
   // file: VS Code's (Seti), 'color' (each type its colour, as in VS Code),
   // 'mono' (the text's colour) or 'off'.
@@ -454,6 +457,8 @@ export function loadSettings(saved) {
     if (key === 'usageRefreshMinutes' && v === 15 && saved.usageRefreshDefault2 !== true) continue
     if (key === 'usageRefreshDefault2') continue
     if (key === 'worktreeCardHostDefaulted') continue
+    if (key === 'editorMinimap' && v === false && saved.editorMinimapDefault2 !== true) continue
+    if (key === 'editorMinimapDefault2') continue
     if (key === 'sourceControlGroupOrder' && !SOURCE_CONTROL_GROUP_ORDERS.includes(v)) continue
     if (key === 'sourceControlViewMode' && !['tree', 'list'].includes(v)) continue
     if (key === 'branchPrefix' && !BRANCH_PREFIX_MODES.includes(v)) continue

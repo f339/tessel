@@ -334,12 +334,17 @@ describe('SidePanel.vue', () => {
     w.unmount()
   })
 
-  it('Files: the … menu has New file, New folder and Show dotfiles', async () => {
+  it("Files: VS Code's header buttons (New file, New folder, Refresh, Collapse), Show dotfiles in the right-click menu", async () => {
     const w = make('files')
     await flushPromises()
-    await w.find('[data-test="explorer-more"]').trigger('click')
-    expect(w.find('[data-test="explorer-new-file"]').exists()).toBe(true)
-    expect(w.find('[data-test="explorer-new-folder"]').exists()).toBe(true)
+    expect(w.find('[data-test="explorer-more"]').exists()).toBe(false)
+    expect(w.findAll('[data-test="explorer-folder-head"] .tb-icon').map((b) => b.attributes('data-test'))).toEqual([
+      'explorer-head-new-file',
+      'explorer-head-new-folder',
+      'explorer-refresh',
+      'explorer-collapse'
+    ])
+    await w.find('.explorer-files').trigger('contextmenu')
     const dot = w.find('[data-test="explorer-dotfiles"]')
     expect(dot.attributes('aria-checked')).toBe('true')
     await dot.trigger('click')

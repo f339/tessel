@@ -1,6 +1,6 @@
 // VS Code's colouring in Tessel's editor: its TextMate grammars and its
-// default colours (Dark+ / Light+, which Dark Modern and Light Modern keep for
-// code), through Shiki (MIT). Monaco's own colouring (Monarch) knows keywords,
+// default themes, Dark 2026 and Light 2026 (themes/vscode-*.json, made from
+// VS Code's own by scripts/gen-vscode-themes.mjs), through Shiki (MIT). Monaco's own colouring (Monarch) knows keywords,
 // strings and comments; VS Code's grammars also tell functions, variables,
 // types, parameters and properties apart, as VS Code shows them.
 //
@@ -19,13 +19,23 @@
 import { createHighlighterCore } from 'shiki/core'
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
 import { bundledLanguages } from 'shiki/langs'
-// Only VS Code's two themes (not Shiki's other sixty).
-import darkPlus from 'shiki/dist/themes/dark-plus.mjs'
-import lightPlus from 'shiki/dist/themes/light-plus.mjs'
+import vscodeDark from './themes/vscode-dark.json'
+import vscodeLight from './themes/vscode-light.json'
 import { INITIAL, EncodedTokenMetadata, FontStyle } from 'shiki/textmate'
 
-export const DARK_THEME = 'dark-plus'
-export const LIGHT_THEME = 'light-plus'
+export const DARK_THEME = 'vscode-dark'
+export const LIGHT_THEME = 'vscode-light'
+
+// VS Code's colours for what the editor draws over the code: the find and
+// replace widget, its inputs and toggles, suggestions, hovers, the minimap,
+// scrollbars, the overview ruler, selections, bracket pairs, sticky scroll.
+// The editor's own background, text, gutter and cursor stay Tessel's.
+const WIDGET_COLOURS =
+  /^(editorWidget|editorHoverWidget|editorSuggestWidget|editorStickyScroll|editorStickyScrollHover|input\.|inputOption|inputValidation|focusBorder|widget\.|toolbar\.|editor\.find|editor\.(inactive)?selection|editor\.wordHighlight|editor\.rangeHighlight|editorBracketMatch|editorBracketHighlight|editorBracketPairGuide|editorIndentGuide|editorWhitespace|minimap|scrollbar|editorOverviewRuler|errorForeground|icon\.foreground|list\.|quickInput|keybindingLabel|editorError|editorWarning|editorInfo|editorLink|descriptionForeground|textLink|editorGhostText|editorInlayHint|editorMarkerNavigation|peekView|diffEditor|editorUnicodeHighlight)/
+export function vscodeColours(dark) {
+  const all = (dark ? vscodeDark : vscodeLight).colors || {}
+  return Object.fromEntries(Object.entries(all).filter(([k, v]) => WIDGET_COLOURS.test(k) && typeof v === 'string' && /^#[0-9a-f]{3,8}$/i.test(v)))
+}
 
 // Monaco language id -> Shiki grammar, where the names differ. A .tsx or
 // .jsx file has its own id (as in VS Code), so a .ts file keeps the plain
@@ -124,7 +134,7 @@ export function createTextmate({ monaco, maxLineLength = 20000, timeLimitMs = 50
   function start() {
     if (!ready) {
       ready = createHighlighterCore({
-        themes: [darkPlus, lightPlus],
+        themes: [vscodeDark, vscodeLight],
         langs: [],
         engine: createJavaScriptRegexEngine({ forgiving: true })
       }).then((h) => {
@@ -200,6 +210,7 @@ export function createTextmate({ monaco, maxLineLength = 20000, timeLimitMs = 50
       listeners.add(fn)
       return () => listeners.delete(fn)
     },
-    hasGrammar: (languageId) => providers.has(languageId)
+    hasGrammar: (languageId) => providers.has(languageId),
+    colours: (dark) => vscodeColours(dark)
   }
 }

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { createTextmate, grammarFor, rulesFor, EXTRA_LANGUAGES } from '../editor/textmate'
+import { createTextmate, grammarFor, rulesFor, vscodeColours, EXTRA_LANGUAGES } from '../editor/textmate'
 
 // A Monaco stand-in: its languages and the tokens providers set on them.
 function fakeMonaco(ids = ['typescript', 'javascript', 'python', 'plaintext']) {
@@ -38,7 +38,7 @@ describe("VS Code's colouring in the editor (Shiki, TextMate)", () => {
     for (const l of EXTRA_LANGUAGES) expect(grammarFor(l.id)).toBeTruthy()
   })
 
-  it('registers the languages Monaco lacks, then colours TypeScript as VS Code Dark+ does', async () => {
+  it('registers the languages Monaco lacks, then colours TypeScript as VS Code Dark 2026 does', async () => {
     const monaco = fakeMonaco()
     const tm = createTextmate({ monaco })
     const ids = monaco.languages.getLanguages().map((l) => l.id)
@@ -47,14 +47,15 @@ describe("VS Code's colouring in the editor (Shiki, TextMate)", () => {
     expect(await tm.useLanguage('typescript')).toBe(true)
     expect(tm.hasGrammar('typescript')).toBe(true)
     const got = Object.fromEntries(colours(tm, monaco.providers.typescript, 'const total = sum(items)').map(([t, c]) => [t.trim(), c]))
-    // Dark+: keyword blue, variable light blue, function yellow.
-    expect(got.const).toBe('569cd6')
-    expect(got.total).toBe('4fc1ff')
-    expect(got.sum).toBe('dcdcaa')
-    expect(got.items).toBe('9cdcfe')
-    // Light+ after a switch: the same pieces in VS Code's light colours.
+    // Dark 2026 (VS Code's default): keyword red, constant blue, function
+    // purple, a variable in the text colour.
+    expect(got.const).toBe('ff7b72')
+    expect(got.total).toBe('79c0ff')
+    expect(got.sum).toBe('d2a8ff')
+    expect(got.items).toBe('c9d1d9')
+    // Light 2026 after a switch: the same pieces in its light colours.
     const light = Object.fromEntries(colours(tm, monaco.providers.typescript, 'const total = sum(items)', false).map(([t, c]) => [t.trim(), c]))
-    expect(light.sum).toBe('795e26')
+    expect(light.sum).not.toBe(got.sum)
   })
 
   it('keeps a line state the grammar sees as equal (an edit re-colours only what changed)', async () => {
@@ -82,5 +83,17 @@ describe("VS Code's colouring in the editor (Shiki, TextMate)", () => {
     expect(rules.find((r) => r.token === 't2')).toEqual({ token: 't2', foreground: '569cd6' })
     expect(rules.find((r) => r.token === 't2.s1')).toEqual({ token: 't2.s1', foreground: '569cd6', fontStyle: 'italic' })
     expect(rules.find((r) => r.token === 't1.s2')).toEqual({ token: 't1.s2', fontStyle: 'bold' })
+  })
+
+  it("VS Code's colours for the find widget and the rest over the code; never the editor's own background", () => {
+    const dark = vscodeColours(true)
+    expect(dark['editorWidget.background']).toBe('#202122')
+    expect(dark['focusBorder']).toBe('#3994BCB3')
+    expect(dark['inputOption.activeBackground']).toBeTruthy()
+    expect(dark['editor.findMatchBackground']).toBeTruthy()
+    expect(dark['minimapSlider.background']).toBeTruthy()
+    expect(dark['editor.background']).toBeUndefined()
+    expect(dark['editorLineNumber.foreground']).toBeUndefined()
+    expect(vscodeColours(false)['editorWidget.background']).not.toBe(dark['editorWidget.background'])
   })
 })

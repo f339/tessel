@@ -176,11 +176,11 @@ describe('compact Files tree', () => {
     expect(names()).toEqual(['a/b', 'c', 'deep', 'x.txt', 'new.js', 'top.md'])
   })
 
-  it('turned off from the explorer menu: one row per folder', async () => {
+  it('turned off from the right-click menu: one row per folder', async () => {
     await mountTree()
     await row('a').trigger('click')
     await flushPromises()
-    await w.get('[data-test="explorer-more"]').trigger('click')
+    await row('a/b/c').trigger('contextmenu')
     await w.get('[data-test="explorer-compact"]').trigger('click')
     expect(settings.explorerCompactFolders).toBe(false)
     expect(names()).toEqual(['a', 'b', 'c', 'deep', 'x.txt', 'top.md'])

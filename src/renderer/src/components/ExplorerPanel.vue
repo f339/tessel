@@ -16,6 +16,7 @@ import { settings } from '../settings'
 import { isRemotePath, remoteHostPath } from '../../../shared/remotePath'
 import { t } from '../i18n'
 import FileIcon from './FileIcon.vue'
+import Codicon from './Codicon.vue'
 
 const props = defineProps({
   root: { type: String, default: null },
@@ -66,7 +67,6 @@ const selected = ref(null)
 const query = ref('')
 const mode = ref('names')
 const search = reactive({ busy: false, results: [], truncated: false, error: '', done: false })
-const moreOpen = ref(false)
 let viewRevision = 0
 let disposed = false
 let statusRequest = 0
@@ -488,14 +488,6 @@ function onHitClick(h) {
   else emit('open', h.path)
 }
 
-// --- The "…" menu ------------------------------------------------------------------
-function moreAct(what) {
-  moreOpen.value = false
-  if (what === 'new-file') startNew(displayRoot.value, false)
-  else if (what === 'new-folder') startNew(displayRoot.value, true)
-  else if (what === 'dotfiles') dotfiles.value = !dotfiles.value
-  else if (what === 'compact') settings.explorerCompactFolders = settings.explorerCompactFolders === false
-}
 
 // A row opens or closes as one: every folder of a compact row. A folder
 // opened with a sole sub-folder opens it too, so the chain shows as one row
@@ -799,6 +791,9 @@ async function act(what) {
   else if (what === 'new-file' || what === 'new-folder') startNew(menuDir.value, what === 'new-folder')
   else if (what === 'rename' && e) startRename(e)
   else if (what === 'trash' && e) trashIt(e)
+  // The view's options (VS Code keeps them in its settings; here, in this menu).
+  else if (what === 'dotfiles') dotfiles.value = !dotfiles.value
+  else if (what === 'compact') settings.explorerCompactFolders = settings.explorerCompactFolders === false
 }
 
 // --- New, rename, delete ---------------------------------------------------------
@@ -974,7 +969,7 @@ function rowTitle(e) {
          Editors", then the project's folder. -->
     <div v-if="root" class="explorer-tools">
       <div class="explorer-search">
-        <svg class="explorer-search-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4" /><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /></svg>
+        <Codicon class="explorer-search-icon" name="search" :size="14" />
         <input
           v-model="query"
           class="explorer-filter"
@@ -1020,10 +1015,10 @@ function rowTitle(e) {
         <span v-if="unsavedCount" class="explorer-badge" data-test="open-editors-unsaved">{{ unsavedLabel }}</span>
         <span class="explorer-actions" @click.stop>
           <button class="tb-icon" :title="t('explorer.saveAll', 'Save all')" :aria-label="t('explorer.saveAll', 'Save all')" data-test="open-editors-save-all" :disabled="!unsavedCount" @click="emit('save-all')">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 2.5h9l2 2v9h-11z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M5 2.5v3.5h5V2.5M5 13.5V9.5h6v4" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /></svg>
+            <Codicon name="save-all" />
           </button>
           <button class="tb-icon" :title="t('explorer.closeAll', 'Close all')" :aria-label="t('explorer.closeAll', 'Close all')" data-test="open-editors-close-all" :disabled="!openEditors.length" @click="emit('close-all')">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 5.5h7v7h-7z" stroke="currentColor" stroke-width="1.2" /><path d="M5.5 3.5h7v7" stroke="currentColor" stroke-width="1.2" /><path d="M5.5 7.5l3 3M8.5 7.5l-3 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg>
+            <Codicon name="close-all" />
           </button>
         </span>
       </div>
@@ -1049,11 +1044,11 @@ function rowTitle(e) {
             data-test="open-editor-close"
             @click.stop="emit('close-editor', ed)"
           >
-            <span class="open-editor-dot" aria-hidden="true">●</span>
-            <svg class="open-editor-x" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" /></svg>
+            <Codicon class="open-editor-dot" name="circle-filled" />
+            <Codicon class="open-editor-x" name="close" />
           </button>
           <FileIcon v-if="ed.kind === 'file'" class="explorer-icon" :name="ed.path" />
-          <svg v-else class="explorer-icon open-editor-globe" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="8" cy="8" r="5.8" stroke="currentColor" stroke-width="1.2" /><path d="M2.2 8h11.6M8 2.2c1.7 1.6 2.5 3.5 2.5 5.8S9.7 12.2 8 13.8M8 2.2C6.3 3.8 5.5 5.7 5.5 8s.8 4.2 2.5 5.8" stroke="currentColor" stroke-width="1.1" /></svg>
+          <Codicon v-else class="explorer-icon open-editor-globe" name="globe" />
           <span class="explorer-name open-editor-name">{{ ed.name }}</span>
           <span class="open-editor-folder">{{ ed.folder }}</span>
           <span v-if="editorLetter(ed)" class="explorer-git">{{ editorLetter(ed) }}</span>
@@ -1075,62 +1070,17 @@ function rowTitle(e) {
       <span v-if="backgroundLoads > 0 && !rootLoading" class="explorer-spinner explorer-head-spinner" role="status" :aria-label="t('explorer.loading', 'Loading…')" data-test="explorer-reloading"></span>
       <span class="explorer-actions" @click.stop>
         <button class="tb-icon" :title="t('explorer.newFile', 'New file')" :aria-label="t('explorer.newFile', 'New file')" data-test="explorer-head-new-file" :disabled="!root" @click="newFromHead(false)">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.5 1.8H4v12.4h8V4.3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M8 7v4M6 9h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg>
+          <Codicon name="new-file" />
         </button>
         <button class="tb-icon" :title="t('explorer.newFolder', 'New folder')" :aria-label="t('explorer.newFolder', 'New folder')" data-test="explorer-head-new-folder" :disabled="!root" @click="newFromHead(true)">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M1.8 4h4.4l1.4 1.5h6.6v7.7H1.8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" /><path d="M8 7.5v4M6 9.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" /></svg>
+          <Codicon name="new-folder" />
         </button>
-        <button
-          class="tb-icon"
-          :title="t('explorer.collapseAllFolders', 'Collapse all folders')"
-          :aria-label="t('explorer.collapseAll', 'Collapse all')"
-          data-test="explorer-collapse" :disabled="!root" @click="collapseAll">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 10l4-4 4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        <button class="tb-icon" :title="t('explorer.refresh', 'Refresh')" :aria-label="t('explorer.refresh', 'Refresh')" data-test="explorer-refresh" :disabled="!root" @click="refresh">
+          <Codicon name="refresh" />
         </button>
-        <button
-          class="tb-icon"
-          :title="t('explorer.refresh', 'Refresh')"
-          :aria-label="t('explorer.refresh', 'Refresh')"
-          data-test="explorer-refresh" :disabled="!root" @click="refresh">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5V5h-2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        <button class="tb-icon" :title="t('explorer.collapseAllFolders', 'Collapse all folders')" :aria-label="t('explorer.collapseAll', 'Collapse all')" data-test="explorer-collapse" :disabled="!root" @click="collapseAll">
+          <Codicon name="collapse-all" />
         </button>
-        <span class="explorer-more-wrap">
-          <button
-            class="tb-icon"
-            :class="{ on: moreOpen }"
-            :title="t('explorer.more', 'More')"
-            :aria-label="t('explorer.more', 'More')"
-            aria-haspopup="menu"
-            :aria-expanded="moreOpen"
-            data-test="explorer-more"
-            :disabled="!root"
-            @click="moreOpen = !moreOpen"
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><circle cx="3.5" cy="8" r="1.2" /><circle cx="8" cy="8" r="1.2" /><circle cx="12.5" cy="8" r="1.2" /></svg>
-          </button>
-          <div v-if="moreOpen" class="explorer-menu-back" @mousedown.self="moreOpen = false"></div>
-          <div v-if="moreOpen" class="ctx-menu explorer-more-menu" role="menu" @keydown.escape.stop="moreOpen = false">
-            <button role="menuitem" class="ctx-menu-item" data-test="explorer-new-file" @click="moreAct('new-file')">
-              {{ t('explorer.newFile', 'New file') }}
-            </button>
-            <button role="menuitem" class="ctx-menu-item" data-test="explorer-new-folder" @click="moreAct('new-folder')">
-              {{ t('explorer.newFolder', 'New folder') }}
-            </button>
-            <div class="ctx-menu-sep"></div>
-            <button role="menuitemcheckbox" class="ctx-menu-item" :aria-checked="dotfiles" data-test="explorer-dotfiles" @click="moreAct('dotfiles')">
-              <span class="explorer-check">{{ dotfiles ? '✓' : '' }}</span>{{ t('explorer.showDotfiles', 'Show dotfiles') }}
-            </button>
-            <button
-              role="menuitemcheckbox"
-              class="ctx-menu-item"
-              :aria-checked="settings.explorerCompactFolders !== false"
-              data-test="explorer-compact"
-              @click="moreAct('compact')"
-            >
-              <span class="explorer-check">{{ settings.explorerCompactFolders !== false ? '✓' : '' }}</span>{{ t('explorer.compactFolders', 'Compact folders') }}
-            </button>
-          </div>
-        </span>
       </span>
     </div>
     <template v-if="folderShown">
@@ -1360,6 +1310,13 @@ function rowTitle(e) {
           <button role="menuitem" class="ctx-menu-item" @click="act('copy-rel')">{{ t('explorer.menu.copyRelPath', 'Copy relative path') }}</button>
         </template>
         <button v-if="!remote" role="menuitem" class="ctx-menu-item" @click="act('reveal')">{{ t('explorer.menu.reveal', 'Reveal in File Explorer') }}</button>
+        <div class="ctx-menu-sep"></div>
+        <button role="menuitemcheckbox" class="ctx-menu-item" :aria-checked="dotfiles" data-test="explorer-dotfiles" @click="act('dotfiles')">
+          <span class="explorer-check">{{ dotfiles ? '✓' : '' }}</span>{{ t('explorer.showDotfiles', 'Show dotfiles') }}
+        </button>
+        <button role="menuitemcheckbox" class="ctx-menu-item" :aria-checked="settings.explorerCompactFolders !== false" data-test="explorer-compact" @click="act('compact')">
+          <span class="explorer-check">{{ settings.explorerCompactFolders !== false ? '✓' : '' }}</span>{{ t('explorer.compactFolders', 'Compact folders') }}
+        </button>
       </div>
     </div>
 

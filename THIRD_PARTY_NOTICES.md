@@ -255,3 +255,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Codicons
+
+The icons of the buttons that copy VS Code's (the explorer's headers, Open
+Editors): VS Code's codicon font, `src/renderer/src/assets/codicon.ttf` (as
+Monaco ships it), used by `src/renderer/src/components/Codicon.vue`.
+
+- Project: https://github.com/microsoft/vscode-codicons
+- Licence: Creative Commons Attribution 4.0 International (CC BY 4.0),
+  https://creativecommons.org/licenses/by/4.0/ ; Copyright (c) Microsoft
+  Corporation. Used unchanged.

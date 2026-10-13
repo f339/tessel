@@ -8386,13 +8386,12 @@ button.act-stat:hover,
   background: var(--surface-3);
   color: var(--text-strong);
 }
-.open-editor-dot,
-.open-editor-x {
+.open-editor .open-editor-dot,
+.open-editor .open-editor-x {
   display: none;
 }
 .open-editor.dirty .open-editor-dot {
-  display: inline;
-  font-size: 11px;
+  display: inline-block;
 }
 .open-editor:hover .open-editor-dot,
 .open-editor.active .open-editor-dot {
@@ -8400,7 +8399,7 @@ button.act-stat:hover,
 }
 .open-editor:hover .open-editor-x,
 .open-editor.active .open-editor-x {
-  display: block;
+  display: inline-block;
 }
 .open-editor .explorer-name.open-editor-name {
   flex: 0 1 auto;
