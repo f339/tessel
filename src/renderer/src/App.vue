@@ -2230,8 +2230,10 @@ window.addEventListener('resize', onWinResize)
 onBeforeUnmount(() => window.removeEventListener('resize', onWinResize))
 // Any menu, list or popup open: the toolbar (a window-drag area, whose clicks
 // Windows keeps) takes clicks, so a click there closes it like anywhere else.
+// Lists always on screen are not popups (the explorer's Open Editors: else
+// the window could no longer be moved or maximized by its bar).
 const POPUP_SELECTOR =
-  '[role="menu"], [role="listbox"]:not(.osb-list), .ctx-menu, .toolbar-menu, .notif-menu, [data-reka-popper-content-wrapper], [data-radix-popper-content-wrapper]'
+  '[role="menu"], [role="listbox"]:not(.osb-list):not(.open-editors-list), .ctx-menu, .toolbar-menu, .notif-menu, [data-reka-popper-content-wrapper], [data-radix-popper-content-wrapper]'
 let popupFrame = 0
 function checkPopups() {
   popupFrame = 0
