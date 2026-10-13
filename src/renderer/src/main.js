@@ -9,12 +9,15 @@ import { applyTheme } from './themes'
 import { applyAppearance, applyUiZoom } from './appearance'
 import { startCapture } from './ptyStore'
 import { installWindowVisibility } from './windowVisibility'
+import { installFocusWatch } from './focusWatch'
 import { setUiLanguage, t } from './i18n'
 
 // Begin buffering PTY output before any pane mounts so nothing is lost.
 startCapture()
 // "Visible" means the window is on screen, not minimized (windowVisibility.js).
 installWindowVisibility()
+// The keyboard leaving a pane while the user types: what took it, in the log.
+installFocusWatch({ log: (text) => window.shellApi && window.shellApi.log && window.shellApi.log('warn', text) })
 
 // Root-level styling also reaches dialogs rendered outside the main app tree.
 watch(() => settings.theme, applyTheme, { immediate: true, flush: 'sync' })
