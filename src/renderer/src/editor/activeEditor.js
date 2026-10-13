@@ -59,3 +59,20 @@ export function revealRange(range, { focus = true, select = false } = {}) {
   if (focus) ed.focus()
   return true
 }
+
+// A project comes on screen (App.vue): which of its editor panes the Outline
+// and Timeline follow: its active pane when an editor, else its first editor
+// pane, else none. -> { keep: the editor followed now is in this project,
+// pick: the pane to follow or null }
+export function editorPaneToFollow(ws, followedId, { findLeafIn, forEachLeaf }) {
+  if (!ws || !ws.tree) return { keep: false, pick: null }
+  const keep = !!(followedId && findLeafIn(ws.tree, followedId))
+  let pick = ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
+  if (!pick || pick.kind !== 'editor') {
+    pick = null
+    forEachLeaf(ws.tree, (l) => {
+      if (!pick && l.kind === 'editor') pick = l
+    })
+  }
+  return { keep, pick }
+}

@@ -127,6 +127,7 @@ import {
 } from './editor/documents'
 import { openTab, validSavedFiles, samePath, fileName, docPathOf, diffTabPath } from './editor/editorTabs'
 import { openEditorsOf } from './explorer/openEditors'
+import { activeEditor, clearActiveEditor, editorPaneToFollow } from './editor/activeEditor'
 import { localDiffLabel } from './explorer/timeline'
 import { setNotesDelivery } from './notesDelivery'
 import { unsafeMultilinePaste } from './pasteSafety'
@@ -2453,6 +2454,24 @@ const openEditors = computed(() => {
   forEachLeaf(ws.tree, (l) => leaves.push(l))
   return openEditorsOf({ leaves, activeId: ws.activeId, root: sideRoot.value, isDirty: (p) => !!(getDoc(p) && getDoc(p).dirty), label: diffTabLabel })
 })
+// The explorer's Outline and Timeline show the project on screen: another
+// project comes up, they follow its editor in use (its active pane when an
+// editor, else its first editor pane), or show none, never a file of the
+// project left behind.
+function followProjectEditor() {
+  const ws = currentWs.value
+  if (!ws) return
+  const { keep, pick } = editorPaneToFollow(ws, activeEditor.paneId, { findLeafIn, forEachLeaf })
+  if (activeEditor.paneId && !keep) clearActiveEditor(activeEditor.paneId)
+  if (!pick || pick.id === activeEditor.paneId) return
+  const id = pick.id
+  nextTick(() => {
+    const pane = getEditorPane(id)
+    if (pane && pane.publish) pane.publish()
+  })
+}
+watch(currentWsId, followProjectEditor)
+
 function activateOpenEditor(ed) {
   if (!ed || !findLeaf(ed.paneId)) return
   focusPane(ed.paneId)

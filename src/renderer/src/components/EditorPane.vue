@@ -322,8 +322,8 @@ function shownEditor() {
   if (showDiff.value && diffEditor) return diffEditor.getModifiedEditor()
   return showCode.value && editor && editor.getModel() ? editor : null
 }
-function publishActive() {
-  if (!isActive.value) return
+function publishActive(force = false) {
+  if (!isActive.value && force !== true) return
   const ed = shownEditor()
   const d = activeDoc.value
   if (ed && d) setActiveEditor({ paneId: props.node.id, editor: ed, path: d.path })
@@ -928,7 +928,9 @@ onMounted(async () => {
     }
   })
   // activate / closeTab: the explorer's Open Editors (App.vue).
-  paneApi = { focus: focusEditor, closeActiveTab, activePath: () => props.node.activePath, activate, closeTab }
+  // publish: this pane's file becomes the one the Outline and Timeline show
+  // (App.vue, when its project comes on screen).
+  paneApi = { focus: focusEditor, closeActiveTab, activePath: () => props.node.activePath, activate, closeTab, publish: () => publishActive(true) }
   registerEditorPane(props.node.id, paneApi)
   if (rootEl.value) rootEl.value.addEventListener('keydown', onKeydownCapture, true)
   try {
