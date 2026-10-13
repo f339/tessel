@@ -1,11 +1,12 @@
 // A team lead (an agent) asks Tessel to act by writing small JSON files into
-// its own inbox folder. Only four requests exist, and none can merge, discard
+// its own inbox folder. Only five requests exist, and none can merge, discard
 // or close anything: those stay the user's.
 //
 //   { "action": "task", "title": "...", "brief": "...", "agent": "Ada" | "codex", "own_copy": true }
 //   { "action": "message", "to": "Ada" | "team", "text": "..." }
 //   { "action": "approve", "task": "<title>", "note": "..." }
 //   { "action": "changes", "task": "<title>", "text": "..." }
+//   { "action": "revive", "task": "<id or title>", "agent": "Ada" | "codex", "brief": "...", "own_copy": true }
 //
 // parseLeadRequest(json) -> { ok: true, ...normalized } | { ok: false, error }.
 
@@ -54,6 +55,29 @@ export function parseLeadRequest(data) {
     if (num == null && !validAgentName(to)) return { ok: false, error: 'a message needs "to": "Ada", "team" or "lead"' }
     return { ok: true, action, to: 'one', num, text, ...(num == null ? { name: to } : {}) }
   }
+  // Take back a card nobody is doing any more: a teammate's pane closed while
+  // its card sat in "doing" or "review", and no lead request could attach a new
+  // agent to that card. Asking for a "task" mints a NEW card, so the same work
+  // then exists twice and the stranded one keeps costing a slot forever.
+  if (action === 'revive') {
+    const task = str(data.task, MAX_TITLE)
+    if (!task) return { ok: false, error: '"revive" needs the "task" id (or its title)' }
+    const agent = str(String(data.agent == null ? '' : data.agent), 60)
+    const num = paneNum(agent)
+    const kind = num == null && /^[a-z0-9_-]{1,40}$/i.test(agent) ? agent.toLowerCase() : null
+    if (num == null && !validAgentName(agent) && !kind) return { ok: false, error: 'a reviving task needs an "agent": a teammate like "Ada", or an agent kind like "codex"' }
+    return {
+      ok: true,
+      action,
+      task,
+      title: task,
+      num,
+      kind,
+      ...(num == null ? { name: agent } : {}),
+      brief: str(data.brief, MAX_TEXT),
+      ownCopy: data.own_copy !== false
+    }
+  }
   if (action === 'approve' || action === 'changes') {
     const task = str(data.task, MAX_TITLE)
     if (!task) return { ok: false, error: `"${action}" needs the "task" id (or its title)` }
@@ -61,7 +85,7 @@ export function parseLeadRequest(data) {
     if (action === 'changes' && !text) return { ok: false, error: '"changes" needs a "text" saying what to change' }
     return { ok: true, action, task, text }
   }
-  return { ok: false, error: `unknown action "${action || '(none)'}": use task, message, approve or changes` }
+  return { ok: false, error: `unknown action "${action || '(none)'}": use task, message, approve, changes or revive` }
 }
 
 // Find the task a lead means: its id first, then its exact title, then the
@@ -109,6 +133,7 @@ export function leadGuide({ teamName, inbox, members, kinds }) {
       ' to start a new agent. New agents work in their own copy (git branch); if the project cannot have one, the request is refused: add "own_copy": false to work in the project folder instead.',
     '- Messages to teammates go through your Tessel team tools (team_send; read yours with team_inbox), not this folder. The review requests and answers from Tessel arrive there too.',
     '- After a teammate finishes, you get a review request with the task id. Then either {"action":"approve","task":"<task id>","note":"why it is good"} (the user is told it is ready to merge) or {"action":"changes","task":"<task id>","text":"what to fix"} (it goes back to the teammate).',
+    '- A teammate\'s pane closed while its task was in progress: take the task back with {"action":"revive","task":"<task id>","agent":"Ada"} ("agent" as for a task: a teammate or an agent kind) instead of giving a new task for the same work.',
     'Keep tasks independent so teammates do not edit the same files at once.'
   ].join('\n')
 }

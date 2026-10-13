@@ -18,8 +18,9 @@
 import { WORKER_AGENTS } from './orchestration'
 
 // Agents an automation can run: their CLI takes a first prompt on its
-// command line (see automationLaunchArgs).
-export const AUTOMATION_AGENTS = WORKER_AGENTS
+// command line (see automationLaunchArgs). Not OpenCode: its first argument
+// is a project folder, so the run's prompt would not reach it.
+export const AUTOMATION_AGENTS = WORKER_AGENTS.filter((a) => a !== 'opencode')
 
 export const SCHEDULE_PRESETS = ['hourly', 'daily', 'weekdays', 'weekly', 'custom']
 // Orca's grace choices (minutes) and its default (12 hours).
