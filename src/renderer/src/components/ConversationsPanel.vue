@@ -9,6 +9,7 @@
 // (this workspace / all), a period, an agent filter, a search box, and a
 // switch to show Tessel's own notices. A thread can be copied as text, and
 // an agent's name goes to its pane while it is open.
+import { senderDetails } from '../senderIdentity'
 import { computed, reactive, ref, shallowRef } from 'vue'
 import { Check, ChevronRight, Copy, LocateFixed, MessagesSquare, Search, Users, X } from 'lucide-vue-next'
 import BrandIcon from './BrandIcon.vue'
@@ -175,6 +176,11 @@ async function copyThread(thread) {
     emit('toast', t('conversations.copyFailed', 'The conversation could not be copied'))
   }
 }
+
+// The model a message was sent with (the sender Tessel recorded): "Opus 5.5 · High".
+function modelOf(sender) {
+  return sender && typeof sender === 'object' ? sender.model || sender.modelId || '' : ''
+}
 </script>
 
 <template>
@@ -331,6 +337,8 @@ async function copyThread(thread) {
                     <span v-if="programOf(row.line.from)" class="cv-program" data-test="cv-program">· {{ programOf(row.line.from) }}</span>
                     <LocateFixed v-if="paneAlive(row.line.from.paneId)" :size="10" class="cv-locate" aria-hidden="true" />
                   </component>
+                  <!-- The model it sent this with, as Tessel recorded it (every detail on hover). -->
+                  <span v-if="modelOf(row.line.sender)" class="cv-model" :title="senderDetails(row.line.sender)" data-test="cv-model">{{ modelOf(row.line.sender) }}</span>
                   <template v-if="thread.kind === 'team'">
                     <span class="cv-arrow" aria-hidden="true">→</span>
                     <template v-for="(to, ti) in recipients(row.line)" :key="ti">
@@ -565,6 +573,12 @@ async function copyThread(thread) {
 .cv-program {
   color: var(--text-dim);
   font-weight: 500;
+}
+.cv-model {
+  margin-left: 6px;
+  color: var(--text-dim);
+  font-size: 0.9em;
+  white-space: nowrap;
 }
 .cv-locate {
   opacity: 0.6;

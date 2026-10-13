@@ -240,3 +240,22 @@ describe('filterThreads and friends', () => {
     expect(threadText(threads.find((th) => th.key === 'team:team1'), { locale: 'en-US' }).startsWith('Team "Team 2"\n')).toBe(true)
   })
 })
+
+describe("the sender Tessel recorded (main's sender snapshot)", () => {
+  it('finds the sending pane and agent from it, and keeps it on the line (its model shown)', () => {
+    const sender = { paneId: 'pane-7', name: 'Euler', agentId: 'claude', agentName: 'Claude Code', model: 'Opus 5.5 · High' }
+    const lines = conversationLines([
+      { t: 1000, type: 'message', scope: 'team-chat', source: 'agent', teamId: 'tm1', paneId: 'pane-9', agent: { title: 'Fermi', agentId: 'codex' }, from: 'Euler', sender, status: 'unread', text: 'Rebase on main' }
+    ])
+    expect(lines).toHaveLength(1)
+    expect(lines[0].from).toMatchObject({ paneId: 'pane-7', label: 'Euler' })
+    expect(lines[0].sender.model).toBe('Opus 5.5 · High')
+  })
+  it('an older message without it: by name, as before', () => {
+    const lines = conversationLines([
+      { t: 1000, type: 'message', scope: 'team-chat', source: 'agent', teamId: 'tm1', paneId: 'pane-9', agent: { title: 'Fermi', agentId: 'codex' }, from: 'Euler', status: 'unread', text: 'Hello' }
+    ])
+    expect(lines[0].from.label).toBe('Euler')
+    expect(lines[0].sender).toBeUndefined()
+  })
+})

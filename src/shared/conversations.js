@@ -67,10 +67,17 @@ function knownAgents(events) {
   }
   for (const e of events) {
     if (e.agent) learn(e.teamId, e.agent.title, e.paneId, e.agent.agentId)
-    if (e.fromPaneId) learn(e.teamId, e.from, e.fromPaneId, e.fromAgentId)
+    const s = senderOf(e)
+    if (s && s.paneId) learn(e.teamId, e.from || s.name, s.paneId, s.agentId)
+    else if (e.fromPaneId) learn(e.teamId, e.from, e.fromPaneId, e.fromAgentId)
   }
   return (teamId, label) => known.get(`${teamId || ''}|${String(label || '').trim()}`) || null // i18n-ignore
 }
+
+// The sender as Tessel recorded it from the sending pane (src/shared/
+// senderIdentity.js: its pane, agent, model…), on team messages since that
+// record exists; null on older ones.
+const senderOf = (e) => (e && e.sender && typeof e.sender === 'object' ? e.sender : null)
 
 // A Tessel notice as shown: without its "[Tessel] " tag.
 const noticeText = (text) => String(text || '').replace(/^\[Tessel\]\s*/, '')
@@ -87,6 +94,8 @@ export function conversationLines(events, opts = {}) {
   // The sender of a team message: as recorded (its pane, its program), else
   // by its name within the team when an older log has that.
   const sender = (e) => {
+    const s = senderOf(e)
+    if (s && s.paneId) return agentWho(e.from || s.name, s.paneId, t, s.agentId || (known(e.teamId, e.from) || {}).agentId)
     if (e.fromPaneId) return agentWho(e.from, e.fromPaneId, t, e.fromAgentId || (known(e.teamId, e.from) || {}).agentId)
     const k = known(e.teamId, e.from)
     return k ? agentWho(e.from, k.paneId, t, k.agentId) : agentWho(e.from, null, t)
@@ -144,10 +153,10 @@ export function conversationLines(events, opts = {}) {
         same.status = same.readCount === same.toAll.length ? 'read' : same.readCount ? 'partly' : 'unread'
         continue
       }
-      line = { ...base, kind: 'message', from, to, toAll: [to], readCount: status === 'read' ? 1 : 0, text, preview: e.preview || preview(text), status, scope: e.scope }
+      line = { ...base, kind: 'message', from, to, toAll: [to], readCount: status === 'read' ? 1 : 0, text, preview: e.preview || preview(text), status, scope: e.scope, ...(senderOf(e) ? { sender: senderOf(e) } : {}) }
       broadcasts.set(key, line)
     } else if (e.source === 'agent' || e.source === 'lead') {
-      line = { ...base, kind: 'message', from: sender(e), to, text, preview: e.preview || preview(text), status, scope: e.scope || null, ...(e.source === 'lead' ? { lead: true } : {}) }
+      line = { ...base, kind: 'message', from: sender(e), to, text, preview: e.preview || preview(text), status, scope: e.scope || null, ...(e.source === 'lead' ? { lead: true } : {}), ...(senderOf(e) ? { sender: senderOf(e) } : {}) }
     } else {
       line = { ...base, kind: 'message', from: you(t), to, text, preview: e.preview || preview(text), status, scope: e.scope || null, ...(e.taskTitle ? { taskTitle: String(e.taskTitle) } : {}) }
     }
