@@ -15,6 +15,7 @@ import RemoteHostsSettings from './remote/RemoteHostsSettings.vue'
 import AutomationsPage from './AutomationsPage.vue'
 import CliSettings from './CliSettings.vue'
 import AgentTerminalSettings from './AgentTerminalSettings.vue'
+import SettingsToolRows from './SettingsToolRows.vue'
 import { BarChart3, Cable, LoaderCircle } from 'lucide-vue-next'
 import { updateFailureText, updateKindLabel } from '../agentUpdateErrors'
 import { settings, FONT_FAMILIES, resetSettings, clamp, MAX_LEFT_SIDEBAR_TINT_OPACITY, limitNumber, DEFAULT_SETTINGS, LIMITS, USAGE_REFRESH_MINUTES } from '../settings'
@@ -431,7 +432,9 @@ const emit = defineEmits([
   'test-notification',
   'install-agent',
   'agent-install-page',
-  'open-cookie-import'
+  'open-cookie-import',
+  // A window, panel or tool to open (settingsTools.js ids), Settings closed first.
+  'open-tool'
 ])
 
 const browserApi = typeof window !== 'undefined' && window.shellApi ? window.shellApi.browser : null
@@ -973,6 +976,38 @@ const AWAKE_MODES = computed(() => [
 ])
 
 // Settings > Appearance > Window & Sidebar (Orca's AppearanceWindowSidebarSection).
+// Settings > Appearance > Sidebar: the left sidebar's view options, the same
+// as its Options menu (WorkspaceSidebar.vue).
+const SIDEBAR_SORT_OPTIONS = computed(() => [
+  { id: 'name', label: t('sidebar.options.sortName', 'Name') },
+  { id: 'smart', label: t('sidebar.options.sortSmart', 'Agent Activity') },
+  { id: 'recent', label: t('sidebar.options.recent', 'Recent') },
+  { id: 'repo', label: t('sidebar.options.project', 'Project') },
+  { id: 'manual', label: t('sidebar.options.manual', 'Manual') }
+])
+const SIDEBAR_GROUPS = computed(() => [
+  { id: 'none', label: t('sidebar.options.groupNone', 'None') },
+  { id: 'repo', label: t('sidebar.options.project', 'Project') }
+])
+const CARD_PROPERTIES = computed(() => [
+  { id: 'ports', label: t('sidebar.options.ports', 'Ports') },
+  { id: 'inline-agents', label: t('sidebar.options.agentActivity', 'Agent activity') },
+  { id: 'host', label: t('sidebar.options.host', 'Host') }
+])
+const AGENT_ACTIVITY_LAYOUTS = computed(() => [
+  { id: 'compact', label: t('sidebar.options.compact', 'Compact') },
+  { id: 'full', label: t('sidebar.options.fullList', 'Full list') }
+])
+function toggleCardProperty(id) {
+  const list = settings.worktreeCardProperties
+  settings.worktreeCardProperties = list.includes(id) ? list.filter((x) => x !== id) : [...list, id]
+}
+// Settings > Git: Source Control's files as a tree or a list (ChangesPanel.vue).
+const SCM_VIEWS = computed(() => [
+  { id: 'tree', label: t('settings.git.viewTree', 'Tree') },
+  { id: 'list', label: t('settings.git.viewList', 'List') }
+])
+const scmView = computed(() => (settings.sourceControlViewMode === 'list' ? 'list' : 'tree'))
 const SIDEBAR_APPEARANCES = computed(() => [
   { id: 'default', label: t('settings.appearance.sidebarDefault', 'Default') },
   { id: 'match-terminal', label: t('settings.appearance.sidebarMatchTerminal', 'Match Terminal') },
@@ -1329,6 +1364,8 @@ function previewSound() {
               </label>
             </div>
           </div>
+
+          <SettingsToolRows page="agents" @open="emit('open-tool', $event)" />
 
           <AgentTerminalSettings />
 
@@ -1824,6 +1861,7 @@ function previewSound() {
               </label>
             </div>
           </div>
+          <SettingsToolRows page="orchestration" @open="emit('open-tool', $event)" />
           <!-- The hooks Tessel adds to the agents: Cursor's opt-in, and
                removing them all (before uninstalling Tessel). -->
           <div class="set-group" data-agent-hooks="">
@@ -2058,6 +2096,7 @@ function previewSound() {
               </label>
             </div>
           </div>
+          <SettingsToolRows page="general" @open="emit('open-tool', $event)" />
           <div class="set-group">
             <h3 class="set-group-title">{{ t('settings.general.resetGroup', 'Reset') }}</h3>
             <div class="set-card">
@@ -2385,6 +2424,107 @@ function previewSound() {
                   </button>
                 </div>
               </div>
+              <div class="set-row">
+                <div id="settings-sidebar-group-label" class="set-label">
+                  {{ t('sidebar.options.groupBy', 'Group by') }}
+                  <span class="set-hint">{{ t('settings.appearance.groupByHint', 'Show the workspaces under their project, or in one list.') }}</span>
+                </div>
+                <div class="launch-seg set-seg" role="group" aria-labelledby="settings-sidebar-group-label" data-setting="sidebarGroupBy">
+                  <button
+                    v-for="o in SIDEBAR_GROUPS"
+                    :key="o.id"
+                    type="button"
+                    class="launch-seg-btn"
+                    :class="{ on: settings.sidebarGroupBy === o.id }"
+                    :aria-pressed="settings.sidebarGroupBy === o.id"
+                    @click="settings.sidebarGroupBy = o.id"
+                  >
+                    {{ o.label }}
+                  </button>
+                </div>
+              </div>
+              <div class="set-row">
+                <label class="set-label" for="settings-sidebar-sort">
+                  {{ t('sidebar.options.sortBy', 'Sort by') }}
+                  <span class="set-hint">{{ t('settings.appearance.sortByHint', 'The order of the workspaces in the left sidebar.') }}</span>
+                </label>
+                <ThemedSelect id="settings-sidebar-sort" v-model="settings.sidebarSortBy" class="set-select" data-setting="sidebarSortBy">
+                  <option v-for="o in SIDEBAR_SORT_OPTIONS" :key="o.id" :value="o.id">{{ o.label }}</option>
+                </ThemedSelect>
+              </div>
+              <div v-if="settings.sidebarGroupBy === 'repo'" class="set-row">
+                <label class="set-label" for="settings-project-order">
+                  {{ t('sidebar.options.projectOrder', 'Project order') }}
+                  <span class="set-hint">{{ t('settings.appearance.projectOrderHint', 'Manual: drag projects to arrange them. Recent: most recent workspace activity first.') }}</span>
+                </label>
+                <ThemedSelect id="settings-project-order" v-model="settings.sidebarProjectOrderBy" class="set-select" data-setting="sidebarProjectOrderBy">
+                  <option value="manual">{{ t('sidebar.options.manual', 'Manual') }}</option>
+                  <option value="recent">{{ t('sidebar.options.recent', 'Recent') }}</option>
+                </ThemedSelect>
+              </div>
+              <div class="set-row">
+                <div class="set-label">
+                  {{ t('sidebar.options.showProperties', 'Show properties') }}
+                  <span class="set-hint">{{ t('settings.appearance.cardPropertiesHint', 'What a detailed workspace card shows (a compact card shows them on hover).') }}</span>
+                </div>
+              </div>
+              <label v-for="p in CARD_PROPERTIES" :key="p.id" class="set-row set-row-nested">
+                <div class="set-label">{{ p.label }}</div>
+                <input
+                  type="checkbox"
+                  class="set-switch"
+                  :data-card-property="p.id"
+                  :checked="settings.worktreeCardProperties.includes(p.id)"
+                  :aria-label="p.label"
+                  @change="toggleCardProperty(p.id)"
+                />
+              </label>
+              <div class="set-row">
+                <div id="settings-agent-activity-label" class="set-label">
+                  {{ t('sidebar.options.agentActivityLayout', 'Agent activity layout') }}
+                  <span class="set-hint">{{ t('settings.appearance.agentActivityHint', 'The agents under a workspace card: a compact line, or the full list.') }}</span>
+                </div>
+                <div class="launch-seg set-seg" role="group" aria-labelledby="settings-agent-activity-label" data-setting="agentActivityDisplayMode">
+                  <button
+                    v-for="o in AGENT_ACTIVITY_LAYOUTS"
+                    :key="o.id"
+                    type="button"
+                    class="launch-seg-btn"
+                    :class="{ on: settings.agentActivityDisplayMode === o.id }"
+                    :aria-pressed="settings.agentActivityDisplayMode === o.id"
+                    @click="settings.agentActivityDisplayMode = o.id"
+                  >
+                    {{ o.label }}
+                  </button>
+                </div>
+              </div>
+              <label class="set-row">
+                <div class="set-label">
+                  {{ t('sidebar.options.hideSleeping', 'Hide sleeping') }}
+                  <span class="set-hint">{{ t('settings.appearance.hideSleepingHint', 'Hide the workspaces whose agents are asleep.') }}</span>
+                </div>
+                <input
+                  type="checkbox"
+                  class="set-switch"
+                  data-setting="hideSleeping"
+                  :checked="!settings.showSleepingWorkspaces"
+                  @change="settings.showSleepingWorkspaces = !$event.target.checked"
+                />
+              </label>
+              <label v-if="!settings.showSleepingWorkspaces" class="set-row set-row-nested">
+                <div class="set-label">
+                  {{ t('sidebar.options.exceptDefault', 'Except default branch') }}
+                  <span class="set-hint">{{ t('sidebar.options.exceptDefaultHint', 'Keep the default branch visible while hiding sleeping workspaces') }}</span>
+                </div>
+                <input v-model="settings.alwaysShowDefaultBranchWorkspace" type="checkbox" class="set-switch" data-setting="alwaysShowDefaultBranchWorkspace" />
+              </label>
+              <label class="set-row">
+                <div class="set-label">
+                  {{ t('sidebar.options.hideDefault', 'Hide default branch') }}
+                  <span class="set-hint">{{ t('settings.appearance.hideDefaultHint', 'Hide the workspace of each project that is on its default branch.') }}</span>
+                </div>
+                <input v-model="settings.hideDefaultBranchWorkspace" type="checkbox" class="set-switch" data-setting="hideDefaultBranchWorkspace" />
+              </label>
             </div>
           </div>
         </section>
@@ -2775,6 +2915,7 @@ function previewSound() {
               </div>
             </div>
           </div>
+          <SettingsToolRows page="terminal" @open="emit('open-tool', $event)" />
         </section>
 
         <!-- ============ Agent alerts ============ -->
@@ -3090,6 +3231,7 @@ function previewSound() {
               </label>
             </div>
           </div>
+          <SettingsToolRows page="browser" @open="emit('open-tool', $event)" />
         </section>
 
         <!-- ============ Git & Source Control ============ -->
@@ -3161,8 +3303,28 @@ function previewSound() {
                   </button>
                 </div>
               </div>
+              <div class="set-row">
+                <div id="settings-scm-view-label" class="set-label">
+                  {{ t('settings.git.viewMode', 'Source Control View') }}
+                  <span class="set-hint">{{ t('settings.git.viewModeHint', 'Show the changed files as a folder tree or as a flat list.') }}</span>
+                </div>
+                <div class="launch-seg set-seg" role="group" aria-labelledby="settings-scm-view-label" data-setting="sourceControlViewMode">
+                  <button
+                    v-for="o in SCM_VIEWS"
+                    :key="o.id"
+                    type="button"
+                    class="launch-seg-btn"
+                    :class="{ on: scmView === o.id }"
+                    :aria-pressed="scmView === o.id"
+                    @click="settings.sourceControlViewMode = o.id"
+                  >
+                    {{ o.label }}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
+          <SettingsToolRows page="git" @open="emit('open-tool', $event)" />
         </section>
 
         <!-- ============ Automations ============ -->

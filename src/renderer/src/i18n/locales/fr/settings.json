@@ -386,7 +386,14 @@
       "usageRefresh": "Actualisation de l’utilisation",
       "usageRefreshHint": "Fréquence à laquelle les limites des fournisseurs sont relues pendant que vous utilisez Tessel. Désactivée : seulement à l’ouverture d’Utilisation.",
       "usageRefreshOff": "Désactivée",
-      "usageRefreshMinutes": "{{count}} min"
+      "usageRefreshMinutes": "{{count}} min",
+      "groupByHint": "Afficher les espaces de travail sous leur projet, ou en une seule liste.",
+      "sortByHint": "L'ordre des espaces de travail dans la barre latérale gauche.",
+      "projectOrderHint": "Manuel : faites glisser les projets pour les ranger. Récent : l'activité la plus récente d'abord.",
+      "cardPropertiesHint": "Ce qu'affiche une carte d'espace de travail détaillée (une carte compacte les montre au survol).",
+      "agentActivityHint": "Les agents sous une carte d'espace de travail : une ligne compacte, ou la liste complète.",
+      "hideSleepingHint": "Masquer les espaces de travail dont les agents sont en veille.",
+      "hideDefaultHint": "Masquer l'espace de travail de chaque projet qui est sur sa branche par défaut."
     },
     "text": {
       "font": "Police",
@@ -518,7 +525,11 @@
       "groupOrderHint": "Choisissez si Modifications, Modifications indexées ou Fichiers non suivis apparaissent en premier dans le contrôle de code source.",
       "changesFirst": "Modifications d'abord",
       "stagedFirst": "Indexées d'abord",
-      "untrackedFirst": "Non suivis d'abord"
+      "untrackedFirst": "Non suivis d'abord",
+      "viewMode": "Vue de la gestion de code source",
+      "viewModeHint": "Afficher les fichiers modifiés en arborescence de dossiers ou en liste simple.",
+      "viewTree": "Arborescence",
+      "viewList": "Liste"
     },
     "quick": {
       "intro": "Du texte envoyé au panneau actif depuis la palette de commandes (Ctrl+Maj+P, puis « Run: nom ») : une commande que vous tapez souvent, ou un prompt pour un agent.",
@@ -798,6 +809,28 @@
       "separateSessionHint": "Les pages que les agents ouvrent utilisent leur propre session, sans les connexions que vous avez importées, et les agents ne peuvent lire, cliquer et saisir que dans ces pages : vos propres pages du navigateur sont hors de leur portée. Les liens et fenêtres surgissantes d'une page d'agent restent dans sa session. Activé par votre premier import de cookies. Désactivé : les agents partagent la même session de navigateur et peuvent utiliser les sites où vous êtes connecté.",
       "clearConfirmTitle": "Effacer les cookies du navigateur ?",
       "clearConfirmText": "Tous les cookies du navigateur de Tessel sont supprimés, y compris ceux que vous avez importés. Vous serez déconnecté de vos sites."
+    },
+    "tools": {
+      "title": "Fenêtres et outils",
+      "open": "Ouvrir…",
+      "show": "Afficher",
+      "mcpHint": "Donnez des outils de plus à vos agents : installez, activez ou désactivez et connectez des serveurs MCP.",
+      "skillsHint": "Voir, ajouter, mettre à jour et retirer les skills de vos agents.",
+      "toolsHint": "Installer des agents, Git, Node.js et plus, et ajouter vos propres agents.",
+      "dashboard": "Tableau de bord des agents",
+      "sessionHistory": "Historique des sessions des agents",
+      "taskBoard": "Tableau des tâches",
+      "taskBoardHint": "Les cartes de cet espace de travail et qui s'en occupe (Ctrl+Shift+K).",
+      "newTask": "Nouvelle tâche",
+      "taskHistory": "Historique des tâches",
+      "browser": "Nouveau panneau navigateur",
+      "browserHint": "Une page web dans un panneau ; sa barre d'outils a le mode design, pour désigner un élément et l'envoyer à un agent.",
+      "scm": "Gestion de code source",
+      "cleanup": "Nettoyer les worktrees",
+      "helpHint": "Tous les raccourcis de Tessel (F1).",
+      "logsHint": "Les fichiers journaux de Tessel, pour examiner un problème.",
+      "noProject": "Ouvrez d'abord un projet.",
+      "cleanupNeedsProject": "Ouvrez d'abord un projet sur cet ordinateur : les worktrees se nettoient un projet à la fois."
     }
   }
 }

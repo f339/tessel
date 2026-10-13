@@ -106,6 +106,7 @@ import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask, addTask, deletedTaskIds, addDeletedTasks, takeDeletedToPurge, cardOnBoard, beginBoardLoad, endBoardLoad } from './taskBoardStore'
 import { taskHistory, setTaskHistory, backfillHistory, setHistoryDescriber } from './taskHistory'
 import { restoredSideTab } from './sideTabs'
+import { runSettingsTool } from './settingsTools'
 import { paneModels } from './paneModels'
 import { buildSenderSnapshot } from './senderIdentity'
 import { sleepBlocker } from '../../shared/agentSleep'
@@ -3615,6 +3616,46 @@ async function copyDiagnostics() {
 function closeSettings() {
   settingsOpen.value = false
   settingsSection.value = null
+}
+
+// Settings' "Windows and tools" rows (settingsTools.js): Settings closes,
+// then the window, panel or tool opens, as from the palette or the toolbar.
+const settingsToolActions = {
+  mcp: () => {
+    mcpTab.value = 'installed'
+    mcpOpen.value = true
+  },
+  skills: () => (skillsOpen.value = true),
+  tools: () => openTools(),
+  sessions: () => openSessions(),
+  dashboard: () => showSideTab('dashboard'),
+  history: () => showSideTab('history'),
+  tasks: () => showSideTab('tasks'),
+  taskHistory: () => showSideTab('taskHistory'),
+  changes: () => showSideTab('changes'),
+  newTask: () => openNewTask(),
+  activity: () => openActivity('workspace'),
+  notes: () => {
+    if (currentWs.value) openNotesView(currentWs.value.id)
+    else showToast(t('settings.tools.noProject', 'Open a project first.'), { kind: 'error' })
+  },
+  cleanupWorktrees: () => {
+    const ws = currentWs.value
+    if (ws && ws.cwd && !ws.remote && window.shellApi.worktreeCleanupScan) openWorktreeCleanup(ws.id)
+    else showToast(t('settings.tools.cleanupNeedsProject', 'Open a project on this computer first: worktrees are cleaned up one project at a time.'), { kind: 'error' })
+  },
+  github: () => openGitHub(),
+  linear: () => openLinear(),
+  floating: () => {
+    if (!floating.state.open) toggleFloating()
+  },
+  browser: () => openInBrowser({ newPane: true, focusAddress: true }),
+  help: () => (helpOpen.value = true),
+  logs: () => openLogs()
+}
+function openFromSettings(id) {
+  closeSettings()
+  runSettingsTool(id, settingsToolActions)
 }
 
 function setDefaultShell(id) {
@@ -11926,6 +11967,7 @@ onBeforeUnmount(() => {
       @update-all-agents="updateAllAgents"
       @cancel-agent-update="cancelAgentUpdate"
       @open-cookie-import="(((settingsOpen = false)), (cookieImportOpen = true))"
+      @open-tool="openFromSettings"
       @open-connections="((settingsOpen = false), (mcpTab = 'connections'), (mcpOpen = true))"
       @check-updates="checkForUpdates"
       @open-update="((settingsOpen = false), (updateOpen = true))"
