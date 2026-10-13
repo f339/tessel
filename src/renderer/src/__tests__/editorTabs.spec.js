@@ -97,7 +97,7 @@ describe('editor settings', () => {
     expect(DEFAULT_SETTINGS).toMatchObject({
       editorAutoSave: false,
       editorAutoSaveDelayMs: 1000,
-      editorMinimap: false,
+      editorMinimap: true, // on, as in VS Code
       editorWordWrap: true,
       editorPreviewTabs: true,
       diffSideBySide: false
@@ -109,6 +109,12 @@ describe('editor settings', () => {
     expect(settings.diffSideBySide).toBe(true)
     loadSettings({ editorAutoSaveDelayMs: 2500 })
     expect(settings.editorAutoSaveDelayMs).toBe(2500)
+    // A minimap left off before it was on by default turns on once; turned
+    // off since (editorMinimapDefault2 saved), it stays off.
+    loadSettings({ editorMinimap: false })
+    expect(settings.editorMinimap).toBe(true)
+    loadSettings({ editorMinimap: false, editorMinimapDefault2: true })
+    expect(settings.editorMinimap).toBe(false)
     resetSettings()
   })
 })

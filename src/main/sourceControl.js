@@ -924,6 +924,55 @@ export function createScm(b) {
     if (!res.stdout.trim()) return { ok: false, error: t('main.scm.nothingStagedMessage', 'Stage at least one file to generate a message.') }
     return { ok: true, diff: truncateDiff(res.stdout), top: r.top }
   }
+  // --- A file's history (the explorer's Timeline, like VS Code's Git
+  // History): the commits that changed it, newest first, following renames;
+  // and whether it has changes not committed yet.
+  // -> { ok, items: [{ id, author, email, time, message }], uncommitted, hasMore }
+  async function scmFileHistory({ root, path, limit } = {}) {
+    const r = await repoOf(root)
+    if (r.error) return { ok: false, error: r.error }
+    const rel = relIn(r.top, path)
+    if (!rel) return { ok: false, error: t('main.scm.notRepoFile', 'Not a file of this repository.') }
+    const n = Number.isFinite(limit) ? Math.min(500, Math.max(1, Math.trunc(limit))) : 50
+    const [log, st] = await Promise.all([
+      git(r.top, ['log', '--follow', '-z', `-n${n + 1}`, '--format=%H%n%aN%n%aE%n%at%n%B', '--', literal(rel)]),
+      git(r.top, ['status', '--porcelain', '--', literal(rel)])
+    ])
+    if (!log.ok) return { ok: false, error: gitMessage(log, t('main.scm.logFailed', 'git log failed.')) }
+    const items = []
+    for (const raw of String(log.stdout || '').split('\0')) {
+      const rec = raw.replace(/^\n+/, '')
+      if (!rec.trim()) continue
+      const [id, author, email, at, ...msg] = rec.split('\n')
+      if (!isCommitId(id)) continue
+      items.push({ id, author: author || '', email: email || '', time: Number(at) * 1000 || 0, message: msg.join('\n').trim() })
+    }
+    return { ok: true, items: items.slice(0, n), hasMore: items.length > n, uncommitted: !!(st.ok && st.stdout.trim()), rel }
+  }
+
+  // A commit's hover (VS Code's Timeline): its changes in numbers and its
+  // page on GitHub. -> { ok, stats: { files, insertions, deletions }, webUrl }
+  async function scmCommitInfo({ root, commit } = {}) {
+    const r = await repoOf(root)
+    if (r.error) return { ok: false, error: r.error }
+    if (!isCommitId(commit)) return { ok: false, error: t('main.scm.badCommit', 'Unknown commit.') }
+    const [stat, url] = await Promise.all([
+      git(r.top, ['show', '--shortstat', '--format=', '--no-color', commit]),
+      git(r.top, ['remote', 'get-url', 'origin'])
+    ])
+    const line = stat.ok ? stat.stdout.trim() : ''
+    const num = (re) => {
+      const m = re.exec(line)
+      return m ? Number(m[1]) : 0
+    }
+    const repo = url.ok ? githubRepoOf(url.stdout.trim()) : null
+    return {
+      ok: true,
+      stats: { files: num(/(\d+) files? changed/), insertions: num(/(\d+) insertions?\(\+\)/), deletions: num(/(\d+) deletions?\(-\)/) },
+      webUrl: repo ? `https://github.com/${repo.owner}/${repo.repo}/commit/${commit}` : null
+    }
+  }
+
   return {
     repoOf,
     resolveCompareBase,
@@ -940,7 +989,9 @@ export function createScm(b) {
     scmHistory,
     scmCommitFiles,
     scmFileVersions,
-    scmStagedDiff
+    scmStagedDiff,
+    scmFileHistory,
+    scmCommitInfo
   }
 }
 
@@ -1041,3 +1092,5 @@ export const scmHistory = local.scmHistory
 export const scmCommitFiles = local.scmCommitFiles
 export const scmFileVersions = local.scmFileVersions
 export const scmStagedDiff = local.scmStagedDiff
+export const scmFileHistory = local.scmFileHistory
+export const scmCommitInfo = local.scmCommitInfo

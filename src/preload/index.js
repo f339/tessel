@@ -394,8 +394,16 @@ const api = {
     branchCompare: (q) => ipcRenderer.invoke('scm:branchCompare', q),
     history: (q) => ipcRenderer.invoke('scm:history', q),
     commitFiles: (q) => ipcRenderer.invoke('scm:commitFiles', q),
+    fileHistory: (q) => ipcRenderer.invoke('scm:fileHistory', q),
+    commitInfo: (q) => ipcRenderer.invoke('scm:commitInfo', q),
     generate: (q) => ipcRenderer.invoke('scm:generate', q),
     cancelGenerate: (q) => ipcRenderer.invoke('scm:cancelGenerate', q)
+  },
+  // The editor's Local History (src/main/localHistory.js).
+  localHistory: {
+    add: (q) => ipcRenderer.invoke('localHistory:add', q),
+    list: (q) => ipcRenderer.invoke('localHistory:list', q),
+    read: (q) => ipcRenderer.invoke('localHistory:read', q)
   },
   mcpList: (cwd) => ipcRenderer.invoke('mcp:list', cwd),
   mcpAdd: (spec) => ipcRenderer.invoke('mcp:add', spec),

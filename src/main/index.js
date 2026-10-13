@@ -119,6 +119,7 @@ import {
 import { reviewInfo, reviewDiff, reviewMerge, reviewRemove, reviewCommit, reviewPush, setLeftoverStore } from './review'
 import { createLeftoverStore } from './worktreeLeftover'
 import * as scm from './sourceControl'
+import { createLocalHistory } from './localHistory'
 import { runHeadless, cancelHeadless, resolveProgram } from './agentHeadless'
 import { createCommitMessageGeneration } from './commitMessageGeneration'
 import { createModelLister } from './agentModelList'
@@ -2029,6 +2030,14 @@ ipcMain.handle('scm:fileVersions', safe((q) => scmFor(q).scmFileVersions(q || {}
 ipcMain.handle('scm:branchCompare', safe((q) => scmFor(q).scmBranchCompare(q || {})))
 ipcMain.handle('scm:history', safe((q) => scmFor(q).scmHistory(q || {})))
 ipcMain.handle('scm:commitFiles', safe((q) => scmFor(q).scmCommitFiles(q || {})))
+// The explorer's Timeline (VS Code's): a file's commits, a commit's numbers
+// and page, and the versions the editor kept at each save (Local History).
+ipcMain.handle('scm:fileHistory', safe((q) => scmFor(q).scmFileHistory(q || {})))
+ipcMain.handle('scm:commitInfo', safe((q) => scmFor(q).scmCommitInfo(q || {})))
+const localHistory = createLocalHistory({ dir: join(app.getPath('userData'), 'History') })
+ipcMain.handle('localHistory:add', safe((q) => localHistory.add(q || {})))
+ipcMain.handle('localHistory:list', safe((q) => localHistory.list(q || {})))
+ipcMain.handle('localHistory:read', safe((q) => localHistory.read(q || {})))
 // A commit message written by an agent from the staged diff (Orca's Generate).
 // The agents run on this machine: not for a remote project yet.
 const commitMessageGeneration = createCommitMessageGeneration({ scm, runHeadless, cancelHeadless })

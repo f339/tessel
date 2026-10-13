@@ -10,6 +10,7 @@ import CssWorker from 'monaco-editor/language/css/css.worker.js?worker'
 import HtmlWorker from 'monaco-editor/language/html/html.worker.js?worker'
 import TsWorker from 'monaco-editor/language/typescript/ts.worker.js?worker'
 import { createTextmate } from './textmate'
+import { documentSymbols, canGiveSymbols } from './outline'
 
 globalThis.MonacoEnvironment = {
   getWorker(_workerId, label) {
@@ -57,4 +58,7 @@ monaco.editor.onDidCreateModel(useGrammar)
 monaco.editor.onDidChangeModelLanguage((e) => useGrammar(e.model))
 for (const model of monaco.editor.getModels()) useGrammar(model)
 
-export { monaco, textmate }
+// The explorer's Outline (outline.js): a file's symbols from the language services.
+const outline = { documentSymbols, canGiveSymbols }
+
+export { monaco, textmate, outline }

@@ -18,6 +18,7 @@ import { ref, computed, watch, inject, nextTick, onMounted, onBeforeUnmount, h, 
 import { settings } from '../settings'
 import { editorOptionsFor, diffOptionsFor } from '../editor/editorOptions'
 import { loadMonaco, textmateIfLoaded } from '../editor/loadMonaco'
+import { setActiveEditor, noteEdited, noteCursor, clearActiveEditor } from '../editor/activeEditor'
 import {
   docs,
   getDoc,
@@ -304,7 +305,31 @@ function showActive() {
   else leaveDiff()
   updateRichText()
   applyReveal()
+  publishActive()
 }
+
+// The explorer's Outline and Timeline follow the editor in use (VS Code's
+// active editor): this pane's file while it is the active pane (a diff: its
+// right side).
+function shownEditor() {
+  if (showDiff.value && diffEditor) return diffEditor.getModifiedEditor()
+  return showCode.value && editor && editor.getModel() ? editor : null
+}
+function publishActive() {
+  if (!isActive.value) return
+  const ed = shownEditor()
+  const d = activeDoc.value
+  if (ed && d) setActiveEditor({ paneId: props.node.id, editor: ed, path: d.path })
+}
+let editedTimer = 0
+function onEdited() {
+  clearTimeout(editedTimer)
+  editedTimer = setTimeout(() => noteEdited(props.node.id), 400)
+}
+function onCursor(e) {
+  if (e && e.position) noteCursor(props.node.id, e.position.lineNumber, e.position.column)
+}
+watch(isActive, (a) => a && nextTick(publishActive))
 
 watch(
   () => [props.node.activePath, activeDoc.value && activeDoc.value.loading, activeDoc.value && activeDoc.value.error, mode.value, ready.value],
@@ -433,6 +458,10 @@ function ensureDiffEditor() {
     maxTokenizationLineLength: 20000,
     padding: { top: 0 }
   })
+  const right = diffEditor.getModifiedEditor()
+  right.onDidChangeModelContent(onEdited)
+  right.onDidChangeCursorPosition(onCursor)
+  right.onDidFocusEditorText(publishActive)
 }
 
 function languageOf(path) {
@@ -885,6 +914,9 @@ onMounted(async () => {
     padding: { top: 4 },
     fixedOverflowWidgets: true
   })
+  editor.onDidChangeModelContent(onEdited)
+  editor.onDidChangeCursorPosition(onCursor)
+  editor.onDidFocusEditorText(publishActive)
   ready.value = true
   await nextTick()
   showActive()
@@ -898,6 +930,8 @@ onBeforeUnmount(() => {
   if (rootEl.value) rootEl.value.removeEventListener('keydown', onKeydownCapture, true)
   if (stopEdits) stopEdits()
   if (stopTextmate) stopTextmate()
+  clearTimeout(editedTimer)
+  clearActiveEditor(props.node.id)
   unregisterEditorPane(props.node.id, paneApi)
   clearTimeout(revealTimer)
   clearTimeout(richTimer)

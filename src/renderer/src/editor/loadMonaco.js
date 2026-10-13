@@ -3,12 +3,14 @@
 let loading = null
 let loaded = null
 let loadedTextmate = null
+let loadedOutline = null
 
 export function loadMonaco() {
   if (!loading) {
     loading = import('./monacoSetup.js').then((m) => {
       loaded = m.monaco
       loadedTextmate = m.textmate || null
+      loadedOutline = m.outline || null
       return loaded
     })
     // A failed load (a missing chunk) can be tried again.
@@ -27,4 +29,9 @@ export function monacoIfLoaded() {
 // VS Code's colouring (textmate.js) once Monaco is loaded, else null.
 export function textmateIfLoaded() {
   return loadedTextmate
+}
+
+// A file's symbols for the Outline (outline.js) once Monaco is loaded, else null.
+export function outlineIfLoaded() {
+  return loadedOutline
 }
