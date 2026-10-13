@@ -105,6 +105,16 @@ import {
   copyMcp,
   hklFromTip
 } from './agentTools'
+import {
+  listSkills,
+  packageFromFolder,
+  packageFromGithub,
+  packageForUpdate,
+  installSkill,
+  removeSkill,
+  isSkillPath,
+  createSkillSources
+} from './skillsManager'
 import { reviewInfo, reviewDiff, reviewMerge, reviewRemove, reviewCommit, reviewPush, setLeftoverStore } from './review'
 import { createLeftoverStore } from './worktreeLeftover'
 import * as scm from './sourceControl'
@@ -2321,6 +2331,47 @@ ipcMain.handle(
 ipcMain.handle(
   'mcp:copy',
   safe((spec) => copyMcp(spec))
+)
+
+// Agent skills (the Skills window, skillsManager.js): listed per agent and
+// scope, added from a folder or GitHub after a preview, removed to the
+// Recycle Bin or deleted. A remote project has no local skill folders.
+const skillSources = createSkillSources(join(app.getPath('userData'), 'skill-sources.json'))
+const skillCwd = (cwd) => (typeof cwd === 'string' && cwd && !isRemotePath(cwd) ? cwd : null)
+ipcMain.handle(
+  'skills:list',
+  safe((cwd) => listSkills({ cwd: skillCwd(cwd), sources: skillSources.all() }))
+)
+ipcMain.handle(
+  'skills:fromFolder',
+  safe((dir) => packageFromFolder(dir))
+)
+ipcMain.handle(
+  'skills:fromGithub',
+  safe((q) => packageFromGithub((q && q.input) || '', { pick: q && typeof q.pick === 'string' ? q.pick : null }))
+)
+ipcMain.handle(
+  'skills:forUpdate',
+  safe((dir) => packageForUpdate(dir, skillSources))
+)
+ipcMain.handle(
+  'skills:install',
+  safe((q) => installSkill({ ...(q || {}), cwd: skillCwd(q && q.cwd), sources: skillSources }))
+)
+ipcMain.handle(
+  'skills:remove',
+  safe((q) =>
+    removeSkill({ ...(q || {}), cwd: skillCwd(q && q.cwd), trash: (p) => shell.trashItem(p), sources: skillSources })
+  )
+)
+ipcMain.handle(
+  'skills:open',
+  safe(async (q) => {
+    const dir = q && q.dir
+    if (!isSkillPath(dir, { cwd: skillCwd(q && q.cwd) })) return { ok: false, error: t('main.skills.unknownFolder', 'This is not a skill folder Tessel knows.') }
+    const error = await shell.openPath(dir)
+    return error ? { ok: false, error } : { ok: true }
+  })
 )
 
 // "An agent needs you": native notification + taskbar flash. Clicking the

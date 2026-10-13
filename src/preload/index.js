@@ -402,6 +402,14 @@ const api = {
   mcpRemove: (spec) => ipcRenderer.invoke('mcp:remove', spec),
   mcpTest: (ref) => ipcRenderer.invoke('mcp:test', ref),
   mcpCopy: (spec) => ipcRenderer.invoke('mcp:copy', spec),
+  // Agent skills (src/main/skillsManager.js).
+  skillsList: (cwd) => ipcRenderer.invoke('skills:list', cwd),
+  skillsFromFolder: (dir) => ipcRenderer.invoke('skills:fromFolder', dir),
+  skillsFromGithub: (q) => ipcRenderer.invoke('skills:fromGithub', q),
+  skillsForUpdate: (dir) => ipcRenderer.invoke('skills:forUpdate', dir),
+  skillsInstall: (q) => ipcRenderer.invoke('skills:install', q),
+  skillsRemove: (q) => ipcRenderer.invoke('skills:remove', q),
+  skillsOpen: (q) => ipcRenderer.invoke('skills:open', q),
   notify: (payload) => ipcRenderer.send('app:notify', payload),
   // The language the interface shows ('en', 'fr'): the main process uses it
   // for its dialogs, notifications and messages (src/main/i18n.js).

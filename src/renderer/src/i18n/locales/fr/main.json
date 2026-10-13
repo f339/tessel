@@ -904,6 +904,30 @@
         "env": "les réglages Tessel du volet n’ont pas pu être écrits sur l’hôte.",
         "tunnelTimeout": "le socket de Tessel sur l’hôte n’était pas prêt à temps."
       }
+    },
+    "skills": {
+      "noSkillMd": "Il n'y a pas de SKILL.md dans ce dossier.",
+      "badName": "Cette compétence n'a pas de nom utilisable (lettres, chiffres, point, tiret et tiret bas).",
+      "tooBig": "Cette compétence est trop volumineuse (plus de {{files}} fichiers ou {{mb}} Mo).",
+      "link": "Cette compétence contient un lien ({{path}}). Les compétences avec des liens ne sont pas installées.",
+      "badPath": "Cette compétence contient un fichier hors de son dossier ou au nom dangereux ({{path}}).",
+      "noFolder": "Choisissez un dossier.",
+      "downloadFailed": "Téléchargement impossible : {{error}}",
+      "badRedirect": "GitHub a envoyé le téléchargement ailleurs ; il n'a pas été utilisé.",
+      "notFound": "Introuvable sur GitHub (un dépôt privé, ou un nom ou une branche erronés).",
+      "httpError": "GitHub a répondu {{status}}.",
+      "badRepo": "Entrez un dépôt GitHub : propriétaire/dépôt, propriétaire/dépôt/chemin, ou son adresse github.com.",
+      "badArchive": "Le téléchargement n'est pas une archive lisible.",
+      "noSkillInRepo": "Aucun SKILL.md trouvé dans {{where}}.",
+      "expired": "Cet aperçu a expiré. Recherchez la compétence à nouveau.",
+      "unknownFolder": "Ce n'est pas un dossier de compétences que Tessel connaît.",
+      "badScope": "Choisissez tous les projets ou ce projet.",
+      "noProject": "Ouvrez un dossier de projet pour y ajouter une compétence.",
+      "chooseAgent": "Choisissez au moins un agent.",
+      "exists": "Une compétence de ce nom s'y trouve déjà.",
+      "gone": "Cette compétence n'est plus là.",
+      "noTrash": "La Corbeille n'est pas disponible.",
+      "noSource": "Cette compétence n'a pas été ajoutée depuis GitHub par Tessel : rien à mettre à jour."
     }
   },
   "main.chat.image.tooLarge": "Cette image dépasse {{mb}} Mo.",
