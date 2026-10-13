@@ -33,6 +33,7 @@ const emit = defineEmits(['open', 'open-editor', 'open-external', 'terminal-here
 // Each folds by its header (kept in Settings); Open Editors shows 9 rows at
 // most (VS Code's explorer.openEditors.visible), then scrolls.
 const OPEN_EDITORS_MAX = 9
+const fileIconsOn = computed(() => settings.fileIcons !== 'off')
 const openEditorsShown = computed(() => settings.explorerOpenEditorsShown !== false)
 const folderShown = computed(() => settings.explorerFolderShown !== false)
 function toggleOpenEditors() {
@@ -969,7 +970,40 @@ function rowTitle(e) {
 
 <template>
   <div class="explorer" :aria-label="t('explorer.side.files', 'Files')" @keydown.escape="closeMenu">
-    <!-- VS Code's explorer: "Open Editors", then the project's folder. -->
+    <!-- Search (by name or content) first, then VS Code's explorer: "Open
+         Editors", then the project's folder. -->
+    <div v-if="root" class="explorer-tools">
+      <div class="explorer-search">
+        <svg class="explorer-search-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4" /><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /></svg>
+        <input
+          v-model="query"
+          class="explorer-filter"
+          :placeholder="mode === 'content' ? t('explorer.search.inFiles', 'Search in files') : t('explorer.search.files', 'Search files')"
+          :aria-label="t('explorer.search.files', 'Search files')"
+          data-test="explorer-search"
+          spellcheck="false"
+          @keydown.escape.stop="clearSearch"
+        />
+        <button
+          v-if="query"
+          class="explorer-search-clear"
+          :title="t('explorer.search.clear', 'Clear')"
+          :aria-label="t('explorer.search.clearAria', 'Clear the search')"
+          @click="clearSearch"
+        >
+          ×
+        </button>
+      </div>
+      <div class="explorer-seg" role="radiogroup" :aria-label="t('explorer.search.by', 'Search by')">
+        <button role="radio" :aria-checked="mode === 'names'" :class="{ on: mode === 'names' }" data-test="explorer-mode-names" @click="setMode('names')">
+          {{ t('explorer.search.names', 'Names') }}
+        </button>
+        <button role="radio" :aria-checked="mode === 'content'" :class="{ on: mode === 'content' }" data-test="explorer-mode-content" @click="setMode('content')">
+          {{ t('explorer.search.content', 'Content') }}
+        </button>
+      </div>
+    </div>
+
     <section class="explorer-section explorer-open-editors" data-test="open-editors">
       <div
         class="explorer-section-head"
@@ -1100,38 +1134,6 @@ function rowTitle(e) {
       </span>
     </div>
     <template v-if="folderShown">
-    <div v-if="root" class="explorer-tools">
-      <div class="explorer-search">
-        <svg class="explorer-search-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4" /><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" /></svg>
-        <input
-          v-model="query"
-          class="explorer-filter"
-          :placeholder="mode === 'content' ? t('explorer.search.inFiles', 'Search in files') : t('explorer.search.files', 'Search files')"
-          :aria-label="t('explorer.search.files', 'Search files')"
-          data-test="explorer-search"
-          spellcheck="false"
-          @keydown.escape.stop="clearSearch"
-        />
-        <button
-          v-if="query"
-          class="explorer-search-clear"
-          :title="t('explorer.search.clear', 'Clear')"
-          :aria-label="t('explorer.search.clearAria', 'Clear the search')"
-          @click="clearSearch"
-        >
-          ×
-        </button>
-      </div>
-      <div class="explorer-seg" role="radiogroup" :aria-label="t('explorer.search.by', 'Search by')">
-        <button role="radio" :aria-checked="mode === 'names'" :class="{ on: mode === 'names' }" data-test="explorer-mode-names" @click="setMode('names')">
-          {{ t('explorer.search.names', 'Names') }}
-        </button>
-        <button role="radio" :aria-checked="mode === 'content'" :class="{ on: mode === 'content' }" data-test="explorer-mode-content" @click="setMode('content')">
-          {{ t('explorer.search.content', 'Content') }}
-        </button>
-      </div>
-    </div>
-
     <div v-if="root && sparseDirs.length" class="explorer-scope" data-test="explorer-scope" :title="scopeHelp">
       <span class="explorer-scope-label">{{ t('explorer.sparse.label', 'Sparse checkout') }}</span>
       <ThemedSelect
@@ -1293,9 +1295,10 @@ function rowTitle(e) {
         >
           <span v-if="row.depth" class="explorer-guides" aria-hidden="true" :style="{ left: guideX(0) + 'px', width: row.depth * INDENT + 'px' }"></span>
           <span v-if="inGuide(i)" class="explorer-guide-active" aria-hidden="true" :style="{ left: guideX(guide.depth) + 'px' }"></span>
-          <span class="explorer-twistie" aria-hidden="true"><svg v-if="row.dir" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10.072 8.024L5.715 3.667l.618-.62L11 7.716v.618L6.333 13l-.618-.619 4.357-4.357z" /></svg></span>
-          <!-- VS Code's file icons; a folder has none (its arrow says it). -->
-          <FileIcon v-if="!row.dir" class="explorer-icon" :name="row.name" />
+          <!-- A folder: its arrow. A file: its icon in the arrow's place (VS Code
+               aligns file icons with arrows when folders have no icon). -->
+          <span v-if="row.dir || !fileIconsOn" class="explorer-twistie" aria-hidden="true"><svg v-if="row.dir" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10.072 8.024L5.715 3.667l.618-.62L11 7.716v.618L6.333 13l-.618-.619 4.357-4.357z" /></svg></span>
+          <FileIcon v-else class="explorer-icon" :name="row.name" />
           <span v-if="row.chain.length > 1" class="explorer-name">
             <template v-for="(c, s) in row.chain" :key="c.path">
               <span v-if="s" class="explorer-crumb-sep">/</span>

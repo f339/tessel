@@ -92,7 +92,7 @@ describe('compact Files tree', () => {
     expect(row('a/b/c').find('.explorer-icon').exists()).toBe(false)
   })
 
-  it('the stylesheet: 22 px rows, 13 px text, a 16 px twistie, guides on hover', () => {
+  it('the stylesheet: 22 px rows, 13 px text, a 16 px twistie, guides always shown', () => {
     const css = readFileSync(join(__dirname, '..', 'style.css'), 'utf8')
     const rule = (sel) => {
       const m = css.match(new RegExp('\\n' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\{([^}]*)\\}'))
@@ -101,8 +101,22 @@ describe('compact Files tree', () => {
     expect(rule('.explorer-row')).toMatch(/height: 22px;/)
     expect(rule('.explorer-row')).toMatch(/font-size: 13px;/)
     expect(rule('.explorer-twistie')).toMatch(/width: 16px;/)
-    expect(rule('.explorer-guides')).toMatch(/opacity: 0;/)
-    expect(css).toMatch(/\.explorer-files:hover \.explorer-guides/)
+    expect(rule('.explorer-guides')).not.toMatch(/opacity: 0;/)
+    expect(css).not.toMatch(/\.explorer-files:hover \.explorer-guides/)
+  })
+
+  it("a file's icon takes the arrow's place (VS Code); with file icons off, an empty arrow keeps it", async () => {
+    await mountTree()
+    expect(row('top.md').find('.explorer-twistie').exists()).toBe(false)
+    expect(row('top.md').find('.file-icon').exists()).toBe(true)
+    expect(row('a').find('.explorer-twistie svg').exists()).toBe(true)
+    settings.fileIcons = 'off'
+    try {
+      await flushPromises()
+      expect(row('top.md').find('.explorer-twistie').exists()).toBe(true)
+    } finally {
+      settings.fileIcons = 'color'
+    }
   })
 
   it('a click on a segment selects that folder; the row closes and opens as one', async () => {

@@ -8252,8 +8252,8 @@ button.act-stat:hover,
 }
 
 /* Indent guides: one thin line per level under each open folder's twistie,
-   shown while the pointer is on the tree (VS Code's "onHover"); the one of
-   the selected folder (or its parent) always, brighter. */
+   linking its files to it, always shown (VS Code's "always"); the one of the
+   selected folder (or its parent) brighter. */
 .explorer-guides,
 .explorer-guide-active {
   position: absolute;
@@ -8265,16 +8265,9 @@ button.act-stat:hover,
 .explorer-guides {
   background-image: repeating-linear-gradient(
     to right,
-    var(--explorer-guide, color-mix(in srgb, var(--text-dim) 40%, transparent)) 0 1px,
+    var(--explorer-guide, color-mix(in srgb, var(--text-dim) 32%, transparent)) 0 1px,
     transparent 1px var(--explorer-indent, 8px)
   );
-  opacity: 0;
-  transition: opacity 0.1s linear;
-}
-
-.explorer-files:hover .explorer-guides,
-.explorer-files:focus-within .explorer-guides {
-  opacity: 1;
 }
 
 .explorer-guide-active {
