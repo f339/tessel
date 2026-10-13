@@ -8686,24 +8686,33 @@ body.explorer-sash-dragging * {
   width: auto;
   visibility: visible;
 }
-/* A Timeline entry's hover: VS Code's workbench hover in Dark 2026. */
+/* A commit's hover card (the Timeline, Source Control's Commits): VS Code's
+   contents in Tessel's own hover card (its backdrop, fine border, shadow,
+   blur and accent, like the sidebar's details card). */
 .timeline-hover {
   position: fixed;
   z-index: 10000;
   max-width: 500px;
-  border: 1px solid #2a2b2c;
-  border-radius: 5px;
-  background: #202122;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.36);
-  color: #cccccc;
-  font-size: 13px;
-  line-height: 19px;
+  border: 1px solid color-mix(in srgb, var(--text-strong) 14%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--backdrop) 90%, transparent);
+  box-shadow:
+    0 16px 36px rgb(0 0 0 / 0.24),
+    inset 0 1px 0 rgb(255 255 255 / 0.06);
+  backdrop-filter: blur(40px);
+  color: var(--text-strong);
+  font-size: 12.5px;
+  line-height: 1.5;
   -webkit-user-select: text;
   user-select: text;
   cursor: default;
+  animation: hover-card-in 150ms ease-out;
+}
+.timeline-hover.side-left {
+  animation-name: hover-card-in-left;
 }
 .timeline-hover-contents {
-  padding: 4px 8px;
+  padding: 10px 12px;
   overflow: hidden;
   overflow-wrap: break-word;
 }
@@ -8725,65 +8734,59 @@ body.explorer-sash-dragging * {
 .timeline-hover hr {
   box-sizing: border-box;
   height: 1px;
-  margin: 4px -8px -4px;
+  margin: 8px -12px;
   border: 0;
-  border-top: 1px solid #2a2b2c;
+  border-top: 1px solid color-mix(in srgb, var(--text-strong) 14%, transparent);
 }
 .timeline-hover hr + p,
 .timeline-hover hr + ul {
-  margin-top: 12px;
+  margin-top: 8px;
 }
 .timeline-hover code {
   padding: 0 0.4em;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
   font-family: var(--mono, Consolas, monospace);
 }
 .timeline-hover-link {
-  color: #48a0c7;
+  color: var(--accent);
   text-decoration: none;
   cursor: pointer;
 }
 .timeline-hover-link:hover {
-  color: #53a5ca;
   text-decoration: underline;
 }
+.timeline-hover-author {
+  color: var(--text-strong);
+}
 .timeline-hover-icon {
+  color: var(--text-dim);
   vertical-align: text-bottom;
+}
+.timeline-hover-link .timeline-hover-icon {
+  color: inherit;
 }
 .timeline-hover-avatar {
   vertical-align: middle;
-  margin-right: 2px;
+  margin-right: 4px;
+  border-radius: 3px;
 }
 .timeline-hover-copy {
   margin-left: 4px;
 }
 .timeline-hover-sep {
   margin: 0 8px;
+  color: var(--text-dim);
 }
 .timeline-hover .stat-insertions {
-  color: #81b88b;
+  color: var(--success, #3fb950);
 }
 .timeline-hover .stat-deletions {
-  color: #c74e39;
+  color: var(--danger, #f85149);
 }
-/* Its pointer, on the side of the row. */
+/* Tessel's cards have no pointer. */
 .timeline-hover-pointer {
-  position: absolute;
-  width: 6px;
-  height: 6px;
-  border-right: 1px solid #2a2b2c;
-  border-bottom: 1px solid #2a2b2c;
-  background: #202122;
-  pointer-events: none;
-}
-.timeline-hover.side-left .timeline-hover-pointer {
-  right: -4px;
-  transform: rotate(-45deg);
-}
-.timeline-hover.side-right .timeline-hover-pointer {
-  left: -4px;
-  transform: rotate(135deg);
+  display: none;
 }
 
 /* VS Code's sticky scroll: the open folders above the first line stay at the

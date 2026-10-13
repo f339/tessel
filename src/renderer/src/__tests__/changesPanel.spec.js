@@ -43,7 +43,8 @@ function api(scm) {
       cancelGenerate: rec('cancelGenerate', () => ({ ok: true })),
       ...(scm.branchCompare ? { branchCompare: rec('branchCompare', scm.branchCompare) } : {}),
       ...(scm.history ? { history: rec('history', scm.history) } : {}),
-      ...(scm.commitFiles ? { commitFiles: rec('commitFiles', scm.commitFiles) } : {})
+      ...(scm.commitFiles ? { commitFiles: rec('commitFiles', scm.commitFiles) } : {}),
+      ...(scm.commitInfo ? { commitInfo: rec('commitInfo', scm.commitInfo) } : {})
     },
     writeClipboard: vi.fn(),
     openExternal: vi.fn()
@@ -725,6 +726,42 @@ describe('Source Control: branch line and Commits', () => {
     await w.find('[data-test="git-history-commit-file"]').trigger('click')
     expect(w.emitted('open-diff')[0][0]).toMatchObject({ root: ROOT, rel: 'src/a.js', area: 'commit', commit: hash, file: 'C:\\proj\\src\\a.js', preview: true })
     await w.find('[data-test="sc-history-toggle"]').trigger('click') // closed again for the next tests
+  })
+})
+
+describe('Source Control: a commit on hover', () => {
+  it("shows the Timeline's card with all the details (no plain tooltip): author, whole message, numbers, hash, GitHub", async () => {
+    const hash = '3'.repeat(40)
+    api({
+      status: () => status([], { head: hash }),
+      history: () => ({
+        ok: true,
+        items: [{ id: hash, parentIds: [], subject: 'UI sweep fixes', message: 'UI sweep fixes\n\n- Save dialog fixed\n- Warnings instead of errors', author: 'Ann', authorEmail: 'ann@example.com', timestamp: Date.now() - 3600000, references: [] }],
+        hasMore: false,
+        limit: 50
+      }),
+      commitInfo: () => ({ ok: true, stats: { files: 9, insertions: 24, deletions: 16 }, webUrl: `https://github.com/me/app/commit/${hash}` })
+    })
+    make()
+    await flushPromises()
+    await w.find('[data-test="sc-history-toggle"]').trigger('click')
+    await flushPromises()
+    const row = w.find('[data-test="git-history-row"]')
+    expect(row.attributes('title')).toBeUndefined()
+    await row.trigger('mouseenter')
+    await new Promise((r) => setTimeout(r, 560))
+    await flushPromises()
+    const card = document.querySelector('[data-test="timeline-hover"]')
+    expect(card).not.toBeNull()
+    expect(card.textContent).toContain('Ann')
+    expect(card.textContent).toContain('Warnings instead of errors')
+    expect(card.querySelector('[data-test="timeline-hover-stats"]').textContent).toContain('24')
+    expect(card.querySelector('[data-test="timeline-hover-github"]')).not.toBeNull()
+    expect(calls.find(([n]) => n === 'commitInfo')[1]).toEqual({ root: ROOT, commit: hash })
+    await row.trigger('mouseleave')
+    await new Promise((r) => setTimeout(r, 200))
+    expect(document.querySelector('[data-test="timeline-hover"]')).toBeNull()
+    await w.find('[data-test="sc-history-toggle"]').trigger('click')
   })
 })
 

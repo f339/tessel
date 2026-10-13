@@ -21,6 +21,8 @@ import FileIcon from './FileIcon.vue'
 import { t, intlLocale } from '../i18n'
 import { dateTimeFormat } from '../../../shared/intlCache'
 import PanelState from './ui/PanelState.vue'
+import TimelineHover from './TimelineHover.vue'
+import { useCommitHover, commitEntry } from '../explorer/useCommitHover'
 
 const props = defineProps({
   // The repository folder (the project or a task's copy).
@@ -204,8 +206,26 @@ watch(
 onBeforeUnmount(() => {
   seq++
   stopResize()
+  commitHover.dispose()
 })
 defineExpose({ load })
+
+// A commit's whole story on hover (the Timeline's card, VS Code's git
+// hover): author, when, the full message, its numbers, hash and GitHub page.
+const commitHover = useCommitHover({ root: () => props.root })
+function openHoveredCommit() {
+  const e = commitHover.hover.entry
+  commitHover.hide()
+  const item = e && rows.value.map((r) => r.vm.historyItem).find((i) => i.id === e.id)
+  if (item && !expanded.value.has(item.id)) toggleCommit(item)
+}
+function copyCommitHash(id) {
+  if (navigator.clipboard) navigator.clipboard.writeText(id).catch(() => {})
+}
+function openCommitUrl(url) {
+  const shell = window.shellApi
+  if (shell && shell.openExternal) Promise.resolve(shell.openExternal(url)).catch(() => {})
+}
 </script>
 
 <script>
@@ -279,9 +299,10 @@ const historyHeight = moduleRef(256)
             class="sch-row"
             :aria-expanded="expanded.has(row.vm.historyItem.id)"
             :aria-label="commitAria(row.vm.historyItem, expanded.has(row.vm.historyItem.id))"
-            :title="row.vm.historyItem.message || row.vm.historyItem.subject"
             data-test="git-history-row"
-            @click="toggleCommit(row.vm.historyItem)"
+            @mouseenter="commitHover.onRowEnter(commitEntry(row.vm.historyItem), $event)"
+            @mouseleave="commitHover.onRowLeave"
+            @click="commitHover.hide(), toggleCommit(row.vm.historyItem)"
           >
             <svg aria-hidden="true" class="sch-graph" :width="row.geo.width" :height="row.geo.height" :viewBox="`0 0 ${row.geo.width} ${row.geo.height}`">
               <path v-for="p in row.geo.paths" :key="p.key" :d="p.d" fill="none" :stroke="graphColor(p.color)" stroke-linecap="round" stroke-width="1" />
@@ -337,5 +358,16 @@ const historyHeight = moduleRef(256)
         </template>
       </div>
     </template>
+    <TimelineHover
+      v-if="commitHover.hover.entry && commitHover.hover.anchor"
+      :entry="commitHover.hover.entry"
+      :anchor="commitHover.hover.anchor"
+      :info="commitHover.info()"
+      @enter="commitHover.onCardEnter"
+      @leave="commitHover.onRowLeave"
+      @open="openHoveredCommit"
+      @copy="copyCommitHash"
+      @open-url="openCommitUrl"
+    />
   </div>
 </template>
