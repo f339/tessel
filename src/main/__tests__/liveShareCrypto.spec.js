@@ -5,7 +5,10 @@ import {
   encodeInvite,
   decodeInvite,
   sessionKeys,
-  createChannel
+  createChannel,
+  newKeyPair,
+  sharedSecret,
+  verificationCode
 } from '../liveShare/shareCrypto'
 
 function pair(secret = newSecret()) {
@@ -84,5 +87,62 @@ describe('Live Share channel', () => {
     const a = pair(secret)
     const b = pair(secret)
     expect(b.guest.open(a.host.seal({ n: 1 }))).toBe(null)
+  })
+})
+
+describe('Live Share key exchange and verification code', () => {
+  function kxPair(secret = newSecret(), guestSecret = secret) {
+    const hostNonce = newNonce()
+    const guestNonce = newNonce()
+    const h = newKeyPair()
+    const g = newKeyPair()
+    const hostKx = { dh: sharedSecret(h.privateKey, g.publicRaw), hostKey: h.publicRaw, guestKey: g.publicRaw }
+    const guestKx = { dh: sharedSecret(g.privateKey, h.publicRaw), hostKey: h.publicRaw, guestKey: g.publicRaw }
+    return { host: sessionKeys(secret, hostNonce, guestNonce, 'host', hostKx), guest: sessionKeys(guestSecret, hostNonce, guestNonce, 'guest', guestKx), hostNonce, guestNonce }
+  }
+
+  it('both sides get the same keys and the same six-digit code', () => {
+    const { host, guest } = kxPair()
+    expect(host.forward).toBe(true)
+    expect(guest.forward).toBe(true)
+    expect(host.code).toMatch(/^\d{3} \d{3}$/)
+    expect(guest.code).toBe(host.code)
+    expect(createChannel(guest).open(createChannel(host).seal({ t: 'hi' }))).toEqual({ t: 'hi' })
+  })
+
+  it('a wrong invite secret gives other keys and another code, even with the key exchange', () => {
+    const { host, guest } = kxPair(newSecret(), newSecret())
+    expect(createChannel(guest).open(createChannel(host).seal({ t: 'hi' }))).toBe(null)
+    expect(guest.code).not.toBe(host.code)
+  })
+
+  it('the keys depend on the exchanged keys: without them they differ', () => {
+    const secret = newSecret()
+    const { host, hostNonce, guestNonce } = kxPair(secret)
+    const plain = sessionKeys(secret, hostNonce, guestNonce, 'guest')
+    expect(plain.forward).toBe(false)
+    expect(createChannel(plain).open(createChannel(host).seal({ t: 'hi' }))).toBe(null)
+  })
+
+  it('a Tessel from before (no key exchange) still talks to one without it', () => {
+    const secret = newSecret()
+    const hostNonce = newNonce()
+    const guestNonce = newNonce()
+    const host = sessionKeys(secret, hostNonce, guestNonce, 'host')
+    const guest = sessionKeys(secret, hostNonce, guestNonce, 'guest')
+    expect(createChannel(guest).open(createChannel(host).seal({ n: 1 }))).toEqual({ n: 1 })
+    expect(guest.code).toBe(host.code)
+  })
+
+  it('refuses keys that are not X25519 keys', () => {
+    const k = newKeyPair()
+    expect(sharedSecret(k.privateKey, Buffer.alloc(31))).toBe(null)
+    expect(sharedSecret(k.privateKey, Buffer.alloc(32))).toBe(null) // low order: an all-zero secret
+    expect(sharedSecret(k.privateKey, 'key')).toBe(null)
+  })
+
+  it('writes the code as two groups of three digits', () => {
+    expect(verificationCode(Buffer.from([0, 0, 0, 7]))).toBe('000 007')
+    expect(verificationCode(Buffer.from([255, 255, 255, 255]))).toMatch(/^\d{3} \d{3}$/)
   })
 })

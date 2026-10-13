@@ -8,13 +8,16 @@
     "wsName": "{{host}} · Live Share",
     "closeHostPane": "Ce panneau tourne sur l'ordinateur de {{host}} : il s'y ferme aussi, pour tous les participants de la session.",
     "onlyTerminals": "Dans un projet Live Share, seuls des terminaux et des agents peuvent être ouverts (sur l'ordinateur de l'hôte).",
+    "viewOnly": "Lecture seule : {{host}} ne vous a pas donné le droit de taper ici.",
     "tabs": {
       "share": "Partager",
       "join": "Rejoindre"
     },
     "share": {
-      "intro": "D'autres personnes vous rejoignent depuis leur propre Tessel : elles voient en direct le projet affiché sur votre écran. Chacune attend votre accord.",
-      "warning": "Les invités que vous acceptez peuvent taper dans vos terminaux et vos agents : ils peuvent donc lancer n'importe quelle commande sur ce PC en votre nom. N'acceptez que des personnes de confiance.",
+      "intro2": "D'autres personnes vous rejoignent depuis leur propre Tessel et voient en direct le projet que vous partagez (ses terminaux et ses agents, sans leur historique). Chacune attend votre accord, puis ne peut que regarder.",
+      "warning2": "Un invité que vous autorisez à taper peut lancer n'importe quelle commande sur ce PC en votre nom. N'autorisez que des personnes de confiance.",
+      "project": "Projet à partager",
+      "noProject": "Aucun projet à partager",
       "name": "Votre nom (vos invités le voient)",
       "start": "Démarrer le partage",
       "stop": "Arrêter le partage",
@@ -28,10 +31,23 @@
       "copy": "Copier",
       "copied": "Copié",
       "copyFailed": "Impossible de copier dans le presse-papiers.",
+      "expires": "De nouveaux invités peuvent rejoindre avec ce code jusqu'à {{time}}.",
+      "expired": "Ce code a expiré : les nouveaux invités en ont besoin d'un nouveau.",
+      "newCode": "Nouveau code",
+      "newCodeTitle": "Un nouveau code : l'ancien ne laisse plus entrer personne (les invités déjà connectés restent)",
+      "newCodeFailed": "Impossible de créer un nouveau code.",
       "guests": "Invités",
       "noGuests": "Personne n'a encore rejoint la session.",
       "guestJoined": "Connecté",
       "guestWaiting": "Attend votre réponse",
+      "guestWaitingCode": "Attend votre réponse (code {{code}})",
+      "rightsLabel": "Ce que {{name}} peut faire",
+      "rightType": "Taper",
+      "rightTypeTitle": "Taper dans vos terminaux et vos agents (cette personne peut lancer n'importe quelle commande en votre nom)",
+      "rightOpen": "Ouvrir",
+      "rightOpenTitle": "Ouvrir des terminaux et des agents dans le projet que vous partagez",
+      "rightClose": "Fermer",
+      "rightCloseTitle": "Demander à fermer des panneaux (un agent ou un terminal occupé attend votre accord)",
       "remove": "Retirer"
     },
     "join": {
@@ -42,15 +58,36 @@
       "failed": "Impossible de rejoindre la session.",
       "connecting": "Connexion…",
       "waiting": "En attente de l'accord de l'hôte…",
+      "code": "Votre code est {{code}}. Donnez-le à votre hôte pour qu'il sache que c'est bien vous.",
       "joined": "Vous avez rejoint le Live Share de {{host}}. Ses panneaux sont ouverts dans le projet Live Share.",
       "leave": "Quitter",
       "cancel": "Annuler"
     },
+    "rights": {
+      "all": "Le Tessel de l'hôte laisse les invités taper, ouvrir et fermer des panneaux.",
+      "watch": "Vous pouvez regarder. L'hôte ne vous a pas encore donné le droit de taper.",
+      "can": "Vous pouvez regarder et {{list}}.",
+      "typePart": "taper dans ses terminaux et ses agents",
+      "openPart": "ouvrir des terminaux et des agents",
+      "closePart": "demander à fermer des panneaux"
+    },
     "ask": {
       "title": "{{name}} veut rejoindre votre Live Share",
-      "text": "Cette personne verra votre écran et pourra taper dans vos terminaux et vos agents.",
+      "text": "Cette personne verra en direct le projet que vous partagez. Elle ne pourra que regarder tant que vous ne l'autorisez pas à taper (Live Share, dans la barre d'outils).",
+      "textProject": "Cette personne verra {{project}} en direct. Elle ne pourra que regarder tant que vous ne l'autorisez pas à taper (Live Share, dans la barre d'outils).",
+      "code": "Son Tessel affiche le code {{code}}. Vérifiez avec cette personne que c'est le même avant d'autoriser.",
+      "older": "Son Tessel est plus ancien : la session n'est chiffrée qu'avec le code d'invitation.",
       "allow": "Autoriser",
       "deny": "Refuser"
+    },
+    "closeAsk": {
+      "title": "{{name}} veut fermer {{pane}}",
+      "text": "Il se ferme sur votre ordinateur, pour tous les participants de la session.",
+      "agent": "Sa session d'agent se termine (elle pourra être reprise plus tard depuis les sessions d'agents).",
+      "unknown": "Tessel n'a pas pu vérifier si une commande tourne encore dedans. Le fermer arrête tout ce qui tourne.",
+      "running": "{{names}} tourne encore dedans. Le fermer l'arrête.",
+      "keep": "Le garder",
+      "close": "Le fermer"
     },
     "reason": {
       "denied": "L'hôte a refusé.",
@@ -58,6 +95,8 @@
       "stopped": "L'hôte a arrêté le partage.",
       "closed": "La connexion s'est fermée.",
       "refused": "Le code d'invitation n'est plus valide.",
+      "expired": "Ce code d'invitation a expiré. Demandez-en un nouveau à l'hôte.",
+      "busy": "L'hôte n'accepte pas de nouveaux invités pour le moment. Réessayez dans quelques minutes.",
       "timeout": "L'hôte n'a pas répondu à temps.",
       "unreachable": "Impossible de joindre l'hôte.",
       "notTessel": "Cette adresse n'est pas un Live Share Tessel.",
@@ -75,7 +114,12 @@
       "openedTerminal": "{{name}} a ouvert un terminal dans votre Tessel.",
       "closed": "{{name}} a fermé {{pane}}.",
       "ended": "Le Live Share avec {{host}} est terminé : {{reason}}",
-      "opening": "Ouverture sur l'ordinateur de {{host}}…"
+      "opening": "Ouverture sur l'ordinateur de {{host}}…",
+      "rights": "{{host}} a changé ce que vous pouvez faire.",
+      "noOpen": "{{host}} ne vous a pas donné le droit d'ouvrir des terminaux ou des agents.",
+      "noClose": "Vous n'avez pas le droit de fermer les panneaux de {{host}}.",
+      "limit": "Le Tessel de {{host}} limite la fréquence à laquelle les invités ouvrent ou ferment des panneaux. Attendez une minute.",
+      "projectClosed": "Vous avez fermé le projet que vous partagiez : Live Share s'est arrêté."
     },
     "toolbar": {
       "label": "Live Share",

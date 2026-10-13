@@ -2070,8 +2070,10 @@ function closeLeaf(leafId, opts = {}) {
   // An editor or a browser pane: no terminal to stop.
   const noTerminal = hasNoTerminal(closing)
   // A pane of a Live Share project is the host's: closing it closes it on
-  // the host's computer, for everyone in the session (asked first).
+  // the host's computer, for everyone in the session (asked first), when
+  // the host lets you.
   if (closing && liveShare.isGuestLeaf(closing) && !opts.force) {
+    if (liveShare.state.guest.state === 'joined' && !liveShare.canClose()) return
     askConfirm({
       title: t('app.close.title', 'Close {{name}}?', { name: closing.paneName || closing.title }),
       text: t('liveShare.closeHostPane', 'This pane runs on {{host}}’s computer: it closes there too, for everyone in the session.', { host: liveShare.state.guest.host || '?' }),
@@ -2245,13 +2247,22 @@ const liveShare = createLiveShareWindow({
   removeWorkspace,
   findLeaf,
   closeLeaf,
-  launch: (spec) => launch(spec),
+  launch: (spec, targetId, where) => launch(spec, targetId, where),
   selectedShell: () => selectedShell.value,
   seedBuffer,
   dropBuffer,
-  showToast
+  showToast,
+  isAgentLeaf,
+  probeRunningWork
 })
 const liveShareOpen = ref(false)
+// The projects you can share (a Live Share project is someone else's).
+const shareableProjects = computed(() => workspaces.value.filter((w) => !w.liveShare).map((w) => ({ id: w.id, name: w.name })))
+const sharedProjectName = computed(() => (liveShare.sharedWs() || {}).name || '')
+function openLiveShare() {
+  liveShare.prepareShare()
+  liveShareOpen.value = true
+}
 onMounted(() => liveShare.init())
 onBeforeUnmount(() => liveShare.dispose())
 
@@ -11821,7 +11832,7 @@ onBeforeUnmount(() => {
                 : t('liveShare.toolbar.title', 'Live Share: share your screen, or join someone’s')
           "
           :aria-label="t('liveShare.toolbar.label', 'Live Share')"
-          @click="liveShareOpen = true"
+          @click="openLiveShare"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <circle cx="6" cy="5.2" r="2.3" stroke="currentColor" stroke-width="1.3" />
@@ -12328,9 +12339,12 @@ onBeforeUnmount(() => {
       v-if="liveShareOpen"
       :open="liveShareOpen"
       :initial-tab="liveShare.state.guest.state === 'joined' ? 'join' : 'share'"
+      :projects="shareableProjects"
+      :project-id="liveShare.state.sharedWsId"
+      @update:project-id="liveShare.shareProject"
       @close="liveShareOpen = false"
     />
-    <LiveShareAsk :ask="liveShare.state.asks[0] || null" @answer="liveShare.answerAsk" />
+    <LiveShareAsk :ask="liveShare.state.asks[0] || null" :project="sharedProjectName" @answer="liveShare.answerAsk" />
 
     <CookieImportDialog
       v-if="cookieImportOpen"

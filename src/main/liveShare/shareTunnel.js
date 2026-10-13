@@ -108,9 +108,55 @@ export async function waitReachable(url, { WebSocketImpl = WebSocket, timeoutMs 
   return false
 }
 
+// What cloudflared gets of Tessel's environment: none of its own settings
+// (TUNNEL_*, CLOUDFLARED_*: a token or origin of the user's named tunnels
+// would change what it does), nor Tessel's or an agent session's secrets.
+export function tunnelEnv(env = process.env) {
+  const out = {}
+  for (const [k, v] of Object.entries(env || {})) {
+    if (/^(TUNNEL_|CLOUDFLARED_|TESSEL_|CLAUDE_CODE_|CODEX_)/i.test(k) || /^(ELECTRON_RUN_AS_NODE|CLAUDECODE)$/i.test(k)) continue
+    out[k] = v
+  }
+  return out
+}
+
+const pidFile = (dataDir) => join(dataDir, 'bin', 'cloudflared.pid')
+
+// A cloudflared this Tessel started and could not stop (it crashed or was
+// killed while sharing) still runs a tunnel to nothing: ended before a new
+// one starts. Only the PID it wrote down, and only while that PID is still
+// this cloudflared (its file name: the exact version Tessel downloads).
+// listNames() -> [{ pid, name }] or null; kill(pid).
+export async function endLeftoverTunnel(dataDir, { listNames, kill }) {
+  let pid = 0
+  try {
+    pid = Number(fs.readFileSync(pidFile(dataDir), 'utf8').trim())
+  } catch {
+    return false
+  }
+  try {
+    fs.rmSync(pidFile(dataDir), { force: true })
+  } catch {
+    /* written again at the next start */
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  const procs = await Promise.resolve()
+    .then(listNames)
+    .catch(() => null)
+  const name = `cloudflared-${CLOUDFLARED_VERSION}.exe`.toLowerCase()
+  const it = Array.isArray(procs) && procs.find((p) => p.pid === pid)
+  if (!it || String(it.name || '').toLowerCase() !== name) return false
+  try {
+    kill(pid)
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Starts a quick tunnel to 127.0.0.1:port. Resolves { url, stop } once
 // Cloudflare gave the address; onExit(code) is called if it stops by itself.
-export function startTunnel({ exe, port, dataDir, spawnImpl = spawn, onExit, timeoutMs = START_TIMEOUT_MS }) {
+export function startTunnel({ exe, port, dataDir, spawnImpl = spawn, onExit, timeoutMs = START_TIMEOUT_MS, env = tunnelEnv() }) {
   // An empty config of its own: a quick tunnel refuses to start when the
   // user's ~/.cloudflared/config.yml exists (a named tunnel of theirs).
   const config = join(dataDir, 'bin', 'cloudflared-quick.yml')
@@ -122,7 +168,20 @@ export function startTunnel({ exe, port, dataDir, spawnImpl = spawn, onExit, tim
   }
   const args = ['tunnel', '--no-autoupdate', '--config', config, '--url', `http://127.0.0.1:${port}`]
   return new Promise((resolve, reject) => {
-    const child = spawnImpl(exe, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawnImpl(exe, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env })
+    // Its PID, for endLeftoverTunnel after a crash; gone once it stopped.
+    try {
+      if (child.pid) fs.writeFileSync(pidFile(dataDir), String(child.pid))
+    } catch {
+      /* only the clean-up after a crash is lost */
+    }
+    const forgetPid = () => {
+      try {
+        if (child.pid && fs.readFileSync(pidFile(dataDir), 'utf8').trim() === String(child.pid)) fs.rmSync(pidFile(dataDir), { force: true })
+      } catch {
+        /* not written */
+      }
+    }
     let output = ''
     let settled = false
     const stop = () => {
@@ -131,6 +190,7 @@ export function startTunnel({ exe, port, dataDir, spawnImpl = spawn, onExit, tim
       } catch {
         /* already stopped */
       }
+      forgetPid()
     }
     const timer = setTimeout(() => {
       if (settled) return
@@ -157,6 +217,7 @@ export function startTunnel({ exe, port, dataDir, spawnImpl = spawn, onExit, tim
     })
     child.on('exit', (code) => {
       clearTimeout(timer)
+      forgetPid()
       if (!settled) {
         settled = true
         const last = output.trim().split(/\r?\n/).slice(-3).join(' | ')

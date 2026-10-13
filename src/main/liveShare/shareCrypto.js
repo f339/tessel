@@ -11,13 +11,24 @@
 // in order: WebSocket runs over TCP). A message that does not open (wrong
 // secret, tampered, replayed, out of order) ends the connection, so a guest
 // without the invite code can't get past its first message.
+//
+// Both sides also trade a fresh X25519 key in the handshake, and its shared
+// secret goes into the keys with the invite's: a recording of the session
+// stays unreadable even if the invite code leaks later (forward secrecy).
+// A Tessel from before this (no key in its handshake) still connects, with
+// the invite's secret alone. Both sides show a short verification code
+// derived from the same keys, so the host can check who they let in.
 import crypto from 'crypto'
 
 const PREFIX = 'TS1.'
 const SECRET_BYTES = 32
 export const NONCE_BYTES = 16
+export const KX_BYTES = 32
 const TAG_BYTES = 16
 const SALT_LABEL = 'tessel-liveshare-v1'
+// The DER header of an X25519 public key (SubjectPublicKeyInfo): the raw 32
+// bytes follow it.
+const X25519_SPKI = Buffer.from('302a300506032b656e032100', 'hex')
 
 const b64u = (buf) => Buffer.from(buf).toString('base64url')
 const unb64u = (s) => Buffer.from(String(s), 'base64url')
@@ -62,15 +73,48 @@ function isLocalHost(host) {
   return /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h)
 }
 
-// The two keys of one connection, named from each side's point of view.
-export function sessionKeys(secret, hostNonce, guestNonce, side) {
+// A fresh X25519 key pair for one connection: { privateKey, publicRaw }.
+export function newKeyPair() {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('x25519')
+  const der = publicKey.export({ type: 'spki', format: 'der' })
+  return { privateKey, publicRaw: Buffer.from(der.subarray(der.length - KX_BYTES)) }
+}
+
+// The X25519 shared secret with the other side's raw public key, or null
+// when that is not a usable key.
+export function sharedSecret(privateKey, peerRaw) {
+  if (!Buffer.isBuffer(peerRaw) || peerRaw.length !== KX_BYTES) return null
+  try {
+    const publicKey = crypto.createPublicKey({ key: Buffer.concat([X25519_SPKI, peerRaw]), format: 'der', type: 'spki' })
+    const dh = crypto.diffieHellman({ privateKey, publicKey })
+    // An all-zero result: a low-order key that fixes the secret.
+    return dh.every((b) => b === 0) ? null : dh
+  } catch {
+    return null
+  }
+}
+
+// "123 456": what both sides show, to compare out loud or in a chat.
+export function verificationCode(bytes) {
+  const n = Buffer.from(bytes).readUInt32BE(0) % 1000000
+  const s = String(n).padStart(6, '0')
+  return `${s.slice(0, 3)} ${s.slice(3)}`
+}
+
+// The two keys of one connection, named from each side's point of view, and
+// its verification code. kx: { dh, hostKey, guestKey } when both sides traded
+// an X25519 key (dh: the shared secret; the keys: the raw public keys).
+export function sessionKeys(secret, hostNonce, guestNonce, side, kx = null) {
   if (!Buffer.isBuffer(hostNonce) || hostNonce.length !== NONCE_BYTES) throw new Error('bad host nonce') // i18n-ignore internal
   if (!Buffer.isBuffer(guestNonce) || guestNonce.length !== NONCE_BYTES) throw new Error('bad guest nonce') // i18n-ignore internal
-  const salt = Buffer.concat([Buffer.from(SALT_LABEL), hostNonce, guestNonce])
-  const key = (info) => Buffer.from(crypto.hkdfSync('sha256', secret, salt, Buffer.from(info), 32))
+  const withKx = !!(kx && kx.dh)
+  const ikm = withKx ? Buffer.concat([Buffer.from(secret), kx.dh]) : secret
+  const salt = Buffer.concat([Buffer.from(SALT_LABEL), hostNonce, guestNonce, ...(withKx ? [kx.hostKey, kx.guestKey] : [])])
+  const key = (info, bytes = 32) => Buffer.from(crypto.hkdfSync('sha256', ikm, salt, Buffer.from(info), bytes))
   const toGuest = key('host-to-guest')
   const toHost = key('guest-to-host')
-  return side === 'host' ? { send: toGuest, recv: toHost } : { send: toHost, recv: toGuest }
+  const code = verificationCode(key('verify-code', 4))
+  return side === 'host' ? { send: toGuest, recv: toHost, code, forward: withKx } : { send: toHost, recv: toGuest, code, forward: withKx }
 }
 
 function counterIv(n) {

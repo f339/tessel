@@ -3,7 +3,7 @@
 // a host pane's id in a guest's window, and registerLiveShare's IPC end to
 // end over real WebSockets on 127.0.0.1 (only Cloudflare's tunnel is faked).
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { cleanLayout, layoutLeaves, guestPaneId, registerLiveShare } from '../liveShare'
+import { cleanLayout, layoutLeaves, guestPaneId, registerLiveShare, visibleScreen } from '../liveShare'
 import { createShareHost } from '../liveShare/shareHost'
 import { newSecret, encodeInvite, decodeInvite } from '../liveShare/shareCrypto'
 
@@ -11,8 +11,11 @@ import { newSecret, encodeInvite, decodeInvite } from '../liveShare/shareCrypto'
 vi.mock('../liveShare/shareTunnel.js', () => ({
   ensureCloudflared: vi.fn(async () => 'cloudflared.exe'),
   startTunnel: vi.fn(async ({ port }) => ({ url: `ws://127.0.0.1:${port}/`, stop: vi.fn() })),
-  waitReachable: vi.fn(async () => true)
+  waitReachable: vi.fn(async () => true),
+  endLeftoverTunnel: vi.fn(async () => false)
 }))
+
+const ALL = { type: true, open: true, close: true }
 
 const until = async (fn, ms = 4000) => {
   const end = Date.now() + ms
@@ -258,6 +261,14 @@ describe('registerLiveShare: joining a host', () => {
     await until(() => m.data.length)
     expect(m.data).toEqual([[localId, '\r\nhello']])
 
+    // View only until the host lets it type, open and close.
+    expect(m.last('liveShare:guest').rights).toEqual({ type: false, open: false, close: false })
+    expect(m.last('liveShare:guest').code).toMatch(/^\d{3} \d{3}$/)
+    m.api.guestWrite(localId, 'early\r')
+    expect(await m.handle['liveShare:open'](null, { kind: 'terminal' })).toEqual({ ok: false, reason: 'rights' })
+    shareHost.setRights(shareHost.guests()[0].id, ALL)
+    await until(() => m.last('liveShare:guest').rights?.type)
+
     m.api.guestWrite(localId, 'ls\r')
     m.api.guestWrite('pane-ls1-nope', 'rm -rf /\r')
     m.api.guestWrite(localId, { not: 'text' })
@@ -332,7 +343,10 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
 
     await guest.handle['liveShare:join'](null, { invite, name: 'Alex' })
     const ask = await until(() => host.last('liveShare:ask'))
-    expect(ask).toMatchObject({ name: 'Alex' })
+    expect(ask).toMatchObject({ name: 'Alex', forward: true })
+    // The code the host sees is the one the guest's Tessel shows.
+    await until(() => guest.last('liveShare:guest')?.code)
+    expect(ask.code).toBe(guest.last('liveShare:guest').code)
     expect(await host.handle['liveShare:approve'](null, { guestId: 'g-unknown', yes: true })).toEqual({ ok: false })
     expect(await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true })).toEqual({ ok: true })
 
@@ -346,6 +360,13 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
     // The snapshot is the terminal host's screen, taken through ptyClient's onReply.
     expect(await guest.api.guestAttach(localId)).toMatchObject({ ok: true, buffer: 'PS C:\\> ' })
     expect(host.host.request).toHaveBeenCalledWith('attach', { id: 'pane-1-ps' }, undefined, expect.any(Function))
+
+    // Typing waits for the host's yes.
+    guest.api.guestWrite(localId, 'early\r')
+    expect(await host.handle['liveShare:rights'](null, { guestId: ask.guestId, rights: ALL })).toEqual({ ok: true })
+    expect(await host.handle['liveShare:rights'](null, { guestId: 'g-unknown', rights: ALL })).toEqual({ ok: false })
+    await until(() => guest.last('liveShare:guest').rights?.type)
+    expect(host.last('liveShare:host').guests.find((g) => g.name === 'Alex').rights).toEqual(ALL)
 
     host.api.onPtyData('pane-1-ps', 'dir\r\n')
     host.api.onPtyData('pane-9-not-shown', 'secret\r\n')
@@ -381,19 +402,14 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
     expect(guest.api.isGuestPane(localId)).toBe(false)
   })
 
-  it('a guest the host says no to, or removes, is out', async () => {
+  it('a guest the host removes, or says no to, is out, and the next one waits a while', async () => {
     const host = fakeMain()
     const a = fakeMain()
     const b = fakeMain()
-    mains.push(host, a, b)
+    const c = fakeMain()
+    mains.push(host, a, b, c)
     host.on['liveShare:layout'](null, { tree: leaf('pane-1-ps') })
     const { invite } = await host.handle['liveShare:start'](null, {})
-
-    await a.handle['liveShare:join'](null, { invite, name: 'Alex' })
-    const askA = await until(() => host.events('liveShare:ask').find((q) => q.name === 'Alex'))
-    await host.handle['liveShare:approve'](null, { guestId: askA.guestId, yes: false })
-    await until(() => a.last('liveShare:guest')?.state === 'ended')
-    expect(a.last('liveShare:guest').reason).toBe('denied')
 
     await b.handle['liveShare:join'](null, { invite, name: 'Bea' })
     const askB = await until(() => host.events('liveShare:ask').find((q) => q.name === 'Bea'))
@@ -403,5 +419,71 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
     await until(() => b.last('liveShare:guest')?.state === 'ended')
     expect(b.last('liveShare:guest').reason).toBe('removed')
     await until(() => host.last('liveShare:host').guests.length === 0)
+
+    await a.handle['liveShare:join'](null, { invite, name: 'Alex' })
+    const askA = await until(() => host.events('liveShare:ask').find((q) => q.name === 'Alex'))
+    await host.handle['liveShare:approve'](null, { guestId: askA.guestId, yes: false })
+    await until(() => a.last('liveShare:guest')?.state === 'ended')
+    expect(a.last('liveShare:guest').reason).toBe('denied')
+
+    // Right after a no: turned away without asking the host again.
+    await c.handle['liveShare:join'](null, { invite, name: 'Alex again' })
+    await until(() => c.last('liveShare:guest')?.state === 'ended')
+    expect(c.last('liveShare:guest').reason).toBe('busy')
+    expect(host.events('liveShare:ask').map((q) => q.name)).toEqual(['Bea', 'Alex'])
+  })
+})
+
+describe('registerLiveShare: invite codes', () => {
+  const mains = []
+  afterEach(() => {
+    for (const m of mains.splice(0)) m.api.stopAll()
+  })
+
+  it('a new code: the old one lets no one in any more, and it works for an hour', async () => {
+    const host = fakeMain()
+    const late = fakeMain()
+    const fresh = fakeMain()
+    mains.push(host, late, fresh)
+    host.on['liveShare:layout'](null, { tree: leaf('pane-1-ps') })
+    const started = await host.handle['liveShare:start'](null, {})
+    expect(started.expiresAt).toBeGreaterThan(Date.now() + 59 * 60 * 1000)
+    const renewed = await host.handle['liveShare:newInvite']()
+    expect(renewed).toMatchObject({ ok: true, state: 'sharing' })
+    expect(renewed.invite).not.toBe(started.invite)
+    expect(host.last('liveShare:host').invite).toBe(renewed.invite)
+
+    await late.handle['liveShare:join'](null, { invite: started.invite, name: 'Late' })
+    await until(() => late.last('liveShare:guest')?.state === 'ended')
+    expect(late.last('liveShare:guest').reason).toBe('refused')
+
+    await fresh.handle['liveShare:join'](null, { invite: renewed.invite, name: 'Fresh' })
+    await until(() => host.events('liveShare:ask').some((q) => q.name === 'Fresh'))
+    expect(host.events('liveShare:ask').some((q) => q.name === 'Late')).toBe(false)
+
+    await host.handle['liveShare:stop']()
+    expect(await host.handle['liveShare:newInvite']()).toEqual({ ok: false })
+  })
+})
+
+describe('visibleScreen', () => {
+  it('keeps the screen as it is, without the scrollback above it', async () => {
+    let history = ''
+    for (let i = 1; i <= 30; i++) history += `secret line ${i}\r\n`
+    const screen = await visibleScreen(history + 'PS> ', 40, 5)
+    expect(screen).toBe('secret line 27\r\nsecret line 28\r\nsecret line 29\r\nsecret line 30\r\nPS> ')
+    expect(screen).not.toContain('secret line 26')
+  })
+
+  it('keeps the colours and the full-screen program (alternate screen) on screen', async () => {
+    const screen = await visibleScreen('old\r\n\x1b[31mred\x1b[0m\r\n\x1b[?1049h\x1b[HTUI', 20, 3)
+    expect(screen).toContain('\x1b[31mred')
+    expect(screen).toContain('\x1b[?1049h')
+    expect(screen.endsWith('TUI')).toBe(true)
+  })
+
+  it('is nothing for nothing', async () => {
+    expect(await visibleScreen('', 80, 24)).toBe('')
+    expect(await visibleScreen(null, 80, 24)).toBe('')
   })
 })

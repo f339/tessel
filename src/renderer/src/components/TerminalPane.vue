@@ -1484,6 +1484,21 @@ watch(
   (size) => size && doFit()
 )
 
+// A Live Share pane the host has not let you type in: nothing typed (nor
+// anything the terminal would answer by itself) goes to the host, and a key
+// that would type says why, now and then.
+const liveShareViewOnly = () => props.node.backend === 'liveshare' && !!props.node.liveShare && props.node.liveShare.canType === false
+let viewOnlyNoticeAt = 0
+function viewOnlyNotice(e) {
+  const types = e.key && (e.key.length === 1 || ['Enter', 'Backspace', 'Tab', 'Delete'].includes(e.key)) && !e.ctrlKey && !e.metaKey
+  if (!types || Date.now() - viewOnlyNoticeAt < 4000 || !ctx.toast) return
+  viewOnlyNoticeAt = Date.now()
+  ctx.toast(t('liveShare.viewOnly', 'View only: {{host}} has not let you type here.', { host: props.node.liveShare.host || '?' }), { timeout: 3500 })
+}
+watch(liveShareViewOnly, (viewOnly) => {
+  if (term) term.options.disableStdin = viewOnly
+})
+
 function scheduleFit() {
   if (fitTimer) clearTimeout(fitTimer)
   fitTimer = setTimeout(() => {
@@ -2350,7 +2365,9 @@ onMounted(() => {
   // Settings > Terminal, "Allow TUI Clipboard Writes (OSC 52)": off, it is
   // ignored.
   term.parser.registerOscHandler(52, (data) => {
-    if (settings.allowOsc52Clipboard === false) return true
+    // Never from a Live Share pane: another computer's program does not
+    // write your clipboard.
+    if (settings.allowOsc52Clipboard === false || props.node.backend === 'liveshare') return true
     const text = osc52Text(data)
     if (text && window.shellApi.writeClipboard) {
       window.shellApi.writeClipboard(text)
@@ -2563,7 +2580,9 @@ onMounted(() => {
   term.onSelectionChange(() => {
     if (settings.copyOnSelect) copySelection()
   })
+  if (liveShareViewOnly()) term.options.disableStdin = true
   term.attachCustomKeyEventHandler((e) => {
+    if (e.type === 'keydown' && liveShareViewOnly()) viewOnlyNotice(e)
     if (e.type === 'keydown' && e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'f') {
       openFind()
       return false

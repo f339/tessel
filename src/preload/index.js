@@ -662,16 +662,20 @@ const api = {
     }
   },
   // Live Share (src/main/liveShare.js). Host: start / stop sharing, the
-  // window's layout as it changes, a yes / no for each guest (onAsk), the
+  // shared project's layout as it changes, a yes / no for each guest
+  // (onAsk), what each guest may do (setRights), a new invite code, the
   // guests' requests to open or close a pane (onHostRequest). Guest: join
   // with an invite code, leave, open a terminal or agent on the host; the
-  // host's panes and layout come with onGuest.
+  // host's panes, layout and the guest's rights come with onGuest, the
+  // host's notices (too many asks) with onNotice.
   liveShare: {
     state: () => ipcRenderer.invoke('liveShare:state'),
     start: ({ name } = {}) => ipcRenderer.invoke('liveShare:start', { name }),
     stop: () => ipcRenderer.invoke('liveShare:stop'),
     setLayout: (layout) => ipcRenderer.send('liveShare:layout', layout),
     approve: ({ guestId, yes } = {}) => ipcRenderer.invoke('liveShare:approve', { guestId, yes }),
+    setRights: ({ guestId, rights } = {}) => ipcRenderer.invoke('liveShare:rights', { guestId, rights }),
+    newInvite: () => ipcRenderer.invoke('liveShare:newInvite'),
     removeGuest: ({ guestId } = {}) => ipcRenderer.invoke('liveShare:removeGuest', { guestId }),
     join: ({ invite, name } = {}) => ipcRenderer.invoke('liveShare:join', { invite, name }),
     leave: () => ipcRenderer.invoke('liveShare:leave'),
@@ -679,7 +683,8 @@ const api = {
     onHost: (cb) => subscribe('liveShare:host', cb),
     onGuest: (cb) => subscribe('liveShare:guest', cb),
     onAsk: (cb) => subscribe('liveShare:ask', cb),
-    onHostRequest: (cb) => subscribe('liveShare:hostRequest', cb)
+    onHostRequest: (cb) => subscribe('liveShare:hostRequest', cb),
+    onNotice: (cb) => subscribe('liveShare:notice', cb)
   },
   update: {
     status: () => ipcRenderer.invoke('update:status'),
