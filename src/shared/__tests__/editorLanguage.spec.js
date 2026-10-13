@@ -11,12 +11,13 @@ describe('detectLanguage (Orca table)', () => {
   })
   it('maps extensions, case-insensitively', () => {
     expect(detectLanguage('a.ts')).toBe('typescript')
-    expect(detectLanguage('a.TSX')).toBe('typescript')
+    expect(detectLanguage('a.TSX')).toBe('typescriptreact')
+    expect(detectLanguage('a.jsx')).toBe('javascriptreact')
     expect(detectLanguage('C:\\x\\b.mjs')).toBe('javascript')
     expect(detectLanguage('c.py')).toBe('python')
     expect(detectLanguage('d.ps1')).toBe('powershell')
     expect(detectLanguage('e.yml')).toBe('yaml')
-    expect(detectLanguage('f.toml')).toBe('ini')
+    expect(detectLanguage('f.toml')).toBe('toml')
     expect(detectLanguage('g.sol')).toBe('sol')
     expect(detectLanguage('h.vue')).toBe('vue')
     expect(detectLanguage('i.json')).toBe('json')
@@ -50,10 +51,18 @@ describe('pickLanguage (what Monaco has registered)', () => {
   it('keeps a registered language', () => {
     expect(pickLanguage('a.ts', langs)).toBe('typescript')
   })
-  it('uses the closest built-in language for Vue, Svelte, Astro, JSONL', () => {
+  it("uses the closest built-in language for Vue, Svelte, Astro, JSONL, TSX, TOML when VS Code's are not registered", () => {
+    expect(pickLanguage('App.tsx', langs)).toBe('typescript')
+    expect(pickLanguage('Cargo.toml', [...langs, { id: 'ini', extensions: ['.ini'] }])).toBe('ini')
     expect(pickLanguage('App.vue', langs)).toBe('html')
     expect(pickLanguage('x.svelte', langs)).toBe('html')
     expect(pickLanguage('log.jsonl', langs)).toBe('json')
+  })
+  it("takes VS Code's language when Tessel registered it (editor/textmate.js)", () => {
+    const more = [...langs, { id: 'typescriptreact', extensions: ['.tsx'] }, { id: 'vue', extensions: ['.vue'] }]
+    expect(pickLanguage('App.tsx', more)).toBe('typescriptreact')
+    expect(pickLanguage('App.vue', more)).toBe('vue')
+    expect(pickLanguage('a.ts', more)).toBe('typescript')
   })
   it("asks Monaco's own file names and extensions", () => {
     expect(pickLanguage('C:\\p\\Gemfile', langs)).toBe('ruby')

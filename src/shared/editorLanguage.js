@@ -5,14 +5,15 @@
 // the languages Monaco has registered).
 
 const EXT_TO_LANGUAGE = {
-  // Monaco has no separate 'typescriptreact' / 'javascriptreact' ids: .tsx,
-  // .cts, .mts are 'typescript', .jsx, .mjs, .cjs are 'javascript' (Orca).
+  // .tsx and .jsx are VS Code's 'typescriptreact' / 'javascriptreact', which
+  // Tessel registers for VS Code's grammars (editor/textmate.js); else they
+  // fall back to 'typescript' / 'javascript', as in Orca.
   '.ts': 'typescript',
-  '.tsx': 'typescript',
+  '.tsx': 'typescriptreact',
   '.cts': 'typescript',
   '.mts': 'typescript',
   '.js': 'javascript',
-  '.jsx': 'javascript',
+  '.jsx': 'javascriptreact',
   '.mjs': 'javascript',
   '.cjs': 'javascript',
   '.json': 'json',
@@ -62,7 +63,7 @@ const EXT_TO_LANGUAGE = {
   '.ps1': 'powershell',
   '.yaml': 'yaml',
   '.yml': 'yaml',
-  '.toml': 'ini',
+  '.toml': 'toml',
   '.ini': 'ini',
   '.cfg': 'ini',
   '.conf': 'ini',
@@ -97,7 +98,15 @@ const EXT_TO_LANGUAGE = {
   '.tf': 'hcl',
   '.hcl': 'hcl',
   '.abap': 'abap',
-  '.prisma': 'graphql',
+  '.prisma': 'prisma',
+  '.zig': 'zig',
+  '.nix': 'nix',
+  '.gd': 'gdscript',
+  '.glsl': 'glsl',
+  '.vert': 'glsl',
+  '.frag': 'glsl',
+  '.hlsl': 'hlsl',
+  '.fx': 'hlsl',
   '.csv': 'csv',
   '.tsv': 'tsv'
 }
@@ -115,9 +124,19 @@ const FILENAME_TO_LANGUAGE = {
   '.env.production': 'ini'
 }
 
-// Languages Orca registers itself that Tessel's Monaco does not have: the
-// closest built-in one (Vue, Svelte and Astro files are mostly HTML).
-const FALLBACK = { vue: 'html', svelte: 'html', astro: 'html', jsonl: 'json' }
+// Languages Tessel registers for VS Code's grammars (editor/textmate.js) that
+// Monaco does not have: the closest built-in one when they are not there
+// (Vue, Svelte and Astro files are mostly HTML).
+const FALLBACK = {
+  typescriptreact: 'typescript',
+  javascriptreact: 'javascript',
+  vue: 'html',
+  svelte: 'html',
+  astro: 'html',
+  toml: 'ini',
+  prisma: 'graphql',
+  jsonl: 'json'
+}
 
 export function baseName(filePath) {
   const parts = String(filePath || '').split(/[\\/]/)

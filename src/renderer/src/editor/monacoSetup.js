@@ -9,6 +9,7 @@ import JsonWorker from 'monaco-editor/language/json/json.worker.js?worker'
 import CssWorker from 'monaco-editor/language/css/css.worker.js?worker'
 import HtmlWorker from 'monaco-editor/language/html/html.worker.js?worker'
 import TsWorker from 'monaco-editor/language/typescript/ts.worker.js?worker'
+import { createTextmate } from './textmate'
 
 globalThis.MonacoEnvironment = {
   getWorker(_workerId, label) {
@@ -45,4 +46,15 @@ if (ts && ts.typescriptDefaults) {
   ts.javascriptDefaults.setCompilerOptions({ ...ts.javascriptDefaults.getCompilerOptions(), jsx: ts.JsxEmit.Preserve })
 }
 
-export { monaco }
+// VS Code's grammars and colours (textmate.js): each file's language gets
+// its grammar the first time a file of it opens.
+const textmate = createTextmate({
+  monaco,
+  log: (text) => window.shellApi && window.shellApi.log && window.shellApi.log('warn', text)
+})
+const useGrammar = (model) => model && !model.isDisposed() && textmate.useLanguage(model.getLanguageId())
+monaco.editor.onDidCreateModel(useGrammar)
+monaco.editor.onDidChangeModelLanguage((e) => useGrammar(e.model))
+for (const model of monaco.editor.getModels()) useGrammar(model)
+
+export { monaco, textmate }

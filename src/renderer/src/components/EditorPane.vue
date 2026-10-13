@@ -17,7 +17,7 @@
 import { ref, computed, watch, inject, nextTick, onMounted, onBeforeUnmount, h, render, getCurrentInstance } from 'vue'
 import { settings } from '../settings'
 import { editorOptionsFor, diffOptionsFor } from '../editor/editorOptions'
-import { loadMonaco } from '../editor/loadMonaco'
+import { loadMonaco, textmateIfLoaded } from '../editor/loadMonaco'
 import {
   docs,
   getDoc,
@@ -79,6 +79,7 @@ let shownKey = null // the file whose model the code editor shows
 let revealDecorations = null
 let revealTimer = null
 let stopEdits = null
+let stopTextmate = null
 let paneApi = null
 let mounted = false
 let notesDecorator = null
@@ -219,10 +220,13 @@ function applyTheme() {
   const line = cssColor('--surface', dark ? '#181b21' : '#f6f8fa')
   const border = cssColor('--border', dark ? '#252932' : '#d0d7de')
   const accent = cssColor('--accent', '#6c9cff')
+  // VS Code's code colours (editor/textmate.js: Dark+ or Light+) once its
+  // grammars are loaded; Monaco's own until then.
+  const tm = textmateIfLoaded()
   monaco.editor.defineTheme('tessel', {
     base: dark ? 'vs-dark' : 'vs',
     inherit: true,
-    rules: [],
+    rules: tm ? tm.rules(dark) : [],
     colors: {
       'editor.background': bg,
       'editor.foreground': fg,
@@ -859,6 +863,8 @@ onMounted(async () => {
   }
   if (!mounted || !hostEl.value) return
   applyTheme()
+  const tm = textmateIfLoaded()
+  if (tm) stopTextmate = tm.onChange(applyTheme)
   editor = monaco.editor.create(hostEl.value, {
     model: null,
     ...editorOptions(),
@@ -868,6 +874,11 @@ onMounted(async () => {
     scrollBeyondLastLine: false,
     lineNumbers: 'on',
     renderLineHighlight: 'line',
+    // As VS Code by default: coloured bracket pairs, the enclosing scopes
+    // kept at the top while scrolling, whitespace shown in a selection.
+    bracketPairColorization: { enabled: true },
+    stickyScroll: { enabled: true },
+    renderWhitespace: 'selection',
     automaticLayout: true,
     tabSize: 2,
     smoothScrolling: true,
@@ -887,6 +898,7 @@ onBeforeUnmount(() => {
   rememberView()
   if (rootEl.value) rootEl.value.removeEventListener('keydown', onKeydownCapture, true)
   if (stopEdits) stopEdits()
+  if (stopTextmate) stopTextmate()
   unregisterEditorPane(props.node.id, paneApi)
   clearTimeout(revealTimer)
   clearTimeout(richTimer)
