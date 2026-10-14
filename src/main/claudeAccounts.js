@@ -887,6 +887,19 @@ export function createClaudeAccounts({
     const who = identity(runtime.oauth.value)
     return matches(account.identity, who) && !conflict(identity(token), who)
   }
+  // The account's sign-in to keep before the system files are changed: its
+  // saved copy (refreshed from the system's when newer), or, that copy gone,
+  // the system's (holds() proved it is this account's), its folder made
+  // again if needed.
+  async function capturedLogin(account, saved, runtime) {
+    if (saved.status === 'ready') return refreshed(account, saved)
+    const path = authPath(account.id)
+    if (!(await ownedDirectory(accountsRoot, path, MARKER, account.id))) {
+      await ensureDirectory(path)
+      await exclusiveText(join(path, MARKER), `${account.id}\n`)
+    }
+    return { status: 'ready', raw: runtime.credentials, oauth: runtime.oauth.value }
+  }
   // Not while Claude sessions an older version started still run: they use
   // the system folder, and would read or write the wrong sign-in there.
   const switchPending = () =>
@@ -916,8 +929,8 @@ export function createClaudeAccounts({
             t('main.claudeAccount.selectedUnreadable', 'The selected Claude account is unreadable. No authentication files were changed.')
           )
         const changes = []
-        if (auth?.status === 'ready') {
-          auth = await refreshed(old, auth)
+        if (old) {
+          auth = await capturedLogin(old, auth, runtime)
           changes.push(...accountChanges(old.id, auth))
         }
         const original = await snapshot()
@@ -983,7 +996,7 @@ export function createClaudeAccounts({
           throw authError(
             t('main.claudeAccount.selectedUnreadable', 'The selected Claude account is unreadable. No authentication files were changed.')
           )
-        const auth = saved.status === 'ready' ? await refreshed(old, saved) : { raw: runtime.credentials, oauth: runtime.oauth.value }
+        const auth = await capturedLogin(old, saved, runtime)
         changes.push(
           ...accountChanges(old.id, auth),
           { kind: 'credentials', after: null, expected: runtime.credentials },
