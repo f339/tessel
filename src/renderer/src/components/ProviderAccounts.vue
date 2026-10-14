@@ -1,7 +1,7 @@
 <script setup>
 // Account rows and quiet maintenance actions are inspired by Orca's MIT
 // AccountsPane (Lovecast, 2026). This Vue implementation is independent.
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, inject } from 'vue'
 import ProviderAccountRow from './ProviderAccountRow.vue'
 import { t, intlLocale } from '../i18n'
 import { applyAccountList, panesOnAccount } from '../accountChoices'
@@ -21,8 +21,11 @@ const available = computed(() => !!window.shellApi?.accounts?.list)
 // An older version's Claude account switch, waiting for the Claude sessions
 // it started: the window restarts them (App's finishClaudeSwitch).
 const switchPending = computed(() => providers.value.some((p) => p.provider === 'claude' && p.switchPending))
+const finishClaudeSwitch = inject('finishClaudeSwitch', null)
 function finishSwitch() {
-  window.dispatchEvent(new CustomEvent('tessel:finish-claude-switch'))
+  if (window.shellApi?.log) window.shellApi.log('info', 'Claude account switch: Settings button clicked')
+  if (finishClaudeSwitch) finishClaudeSwitch()
+  else window.dispatchEvent(new CustomEvent('tessel:finish-claude-switch'))
 }
 let alive = true
 let pollTimer = null

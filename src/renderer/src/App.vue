@@ -4291,6 +4291,7 @@ async function finishClaudeSwitch(asked = true) {
     return
   }
   claudeSwitchBusy = true
+  if (asked && window.shellApi.log) window.shellApi.log('info', 'Claude account switch: restart asked in the window')
   try {
     const state = await api.claudeSwitch().catch((err) => ({ pending: false, error: err && err.message }))
     if (!state || !state.pending) {
@@ -4337,6 +4338,8 @@ async function finishClaudeSwitch(asked = true) {
     claudeSwitchBusy = false
   }
 }
+// Settings > AI provider accounts calls it directly (its button).
+provide('finishClaudeSwitch', () => finishClaudeSwitch(true))
 // At startup: the switch still to be undone. Sessions that version started
 // still run: offered to restart them; none: undone now.
 async function checkClaudeSwitch() {
