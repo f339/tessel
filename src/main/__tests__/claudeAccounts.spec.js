@@ -5,6 +5,7 @@ import fsp from 'fs/promises'
 import os from 'os'
 import { join, resolve, sep } from 'path'
 import { createClaudeAccounts, SHARED_FOLDERS, accountState, sharedStateKey } from '../claudeAccounts'
+import { createProviderUsage } from '../providerUsage'
 
 // These use real, fsynced files and guarded Windows paths; concurrent suite I/O
 // can exceed Vitest's 5-second unit-test default.
@@ -487,7 +488,7 @@ describe('the account folder before a launch', () => {
     expect(fs.readFileSync(join(systemDir(), 'projects', 'C--p', 'both.jsonl'), 'utf8')).toBe('account copy\n')
     expect(fs.existsSync(join(authPath(id), 'projects.merge'))).toBe(false)
   })
-  it('copies the system settings at each launch (the system wins), and its memory as an import', async () => {
+  it('copies the system settings, and its memory as an import; a file gone from the system goes from the account', async () => {
     seedSystem()
     put(join(systemDir(), 'settings.json'), { model: 'opus', hooks: { Stop: [] } })
     put(join(systemDir(), 'settings.local.json'), { local: true })
@@ -499,11 +500,16 @@ describe('the account folder before a launch', () => {
       expect(fs.readFileSync(join(authPath(id), name), 'utf8')).toBe(fs.readFileSync(join(systemDir(), name), 'utf8'))
     // ~/.claude/CLAUDE.md is also read as a parent folder's: imported once, not copied.
     expect(fs.readFileSync(join(authPath(id), 'CLAUDE.md'), 'utf8')).toBe('@~/.claude/CLAUDE.md\n')
-    put(join(authPath(id), 'settings.json'), { model: 'changed in a session' })
+    put(join(systemDir(), 'settings.json'), { model: 'sonnet', hooks: { Stop: [] } })
     fs.unlinkSync(join(systemDir(), 'keybindings.json'))
     await service.launchEnv(id)
-    expect(read(join(authPath(id), 'settings.json'))).toEqual({ model: 'opus', hooks: { Stop: [] } })
+    expect(read(join(authPath(id), 'settings.json'))).toEqual({ model: 'sonnet', hooks: { Stop: [] } })
     expect(fs.existsSync(join(authPath(id), 'keybindings.json'))).toBe(false)
+    // A copy removed in the account is copied again, never removed from the system.
+    fs.unlinkSync(join(authPath(id), 'settings.local.json'))
+    await service.launchEnv(id)
+    expect(read(join(authPath(id), 'settings.local.json'))).toEqual({ local: true })
+    expect(read(join(systemDir(), 'settings.local.json'))).toEqual({ local: true })
   })
   it('gives the account the system user settings, never its login, ids, caches or subscription state', async () => {
     put(credentialPath(), token('system'))
@@ -536,42 +542,39 @@ describe('the account folder before a launch', () => {
       projects: { 'C:/p': { allowedTools: ['a'] }, 'C:/q': { hasTrustDialogAccepted: false, lastCost: 1 } }
     })
     const id = await add()
-    put(join(authPath(id), '.claude.json'), {
-      own: 1,
-      theme: 'light',
-      userID: 'account-user',
-      mcpServers: { own: { command: 'own' } },
-      projects: { 'C:/q': { hasTrustDialogAccepted: true }, 'C:/own': { x: 1 } },
-      oauthAccount: { ...who(), displayName: 'Fresh' }
-    })
     await service.launchEnv(id)
     expect(read(join(authPath(id), '.claude.json'))).toEqual({
-      own: 1,
       theme: 'dark',
-      userID: 'account-user',
       hasCompletedOnboarding: true,
       opusProMigrationComplete: true,
       hasSeenTasksHint: true,
       tipsHistory: { tip: 1 },
-      mcpServers: { own: { command: 'own' }, shared: { command: 'shared' } },
-      projects: {
-        'C:/p': { allowedTools: ['a'] },
-        'C:/q': { hasTrustDialogAccepted: true, lastCost: 1 },
-        'C:/own': { x: 1 }
-      },
-      // Claude keeps a fresher profile there: kept while it is this account's.
+      mcpServers: { shared: { command: 'shared' } },
+      projects: { 'C:/p': { allowedTools: ['a'] }, 'C:/q': { hasTrustDialogAccepted: false, lastCost: 1 } },
+      oauthAccount: who()
+    })
+    // Claude keeps a fresher profile there: kept while it is this account's.
+    // Its own ids stay its own, and a folder Tessel trusted in it stays trusted.
+    const own = read(join(authPath(id), '.claude.json'))
+    own.oauthAccount = { ...who(), displayName: 'Fresh' }
+    own.userID = 'account-user'
+    own.projects['C:/q'].hasTrustDialogAccepted = true
+    put(join(authPath(id), '.claude.json'), own)
+    await service.launchEnv(id)
+    expect(read(join(authPath(id), '.claude.json'))).toMatchObject({
+      userID: 'account-user',
+      projects: { 'C:/q': { hasTrustDialogAccepted: true, lastCost: 1 } },
       oauthAccount: { ...who(), displayName: 'Fresh' }
     })
-    put(join(authPath(id), '.claude.json'), { oauthAccount: who('someone-else') })
-    await service.launchEnv(id)
-    expect(read(join(authPath(id), '.claude.json')).oauthAccount).toEqual(who())
+    // The account's trust and ids never reach the system.
+    expect(read(configPath())).toMatchObject({ userID: 'system-user', projects: { 'C:/q': { hasTrustDialogAccepted: false } } })
   })
   it('chooses the shared keys strictly', () => {
     for (const key of ['theme', 'mcpServers', 'projects', 'hasCompletedOnboarding', 'opusProMigrationComplete', 'fable5ToFableAliasMigrationTimestamp', 'hasSeenTasksHint', 'editorMode', 'githubRepoPaths'])
       expect(sharedStateKey(key)).toBe(true)
     for (const key of ['oauthAccount', 'userID', 'machineID', 'primaryApiKey', 'customApiKeyResponses', 'cachedUsageUtilization', 'metricsStatusCache', 'groveConfigCache', 'passesUpsellSeenCount', 'hasVisitedPasses', 'subscriptionNoticeCount', 'hasAvailableSubscription', 'orgModelDefaultCache', 'penguinModeOrgEnabled', 'skillUsage', 'numStartups', 'firstStartTime', 'claudeCodeFirstTokenDate', 'bridgeOauthDeadExpiresAt', 'claudeAiMcpEverConnected', 'additionalModelOptionsAnsweredAt'])
       expect(sharedStateKey(key)).toBe(false)
-    expect(accountState({ a: 1 }, null, who())).toEqual({ a: 1, oauthAccount: who() })
+    expect(accountState({ a: 1 }, null, who()).account).toEqual({ a: 1, oauthAccount: who() })
   })
   it('leaves its settings file alone while Claude holds its lock', async () => {
     seedSystem()
@@ -580,6 +583,338 @@ describe('the account folder before a launch', () => {
     fs.mkdirSync(join(authPath(id), '.claude.json.lock'))
     expect(await service.launchEnv(id)).toMatchObject({ ok: true, accountId: id })
     expect(read(join(authPath(id), '.claude.json'))).toEqual({ oauthAccount: who(), own: true })
+  })
+  it('never moves an entry over a system file made between its check and its move', async () => {
+    seedSystem()
+    const id = await add()
+    await service.launchEnv(id)
+    fs.rmdirSync(join(authPath(id), 'projects'))
+    put(join(authPath(id), 'projects', 'C--p', 'race.jsonl'), 'account copy\n')
+    put(join(authPath(id), 'projects', 'C--p', 'own.jsonl'), 'own\n')
+    const target = join(systemDir(), 'projects', 'C--p', 'race.jsonl')
+    const lstat = fsp.lstat.bind(fsp)
+    const link = fsp.link.bind(fsp)
+    // A system session writes the file right after any check, right before the move.
+    vi.spyOn(fsp, 'lstat').mockImplementation(async (path, ...rest) => {
+      const result = await lstat(path, ...rest).catch((error) => error)
+      if (path === target && !fs.existsSync(target)) put(target, 'system session\n')
+      if (result instanceof Error) throw result
+      return result
+    })
+    vi.spyOn(fsp, 'link').mockImplementation(async (from, to) => {
+      if (to === target && !fs.existsSync(target)) put(target, 'system session\n')
+      return link(from, to)
+    })
+    await service.launchEnv(id)
+    expect(fs.readFileSync(target, 'utf8')).toBe('system session\n')
+    expect(fs.readFileSync(join(authPath(id), 'projects.merge', 'C--p', 'race.jsonl'), 'utf8')).toBe('account copy\n')
+    expect(fs.readFileSync(join(systemDir(), 'projects', 'C--p', 'own.jsonl'), 'utf8')).toBe('own\n')
+  })
+  it('moves entries by an exclusive copy where hard links cannot be made, never over a file there', async () => {
+    seedSystem()
+    const id = await add()
+    await service.launchEnv(id)
+    fs.rmdirSync(join(authPath(id), 'projects'))
+    put(join(authPath(id), 'projects', 'C--p', 'race.jsonl'), 'account copy\n')
+    put(join(authPath(id), 'projects', 'C--p', 'own.jsonl'), 'own\n')
+    const target = join(systemDir(), 'projects', 'C--p', 'race.jsonl')
+    vi.spyOn(fsp, 'link').mockRejectedValue(Object.assign(new Error('other volume'), { code: 'EXDEV' }))
+    const copy = fsp.copyFile.bind(fsp)
+    vi.spyOn(fsp, 'copyFile').mockImplementation(async (from, to, mode) => {
+      if (to === target) put(target, 'system session\n')
+      return copy(from, to, mode)
+    })
+    await service.launchEnv(id)
+    expect(fs.readFileSync(target, 'utf8')).toBe('system session\n')
+    expect(fs.readFileSync(join(authPath(id), 'projects.merge', 'C--p', 'race.jsonl'), 'utf8')).toBe('account copy\n')
+    expect(fs.readFileSync(join(systemDir(), 'projects', 'C--p', 'own.jsonl'), 'utf8')).toBe('own\n')
+    expect(fs.existsSync(join(authPath(id), 'projects.merge', 'C--p', 'own.jsonl'))).toBe(false)
+  })
+  it('moves what still waits in <name>.merge into the system folder when the account is removed, and logs what is left', async () => {
+    seedSystem()
+    const log = { warn: vi.fn() }
+    service = create({ log })
+    const id = await add()
+    await service.launchEnv(id)
+    put(join(authPath(id), 'projects.merge', 'C--p', 'own.jsonl'), 'own\n')
+    put(join(authPath(id), 'projects.merge', 'C--p', 'both.jsonl'), 'account copy\n')
+    put(join(systemDir(), 'projects', 'C--p', 'both.jsonl'), 'system copy\n')
+    expect(await service.remove(id)).toMatchObject({ ok: true })
+    expect(fs.readFileSync(join(systemDir(), 'projects', 'C--p', 'own.jsonl'), 'utf8')).toBe('own\n')
+    expect(fs.readFileSync(join(systemDir(), 'projects', 'C--p', 'both.jsonl'), 'utf8')).toBe('system copy\n')
+    expect(log.warn).toHaveBeenCalledWith('accounts', expect.stringContaining(join('projects.merge', 'C--p', 'both.jsonl')))
+    expect(fs.existsSync(authPath(id))).toBe(false)
+  })
+  it('reads a login a session is refreshing once more before refusing the launch', async () => {
+    seedSystem()
+    const id = await add()
+    const file = join(authPath(id), '.credentials.json')
+    const good = fs.readFileSync(file, 'utf8')
+    fs.writeFileSync(file, good.slice(0, 20))
+    // Half-written when first read; the session finishes writing it just after.
+    const open = fsp.open.bind(fsp)
+    let reads = 0
+    vi.spyOn(fsp, 'open').mockImplementation(async (path, ...rest) => {
+      if (path === file && rest[0] === 'r' && reads++ === 0) setTimeout(() => fs.writeFileSync(file, good), 20)
+      return open(path, ...rest)
+    })
+    expect(await service.launchEnv(id)).toMatchObject({ ok: true, accountId: id })
+    expect(reads).toBeGreaterThan(1)
+  })
+})
+
+// A /login inside a session on an added account signs its folder in to
+// another account: never launched, selected or read for usage as the first.
+describe('an account folder signed in to another account', () => {
+  it.each(['names nobody', 'names the other account'])(
+    'refuses it, keeps its files, reads no usage, and a new sign-in fixes it (the token %s)',
+    async (mode) => {
+      seedSystem()
+      const id = await add('one')
+      await service.select(id)
+      await service.launchEnv(id)
+      const folder = authPath(id)
+      const login = token('two')
+      if (mode === 'names the other account') login.claudeAiOauth.emailAddress = who('two').emailAddress
+      put(join(folder, '.credentials.json'), login)
+      put(join(folder, '.claude.json'), { ...read(join(folder, '.claude.json')), oauthAccount: who('two') })
+      const contents = () => filesUnder(folder).map((file) => [file, fs.readFileSync(file, 'utf8')])
+      const before = contents()
+      expect(await service.launchEnv(id)).toMatchObject({ ok: false, error: expect.stringContaining('/login') })
+      expect(await service.launchEnv()).toMatchObject({ ok: false, error: expect.stringContaining('/login') })
+      await expect(service.select(id)).rejects.toThrow('/login')
+      expect(await service.usageScope(id)).toMatchObject({ ok: false })
+      expect((await service.list()).accounts[0].status).toBe('missing')
+      // Its usage is never read as the first account's.
+      const request = vi.fn()
+      const usage = createProviderUsage({
+        accounts: {
+          list: async () => ({ ok: true, providers: [await service.list()], jobs: [] }),
+          usageScope: (provider, accountId) => service.usageScope(accountId)
+        },
+        home,
+        env: {},
+        request
+      })
+      expect(await usage.read({ provider: 'claude', accountId: id })).toMatchObject({ ok: false })
+      expect(request).not.toHaveBeenCalled()
+      // Nothing "repaired": the other account's files stay as they are.
+      expect(contents()).toEqual(before)
+      selectedIdentity = 'one'
+      expect(await service.reauthenticate(id)).toMatchObject({ ok: true })
+      expect(await service.launchEnv(id)).toMatchObject({ ok: true, accountId: id })
+      expect(read(join(folder, '.claude.json')).oauthAccount).toEqual(who('one'))
+      expect(read(join(folder, '.credentials.json'))).toEqual(token('one'))
+    }
+  )
+  it('gives a folder with no profile yet the saved identity', async () => {
+    seedSystem()
+    const id = await add()
+    fs.unlinkSync(join(authPath(id), '.claude.json'))
+    expect(await service.launchEnv(id)).toMatchObject({ ok: true })
+    expect(read(join(authPath(id), '.claude.json')).oauthAccount).toEqual(who())
+    put(join(authPath(id), '.claude.json'), { ...read(join(authPath(id), '.claude.json')), oauthAccount: null })
+    expect(await service.launchEnv(id)).toMatchObject({ ok: true })
+    expect(read(join(authPath(id), '.claude.json')).oauthAccount).toEqual(who())
+  })
+})
+
+describe('settings changed in a session on an added account', () => {
+  const tesselHook = (node = 'C:/node/node.exe') => ({
+    matcher: '',
+    hooks: [{ type: 'command', command: `"${node}" "C:/Users/x/AppData/Roaming/tessel-team/tessel-team-mcp.cjs" --hook` }]
+  })
+  const account = (id, name) => join(authPath(id), name)
+  it('writes a change made in the account back to the system, and a system change to the account', async () => {
+    seedSystem()
+    put(join(systemDir(), 'settings.json'), { model: 'opus' })
+    put(join(systemDir(), 'keybindings.json'), [{ key: 'ctrl+k' }])
+    const id = await add()
+    await service.launchEnv(id)
+    // /model and /plugin install in the account's session.
+    put(account(id, 'settings.json'), { model: 'sonnet', enabledPlugins: { 'p@m': true } })
+    put(account(id, 'keybindings.json'), [{ key: 'ctrl+j' }])
+    await service.launchEnv(id)
+    expect(read(join(systemDir(), 'settings.json'))).toEqual({ model: 'sonnet', enabledPlugins: { 'p@m': true } })
+    expect(read(join(systemDir(), 'keybindings.json'))).toEqual([{ key: 'ctrl+j' }])
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'sonnet', enabledPlugins: { 'p@m': true } })
+    // Then a change in a system session reaches the account.
+    put(join(systemDir(), 'settings.json'), { model: 'haiku', enabledPlugins: { 'p@m': true } })
+    await service.launchEnv(id)
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'haiku', enabledPlugins: { 'p@m': true } })
+    // A second account sees the first one's change.
+    const other = await add('other')
+    await service.launchEnv(other)
+    expect(read(account(other, 'keybindings.json'))).toEqual([{ key: 'ctrl+j' }])
+  })
+  it('keeps the system version when both changed, the account one aside, and logs it', async () => {
+    seedSystem()
+    const log = { warn: vi.fn() }
+    service = create({ log })
+    put(join(systemDir(), 'settings.json'), { model: 'opus' })
+    const id = await add()
+    await service.launchEnv(id)
+    put(account(id, 'settings.json'), { model: 'sonnet' })
+    put(join(systemDir(), 'settings.json'), { model: 'haiku' })
+    await service.launchEnv(id)
+    expect(read(join(systemDir(), 'settings.json'))).toEqual({ model: 'haiku' })
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'haiku' })
+    const aside = fs.readdirSync(authPath(id)).filter((name) => name.startsWith('settings.json.conflict-'))
+    expect(aside).toHaveLength(1)
+    expect(read(account(id, aside[0]))).toEqual({ model: 'sonnet' })
+    expect(log.warn).toHaveBeenCalledWith('accounts', expect.stringContaining(aside[0]))
+  })
+  it('keeps the system version and the account one aside when there is no record of the last sync', async () => {
+    seedSystem()
+    put(join(systemDir(), 'settings.json'), { model: 'opus' })
+    const id = await add()
+    await service.launchEnv(id)
+    fs.unlinkSync(account(id, '.tessel-sync.json'))
+    put(account(id, 'settings.json'), { model: 'sonnet' })
+    await service.launchEnv(id)
+    expect(read(join(systemDir(), 'settings.json'))).toEqual({ model: 'opus' })
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'opus' })
+    expect(fs.readdirSync(authPath(id)).some((name) => name.startsWith('settings.json.conflict-'))).toBe(true)
+  })
+  it("never takes Tessel's own hooks for a change, and keeps the system's when writing back", async () => {
+    seedSystem()
+    put(join(systemDir(), 'settings.json'), { hooks: { Stop: [tesselHook()] } })
+    const id = await add()
+    await service.launchEnv(id)
+    // Tessel installs its hooks in the account's copy at the launch (another node path here).
+    put(account(id, 'settings.json'), { hooks: { Stop: [tesselHook('D:/other/node.exe')] } })
+    const before = fs.readFileSync(join(systemDir(), 'settings.json'), 'utf8')
+    await service.launchEnv(id)
+    expect(fs.readFileSync(join(systemDir(), 'settings.json'), 'utf8')).toBe(before)
+    expect(fs.readdirSync(authPath(id)).some((name) => name.includes('.conflict-'))).toBe(false)
+    // /hooks in the session: the user's hook goes to the system, with the system's Tessel hook.
+    const mine = { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo mine' }] }
+    put(account(id, 'settings.json'), { hooks: { Stop: [tesselHook('D:/other/node.exe')], PreToolUse: [mine] } })
+    await service.launchEnv(id)
+    expect(read(join(systemDir(), 'settings.json'))).toEqual({ hooks: { Stop: [tesselHook()], PreToolUse: [mine] } })
+  })
+  it('appends what a session added to its memory to the system memory, and keeps the import', async () => {
+    seedSystem()
+    put(join(systemDir(), 'CLAUDE.md'), 'Keep the board updated.')
+    const id = await add()
+    await service.launchEnv(id)
+    fs.appendFileSync(account(id, 'CLAUDE.md'), '\n- Answer in French.\n')
+    await service.launchEnv(id)
+    expect(fs.readFileSync(join(systemDir(), 'CLAUDE.md'), 'utf8')).toBe('Keep the board updated.\n- Answer in French.\n')
+    expect(fs.readFileSync(account(id, 'CLAUDE.md'), 'utf8')).toBe('@~/.claude/CLAUDE.md\n')
+    // A memory a session made where the system had none.
+    fs.unlinkSync(join(systemDir(), 'CLAUDE.md'))
+    put(account(id, 'CLAUDE.md'), '- Use tabs.\n')
+    await service.launchEnv(id)
+    expect(fs.readFileSync(join(systemDir(), 'CLAUDE.md'), 'utf8')).toBe('- Use tabs.\n')
+    expect(fs.readFileSync(account(id, 'CLAUDE.md'), 'utf8')).toBe('@~/.claude/CLAUDE.md\n')
+  })
+  it('never copies the system sign-in settings into an account, nor removes them from the system', async () => {
+    seedSystem()
+    const auth = {
+      apiKeyHelper: 'fixture-helper',
+      forceLoginOrgUUID: 'fixture-org',
+      awsAuthRefresh: 'fixture-refresh-cmd',
+      env: { ANTHROPIC_API_KEY: 'fixture-secret-key', claude_code_oauth_token: 'fixture-secret-token', KEEP: '1' }
+    }
+    put(join(systemDir(), 'settings.json'), { model: 'opus', ...auth })
+    const id = await add()
+    await service.launchEnv(id)
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'opus', env: { KEEP: '1' } })
+    for (const file of filesUnder(authPath(id))) expect(fs.readFileSync(file, 'utf8')).not.toMatch(/fixture-(secret|helper|org)/)
+    put(account(id, 'settings.json'), { model: 'sonnet', env: { KEEP: '1' } })
+    await service.launchEnv(id)
+    expect(read(join(systemDir(), 'settings.json'))).toEqual({ model: 'sonnet', ...auth, env: auth.env })
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'sonnet', env: { KEEP: '1' } })
+  })
+  it('strips sign-in settings an older copy left in the account', async () => {
+    seedSystem()
+    put(join(systemDir(), 'settings.json'), { model: 'opus', env: { CLAUDE_CODE_OAUTH_TOKEN: 'fixture-secret-token' } })
+    const id = await add()
+    put(account(id, 'settings.json'), fs.readFileSync(join(systemDir(), 'settings.json'), 'utf8'))
+    await service.launchEnv(id)
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'opus' })
+  })
+  it('syncs the shared .claude.json keys both ways, under the system file lock', async () => {
+    seedSystem()
+    put(configPath(), { ...read(configPath()), projects: { 'C:/p': { allowedTools: [] } }, mcpServers: {} })
+    const id = await add()
+    await service.launchEnv(id)
+    const own = read(account(id, '.claude.json'))
+    own.theme = 'light'
+    own.projects['C:/p'].mcpServers = { local: { command: 'local' } }
+    own.projects['C:/p'].lastCost = 3
+    own.mcpServers = { mine: { command: 'mine' } }
+    put(account(id, '.claude.json'), own)
+    // Claude holds the system file: nothing written back yet, the account's changes kept.
+    fs.mkdirSync(`${configPath()}.lock`)
+    await service.launchEnv(id)
+    expect(read(configPath()).theme).toBe('dark')
+    expect(read(account(id, '.claude.json')).theme).toBe('light')
+    fs.rmdirSync(`${configPath()}.lock`)
+    await service.launchEnv(id)
+    expect(read(configPath())).toEqual({
+      theme: 'light',
+      projects: { 'C:/p': { allowedTools: [], mcpServers: { local: { command: 'local' } } } },
+      mcpServers: { mine: { command: 'mine' } },
+      oauthAccount: who('system')
+    })
+    expect(read(account(id, '.claude.json')).projects['C:/p'].lastCost).toBe(3)
+    expect(fs.existsSync(`${configPath()}.lock`)).toBe(false)
+  })
+  it('removes from the account what the system removed, unless the account changed it since', async () => {
+    seedSystem()
+    put(configPath(), {
+      ...read(configPath()),
+      mcpServers: { dropped: { command: 'a' }, edited: { command: 'b' }, kept: { command: 'c' } },
+      projects: { 'C:/gone': { allowedTools: [] }, 'C:/edited': { allowedTools: [] } }
+    })
+    const id = await add()
+    await service.launchEnv(id)
+    const own = read(account(id, '.claude.json'))
+    own.mcpServers.edited = { command: 'b2' }
+    own.projects['C:/edited'].allowedTools = ['Bash']
+    put(account(id, '.claude.json'), own)
+    put(configPath(), { ...read(configPath()), mcpServers: { kept: { command: 'c' } }, projects: {} })
+    await service.launchEnv(id)
+    const after = read(account(id, '.claude.json'))
+    expect(after.mcpServers).toEqual({ edited: { command: 'b2' }, kept: { command: 'c' } })
+    expect(after.projects).toEqual({ 'C:/edited': { allowedTools: ['Bash'] } })
+    // Kept by the account alone: not brought back into the system.
+    await service.launchEnv(id)
+    expect(read(configPath())).toMatchObject({ mcpServers: { kept: { command: 'c' } }, projects: {} })
+    // A server removed in the account's session is removed from the system.
+    const latest = read(account(id, '.claude.json'))
+    delete latest.mcpServers.kept
+    put(account(id, '.claude.json'), latest)
+    await service.launchEnv(id)
+    expect(read(configPath()).mcpServers).toEqual({})
+  })
+  it('never writes back the fresh defaults of an account file Claude started again', async () => {
+    seedSystem()
+    put(configPath(), { ...read(configPath()), autoUpdates: false, editorMode: 'vim', hasCompletedOnboarding: true, mcpServers: { s: { command: 's' } } })
+    const id = await add()
+    await service.launchEnv(id)
+    put(account(id, '.claude.json'), { autoUpdates: true, numStartups: 1, oauthAccount: who() })
+    await service.launchEnv(id)
+    await service.launchEnv(id)
+    expect(read(configPath())).toMatchObject({ autoUpdates: false, editorMode: 'vim', mcpServers: { s: { command: 's' } } })
+    expect(read(account(id, '.claude.json'))).toMatchObject({ autoUpdates: false, editorMode: 'vim', theme: 'dark', numStartups: 1 })
+    expect(fs.readdirSync(authPath(id)).some((name) => name.includes('.conflict-'))).toBe(false)
+  })
+  it("keeps the system's value of a key changed on both sides, the account's aside, and Claude's counters without a conflict", async () => {
+    seedSystem()
+    put(configPath(), { ...read(configPath()), tipsHistory: { a: 1 }, promptQueueUseCount: 1 })
+    const id = await add()
+    await service.launchEnv(id)
+    put(account(id, '.claude.json'), { ...read(account(id, '.claude.json')), theme: 'light', tipsHistory: { a: 2 }, promptQueueUseCount: 5 })
+    put(configPath(), { ...read(configPath()), theme: 'solarized', tipsHistory: { a: 3 }, promptQueueUseCount: 2 })
+    await service.launchEnv(id)
+    expect(read(account(id, '.claude.json'))).toMatchObject({ theme: 'solarized', tipsHistory: { a: 3 }, promptQueueUseCount: 2 })
+    expect(read(configPath())).toMatchObject({ theme: 'solarized', tipsHistory: { a: 3 } })
+    const aside = fs.readdirSync(authPath(id)).filter((name) => name.startsWith('.claude.json.conflict-'))
+    expect(aside).toHaveLength(1)
+    expect(read(account(id, aside[0]))).toEqual({ theme: 'light' })
   })
 })
 

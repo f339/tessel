@@ -658,7 +658,8 @@
       "awaitingRecovery": "Une opération sur un compte Claude attend une récupération.",
       "removedAccount": "Ce compte Claude n'est plus dans Tessel. Démarrez la session avec un autre compte.",
       "signInAgain": "Ce compte Claude doit se reconnecter (Paramètres > Comptes de fournisseurs d'IA).",
-      "switchPending": "Des sessions Claude démarrées avant la mise à jour utilisent encore la connexion du système. Redémarrez-les d'abord (Paramètres > Comptes de fournisseurs d'IA)."
+      "switchPending": "Des sessions Claude démarrées avant la mise à jour utilisent encore la connexion du système. Redémarrez-les d'abord (Paramètres > Comptes de fournisseurs d'IA).",
+      "otherAccount": "Ce compte Claude a été basculé sur un autre compte par un /login dans l'une de ses sessions. Reconnectez-le : Paramètres > Comptes de fournisseurs d'IA > Se reconnecter."
     },
     "codexAccount": {
       "storageLink": "Le stockage des comptes Codex contient un lien ou un dossier non valide. Restaurez son emplacement d'origine et réessayez.",
