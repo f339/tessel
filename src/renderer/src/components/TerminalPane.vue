@@ -199,13 +199,17 @@ function chosenShown(n, res) {
   if (!c || !c.model) return res
   if (res && res.source === 'session') {
     // An answer written after the pick: the session says what runs now
-    // (a later /model or /effort in the agent included).
-    if (res.at && c.at && res.at > c.at) {
+    // (a later /model or /effort in the agent included). Not on an SSH host:
+    // its clock is not this PC's.
+    if (res.at && c.at && !n.remoteHostId && res.at > c.at) {
       delete n.modelChoice
       return res
     }
-    if (c.seen === undefined) c.seen = res.model
-    else if (res.model !== c.seen) {
+    // Without times: the first answer seen, model and effort; any change after
+    // it (a /model or /effort in the agent) is what runs now.
+    const said = `${res.model}|${res.effort || ''}` // i18n-ignore
+    if (c.seen === undefined) c.seen = said
+    else if (said !== c.seen) {
       delete n.modelChoice
       return res
     }
@@ -291,6 +295,8 @@ async function refreshModel() {
       launchedAt: n.launchedAt || 0,
       // An agent on an SSH host: its conversation file is there.
       ...(n.remoteHostId ? { remoteHostId: n.remoteHostId } : {}),
+      // A managed account (Codex): its conversations are in that account's home.
+      ...(typeof n.accountId === 'string' ? { accountId: n.accountId } : {}),
       chosenModel:
         n.sessionOptions && typeof n.sessionOptions.model === 'string'
           ? n.sessionOptions.model

@@ -440,11 +440,20 @@ export function createCodexAccounts({
   }
   function erase(id, validateOnly = false) {
     const target = owned(id)
+    // A link inside the account's home (a browser started by a sign-in can
+    // leave a profile with junctions there): removed itself, never followed.
+    // The home and the folders above it may not be links.
+    const links = []
     function validateTree(path, depth = 0) {
       if (depth > 40)
         throw problem(
           t('main.codexAccount.treeUnsafe', 'The managed account contains a directory tree that cannot be removed safely.')
         )
+      if (within(target.home, path) && !samePath(path, target.home) && fs.lstatSync(path).isSymbolicLink()) {
+        noLinks(dirname(path))
+        links.push(path)
+        return
+      }
       noLinks(path)
       const stat = fs.lstatSync(path)
       if (stat.isDirectory())
@@ -456,7 +465,12 @@ export function createCodexAccounts({
     }
     validateTree(target.directory)
     owned(id)
-    if (!validateOnly) fs.rmSync(target.directory, { recursive: true, force: false })
+    if (validateOnly) return
+    for (const link of links) {
+      noLinks(dirname(link))
+      if (fs.lstatSync(link).isSymbolicLink()) fs.unlinkSync(link)
+    }
+    fs.rmSync(target.directory, { recursive: true, force: false })
   }
   function entry(id, details) {
     return {

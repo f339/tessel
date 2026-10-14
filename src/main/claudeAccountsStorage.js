@@ -147,16 +147,20 @@ export async function ownedDirectory(root, path, marker, identity) {
 }
 
 // Validate the entire owned tree first; never recurse through a link or junction
-// (one found inside is removed itself, never what it points to). A Claude
-// account's folder, used by its sessions, can hold more than a sign-in's.
+// (one found inside is removed itself, never what it points to). The ownership
+// marker goes last: a removal that fails halfway leaves the folder still
+// marked, so a later cleanup can finish it. A Claude account's folder, used by
+// its sessions, can hold more than a sign-in's.
 export async function removeOwnedDirectory(root, path, marker, identity, { depth: maxDepth = 12, count = 4096 } = {}) {
   if (!(await ownedDirectory(root, path, marker, identity))) return
+  const markerPath = join(path, marker)
   const entries = []
   async function walk(directory, depth) {
     if (depth > maxDepth || entries.length > count) throw authError()
     await inspect(directory, true)
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       const child = join(directory, entry.name)
+      if (child === markerPath) continue
       if (entry.isSymbolicLink()) entries.push([child, 'link'])
       else if (entry.isDirectory()) await walk(child, depth + 1)
       else {
@@ -178,6 +182,10 @@ export async function removeOwnedDirectory(root, path, marker, identity, { depth
       continue
     }
     await inspect(entry, kind === 'directory')
+    if (kind === 'directory' && entry === path) {
+      await inspect(markerPath)
+      await fs.unlink(markerPath)
+    }
     if (kind === 'directory') await fs.rmdir(entry)
     else await fs.unlink(entry)
   }

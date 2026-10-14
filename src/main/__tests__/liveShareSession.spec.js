@@ -798,7 +798,8 @@ describe('Live Share session: round 5', () => {
 
   it('connections that say nothing hold no guest place, and are limited per address', async () => {
     const t = fakeTessel()
-    const host = hostFor({ secret: newSecret(), hostName: 'Cedric', callbacks: t.callbacks })
+    const secret = newSecret()
+    const host = hostFor({ secret, hostName: 'Cedric', callbacks: t.callbacks })
     const port = await host.start()
     const open = (ip) =>
       new Promise((resolve) => {
@@ -810,8 +811,12 @@ describe('Live Share session: round 5', () => {
     // Three silent connections from one address: a fourth is turned away.
     for (let i = 0; i < 3; i++) expect((await open('198.51.100.1')).code).toBe(null)
     expect((await open('198.51.100.1')).code).toBe(4002)
-    // Another address: still welcome, and a real guest still gets in.
+    // Another address: still welcome, and a real guest gets in while they
+    // are all held.
     expect((await open('198.51.100.2')).code).toBe(null)
+    const r = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', signingKey: newSigningKey(), callbacks: r.callbacks }).connect()
+    await until(() => r.states.includes('joined'))
   })
 
   it('a returning guest acts on nothing the host sends before its signed welcome', async () => {
@@ -865,10 +870,55 @@ describe('Live Share session: round 5', () => {
     clock += 60 * 60 * 1000
     const known = host.knownGuests()
     expect(known[0].lastSeen).toBe(clock)
-    // The next Tessel, another hour later (a crash; nothing ran meanwhile).
-    clock += 60 * 60 * 1000
-    const next = hostFor({ secret, hostName: 'Cedric', callbacks: fakeTessel().callbacks, known, hostKey, now: () => clock })
+    const savedAt = clock
+    // Another guest, offline for 14 minutes when the list was saved.
+    known.push({ ...known[0], key: newSigningKey().publicRaw.toString('base64'), name: 'Sam', lastSeen: clock - 14 * 60 * 1000 })
+    // The next Tessel, 5 minutes later (a crash or an update; nothing ran
+    // meanwhile): the time away is not counted as theirs offline.
+    clock += 5 * 60 * 1000
+    const next = hostFor({ secret, hostName: 'Cedric', callbacks: fakeTessel().callbacks, known, knownAt: savedAt, hostKey, now: () => clock })
+    expect(next.offlineGuests().map((g) => g.name).sort()).toEqual(['Alex', 'Sam'])
+    // Two minutes on: Sam's 15 minutes are over (restarts don't extend them);
+    // Alex has 13 left.
+    clock += 2 * 60 * 1000
     expect(next.offlineGuests().map((g) => g.name)).toEqual(['Alex'])
+  })
+
+  it('a full room turns guests away without counting them against the code', async () => {
+    const t = fakeTessel()
+    let blocked = 0
+    const secret = newSecret()
+    const host = hostFor({ secret, hostName: 'Cedric', callbacks: { ...t.callbacks, onInviteBlocked: () => blocked++ } })
+    const port = await host.start()
+    const join = async (name) => {
+      const r = guestRecorder()
+      createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name, signingKey: newSigningKey(), callbacks: r.callbacks }).connect()
+      await until(() => r.states.includes('joined') || r.closed)
+      return r
+    }
+    for (let i = 0; i < 10; i++) expect((await join(`G${i}`)).states).toContain('joined')
+    // Ten guests in: the next ones are turned away, as many as they like.
+    for (let i = 0; i < 9; i++) expect((await join(`X${i}`)).closed).toBe('busy')
+    expect(blocked).toBe(0)
+  }, 30000)
+
+  it('what a guest closes is saved at once (a crash before the next save does not reset its count)', async () => {
+    const t = fakeTessel()
+    let saves = 0
+    const secret = newSecret()
+    const host = hostFor({ secret, hostName: 'Cedric', callbacks: { ...t.callbacks, onKnownChanged: () => saves++ }, hostKey: newSigningKey() })
+    const port = await host.start()
+    const r = guestRecorder()
+    const g = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', signingKey: newSigningKey(), callbacks: r.callbacks })
+    g.connect()
+    await until(() => r.states.includes('joined'))
+    host.setRights(host.guests()[0].id, { type: false, open: false, close: true })
+    await until(() => r.rights.length === 2)
+    const before = saves
+    for (let i = 0; i < 3; i++) g.close('p1')
+    await until(() => t.closed.length === 3)
+    expect(saves - before).toBeGreaterThanOrEqual(3)
+    expect(host.knownGuests()[0].closes).toHaveLength(3)
   })
 
   it('what a guest opened this minute survives a restart', async () => {

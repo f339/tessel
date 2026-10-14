@@ -13,7 +13,7 @@
 // same tunnel back (liveShare.js resume), and the invite code stays the same.
 import fs from 'fs'
 import { join } from 'path'
-import { spawn, execFile } from 'child_process'
+import { spawn, spawnSync, execFile } from 'child_process'
 import crypto from 'crypto'
 import WebSocket from 'ws'
 
@@ -194,45 +194,50 @@ export function readTunnelPid(dataDir) {
   return pids.length ? pids[pids.length - 1] : 0
 }
 
-// The program a PID runs: its full path; '' when there is no such process;
-// null when Windows could not say (PowerShell failed or took too long, the
-// query failed, or the process's path is not given). Written out in UTF-8 (a
-// user folder with accents would come back garbled otherwise), any error an
-// error.
-export function processPath(pid, { execFileImpl = execFile } = {}) {
+// The folder this Tessel's cloudflared programs are in (each version its own
+// file there).
+const binDir = (dataDir) => join(dataDir, 'bin')
+// PowerShell's test that $p (a Win32_Process) runs a cloudflared of that
+// folder, any version (one left by the version before an update included).
+const OURS_TEST = `$x = [string]$p.ExecutablePath; $i = $x.LastIndexOf('\\'); $i -gt 0 -and $x.Substring(0, $i) -ieq $env:TESSEL_TUNNEL_BIN -and $x.Substring($i + 1) -like 'cloudflared-*.exe'`
+
+// What a PID is now, asked of Windows: 'ours' (a cloudflared of this
+// Tessel's data folder), 'other' (another program, or one whose path Windows
+// does not give: ours always has one), 'gone', or null when Windows could not
+// say. The comparison runs in PowerShell and only a plain word comes back (no
+// path to decode, and it works in a restricted PowerShell); the PID and the
+// folder go in as variables, never into the script's text.
+export function processState(pid, dataDir, { execFileImpl = execFile, env = process.env } = {}) {
   return new Promise((resolve) => {
-    if (!Number.isInteger(pid) || pid <= 0) return resolve('')
-    const script = `$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { if ($p.ExecutablePath) { $p.ExecutablePath } else { '?' } } else { '' }`
-    execFileImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 8000, encoding: 'utf8' }, (err, stdout) => {
-      const out = err ? null : String(stdout).trim()
-      resolve(out === '?' ? null : out)
+    if (!Number.isInteger(pid) || pid <= 0) return resolve('gone')
+    const script = `$ErrorActionPreference = 'Stop'; $p = Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$env:TESSEL_TUNNEL_PID); if (-not $p) { 'gone' } elseif (-not $p.ExecutablePath) { 'other' } elseif ($(${OURS_TEST})) { 'ours' } else { 'other' }`
+    const opts = { windowsHide: true, timeout: 8000, env: { ...env, TESSEL_TUNNEL_PID: String(pid), TESSEL_TUNNEL_BIN: binDir(dataDir) } }
+    execFileImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], opts, (err, stdout) => {
+      const out = err ? '' : String(stdout).trim()
+      resolve(out === 'ours' || out === 'other' || out === 'gone' ? out : null)
     })
   })
 }
 
-// What a saved PID is now: 'ours' (this exact cloudflared program: the one
-// this Tessel's data folder holds), 'other' (another program has that PID
-// now), 'gone', or 'unknown' (Windows could not say, or would not give the
-// process's path). Only 'ours' is ever stopped.
-export async function tunnelState(pid, { exe, queryPath = processPath }) {
+// What a saved PID is now: 'ours', 'other', 'gone', or 'unknown' (Windows
+// could not say). Only 'ours' is ever stopped.
+export async function tunnelState(pid, { dataDir, queryState = processState }) {
   if (!pid) return 'gone'
-  const path = await Promise.resolve()
-    .then(() => queryPath(pid))
+  const state = await Promise.resolve()
+    .then(() => queryState(pid, dataDir))
     .catch(() => null)
-  if (path == null) return 'unknown'
-  if (!path) return 'gone'
-  return String(path).toLowerCase() === String(exe).toLowerCase() ? 'ours' : 'other'
+  return state || 'unknown'
 }
 
 // The cloudflared this Tessel started and that no share uses (Tessel quit
 // without stopping them, and the share was not taken back): ended. Only the
 // PIDs it wrote down, and only while each is still this exact cloudflared;
 // one Windows could not tell about stays written down for the next try.
-export async function endLeftoverTunnel(dataDir, { queryPath, kill, keep = 0 }) {
+export async function endLeftoverTunnel(dataDir, { queryState, kill, keep = 0 }) {
   let ended = false
   for (const pid of readTunnelPids(dataDir)) {
     if (pid === keep) continue
-    const state = await tunnelState(pid, { exe: cloudflaredPath(dataDir), queryPath })
+    const state = await tunnelState(pid, { dataDir, queryState })
     if (state === 'unknown') continue
     forgetTunnelPid(dataDir, pid)
     if (state !== 'ours') continue
@@ -246,14 +251,29 @@ export async function endLeftoverTunnel(dataDir, { queryPath, kill, keep = 0 }) 
   return ended
 }
 
-// Quitting Tessel with a tunnel taken back after a restart (nothing can be
-// waited for): Windows' own taskkill ends it after Tessel is gone, only if
-// that PID still runs this cloudflared program (its name: its path was
-// checked when it was taken back).
-export function stopTunnelLater(dataDir, pid, { spawnImpl = spawn } = {}) {
+// Quitting Tessel with a tunnel taken back after a restart: ended now, only
+// while that PID still runs a cloudflared of this data folder (its full path:
+// another Tessel's cloudflared is left alone). Tessel waits for PowerShell (a
+// second or two, at most 3; a PowerShell started on its own would not run
+// without a console). If it can't answer in time: Windows' taskkill, after
+// Tessel is gone, that PID only while it runs a program of cloudflared's name.
+// The PID and the folder go in as variables, never into the script's text.
+export function stopTunnelLater(dataDir, pid, { spawnSyncImpl = spawnSync, spawnImpl = spawn, env = process.env } = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return
+  const script = `$ErrorActionPreference = 'Stop'; $p = Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$env:TESSEL_TUNNEL_PID); if ($p -and $p.ExecutablePath -and $(${OURS_TEST})) { Stop-Process -Id $p.ProcessId -Force }`
   try {
-    const child = spawnImpl('taskkill.exe', ['/F', '/PID', String(pid), '/FI', `IMAGENAME eq cloudflared-${CLOUDFLARED_VERSION}.exe`], { windowsHide: true, detached: true, stdio: 'ignore' })
+    const r = spawnSyncImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      windowsHide: true,
+      stdio: 'ignore',
+      timeout: 3000,
+      env: { ...env, TESSEL_TUNNEL_PID: String(pid), TESSEL_TUNNEL_BIN: binDir(dataDir) }
+    })
+    if (r && !r.error && r.status === 0) return
+  } catch {
+    /* taskkill below */
+  }
+  try {
+    const child = spawnImpl('taskkill.exe', ['/F', '/PID', String(pid), '/FI', 'IMAGENAME eq cloudflared-*'], { windowsHide: true, detached: true, stdio: 'ignore' })
     child.on?.('error', () => {})
     child.unref?.()
   } catch {
@@ -262,9 +282,10 @@ export function stopTunnelLater(dataDir, pid, { spawnImpl = spawn } = {}) {
 }
 
 // Stops a tunnel by its PID (one this Tessel took back after a restart),
-// only while that PID is still this exact cloudflared, and forgets it.
-export async function stopTunnelPid(dataDir, pid, { queryPath, kill = (p) => process.kill(p) }) {
-  const state = await tunnelState(pid, { exe: cloudflaredPath(dataDir), queryPath })
+// only while that PID is still a cloudflared of this data folder, and
+// forgets it.
+export async function stopTunnelPid(dataDir, pid, { queryState, kill = (p) => process.kill(p) }) {
+  const state = await tunnelState(pid, { dataDir, queryState })
   let stopped = false
   if (state === 'ours') {
     try {

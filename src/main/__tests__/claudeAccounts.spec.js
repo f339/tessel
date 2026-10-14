@@ -785,4 +785,50 @@ describe('sign-in folders', () => {
     expect(fs.existsSync(foreign)).toBe(true)
     expect(read(credentialPath())).toEqual(token('system'))
   })
+  it('a cleanup that fails halfway keeps the folder marked (a later sign-in finishes it), and its copy of the login goes at once', async () => {
+    seedSystem()
+    const signIn = runner.getMockImplementation()
+    let isolated
+    runner.mockImplementationOnce(async (options) => {
+      isolated = options.home
+      put(join(isolated, 'AppData', 'Profile', 'cookies.sqlite'), 'held by a browser')
+      return signIn(options)
+    })
+    const real = fsp.unlink.bind(fsp)
+    const unlink = vi.spyOn(fsp, 'unlink').mockImplementation(async (path) => {
+      if (String(path).endsWith('cookies.sqlite')) throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+      return real(path)
+    })
+    expect((await service.add()).ok).toBe(true)
+    expect(fs.existsSync(join(isolated, MARKER))).toBe(true)
+    expect(fs.existsSync(join(isolated, '.credentials.json'))).toBe(false)
+    // The browser let go; an hour on, the next sign-in removes the folder.
+    unlink.mockRestore()
+    const hoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    fs.utimesSync(join(isolated, MARKER), hoursAgo, hoursAgo)
+    await add('other')
+    expect(fs.existsSync(isolated)).toBe(false)
+  })
+  it('keeps the folder of a sign-in whose end was never confirmed until its process is gone, whatever its age', async () => {
+    seedSystem()
+    const alive = new Set([4242])
+    service = create({ pidAlive: (pid) => alive.has(pid) })
+    const hoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    const folders = []
+    for (const pid of [4242, null]) {
+      runner.mockImplementationOnce(async ({ home: isolated }) => {
+        folders.push(isolated)
+        return { ok: false, cleanupSafe: false, pid }
+      })
+      await expect(service.add()).rejects.toThrow('could not be confirmed')
+    }
+    for (const folder of folders) fs.utimesSync(join(folder, MARKER), hoursAgo, hoursAgo)
+    // Its process still runs, or is unknown: kept.
+    await add()
+    expect(folders.map((f) => fs.existsSync(f))).toEqual([true, true])
+    // Seen gone: removed at the next sign-in; the unknown one stays.
+    alive.clear()
+    await add('other')
+    expect(folders.map((f) => fs.existsSync(f))).toEqual([false, true])
+  })
 })

@@ -29,8 +29,7 @@ vi.mock('../liveShare/shareTunnel.js', () => ({
   }),
   stopTunnelPid: vi.fn(async () => true),
   stopTunnelLater: vi.fn(),
-  processPath: vi.fn(async () => null),
-  cloudflaredPath: vi.fn(() => 'C:/fixture/bin/cloudflared.exe')
+  processState: vi.fn(async () => null)
 }))
 
 // Each Tessel's data folder (its saved share and session).
@@ -681,7 +680,7 @@ describe('registerLiveShare: taking a share back, carefully', () => {
     expect(await taking).toEqual([false, false])
     expect((await next.handle['liveShare:state']()).host.state).toBe('off')
     const { stopTunnelPid } = await import('../liveShare/shareTunnel.js')
-    expect(stopTunnelPid).toHaveBeenCalledWith(host.dataDir, 4242, expect.objectContaining({ queryPath: expect.any(Function) }))
+    expect(stopTunnelPid).toHaveBeenCalledWith(host.dataDir, 4242, expect.objectContaining({ queryState: expect.any(Function) }))
     // Nothing left to take back.
     const third = fakeMain({ dataDir: host.dataDir, resume: true })
     mains.push(third)

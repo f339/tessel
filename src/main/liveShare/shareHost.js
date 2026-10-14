@@ -170,7 +170,7 @@ const secretId = (secret) => crypto.createHash('sha256').update('tessel-liveshar
 // A share taken back after a restart: known (knownGuests()), secrets (its
 // earlier invite secrets), inviteExpires (its code's end), guard (its block,
 // guardState()), hostKey (its signing key, shareCrypto.js newSigningKey).
-export function createShareHost({ secret, hostName, callbacks, log = () => {}, now = Date.now, known = [], secrets: earlier = [], inviteExpires: expiresAt = null, guard = null, hostKey = newSigningKey() }) {
+export function createShareHost({ secret, hostName, callbacks, log = () => {}, now = Date.now, known = [], knownAt = null, secrets: earlier = [], inviteExpires: expiresAt = null, guard = null, hostKey = newSigningKey() }) {
   const guests = new Map() // id -> guest
   let wss = null
   let pingTimer = null
@@ -188,11 +188,15 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   const times = (list) => (Array.isArray(list) ? list.filter((x) => Number.isFinite(x) && now() - x < 60000).slice(-20) : [])
   const entry = (key, name, rights, sid, opened = 0, lastSeen = now(), opens = [], closes = []) => ({ key, name: cleanName(name), rights: cleanRights(rights), sid, opened: Math.max(0, opened | 0), lastSeen, opens: times(opens), closes: times(closes) })
   const sids = new Set(secrets.map(secretId))
-  // Guests of a share taken back: seen now (they get their full time to come
-  // back after the restart), with their counts.
+  // Guests of a share taken back, with their counts. The time this Tessel was
+  // away (since the list was saved, knownAt) does not count as theirs offline:
+  // one online then gets its full time to come back, one already offline only
+  // what it had left.
+  const away = Number.isFinite(knownAt) ? Math.max(0, now() - knownAt) : 0
   for (const k of Array.isArray(known) ? known : []) {
     const key = k && typeof k.key === 'string' ? Buffer.from(k.key, 'base64') : null
-    if (key && key.length === KX_BYTES && sids.has(k.sid)) keys.set(keyHash(key), entry(key, k.name, k.rights, k.sid, k.opened, now(), k.opens, k.closes))
+    const seen = Number.isFinite(k && k.lastSeen) ? Math.min(now(), k.lastSeen + away) : now()
+    if (key && key.length === KX_BYTES && sids.has(k.sid)) keys.set(keyHash(key), entry(key, k.name, k.rights, k.sid, k.opened, seen, k.opens, k.closes))
   }
   // Earlier secrets kept: the recent ones, and any a guest let in needs.
   const pruneSecrets = () => {
@@ -387,8 +391,12 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     const known = hash && keys.get(hash)
     if (!known || !bindingSigned(key, g.binding, signature)) return drop(g, 'rejoin-refused')
     for (const other of [...guests.values()]) if (other !== g && other.keyHash === hash) drop(other, 'replaced')
-    // At most a few more than the guests' room (it was one of them).
-    if ([...guests.values()].filter((x) => x.state === 'joined').length >= MAX_GUESTS + 2) return drop(g, 'busy')
+    // At most a few more than the guests' room (it was one of them). The
+    // host's doing: never counted against the code (it proved its key).
+    if ([...guests.values()].filter((x) => x.state === 'joined').length >= MAX_GUESTS + 2) {
+      g.byHost = true
+      return drop(g, 'busy')
+    }
     g.keyHash = hash
     g.name = known.name || cleanName(g.name)
     g.rights = { ...known.rights }
@@ -415,7 +423,12 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     // pausing after a no, and its reconnect key.
     if (blocked || !isCurrent(g) || now() > inviteExpires) return drop(g, 'expired')
     const inOrWaiting = [...guests.values()].filter((x) => x.state === 'joined' || x.state === 'waiting')
-    if (now() < waitUntil || inOrWaiting.filter((x) => x.state === 'waiting').length >= MAX_WAITING || inOrWaiting.length >= MAX_GUESTS) return drop(g, 'busy')
+    if (now() < waitUntil || inOrWaiting.filter((x) => x.state === 'waiting').length >= MAX_WAITING) return drop(g, 'busy')
+    // The room full: the host's doing, not counted against the code.
+    if (inOrWaiting.length >= MAX_GUESTS) {
+      g.byHost = true
+      return drop(g, 'busy')
+    }
     // Its reconnect key: it signed this connection with it (it holds it), not
     // a weak one, and not one already known (another guest's).
     const key = Buffer.from(String(msg.key || ''), 'base64')
@@ -494,6 +507,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       case 'close':
         if (!g.rights.close || !isShared(msg.id)) return
         if (!allowed(g, 'closes', CLOSES_PER_MINUTE)) return
+        keysChanged()
         callbacks.closePane(msg.id, publicGuest(g))
         return
       default:

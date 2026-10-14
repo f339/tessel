@@ -222,6 +222,18 @@ describe('managed Codex accounts', () => {
     expect(await api.launchEnv()).toMatchObject({ ok: true })
   })
 
+  it('removes an account whose home holds a junction (a browser profile left by a sign-in), keeping what it points to', async () => {
+    const api = service()
+    const { id } = await api.add()
+    const outside = join(userData, '..', 'outside-profile')
+    put(join(outside, 'keep.txt'), 'keep')
+    fs.mkdirSync(join(managed(id), 'AppData', 'INetCache'), { recursive: true })
+    fs.symlinkSync(outside, join(managed(id), 'AppData', 'INetCache', 'Content.IE5'), process.platform === 'win32' ? 'junction' : 'dir')
+    await api.remove(id)
+    expect(fs.existsSync(managed(id))).toBe(false)
+    expect(fs.readFileSync(join(outside, 'keep.txt'), 'utf8')).toBe('keep')
+  })
+
   it('refuses linked account home without deleting the real target or clearing selection', async () => {
     const api = service()
     const { id } = await api.add()
