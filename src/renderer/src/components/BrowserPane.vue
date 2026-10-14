@@ -59,6 +59,7 @@ import { claimPage, releasePage, placePage, createWebview, MAIN_PARTITION, AGENT
 import DesignModePanel from './DesignModePanel.vue'
 import ViewTabs from './ViewTabs.vue'
 import { t } from '../i18n'
+import { settings } from '../settings'
 
 const props = defineProps({
   node: { type: Object, required: true },
@@ -211,7 +212,7 @@ function onDomReady() {
     page.ready = true
     page.guestId = guestId.value
   }
-  call('setZoomLevel', clampZoom(props.node.zoom || 0))
+  call('setZoomLevel', pageZoom())
   syncHistory()
   if (first && pendingUrl) {
     const url = pendingUrl
@@ -517,11 +518,23 @@ function onDocMouseDown(e) {
 
 // --- Zoom (Orca's browser-page-zoom-indicator) ------------------------------------------------
 const zoomShown = ref(false)
-const zoomText = computed(() => t('browser.zoom.percent', '{{percent}}%', { percent: zoomPercent(props.node.zoom || 0) }))
+// The pane's own zoom, else Settings' default (browserZoomLevel); reset goes
+// back to the default.
+function pageZoom() {
+  return clampZoom(Number.isFinite(props.node.zoom) ? props.node.zoom : settings.browserZoomLevel)
+}
+// Settings' default changed: pages that follow it follow.
+watch(
+  () => settings.browserZoomLevel,
+  () => {
+    if (!Number.isFinite(props.node.zoom)) call('setZoomLevel', pageZoom())
+  }
+)
+const zoomText = computed(() => t('browser.zoom.percent', '{{percent}}%', { percent: zoomPercent(pageZoom()) }))
 let zoomTimer = null
 function zoom(dir) {
-  const level = nextZoom(props.node.zoom || 0, dir)
-  props.node.zoom = level
+  props.node.zoom = dir ? nextZoom(pageZoom(), dir) : null
+  const level = pageZoom()
   call('setZoomLevel', level)
   zoomShown.value = true
   clearTimeout(zoomTimer)

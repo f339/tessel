@@ -393,8 +393,9 @@ function makeBrowserLeaf(id = null, url = BLANK_URL) {
     id: id || newId('pane'),
     title: t('app.pane.browser', 'Browser'),
     url: allowedBrowserUrl(url) || BLANK_URL,
-    // Chromium's zoom level of the page (0: 100%).
-    zoom: 0,
+    // Chromium's zoom level of the page, set in the pane (Ctrl+= / Ctrl+-);
+    // null: Settings' default (browserZoomLevel).
+    zoom: null,
     // Bumped to put the keyboard in its address bar.
     focusAddress: 0,
     broadcast: false
@@ -1758,7 +1759,7 @@ function serializeNode(node) {
       num: node.num || null,
       paneName: node.paneName || undefined,
       url: allowedBrowserUrl(node.url) || BLANK_URL,
-      zoom: Number.isFinite(node.zoom) ? node.zoom : 0,
+      zoom: Number.isFinite(node.zoom) ? node.zoom : null,
       viewPath: node.viewPath || undefined,
       agentSession: node.agentSession ? true : undefined
     }
@@ -1884,7 +1885,9 @@ async function deserializeNode(snap, cwd = null) {
     if (typeof snap.title === 'string' && snap.title) leaf.title = snap.title.slice(0, 200)
     if (snap.paneName) leaf.paneName = snap.paneName
     if (Number.isInteger(snap.num) && snap.num > 0) leaf.num = snap.num
-    if (Number.isFinite(snap.zoom)) leaf.zoom = Math.max(-3, Math.min(5, snap.zoom))
+    // Saved before the compact defaults, 0 was only the default: it follows
+    // the new one.
+    if (Number.isFinite(snap.zoom) && (snap.zoom !== 0 || settings.compactDefaults)) leaf.zoom = Math.max(-3, Math.min(5, snap.zoom))
     if (validViewPath(snap.viewPath)) leaf.viewPath = snap.viewPath
     if (snap.agentSession === true) leaf.agentSession = true
     return leaf
@@ -11910,6 +11913,8 @@ onMounted(async () => {
   await loadModelLists()
   startStep = 'layout'
   await restoreOrSeedLayout()
+  // The compact defaults are applied now (settings.js, deserializeNode): once.
+  settings.compactDefaults = true
   layoutReady.value = true
   startStep = 'terminals'
   if (window.shellApi.reconcilePtys) {

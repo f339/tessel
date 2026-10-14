@@ -447,8 +447,10 @@ describe('BrowserPane.vue', () => {
     expect(node.zoom).toBe(1.5)
     expect(wrapper.find('[data-test="browser-zoom"]').classes()).toContain('shown')
     expect(wrapper.find('[data-test="browser-zoom"]').text()).toBe('131%')
+    // Reset: back to Settings' default (a little smaller than 100 %).
     await root.trigger('keydown', { key: '0', ctrlKey: true })
-    expect(node.zoom).toBe(0)
+    expect(node.zoom).toBeNull()
+    expect(webview().setZoomLevel).toHaveBeenLastCalledWith(-0.5)
     await root.trigger('keydown', { key: 'r', ctrlKey: true })
     expect(webview().reload).toHaveBeenCalled()
     await root.trigger('keydown', { key: 'R', ctrlKey: true, shiftKey: true })

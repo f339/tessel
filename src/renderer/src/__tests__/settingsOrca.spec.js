@@ -224,9 +224,9 @@ describe('Trim Gutter on Copy', () => {
 })
 
 describe('editor options', () => {
-  it("Editor Font Family: VS Code's (Consolas) when empty, 14 px", () => {
+  it("Editor Font Family: VS Code's (Consolas) when empty, 12 px", () => {
     expect(editorFontStack({ fontFamily: 'Cascadia Mono', editorFontFamily: '' })).toBe("Consolas, 'Courier New', monospace")
-    expect(editorOptionsFor(DEFAULT_SETTINGS).fontSize).toBe(14)
+    expect(editorOptionsFor(DEFAULT_SETTINGS).fontSize).toBe(12)
     expect(editorFontStack({ fontFamily: 'Consolas', editorFontFamily: 'Fira Code' })).toMatch(/^"Fira Code"/)
     expect(editorFontStack({ fontFamily: 'Consolas', editorFontFamily: "'A', B" })).toMatch(/^'A', B, /)
     expect(editorOptionsFor({ ...DEFAULT_SETTINGS, editorFontFamily: 'Fira Code' }).fontFamily).toMatch(/^"Fira Code"/)

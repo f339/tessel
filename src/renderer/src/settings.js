@@ -206,9 +206,15 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // Like Orca's (Settings > Editor): the editor's own font ('' = the
   // terminal font), and how diffs show whitespace, unchanged lines and long
   // lines.
-  // The editor's font: VS Code's (Consolas 14 px on Windows) unless one is set.
+  // The editor's font: VS Code's (Consolas) unless one is set, compact (12 px).
   editorFontFamily: '',
-  editorFontSize: 14,
+  editorFontSize: 12,
+  // A browser pane's page zoom unless set in the pane (Ctrl+= / Ctrl+-):
+  // Chromium's level, -0.5 = 91 %, a little smaller than Chrome's 100 %.
+  browserZoomLevel: -0.5,
+  // The compact defaults were applied once to settings saved before them
+  // (the editor at 14 px, pages at 100 %).
+  compactDefaults: false,
   diffShowWhitespace: false,
   diffCollapseUnchanged: false,
   diffWordWrap: false,
@@ -320,7 +326,8 @@ export const LIMITS = Object.freeze({
   fastScrollSensitivity: [1, 10],
   notificationVolume: [0, 100],
   minimumContrastRatio: [1, 21],
-  editorFontSize: [6, 100]
+  editorFontSize: [6, 100],
+  browserZoomLevel: [-3, 5]
 })
 export const UI_ZOOM_STEP = 0.5
 export const GPU_MODES = ['auto', 'on', 'off']
@@ -492,6 +499,9 @@ export function loadSettings(saved) {
   settings.fontWeightBold = Math.round(settings.fontWeightBold)
   settings.dividerThickness = Math.round(settings.dividerThickness)
   settings.notificationVolume = Math.round(settings.notificationVolume)
+  // Settings saved before the compact defaults: the editor's old default
+  // (14 px) becomes the new one, once (pages: App.vue deserializeNode).
+  if (!saved.compactDefaults && saved.editorFontSize === 14) settings.editorFontSize = DEFAULT_SETTINGS.editorFontSize
 }
 
 // Resets preferences; your custom agents and quick commands are kept.
