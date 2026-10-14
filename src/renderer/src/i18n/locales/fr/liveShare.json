@@ -170,6 +170,31 @@
       "remove": "Retirer de Live Share",
       "removeHint": "Ses panneaux disparaissent aussitôt pour tous les invités",
       "last": "C'est le seul projet que vous partagez. Pour arrêter, utilisez Arrêter le partage dans Live Share."
+    },
+    "banner": {
+      "starting": "DÉMARRAGE",
+      "live": "EN DIRECT",
+      "sharingHere2": "Vos invités voient ce projet en direct. Vous partagez :",
+      "sharingOther2": "Ce projet n'est pas partagé. Vous partagez :",
+      "projectsLabel": "Projets que vous partagez",
+      "projectHere": "À l'écran maintenant",
+      "gotoProject": "Aller à {{project}}",
+      "removeProject": "Arrêter de partager {{project}} : vos invités ne le voient plus",
+      "add": "Partager ce projet",
+      "addTitle": "Les invités déjà connectés le voient une fois que vous l'activez pour eux (Gérer…)",
+      "guests_one": "{{count}} invité connecté",
+      "guests_other": "{{count}} invités connectés",
+      "waiting_one": "{{count}} attend votre réponse",
+      "waiting_other": "{{count}} attendent votre réponse",
+      "manage": "Gérer…",
+      "guestTag": "LIVE SHARE",
+      "reconnecting": "Reconnexion à la session de {{host}}…",
+      "guestHere": "Vous êtes dans la session de {{host}} : ces panneaux tournent sur l’ordinateur de {{host}}.",
+      "guestOther": "Vous êtes dans la session de {{host}} (ce projet est le vôtre).",
+      "gotoSession": "Aller à la session",
+      "leave": "Quitter",
+      "leaveTitle": "Quitter la session Live Share ?",
+      "leaveText": "Vous ne verrez plus les panneaux de {{host}}. Pour revenir, demandez un nouveau code d’invitation à {{host}}."
     }
   }
 }

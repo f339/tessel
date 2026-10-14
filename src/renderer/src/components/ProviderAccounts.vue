@@ -764,6 +764,11 @@ onBeforeUnmount(() => {
 .accounts-notice {
   color: var(--text-dim);
 }
+/* A banner's button keeps its label on one line, beside the text. */
+.accounts-banner > .exit-btn {
+  flex: none;
+  white-space: nowrap;
+}
 .account-pulse {
   display: inline-block;
   width: 6px;
