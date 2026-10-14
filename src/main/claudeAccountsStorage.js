@@ -146,7 +146,8 @@ export async function ownedDirectory(root, path, marker, identity) {
   return true
 }
 
-// Validate the entire owned tree first; never recurse through a link or junction.
+// Validate the entire owned tree first; never recurse through a link or junction
+// (one found inside is removed itself, never what it points to).
 export async function removeOwnedDirectory(root, path, marker, identity) {
   if (!(await ownedDirectory(root, path, marker, identity))) return
   const entries = []
@@ -155,21 +156,28 @@ export async function removeOwnedDirectory(root, path, marker, identity) {
     await inspect(directory, true)
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       const child = join(directory, entry.name)
-      if (entry.isSymbolicLink()) throw authError()
-      if (entry.isDirectory()) await walk(child, depth + 1)
+      if (entry.isSymbolicLink()) entries.push([child, 'link'])
+      else if (entry.isDirectory()) await walk(child, depth + 1)
       else {
         if (!entry.isFile() || !(await inspect(child))) throw authError()
-        entries.push([child, false])
+        entries.push([child, 'file'])
       }
     }
-    entries.push([directory, true])
+    entries.push([directory, 'directory'])
   }
   await walk(path, 0)
   if (!(await ownedDirectory(root, path, marker, identity))) throw authError()
-  for (const [entry, directory] of entries) {
+  for (const [entry, kind] of entries) {
     if (!contained(resolve(root), resolve(entry))) throw authError()
-    await inspect(entry, directory)
-    if (directory) await fs.rmdir(entry)
+    if (kind === 'link') {
+      // Its folder was checked above; the link is unlinked, not followed.
+      await inspect(dirname(entry), true)
+      if (!(await fs.lstat(entry)).isSymbolicLink()) throw authError()
+      await fs.unlink(entry)
+      continue
+    }
+    await inspect(entry, kind === 'directory')
+    if (kind === 'directory') await fs.rmdir(entry)
     else await fs.unlink(entry)
   }
 }

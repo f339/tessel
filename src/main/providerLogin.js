@@ -66,18 +66,15 @@ export function loginEnvironment(provider, home, base = process.env) {
   if (!ACCOUNT_AUTH_ENV[provider] || !isAbsolute(home)) throw new Error(t('main.login.invalidRequest', 'Invalid sign-in request.'))
   const env = cleanEnv(base)
   const remove = new Set(
-    [
-      ...ACCOUNT_AUTH_ENV.codex,
-      ...ACCOUNT_AUTH_ENV.claude,
-      'HOME',
-      'USERPROFILE',
-      'CLAUDE_CONFIG_DIR',
-      'CODEX_HOME'
-    ].map((key) => key.toUpperCase())
+    [...ACCOUNT_AUTH_ENV.codex, ...ACCOUNT_AUTH_ENV.claude, 'CLAUDE_CONFIG_DIR', 'CODEX_HOME'].map((key) =>
+      key.toUpperCase()
+    )
   )
   for (const key of Object.keys(env)) if (remove.has(key.toUpperCase())) delete env[key]
-  env.HOME = home
-  env.USERPROFILE = home
+  // The sign-in's files go to its own folder (both CLIs keep their login in
+  // CLAUDE_CONFIG_DIR / CODEX_HOME). HOME and USERPROFILE stay the user's: the
+  // browser the CLI opens inherits them, and with another profile Windows sends
+  // it to an empty profile (no saved logins) inside that folder.
   env[provider === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'] = home
   return env
 }

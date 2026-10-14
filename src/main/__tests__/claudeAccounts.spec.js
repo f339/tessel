@@ -609,3 +609,59 @@ describe('saved pane account scope', () => {
     expect(read(join(override, '.credentials.json'))).toEqual(token('one'))
   })
 })
+
+describe('sign-in folders', () => {
+  const link = (target, path) => {
+    fs.mkdirSync(join(path, '..'), { recursive: true })
+    fs.symlinkSync(target, path, process.platform === 'win32' ? 'junction' : 'dir')
+  }
+  it('adds the account when its sign-in folder holds a junction (a browser profile), removes the folder and keeps what the junction points to', async () => {
+    seedSystem()
+    const outside = join(root, 'outside')
+    put(join(outside, 'keep.txt'), 'keep')
+    const signIn = runner.getMockImplementation()
+    let isolated
+    runner.mockImplementationOnce(async (options) => {
+      isolated = options.home
+      link(outside, join(isolated, 'AppData', 'INetCache', 'Content.IE5'))
+      return signIn(options)
+    })
+    const result = await service.add()
+    expect(result.ok).toBe(true)
+    expect(fs.existsSync(isolated)).toBe(false)
+    expect(fs.readFileSync(join(outside, 'keep.txt'), 'utf8')).toBe('keep')
+  })
+  it('a sign-in folder that cannot be removed does not undo the sign-in', async () => {
+    seedSystem()
+    const signIn = runner.getMockImplementation()
+    let isolated
+    runner.mockImplementationOnce(async (options) => {
+      isolated = options.home
+      // Deeper than the cleanup goes.
+      fs.mkdirSync(join(isolated, ...Array(14).fill('d')), { recursive: true })
+      return signIn(options)
+    })
+    const result = await service.add()
+    expect(result.ok).toBe(true)
+    expect((await service.list()).accounts.map((a) => a.email)).toEqual(['managed@fixture.invalid'])
+    expect(fs.existsSync(isolated)).toBe(true)
+  })
+  it('removes a sign-in folder an earlier sign-in left once it is an hour old, and only one of its own', async () => {
+    seedSystem()
+    const ids = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333']
+    const [old, recent, foreign] = ids.map((id) => runtimePath(`login-${id}`))
+    const hoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    put(join(old, MARKER), `login:${ids[0]}\n`)
+    put(join(old, '.credentials.json'), token('old'))
+    link(join(root, 'home'), join(old, 'AppData', 'Content.IE5'))
+    fs.utimesSync(join(old, MARKER), hoursAgo, hoursAgo)
+    put(join(recent, MARKER), `login:${ids[1]}\n`)
+    put(join(foreign, MARKER), 'someone else\n')
+    fs.utimesSync(join(foreign, MARKER), hoursAgo, hoursAgo)
+    await add()
+    expect(fs.existsSync(old)).toBe(false)
+    expect(fs.existsSync(recent)).toBe(true)
+    expect(fs.existsSync(foreign)).toBe(true)
+    expect(read(credentialPath())).toEqual(token('system'))
+  })
+})

@@ -19,6 +19,7 @@ import {
 } from './claudeAccountsStorage'
 
 const MARKER = '.tessel-managed-claude-auth'
+const STALE_LOGIN_MS = 60 * 60 * 1000 // a sign-in times out after 10 minutes
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const queues = new Map()
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value)
@@ -412,6 +413,7 @@ export function createClaudeAccounts({
     if (id && state.selectedId === id) await snapshot()
     if (typeof runLogin !== 'function') throw authError(t('main.claudeAccount.loginUnavailable', 'Claude login is unavailable.'))
     if (signal?.aborted) throw authError(t('main.claudeAccount.loginCancelled', 'Claude login was cancelled.'))
+    await removeStaleLogins()
     const loginId = randomUUID()
     const temporary = join(runtimeRoot, `login-${loginId}`)
     await ensureDirectory(temporary)
@@ -494,8 +496,32 @@ export function createClaudeAccounts({
         if ((await readText(journalPath)) === null)
           await removeOwnedDirectory(accountsRoot, created.path, MARKER, created.id)
       }
+      // Only a copy of what was saved: a failed cleanup never undoes the
+      // sign-in (the folder is removed by a later one).
       if (cleanupSafe)
-        await removeOwnedDirectory(runtimeRoot, temporary, MARKER, `login:${loginId}`)
+        await removeOwnedDirectory(runtimeRoot, temporary, MARKER, `login:${loginId}`).catch(() => {})
+    }
+  }
+  // Sign-in folders an earlier sign-in left (its cleanup failed, or Tessel
+  // stopped meanwhile): removed once no sign-in can still use them.
+  async function removeStaleLogins() {
+    let names
+    try {
+      names = await fs.readdir(runtimeRoot)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      const id = /^login-(.+)$/.exec(name)?.[1]
+      if (!id || !UUID.test(id)) continue
+      const path = join(runtimeRoot, name)
+      try {
+        const marker = await inspect(join(path, MARKER))
+        if (!marker || Date.now() - marker.mtimeMs < STALE_LOGIN_MS) continue
+        await removeOwnedDirectory(runtimeRoot, path, MARKER, `login:${id}`)
+      } catch {
+        /* kept: tried again at the next sign-in */
+      }
     }
   }
   const savedAccountRefusal = () => ({

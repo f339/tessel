@@ -66,7 +66,7 @@ describe('provider login links and environment', () => {
       accountLoginUrl('claude', 'Browser: https://claude.ai/oauth/authorize?state=test\n')
     ).toContain('https://claude.ai/oauth/authorize')
   })
-  it('isolates home and removes competing credentials and parent agent variables case insensitively', () => {
+  it('isolates the provider folder, keeps the user profile (for the browser), and removes competing credentials and parent agent variables case insensitively', () => {
     const env = loginEnvironment('codex', home, {
       home: 'real',
       USERPROFILE: 'real',
@@ -78,11 +78,15 @@ describe('provider login links and environment', () => {
       HTTPS_PROXY: 'proxy'
     })
     expect(env).toEqual({
-      HOME: home,
-      USERPROFILE: home,
+      home: 'real',
+      USERPROFILE: 'real',
       CODEX_HOME: home,
       PATH: 'bin',
       HTTPS_PROXY: 'proxy'
+    })
+    expect(loginEnvironment('claude', home, { USERPROFILE: 'real', claude_config_dir: 'real', CLAUDE_CODE_OAUTH_TOKEN: 'secret' })).toEqual({
+      USERPROFILE: 'real',
+      CLAUDE_CONFIG_DIR: home
     })
     expect(() => loginEnvironment('unknown', home)).toThrow()
   })
