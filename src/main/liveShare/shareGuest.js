@@ -96,7 +96,7 @@ export function createShareGuest({ url, secret, name, callbacks }) {
       socket.on('message', (data, isBinary) => {
         if (closed) return
         if (!channel) {
-          let hello = null
+          let hello
           try {
             hello = isBinary ? null : JSON.parse(data.toString())
           } catch {

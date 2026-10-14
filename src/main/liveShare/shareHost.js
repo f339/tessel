@@ -53,6 +53,7 @@ export const cleanRights = (r) => ({ type: !!(r && r.type), open: !!(r && r.open
 
 export const cleanName = (name) =>
   String(name || '')
+    // eslint-disable-next-line no-control-regex -- control characters are what it removes
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .trim()
     .slice(0, 40) || 'Guest'
@@ -61,6 +62,7 @@ export const cleanName = (name) =>
 // what someone types: the cursor position, the terminal's identity and
 // version, mode and status reports, colour and window answers, focus in and
 // out. A guest's terminal answers too: dropped, the host's answers already.
+/* eslint-disable no-control-regex -- terminal escape sequences */
 const TERMINAL_REPLIES = [
   /\x1b\[\d+;\d+R/g, // cursor position (also Shift+F3 and the like: not sent)
   /\x1b\[[?>][\d;]*c/g, // device attributes
@@ -72,6 +74,7 @@ const TERMINAL_REPLIES = [
   /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, // OSC answers (colours)
   /\x1bP[^\x1b]*\x1b\\/g // DCS answers (version, settings)
 ]
+/* eslint-enable no-control-regex */
 export function stripTerminalReplies(data) {
   let out = String(data || '')
   for (const re of TERMINAL_REPLIES) out = out.replace(re, '')
@@ -80,6 +83,10 @@ export function stripTerminalReplies(data) {
 
 // callbacks:
 //   listPanes()            -> [{ id, title, kind, cols, rows }]
+//   isShared(id)           -> whether a pane is shared right now (optional:
+//                             listPanes otherwise); checked for every output,
+//                             screen and exit, so a pane taken out of the
+//                             shared project sends nothing more at once
 //   layout()               -> what the host's window shares (sent as is)
 //   snapshot(id, ready)    -> Promise<{ data, cols, rows } | null>, then live
 //                             output comes through sendData (see subscribe);
@@ -140,11 +147,22 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     for (const [id, data] of [...g.pending]) {
       if (g.held.has(id)) continue
       g.pending.delete(id)
-      send(g, { t: 'data', id, data })
+      if (isShared(id)) send(g, { t: 'data', id, data })
+      else forget(g, id)
     }
   }
 
   const sharedIds = () => new Set(callbacks.listPanes().map((p) => p.id))
+  const isShared = (id) => (callbacks.isShared ? !!callbacks.isShared(id) : sharedIds().has(id))
+
+  // A pane no longer shared: what was waiting for it goes, and its screen
+  // is taken again if it comes back.
+  function forget(g, id) {
+    g.subscribed.delete(id)
+    g.held.delete(id)
+    g.heldExits.delete(id)
+    g.pending.delete(id)
+  }
 
   // A pane's screen, then its output from there on. Output that came before
   // the snapshot is in it and is not sent again; output after it is. The
@@ -162,6 +180,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       if (done) return
       done = true
       if (!guests.has(g.id) || g.subscribed.get(id) !== 'loading') return
+      if (!isShared(id)) return forget(g, id)
       g.subscribed.set(id, 'live')
       const cols = snap?.cols || 0
       const rows = snap?.rows || 0
@@ -175,6 +194,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
         .catch(() => '')
         .then((text) => {
           if (!guests.has(g.id) || !g.held.delete(id)) return
+          if (!isShared(id)) return forget(g, id)
           if (g.subscribed.get(id) === 'live') send(g, { t: 'snapshot', id, data: typeof text === 'string' ? text : '', cols, rows })
           const exit = g.heldExits.get(id)
           g.heldExits.delete(id)
@@ -248,7 +268,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     if (g.state !== 'joined') return
     switch (msg.t) {
       case 'write': {
-        if (!g.rights.type || typeof msg.data !== 'string' || msg.data.length > MAX_WRITE || !sharedIds().has(msg.id)) return
+        if (!g.rights.type || typeof msg.data !== 'string' || msg.data.length > MAX_WRITE || !isShared(msg.id)) return
         const data = stripTerminalReplies(msg.data)
         if (data) callbacks.write(msg.id, data)
         return
@@ -260,7 +280,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
         callbacks.openPane({ kind: msg.spec.kind, agent: typeof msg.spec.agent === 'string' ? msg.spec.agent.slice(0, 40) : undefined }, publicGuest(g))
         return
       case 'close':
-        if (!g.rights.close || !sharedIds().has(msg.id)) return
+        if (!g.rights.close || !isShared(msg.id)) return
         if (!allowed(g, g.closes, CLOSES_PER_MINUTE)) return
         callbacks.closePane(msg.id, publicGuest(g))
         return
@@ -310,7 +330,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     socket.on('message', (data, isBinary) => {
       if (!guests.has(g.id)) return
       if (g.state === 'handshake') {
-        let msg = null
+        let msg
         try {
           msg = isBinary ? null : JSON.parse(data.toString())
         } catch {
@@ -399,6 +419,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     // guest whose snapshot is being taken must skip exactly what came before
     // it), to every guest that has the pane; sent in batches.
     sendData(id, data) {
+      if (!isShared(id)) return
       for (const g of guests.values()) {
         if (g.state !== 'joined' || g.subscribed.get(id) !== 'live') continue
         g.pending.set(id, (g.pending.get(id) || '') + data)
@@ -406,6 +427,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       }
     },
     sendExit(id, exitCode) {
+      if (!isShared(id)) return
       for (const g of guests.values()) {
         if (g.state !== 'joined' || !g.subscribed.has(id)) continue
         if (g.held.has(id)) {
@@ -424,13 +446,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       const ids = new Set(panes.map((p) => p.id))
       for (const g of guests.values()) {
         if (g.state !== 'joined') continue
-        for (const id of [...g.subscribed.keys()]) {
-          if (ids.has(id)) continue
-          g.subscribed.delete(id)
-          g.held.delete(id)
-          g.heldExits.delete(id)
-          g.pending.delete(id)
-        }
+        for (const id of [...g.subscribed.keys()]) if (!ids.has(id)) forget(g, id)
         send(g, { t: 'panes', panes, layout })
         for (const p of panes) subscribe(g, p.id)
       }

@@ -1622,6 +1622,8 @@ function firstAwakeLeafId(node) {
 // Serialize the live tree into a plain snapshot (no PTYs / pids / runtime ids).
 function serializeNode(node) {
   if (!node) return null
+  // A Live Share host's pane (another computer's terminal) is never saved.
+  if (node.type === 'leaf' && node.backend === 'liveshare') return null
   // An editor pane: its tabs (no terminal).
   if (node.type === 'leaf' && node.kind === 'editor') {
     return {
@@ -1719,11 +1721,24 @@ function serializeNode(node) {
       agentMissing: !node.detected && node.agentMissing ? true : undefined
     }
   }
+  const children = node.children.map(serializeNode)
+  if (children.every(Boolean)) {
+    return {
+      type: 'split',
+      dir: node.dir,
+      sizes: node.sizes.slice(),
+      children
+    }
+  }
+  // Without the panes left out: the others share their room.
+  const kept = children.map((c, i) => [c, Number(node.sizes[i]) || 0]).filter(([c]) => c)
+  if (kept.length < 2) return kept.length ? kept[0][0] : null
+  const total = kept.reduce((sum, [, size]) => sum + size, 0)
   return {
     type: 'split',
     dir: node.dir,
-    sizes: node.sizes.slice(),
-    children: node.children.map(serializeNode)
+    sizes: kept.map(([, size]) => (total > 0 ? (size / total) * 100 : 100 / kept.length)),
+    children: kept.map(([c]) => c)
   }
 }
 
@@ -2069,17 +2084,19 @@ function closeLeaf(leafId, opts = {}) {
   const isEditor = !!(closing && closing.kind === 'editor')
   // An editor or a browser pane: no terminal to stop.
   const noTerminal = hasNoTerminal(closing)
-  // A pane of a Live Share project is the host's: closing it closes it on
-  // the host's computer, for everyone in the session (asked first), when
-  // the host lets you.
-  if (closing && liveShare.isGuestLeaf(closing) && !opts.force) {
-    if (liveShare.state.guest.state === 'joined' && !liveShare.canClose()) return
+  // A pane of a Live Share project is the host's: closing it asks the host
+  // to close it on their computer, for everyone in the session (asked here
+  // first), when the host lets you. It stays here until the host closed it.
+  if (closing && liveShare.isGuestLeaf(closing) && liveShare.state.guest.state === 'joined') {
+    if (!liveShare.canClose()) return
+    const name = closing.paneName || closing.title
+    if (opts.force) return liveShare.requestClose(leafId, name)
     askConfirm({
-      title: t('app.close.title', 'Close {{name}}?', { name: closing.paneName || closing.title }),
-      text: t('liveShare.closeHostPane', 'This pane runs on {{host}}’s computer: it closes there too, for everyone in the session.', { host: liveShare.state.guest.host || '?' }),
+      title: t('app.close.title', 'Close {{name}}?', { name }),
+      text: t('liveShare.closeHostPane2', 'This pane runs on {{host}}’s computer: {{host}} is asked to close it there, for everyone in the session.', { host: liveShare.state.guest.host || '?' }),
       confirmLabel: t('app.close.confirm', 'Close'),
       danger: true
-    }).then((ok) => ok && closeLeaf(leafId, { ...opts, force: true }))
+    }).then((ok) => ok && liveShare.requestClose(leafId, name))
     return
   }
   // Settings > General, "Confirm before closing running terminals" (Orca's):
@@ -2253,7 +2270,16 @@ const liveShare = createLiveShareWindow({
   dropBuffer,
   showToast,
   isAgentLeaf,
-  probeRunningWork
+  probeRunningWork,
+  killPty: (id) => window.shellApi.killPty(id),
+  // Panes of this computer left in a Live Share project when it ends: a
+  // project of their own, so nothing running is lost.
+  adoptLeaves: (leaves) => {
+    const ws = makeWorkspace(t('liveShare.keptPanes', 'Kept from Live Share'))
+    ws.tree = leaves.length === 1 ? leaves[0] : makeSplit('row', leaves, leaves.map(() => 100 / leaves.length))
+    ws.activeId = leaves[0].id
+    workspaces.value.push(ws)
+  }
 })
 const liveShareOpen = ref(false)
 // The projects you can share (a Live Share project is someone else's).
@@ -4454,6 +4480,13 @@ function movePane(srcId, target) {
   const srcWs = wsOfLeaf(srcId)
   const src = findLeaf(srcId)
   if (!srcWs || !src) return
+  // A Live Share project shows the host's layout: no pane moves in, out or
+  // around in it (a host's pane is not a terminal of this computer).
+  const dstWsOf = target.kind === 'ws' || target.kind === 'edge' ? wsById(target.id) : wsOfLeaf(target.id)
+  if (liveShare.isGuestWs(srcWs) || liveShare.isGuestWs(dstWsOf) || liveShare.isGuestLeaf(src)) {
+    showToast(t('liveShare.noMove', 'A Live Share project follows the host’s layout: its panes do not move, and no pane moves into it.'), { timeout: 5000 })
+    return
+  }
 
   if (target.kind === 'ws') {
     const dst = wsById(target.id)
@@ -4561,6 +4594,10 @@ function moveSidePageToGrid(pageId, target) {
   if (!page) return
   const ws = target.kind === 'pane' ? wsOfLeaf(target.id) : wsById(target.id)
   if (!ws) return
+  if (liveShare.isGuestWs(ws)) {
+    showToast(t('liveShare.noMove', 'A Live Share project follows the host’s layout: its panes do not move, and no pane moves into it.'), { timeout: 5000 })
+    return
+  }
   const anchorId = target.kind === 'pane' ? target.id : ws.activeId && findLeafIn(ws.tree, ws.activeId) ? ws.activeId : firstLeafId(ws.tree)
   const anchor = anchorId ? findLeafIn(ws.tree, anchorId) : null
   const leaf = leafFromSidePage(page, (url) => makeBrowserLeaf(null, url))

@@ -92,11 +92,16 @@ export function layoutLeaves(layout) {
   return out
 }
 
+// Where a full-screen program's screen starts in a serialized screen.
+const ALT_SCREEN = '\x1b[?1049h\x1b[H'
+
 // What a guest gets of a pane: its screen as it is now, without the
 // scrollback above it (the terminal host's snapshot has thousands of lines of
 // history). The snapshot is drawn on an invisible terminal of the pane's size
-// that keeps no scrollback, and that screen is written out again. '' when it
-// can't (the guest then sees the output from now on).
+// that keeps no scrollback, and that screen is written out again. While a
+// full-screen program shows (the alternate screen), only its screen: the
+// normal screen hidden under it is history too. '' when it can't (the guest
+// then sees the output from now on).
 export function visibleScreen(data, cols, rows) {
   const text = typeof data === 'string' ? data : ''
   if (!text) return Promise.resolve('')
@@ -121,7 +126,12 @@ export function visibleScreen(data, cols, rows) {
       vt.loadAddon(ser)
       vt.write(text, () => {
         try {
-          done(ser.serialize({ scrollback: 0 }))
+          const all = ser.serialize({ scrollback: 0 })
+          if (vt.buffer.active.type !== 'alternate') return done(all)
+          // The addon writes the normal screen, then this switch and the
+          // alternate screen (and the modes after it): from the switch on.
+          const at = all.lastIndexOf(ALT_SCREEN)
+          done(at >= 0 ? all.slice(at) : '')
         } catch {
           done('')
         }
@@ -147,6 +157,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   // --- Host --------------------------------------------------------------
   let sharing = null // { server, tunnel, invite, state, guests, error }
   let layout = null // cleaned, from the window (liveShare:layout)
+  let shared = new Set() // its terminal panes: what guests may see
   const sizes = new Map() // pane id -> { cols, rows }, of every terminal
   const asks = new Map() // guest id -> resolve(yes)
   let changedTimer = null
@@ -239,6 +250,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         log: info,
         callbacks: {
           listPanes: sharedPanes,
+          isShared: (id) => shared.has(id),
           layout: () => layout,
           snapshot,
           write: (id, data) => host.send('write', { id, data }),
@@ -486,7 +498,15 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   })
   ipcMain.on('liveShare:layout', (_evt, raw) => {
     layout = cleanLayout(raw)
-    screenChanged()
+    const before = shared
+    shared = new Set(layoutLeaves(layout).filter((l) => l.view === 'terminal').map((l) => l.id))
+    // A pane taken out: nothing more of it goes out from now (shareHost
+    // checks isShared), and guests drop it now rather than after the pause.
+    if ([...before].some((id) => !shared.has(id)) && sharing?.server) {
+      clearTimeout(changedTimer)
+      changedTimer = null
+      sharing.server.panesChanged()
+    } else screenChanged()
   })
   ipcMain.handle('liveShare:rights', (_evt, { guestId, rights } = {}) => ({ ok: !!sharing?.server?.setRights(guestId, rights) }))
   ipcMain.handle('liveShare:newInvite', () => newInvite())

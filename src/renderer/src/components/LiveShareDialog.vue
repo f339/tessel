@@ -107,7 +107,6 @@ const progressText = computed(() => {
   return ''
 })
 const guests = computed(() => (Array.isArray(host.value.guests) ? host.value.guests : []))
-const sharedName = computed(() => (props.projects.find((p) => p.id === props.projectId) || {}).name || '')
 const expired = computed(() => !!host.value.expiresAt && host.value.expiresAt <= now.value)
 const expiryText = computed(() => {
   const at = host.value.expiresAt

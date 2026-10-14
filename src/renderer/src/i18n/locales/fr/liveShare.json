@@ -6,7 +6,9 @@
     "unavailable": "Live Share n'est pas disponible dans cette version.",
     "guest": "Un invité",
     "wsName": "{{host}} · Live Share",
-    "closeHostPane": "Ce panneau tourne sur l'ordinateur de {{host}} : il s'y ferme aussi, pour tous les participants de la session.",
+    "closeHostPane2": "Ce panneau tourne sur l'ordinateur de {{host}} : {{host}} reçoit la demande de le fermer, pour tous les participants de la session.",
+    "noMove": "Un projet Live Share suit la disposition de l'hôte : ses panneaux ne se déplacent pas, et aucun panneau n'y entre.",
+    "keptPanes": "Gardés de Live Share",
     "onlyTerminals": "Dans un projet Live Share, seuls des terminaux et des agents peuvent être ouverts (sur l'ordinateur de l'hôte).",
     "viewOnly": "Lecture seule : {{host}} ne vous a pas donné le droit de taper ici.",
     "tabs": {
@@ -115,6 +117,7 @@
       "closed": "{{name}} a fermé {{pane}}.",
       "ended": "Le Live Share avec {{host}} est terminé : {{reason}}",
       "opening": "Ouverture sur l'ordinateur de {{host}}…",
+      "closeAsked": "Demande envoyée à {{host}} pour fermer {{pane}}.",
       "rights": "{{host}} a changé ce que vous pouvez faire.",
       "noOpen": "{{host}} ne vous a pas donné le droit d'ouvrir des terminaux ou des agents.",
       "noClose": "Vous n'avez pas le droit de fermer les panneaux de {{host}}.",

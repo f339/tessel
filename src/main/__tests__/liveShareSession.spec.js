@@ -285,6 +285,42 @@ describe('Live Share session', () => {
     ])
   })
 
+  it('a pane taken out of the shared project sends nothing more, at once', async () => {
+    const { t, r } = await joinOne()
+    await until(() => r.screens.p1 === 'screen of p1')
+    // Output waiting to go out when the pane leaves: dropped.
+    host.sendData('p1', 'QUEUED')
+    t.panes = []
+    // Output after it left, before the guests are told (panesChanged).
+    host.sendData('p1', 'PRIVATE-AFTER-MOVE')
+    host.sendExit('p1', 0)
+    await wait(60)
+    expect(r.screens.p1).toBe('screen of p1')
+    expect(r.exits).toEqual({})
+    // Back in the project: its screen again, then its output.
+    t.panes = [{ id: 'p1', title: 'Claude Code', kind: 'agent', cols: 100, rows: 30 }]
+    host.panesChanged()
+    await wait(30)
+    host.sendData('p1', 'back')
+    await until(() => r.screens.p1 === 'screen of p1back')
+  })
+
+  it('a screen still being prepared when its pane leaves the project is not sent', async () => {
+    const t = fakeTessel()
+    let finish
+    t.callbacks.snapshot = (id, ready) => {
+      ready({ data: new Promise((resolve) => (finish = resolve)), cols: 100, rows: 30 })
+      return new Promise(() => {})
+    }
+    const { r } = await joinOne({ t })
+    await until(() => finish)
+    host.sendData('p1', 'during')
+    t.panes = []
+    finish('PRIVATE-SCREEN')
+    await wait(60)
+    expect(r.order).toEqual([])
+  })
+
   it('removes a guest and ends everything when sharing stops', async () => {
     const secret = newSecret()
     const t = fakeTessel()

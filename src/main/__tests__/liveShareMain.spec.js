@@ -386,6 +386,16 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
       { action: 'close', id: 'pane-1-ps', guest: expect.objectContaining({ name: 'Alex' }) }
     ])
 
+    // A pane taken out of the shared project: its output stops at once, and
+    // the guest drops it without waiting.
+    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-2-web', { view: 'browser' }), activeId: null })
+    host.api.onPtyData('pane-1-ps', 'PRIVATE-AFTER-MOVE\r\n')
+    await until(() => guest.last('liveShare:guest').panes.length === 0)
+    await new Promise((r) => setTimeout(r, 40))
+    expect(guest.data.some(([, d]) => d.includes('PRIVATE'))).toBe(false)
+    host.on['liveShare:layout'](null, { project: 'site', tree: { type: 'split', children: [leaf('pane-1-ps', { title: 'PowerShell' }), leaf('pane-2-web', { view: 'browser', title: 'localhost' })] }, activeId: 'pane-1-ps' })
+    await until(() => guest.last('liveShare:guest').panes.length === 1)
+
     // The host's window resized the pane: the guest shows it at that size.
     host.api.noteSize('pane-1-ps', 90, 25)
     await until(() => guest.last('liveShare:guest').panes[0]?.cols === 90)
@@ -475,11 +485,21 @@ describe('visibleScreen', () => {
     expect(screen).not.toContain('secret line 26')
   })
 
-  it('keeps the colours and the full-screen program (alternate screen) on screen', async () => {
-    const screen = await visibleScreen('old\r\n\x1b[31mred\x1b[0m\r\n\x1b[?1049h\x1b[HTUI', 20, 3)
+  it('keeps the colours on screen', async () => {
+    const screen = await visibleScreen('old\r\n\x1b[31mred\x1b[0m\r\nok', 20, 3)
     expect(screen).toContain('\x1b[31mred')
-    expect(screen).toContain('\x1b[?1049h')
-    expect(screen.endsWith('TUI')).toBe(true)
+    expect(screen.endsWith('ok')).toBe(true)
+  })
+
+  it('under a full-screen program, only its screen: not the normal screen hidden under it', async () => {
+    const screen = await visibleScreen('SECRET-BEFORE-JOIN\r\n\x1b[?1049h\x1b[HVISIBLE-TUI', 80, 24)
+    expect(screen).not.toContain('SECRET-BEFORE-JOIN')
+    expect(screen.startsWith('\x1b[?1049h\x1b[H')).toBe(true)
+    expect(screen).toContain('VISIBLE-TUI')
+    // Back from it: the normal screen again.
+    const after = await visibleScreen('SECRET\r\n\x1b[?1049h\x1b[HTUI\x1b[?1049lprompt', 80, 24)
+    expect(after).toContain('SECRET')
+    expect(after).not.toContain('TUI')
   })
 
   it('is nothing for nothing', async () => {
