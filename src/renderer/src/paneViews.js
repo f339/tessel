@@ -3,6 +3,9 @@
 // of the left sidebar (sidebarModel.js buildProjectCards). The panes all stay
 // in the workspace's single tree; a view is the part of it that belongs to
 // one copy. Pure functions: App picks the view, SplitNode draws it.
+// In a view, the editor and browser panes are not in the grid: each is a tab
+// of its own above it (ViewTabs.vue: Terminal | Editor | Browser), shown
+// alone in the whole room; the Terminal tab is the grid of the others.
 
 function normPath(p) {
   return String(p || '')
@@ -96,15 +99,72 @@ export function writeViewSizes(node) {
   src.sizes = sizes
 }
 
-// What the workspace shows: a layer per view ({ key, tree, active }), the
-// active pane's view on screen. One view: the tree as it is.
+// --- Tabs above the grid ----------------------------------------------------------
+// An editor or a browser pane: a tab of its own. It stays in the workspace's
+// tree (saved, listed and closed as before); where it sits there changes
+// nothing on screen.
+export function isTabLeaf(leaf) {
+  return !!leaf && leaf.type === 'leaf' && (leaf.kind === 'editor' || leaf.kind === 'browser')
+}
+
+// The tab a view shows ({ ids, grid, tabs }): 'terminal' (its grid) or the id
+// of one of its tab panes. The active pane is always on screen: its own tab,
+// or the grid for a terminal or an agent. ws.view keeps the Terminal tab
+// chosen by hand in a view whose grid is empty (the launcher shows there),
+// and the tab of a view that is not on screen.
+export function shownTab(ws, view) {
+  const ids = view.tabs.map((l) => l.id)
+  if (ws.activeId && view.ids.has(ws.activeId)) {
+    if (!ids.includes(ws.activeId)) return 'terminal'
+    return ws.view === 'terminal' && !view.grid ? 'terminal' : ws.activeId
+  }
+  return ids.includes(ws.view) ? ws.view : 'terminal'
+}
+
+// The tree with a new tab pane beside it all: the grid is not split (it is
+// the same tree, with all its room). makeSplit(dir, children, sizes).
+export function addTabLeaf(tree, leaf, makeSplit) {
+  return tree ? makeSplit('row', [tree, leaf], [50, 50]) : leaf
+}
+
+// The terminal or agent a pane opened from a tab goes beside, in the tab's
+// grid (its copy's): the last one made active there (ws.gridId), else the
+// first one. null when that grid has none.
+export function gridLeafFor(ws, from) {
+  if (!ws || !ws.tree) return null
+  const key = viewKey(from, ws.cwd)
+  let first = null
+  let last = null
+  eachLeaf(ws.tree, (leaf) => {
+    if (isTabLeaf(leaf) || viewKey(leaf, ws.cwd) !== key) return
+    if (!first) first = leaf
+    if (leaf.id === ws.gridId) last = leaf
+  })
+  return last || first
+}
+
+// What the workspace shows: a layer per view ({ key, tree, grid, tabs, shown,
+// active }), the active pane's view on screen. tree: the view's panes (one
+// view: the tree as it is); grid: its terminals and agents (the Terminal
+// tab; null when it has none); tabs: its editor and browser panes, in tree
+// order; shown: the tab on screen (shownTab).
 export function workspaceViews(ws) {
   if (!ws || !ws.tree) return []
   const views = treeViews(ws.tree, ws.cwd)
   const active = activeViewKey(views, ws.activeId)
-  return views.map((v) => ({
-    key: v.key || ':main',
-    tree: views.length === 1 ? ws.tree : pruneTree(ws.tree, (leaf) => v.ids.has(leaf.id)),
-    active: v.key === active
-  }))
+  return views.map((v) => {
+    const tabs = []
+    eachLeaf(ws.tree, (leaf) => v.ids.has(leaf.id) && isTabLeaf(leaf) && tabs.push(leaf))
+    // One pass over the tree: a divider moved in the grid writes back to the
+    // tree's own split (writeViewSizes).
+    const grid = pruneTree(ws.tree, (leaf) => v.ids.has(leaf.id) && !isTabLeaf(leaf))
+    return {
+      key: v.key || ':main',
+      tree: views.length === 1 ? ws.tree : pruneTree(ws.tree, (leaf) => v.ids.has(leaf.id)),
+      grid,
+      tabs,
+      shown: shownTab(ws, { ids: v.ids, grid, tabs }),
+      active: v.key === active
+    }
+  })
 }

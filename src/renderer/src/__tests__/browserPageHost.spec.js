@@ -163,6 +163,39 @@ describe('the page layer (browser/pageHost.js)', () => {
     expect(el.classList.contains('hosted')).toBe(true)
   })
 
+  // A browser pane is a tab of its own above the grid (App.vue, paneViews.js):
+  // its page is not inside the pane, so it is hidden by hand while another
+  // tab shows; a pane maximized in the grid never covers it.
+  it('a tab above the panes: its header holds the tabs, its page hides while another tab shows', async () => {
+    const rect = (left, top, width, height) => () => ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top })
+    wrapper.unmount()
+    _resetPagesForTests()
+    const shown = ref('terminal')
+    ctx.paneTabs = (id) => (id === 'b1' ? { leaves: [node], shown: shown.value } : null)
+    ctx.selectViewTab = vi.fn()
+    ctx.maximizedId.value = 'a-grid-pane'
+    wrapper = mount(Harness, { attachTo: document.body, global: { provide: { panelCtx: ctx } } })
+    await nextTick()
+    host().getBoundingClientRect = rect(100, 50, 1000, 800)
+    wrapper.find('.bp-page').element.getBoundingClientRect = rect(100, 110, 1000, 740)
+    const box = boxes()[0]
+    expect(box.style.visibility).toBe('hidden')
+    expect(wrapper.find('.pane-nav').classes()).toContain('with-view-tabs')
+    expect(wrapper.findAll('[data-test="view-tab"]').map((w) => w.attributes('data-tab'))).toEqual(['terminal', 'b1'])
+    // Its own tab fills the room: no maximize button.
+    expect(wrapper.find('.pane-nav-actions').findAll('.pane-nav-btn')).toHaveLength(1)
+    shown.value = 'b1'
+    await nextTick()
+    await nextTick()
+    expect(box.style.visibility).toBe('')
+    shown.value = 'terminal'
+    await nextTick()
+    await nextTick()
+    expect(box.style.visibility).toBe('hidden')
+    await wrapper.find('[data-tab="terminal"]').trigger('click')
+    expect(ctx.selectViewTab).toHaveBeenCalledWith('b1', 'terminal')
+  })
+
   it('another workspace shown: the page stays as it is, hidden with its layer', async () => {
     const el = webviewInHost()
     hidden.value = true

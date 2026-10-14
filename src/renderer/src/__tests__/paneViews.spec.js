@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { reactive } from 'vue'
-import { viewKey, treeViews, activeViewKey, pruneTree, writeViewSizes, workspaceViews } from '../paneViews'
+import { viewKey, treeViews, activeViewKey, pruneTree, writeViewSizes, workspaceViews, isTabLeaf, shownTab, addTabLeaf, gridLeafFor } from '../paneViews'
 
 const leaf = (id, extra = {}) => ({ type: 'leaf', id, ...extra })
 const split = (id, dir, children, sizes) => ({ type: 'split', id, dir, children, sizes: sizes || children.map(() => 100 / children.length) })
@@ -56,5 +56,87 @@ describe('paneViews', () => {
     const single = { cwd: 'C:\\Tessel', activeId: 'a', tree: split('root', 'row', [leaf('a'), leaf('b')]) }
     expect(workspaceViews(single)[0].tree).toBe(single.tree)
     expect(workspaceViews({ cwd: null, tree: null })).toEqual([])
+  })
+})
+
+describe('tabs above the grid', () => {
+  const editor = (id, extra = {}) => leaf(id, { kind: 'editor', ...extra })
+  const browser = (id, extra = {}) => leaf(id, { kind: 'browser', ...extra })
+  const makeSplit = (dir, children, sizes) => ({ type: 'split', id: `s-${children.map((c) => c.id).join('-')}`, dir, children, sizes })
+
+  it('an editor or a browser is a tab; a terminal, an agent or a chat is in the grid', () => {
+    expect(isTabLeaf(editor('e'))).toBe(true)
+    expect(isTabLeaf(browser('b'))).toBe(true)
+    expect(isTabLeaf(leaf('t', { kind: 'shell' }))).toBe(false)
+    expect(isTabLeaf(leaf('a', { kind: 'agent' }))).toBe(false)
+    expect(isTabLeaf(leaf('c', { kind: 'chat' }))).toBe(false)
+    expect(isTabLeaf(null)).toBe(false)
+  })
+
+  it('a tab opened beside the grid leaves the grid as it is (the same tree, all its room)', () => {
+    const grid = split('g', 'col', [leaf('a'), leaf('b')], [70, 30])
+    const withEditor = addTabLeaf(grid, editor('e'), makeSplit)
+    const withBoth = addTabLeaf(withEditor, browser('w'), makeSplit)
+    const ws = { cwd: 'C:\\p', activeId: 'a', tree: withBoth }
+    const [view] = workspaceViews(ws)
+    expect(view.grid).toBe(grid)
+    expect(grid.sizes).toEqual([70, 30])
+    expect(view.tabs.map((l) => l.id)).toEqual(['e', 'w'])
+    // The whole tree is still the view's (saved, listed as before).
+    expect(view.tree).toBe(withBoth)
+    // No tab yet: the first one is the whole tree.
+    expect(addTabLeaf(null, editor('e'), makeSplit).id).toBe('e')
+  })
+
+  it("prunes the tabs out of the grid, also with one view, and a divider moved there writes back to the tree's split", () => {
+    const tree = reactive(split('root', 'row', [leaf('a'), editor('e'), leaf('b')], [40, 20, 40]))
+    const ws = { cwd: 'C:\\p', activeId: 'a', tree }
+    const [view] = workspaceViews(ws)
+    expect(view.grid.children.map((c) => c.id)).toEqual(['a', 'b'])
+    expect(view.grid.sizes).toEqual([50, 50])
+    view.grid.sizes = [25, 75]
+    writeViewSizes(view.grid)
+    expect(tree.sizes).toEqual([20, 20, 60])
+    // Only tabs: no grid.
+    expect(workspaceViews({ cwd: 'C:\\p', activeId: 'e', tree: editor('e') })[0].grid).toBe(null)
+  })
+
+  it("each worktree's view has its own grid and tabs", () => {
+    const wt = { viewPath: 'C:\\wt' }
+    const tree = split('root', 'row', [leaf('a'), editor('e'), leaf('w', copy('C:\\wt')), browser('p', wt)])
+    const views = workspaceViews({ cwd: 'C:\\p', activeId: 'p', tree })
+    expect(views.map((v) => [v.key, v.tabs.map((l) => l.id), v.grid.id, v.active])).toEqual([
+      [':main', ['e'], 'a', false],
+      ['c:/wt', ['p'], 'w', true]
+    ])
+  })
+
+  it('shows the active pane: its own tab, or the grid for a terminal or an agent', () => {
+    const tree = split('root', 'row', [split('g', 'col', [leaf('a'), leaf('b')]), editor('e'), browser('w')])
+    const shown = (activeId, view) => workspaceViews({ cwd: 'C:\\p', activeId, view, tree })[0].shown
+    expect(shown('a')).toBe('terminal')
+    expect(shown('e')).toBe('e')
+    expect(shown('w', 'terminal')).toBe('w')
+    // The Terminal tab chosen in a view with no terminal: it stays (the
+    // launcher shows there).
+    const only = split('root', 'row', [editor('e'), browser('w')])
+    expect(workspaceViews({ cwd: 'C:\\p', activeId: 'e', view: 'terminal', tree: only })[0].shown).toBe('terminal')
+    expect(workspaceViews({ cwd: 'C:\\p', activeId: 'e', view: 'e', tree: only })[0].shown).toBe('e')
+    // A view not on screen keeps the tab chosen there.
+    const view = { ids: new Set(['x', 'y']), grid: leaf('x'), tabs: [editor('y')] }
+    expect(shownTab({ activeId: 'other', view: 'y' }, view)).toBe('y')
+    expect(shownTab({ activeId: 'other', view: 'gone' }, view)).toBe('terminal')
+  })
+
+  it("a pane opened from a tab goes beside the grid's terminal or agent last used, in the tab's own worktree", () => {
+    const tree = split('root', 'row', [leaf('a'), leaf('b'), editor('e'), leaf('w', copy('C:\\wt')), editor('f', { viewPath: 'C:\\wt' })])
+    const ws = { cwd: 'C:\\p', tree, gridId: 'b' }
+    expect(gridLeafFor(ws, tree.children[2]).id).toBe('b')
+    // The last one used is in another worktree: that tab's own grid.
+    expect(gridLeafFor(ws, tree.children[4]).id).toBe('w')
+    // None used yet (or it closed): the first one.
+    expect(gridLeafFor({ ...ws, gridId: 'gone' }, tree.children[2]).id).toBe('a')
+    // A grid with none.
+    expect(gridLeafFor({ cwd: 'C:\\p', tree: split('r', 'row', [editor('e'), browser('p')]) }, editor('e'))).toBe(null)
   })
 })

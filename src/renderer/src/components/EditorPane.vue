@@ -49,6 +49,7 @@ import LucideIcon from './LucideIcon.vue'
 import FileIcon from './FileIcon.vue'
 import Codicon from './Codicon.vue'
 import EditorBreadcrumbs from './EditorBreadcrumbs.vue'
+import ViewTabs from './ViewTabs.vue'
 import { symbolsAt } from '../editor/symbolKinds'
 import RichView from './RichView.vue'
 import NotesSendMenu from './NotesSendMenu.vue'
@@ -67,6 +68,9 @@ const appContext = getCurrentInstance().appContext
 
 const isActive = computed(() => ctx.activeId.value === props.node.id)
 const isMaximized = computed(() => ctx.maximizedId.value === props.node.id)
+// Shown as a tab above the panes (App.vue, paneViews.js): its header draws
+// the tabs, and it fills the room already (no maximize).
+const viewTabs = computed(() => (ctx.paneTabs ? ctx.paneTabs(props.node.id) : null))
 
 const rootEl = ref(null)
 const hostEl = ref(null)
@@ -1013,16 +1017,26 @@ onBeforeUnmount(() => {
     tabindex="-1"
     @mousedown="onPaneMouseDown"
   >
-    <div class="pane-nav" data-test="pane-header" @mousedown.stop="onNavMouseDown" @pointerdown="onNavPointerDown">
+    <div class="pane-nav" :class="{ 'with-view-tabs': !!viewTabs }" data-test="pane-header" @mousedown.stop="onNavMouseDown" @pointerdown="onNavPointerDown">
       <div class="pane-nav-left">
-        <span class="pane-icon" :title="t('editor.pane.title', 'Editor')">
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </span>
-        <span class="pane-title" :title="t('editor.pane.titleHint', '{{path}}\nDrag the header to move the pane', { path: activeDocPath || title })">{{
-          title
-        }}</span>
+        <!-- A tab above the panes: its header is the line of tabs. -->
+        <ViewTabs
+          v-if="viewTabs"
+          :leaves="viewTabs.leaves"
+          :shown="viewTabs.shown"
+          @select="(id) => ctx.selectViewTab(node.id, id)"
+          @close="(id) => ctx.closeLeaf(id)"
+        />
+        <template v-else>
+          <span class="pane-icon" :title="t('editor.pane.title', 'Editor')">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </span>
+          <span class="pane-title" :title="t('editor.pane.titleHint', '{{path}}\nDrag the header to move the pane', { path: activeDocPath || title })">{{
+            title
+          }}</span>
+        </template>
       </div>
       <div class="pane-nav-actions" @mousedown.stop>
         <button
@@ -1049,6 +1063,7 @@ onBeforeUnmount(() => {
           </svg>
         </button>
         <button
+          v-if="!viewTabs"
           class="pane-nav-btn"
           :title="isMaximized ? t('editor.pane.restore', 'Restore pane') : t('editor.pane.maximize', 'Maximize pane')"
           @click="ctx.toggleMaximize(node.id)"

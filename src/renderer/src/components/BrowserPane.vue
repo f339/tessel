@@ -57,6 +57,7 @@ import { registerWebview } from '../browser/webviewPassthrough'
 import { registerNavigationOwner, focusNavigationOwner, isNavigationOwner, releaseNavigationOwner } from '../browser/navigationFocus'
 import { claimPage, releasePage, placePage, createWebview, MAIN_PARTITION, AGENT_PARTITION } from '../browser/pageHost'
 import DesignModePanel from './DesignModePanel.vue'
+import ViewTabs from './ViewTabs.vue'
 import { t } from '../i18n'
 
 const props = defineProps({
@@ -71,6 +72,10 @@ const askConfirm = inject('askConfirm', null)
 
 const isActive = computed(() => ctx.activeId.value === props.node.id)
 const isMaximized = computed(() => ctx.maximizedId.value === props.node.id)
+// Shown as a tab above the panes (App.vue, paneViews.js): its header draws
+// the tabs, and it fills the room already (no maximize). Not in the side
+// panel (its own tab bar).
+const viewTabs = computed(() => (!props.inSidePanel && ctx.paneTabs ? ctx.paneTabs(props.node.id) : null))
 
 const rootEl = ref(null)
 // The page (a <webview>): made in onMounted, in the workspace's page layer
@@ -767,10 +772,13 @@ function pageLayer() {
   return null
 }
 const hosted = shallowRef(false)
-// Hidden under another pane that is maximized.
-const coveredByMaximized = computed(() => !!ctx.maximizedId.value && ctx.maximizedId.value !== props.node.id)
+// Hidden under another pane that is maximized (in a grid: a tab above the
+// panes has the room to itself).
+const coveredByMaximized = computed(() => !viewTabs.value && !!ctx.maximizedId.value && ctx.maximizedId.value !== props.node.id)
+// A tab above the panes while another tab is on screen: its page is hidden.
+const tabHidden = computed(() => !!viewTabs.value && viewTabs.value.shown !== props.node.id)
 function place() {
-  if (page) placePage(page, pageEl.value, { hidden: coveredByMaximized.value })
+  if (page) placePage(page, pageEl.value, { hidden: coveredByMaximized.value || tabHidden.value })
 }
 let placeFrame = 0
 function placeSoon() {
@@ -780,7 +788,7 @@ function placeSoon() {
     place()
   })
 }
-watch([coveredByMaximized, isMaximized], () => nextTick(place))
+watch([coveredByMaximized, isMaximized, tabHidden], () => nextTick(place))
 let resizeObserver = null
 // A click on the page's overlays (the failure page, Design Mode) activates the pane.
 function onBoxMouseDown() {
@@ -886,20 +894,38 @@ defineExpose({ navigate, focusAddress })
     @focusin="onPaneMouseDown"
     @keydown="onKeydown"
   >
-    <div v-if="!inSidePanel" class="pane-nav" data-test="pane-header" @mousedown.stop="onNavMouseDown" @pointerdown="onNavPointerDown">
+    <div
+      v-if="!inSidePanel"
+      class="pane-nav"
+      :class="{ 'with-view-tabs': !!viewTabs }"
+      data-test="pane-header"
+      @mousedown.stop="onNavMouseDown"
+      @pointerdown="onNavPointerDown"
+    >
       <div class="pane-nav-left">
-        <span class="pane-icon" :title="t('browser.pane.title', 'Browser')">
-          <Globe :size="15" aria-hidden="true" />
-        </span>
-        <span
-          class="pane-title"
-          data-test="browser-title"
-          :title="t('browser.pane.titleHint', '{{url}}\nDrag the header to move the pane', { url: displayUrl(currentUrl) || headerTitle })"
-          >{{ headerTitle }}</span
-        >
+        <!-- A tab above the panes: its header is the line of tabs. -->
+        <ViewTabs
+          v-if="viewTabs"
+          :leaves="viewTabs.leaves"
+          :shown="viewTabs.shown"
+          @select="(id) => ctx.selectViewTab(node.id, id)"
+          @close="(id) => ctx.closeLeaf(id)"
+        />
+        <template v-else>
+          <span class="pane-icon" :title="t('browser.pane.title', 'Browser')">
+            <Globe :size="15" aria-hidden="true" />
+          </span>
+          <span
+            class="pane-title"
+            data-test="browser-title"
+            :title="t('browser.pane.titleHint', '{{url}}\nDrag the header to move the pane', { url: displayUrl(currentUrl) || headerTitle })"
+            >{{ headerTitle }}</span
+          >
+        </template>
       </div>
       <div class="pane-nav-actions" @mousedown.stop>
         <button
+          v-if="!viewTabs"
           class="pane-nav-btn"
           :title="isMaximized ? t('editor.pane.restore', 'Restore pane') : t('editor.pane.maximize', 'Maximize pane')"
           @click="ctx.toggleMaximize(node.id)"

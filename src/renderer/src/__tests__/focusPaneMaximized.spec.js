@@ -4,6 +4,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import fs from 'fs'
 import vm from 'vm'
+import { isTabLeaf } from '../paneViews'
 
 const app = fs.readFileSync('src/renderer/src/App.vue', 'utf8').replace(/\r\n/g, '\n')
 // A top-level function of App.vue, from its first line to its closing brace.
@@ -38,6 +39,10 @@ function setup(maximized = null) {
     clearAttention: vi.fn(),
     readForPane: vi.fn(),
     getEditorPane: () => null,
+    // The tabs above the panes (paneViews.js): these panes are all in the grid.
+    isTabLeaf,
+    shownTabOf: () => 'terminal',
+    focusAfterTabSwitch: vi.fn(),
     nextTick: (fn) => fn(),
     getPane: () => ({ paste: vi.fn(), submit: vi.fn() }),
     showToast: vi.fn(),
