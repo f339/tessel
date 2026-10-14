@@ -178,16 +178,20 @@ describe('Live Share tunnel: round 5', () => {
     expect(readTunnelPids(dir)).toEqual([500])
   })
 
-  it('leaves a taken-back tunnel to Windows taskkill when quitting (only that PID, only cloudflared)', () => {
+  it('leaves a taken-back tunnel to a PowerShell of its own when quitting (only that PID, only while it runs this exact cloudflared)', () => {
     const spawned = []
-    stopTunnelLater('C:/x', 4242, { spawnImpl: (cmd, args, opts) => {
+    stopTunnelLater('C:/x', 4242, { env: { SystemRoot: 'C:\Windows' }, spawnImpl: (cmd, args, opts) => {
       spawned.push({ cmd, args, opts })
       const child = new EventEmitter()
       child.unref = () => {}
       return child
     } })
-    expect(spawned[0].cmd).toBe('taskkill.exe')
-    expect(spawned[0].args).toEqual(['/F', '/PID', '4242', '/FI', expect.stringMatching(/^IMAGENAME eq cloudflared-.+\.exe$/)])
-    expect(spawned[0].opts).toMatchObject({ detached: true, windowsHide: true })
+    expect(spawned[0].cmd).toBe('powershell.exe')
+    const script = spawned[0].args.at(-1)
+    expect(script).toContain('$p.ExecutablePath -ieq $env:TESSEL_TUNNEL_EXE')
+    expect(script).toContain('Stop-Process -Id $p.ProcessId -Force')
+    // The PID and the path are variables, never text in the script.
+    expect(script).not.toContain('4242')
+    expect(spawned[0].opts).toMatchObject({ detached: true, windowsHide: true, env: { SystemRoot: 'C:\Windows', TESSEL_TUNNEL_PID: '4242', TESSEL_TUNNEL_EXE: cloudflaredPath('C:/x') } })
   })
 })

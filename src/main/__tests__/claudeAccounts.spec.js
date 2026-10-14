@@ -664,4 +664,26 @@ describe('sign-in folders', () => {
     expect(fs.existsSync(foreign)).toBe(true)
     expect(read(credentialPath())).toEqual(token('system'))
   })
+  it('keeps the folder of a sign-in whose end was never confirmed until its process is gone, whatever its age', async () => {
+    seedSystem()
+    const alive = new Set([4242])
+    service = create({ pidAlive: (pid) => alive.has(pid) })
+    const hoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    const folders = []
+    for (const pid of [4242, null]) {
+      runner.mockImplementationOnce(async ({ home: isolated }) => {
+        folders.push(isolated)
+        return { ok: false, cleanupSafe: false, pid }
+      })
+      await expect(service.add()).rejects.toThrow('could not be confirmed')
+    }
+    for (const folder of folders) fs.utimesSync(join(folder, MARKER), hoursAgo, hoursAgo)
+    // Its process still runs, or is unknown: kept.
+    await add()
+    expect(folders.map((f) => fs.existsSync(f))).toEqual([true, true])
+    // Seen gone: removed at the next sign-in; the unknown one stays.
+    alive.clear()
+    await add('other')
+    expect(folders.map((f) => fs.existsSync(f))).toEqual([false, true])
+  })
 })

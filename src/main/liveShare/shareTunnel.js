@@ -247,13 +247,20 @@ export async function endLeftoverTunnel(dataDir, { queryPath, kill, keep = 0 }) 
 }
 
 // Quitting Tessel with a tunnel taken back after a restart (nothing can be
-// waited for): Windows' own taskkill ends it after Tessel is gone, only if
-// that PID still runs this cloudflared program (its name: its path was
-// checked when it was taken back).
-export function stopTunnelLater(dataDir, pid, { spawnImpl = spawn } = {}) {
+// waited for): a PowerShell of its own ends it after Tessel is gone, only if
+// that PID still runs this exact cloudflared (its full path: another
+// Tessel's cloudflared of the same version is left alone). The PID and the
+// path go in as variables, never into the script's text.
+export function stopTunnelLater(dataDir, pid, { spawnImpl = spawn, env = process.env } = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return
+  const script = `$ErrorActionPreference = 'Stop'; $p = Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$env:TESSEL_TUNNEL_PID); if ($p -and $p.ExecutablePath -and ($p.ExecutablePath -ieq $env:TESSEL_TUNNEL_EXE)) { Stop-Process -Id $p.ProcessId -Force }`
   try {
-    const child = spawnImpl('taskkill.exe', ['/F', '/PID', String(pid), '/FI', `IMAGENAME eq cloudflared-${CLOUDFLARED_VERSION}.exe`], { windowsHide: true, detached: true, stdio: 'ignore' })
+    const child = spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      windowsHide: true,
+      detached: true,
+      stdio: 'ignore',
+      env: { ...env, TESSEL_TUNNEL_PID: String(pid), TESSEL_TUNNEL_EXE: cloudflaredPath(dataDir) }
+    })
     child.on?.('error', () => {})
     child.unref?.()
   } catch {

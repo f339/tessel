@@ -494,6 +494,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       case 'close':
         if (!g.rights.close || !isShared(msg.id)) return
         if (!allowed(g, 'closes', CLOSES_PER_MINUTE)) return
+        keysChanged()
         callbacks.closePane(msg.id, publicGuest(g))
         return
       default:

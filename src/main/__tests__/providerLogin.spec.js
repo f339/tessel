@@ -191,6 +191,8 @@ describe('private browser login lifecycle', () => {
       expect(await result).toEqual({
         ok: false,
         cleanupSafe: false,
+        // Its process: its folder is kept until that one is seen gone.
+        pid: 12345,
         error: 'Sign-in could not be stopped. Its temporary files were retained.'
       })
       expect(f.runStatus).not.toHaveBeenCalled()

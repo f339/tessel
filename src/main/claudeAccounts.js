@@ -20,6 +20,15 @@ import {
 
 const MARKER = '.tessel-managed-claude-auth'
 const STALE_LOGIN_MS = 60 * 60 * 1000 // a sign-in times out after 10 minutes
+const LOGIN_PID = '.tessel-login-pid' // a sign-in whose end was never confirmed
+const running = (pid) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return error.code === 'EPERM'
+  }
+}
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const queues = new Map()
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value)
@@ -96,7 +105,8 @@ export function createClaudeAccounts({
   home = os.homedir(),
   env = process.env,
   runLogin,
-  now = Date.now
+  now = Date.now,
+  pidAlive = running
 } = {}) {
   if (!text(userData) || !isAbsolute(userData) || !isAbsolute(home))
     throw authError(t('main.claudeAccount.absolutePaths', 'Absolute account storage and home paths are required.'))
@@ -425,13 +435,18 @@ export function createClaudeAccounts({
       // cancellation checks so an aborted, possibly live child keeps its home.
       const result = await runLogin({ provider: 'claude', home: temporary, signal, onProgress })
       cleanupSafe = result?.cleanupSafe !== false
-      if (!cleanupSafe)
+      if (!cleanupSafe) {
+        // Its folder stays until that process is seen gone (an unknown one:
+        // for good).
+        const pid = Number.isInteger(result.pid) && result.pid > 0 ? result.pid : ''
+        await writeText(join(temporary, LOGIN_PID), `${pid}\n`).catch(() => {})
         throw Object.assign(
           authError(
             t('main.claudeAccount.stopFailed', 'Claude sign-in could not be stopped. Temporary files were retained because process termination could not be confirmed.')
           ),
           { cleanupSafe: false }
         )
+      }
       if (signal?.aborted) throw authError(t('main.claudeAccount.loginCancelled', 'Claude login was cancelled.'))
       if (!result?.ok)
         throw authError(t('main.claudeAccount.loginIncomplete', 'Claude login did not complete. The previous account was preserved.'))
@@ -518,6 +533,12 @@ export function createClaudeAccounts({
       try {
         const marker = await inspect(join(path, MARKER))
         if (!marker || Date.now() - marker.mtimeMs < STALE_LOGIN_MS) continue
+        // A sign-in whose end was never confirmed: kept while it may still run.
+        const pidText = await readText(join(path, LOGIN_PID))
+        if (pidText !== null) {
+          const pid = Number(pidText.trim())
+          if (!Number.isInteger(pid) || pid <= 0 || pidAlive(pid)) continue
+        }
         await removeOwnedDirectory(runtimeRoot, path, MARKER, `login:${id}`)
       } catch {
         /* kept: tried again at the next sign-in */

@@ -217,6 +217,8 @@ export function createProviderLogin({
             ? {
                 ok: false,
                 cleanupSafe: false,
+                // The sign-in's process, for whoever later decides its folder can go.
+                pid: Number.isInteger(child?.pid) ? child.pid : null,
                 error: t('main.login.stopFailed', 'Sign-in could not be stopped. Its temporary files were retained.')
               }
             : aborted

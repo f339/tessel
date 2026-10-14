@@ -871,6 +871,25 @@ describe('Live Share session: round 5', () => {
     expect(next.offlineGuests().map((g) => g.name)).toEqual(['Alex'])
   })
 
+  it('what a guest closes is saved at once (a crash before the next save does not reset its count)', async () => {
+    const t = fakeTessel()
+    let saves = 0
+    const secret = newSecret()
+    const host = hostFor({ secret, hostName: 'Cedric', callbacks: { ...t.callbacks, onKnownChanged: () => saves++ }, hostKey: newSigningKey() })
+    const port = await host.start()
+    const r = guestRecorder()
+    const g = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', signingKey: newSigningKey(), callbacks: r.callbacks })
+    g.connect()
+    await until(() => r.states.includes('joined'))
+    host.setRights(host.guests()[0].id, { type: false, open: false, close: true })
+    await until(() => r.rights.length === 2)
+    const before = saves
+    for (let i = 0; i < 3; i++) g.close('p1')
+    await until(() => t.closed.length === 3)
+    expect(saves - before).toBeGreaterThanOrEqual(3)
+    expect(host.knownGuests()[0].closes).toHaveLength(3)
+  })
+
   it('what a guest opened this minute survives a restart', async () => {
     const t = fakeTessel()
     const secret = newSecret()

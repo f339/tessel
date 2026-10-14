@@ -199,8 +199,11 @@ function chosenShown(n, res) {
       delete n.modelChoice
       return res
     }
-    if (c.seen === undefined) c.seen = res.model
-    else if (res.model !== c.seen) {
+    // Without times: the first answer seen, model and effort; any change after
+    // it (a /model or /effort in the agent) is what runs now.
+    const said = `${res.model}|${res.effort || ''}` // i18n-ignore
+    if (c.seen === undefined) c.seen = said
+    else if (said !== c.seen) {
       delete n.modelChoice
       return res
     }
