@@ -229,9 +229,58 @@ describe('managed Codex accounts', () => {
     put(join(outside, 'keep.txt'), 'keep')
     fs.mkdirSync(join(managed(id), 'AppData', 'INetCache'), { recursive: true })
     fs.symlinkSync(outside, join(managed(id), 'AppData', 'INetCache', 'Content.IE5'), process.platform === 'win32' ? 'junction' : 'dir')
+    // Electron's fs.rmSync goes through a junction (Node's in these tests does not): never used.
+    const rm = vi.spyOn(fs, 'rmSync')
     await api.remove(id)
     expect(fs.existsSync(managed(id))).toBe(false)
     expect(fs.readFileSync(join(outside, 'keep.txt'), 'utf8')).toBe('keep')
+    expect(rm).not.toHaveBeenCalled()
+  })
+
+  it('removes the ownership marker last; an account still held (a browser its sign-in started) stays marked and listed, and goes once let go', async () => {
+    const api = service()
+    for (const held of ['home', 'account folder']) {
+      const { id } = await api.add()
+      put(join(managed(id), 'log', 'codex.log'), 'log')
+      const marker = join(managed(id), '.tessel-managed-codex.json')
+      const folder = held === 'home' ? managed(id) : dirname(managed(id))
+      const unlinked = []
+      let beforeFailure = null
+      const realUnlink = fs.unlinkSync.bind(fs)
+      const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation((path) => {
+        unlinked.push(String(path))
+        return realUnlink(path)
+      })
+      const realRmdir = fs.rmdirSync.bind(fs)
+      const rmdir = vi.spyOn(fs, 'rmdirSync').mockImplementation((path, ...rest) => {
+        if (String(path) !== folder) return realRmdir(path, ...rest)
+        beforeFailure = [...unlinked]
+        throw Object.assign(new Error('held'), { code: 'EPERM' })
+      })
+      await expect(api.remove(id)).rejects.toThrow()
+      expect(beforeFailure).toEqual(expect.arrayContaining([join(managed(id), 'auth.json'), join(managed(id), 'log', 'codex.log')]))
+      expect(beforeFailure.at(-1)).toBe(marker)
+      // Marked again: still listed, and removable later.
+      expect(JSON.parse(fs.readFileSync(marker, 'utf8'))).toMatchObject({ version: 1, provider: 'codex', id })
+      expect((await api.list()).accounts.map((a) => a.id)).toEqual([id])
+      unlink.mockRestore()
+      rmdir.mockRestore()
+      await api.remove(id)
+      expect(fs.existsSync(dirname(managed(id)))).toBe(false)
+      expect((await api.list()).accounts).toEqual([])
+    }
+  })
+
+  it('looks at each entry of a deep account once, not at every folder above it', async () => {
+    const api = service()
+    const { id } = await api.add()
+    const deep = join(managed(id), ...Array(20).fill('d'))
+    for (let i = 0; i < 100; i++) put(join(deep, `f${i}`), 'x')
+    const lstat = vi.spyOn(fs, 'lstatSync')
+    await api.remove(id)
+    expect(fs.existsSync(managed(id))).toBe(false)
+    // About 130 entries: checked twice and removed once, plus the account's own folders.
+    expect(lstat.mock.calls.length).toBeLessThan(1000)
   })
 
   it('refuses linked account home without deleting the real target or clearing selection', async () => {

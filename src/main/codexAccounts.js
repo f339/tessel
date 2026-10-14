@@ -5,8 +5,9 @@
 import fs from 'fs'
 import os from 'os'
 import { createHash, randomUUID } from 'crypto'
-import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'path'
+import { isAbsolute, join, parse, relative, resolve, sep } from 'path'
 import { writeJsonSafe } from './safeJson'
+import { removeTreeSync } from './removeTree'
 import { t } from './i18n'
 
 const MARKER = '.tessel-managed-codex.json'
@@ -439,23 +440,25 @@ export function createCodexAccounts({
     return account
   }
   function erase(id, validateOnly = false) {
+    // The home and the folders above it may not be links: owned() checks them
+    // once. Below, each entry is only looked at itself (lstat), never followed.
     const target = owned(id)
-    // A link inside the account's home (a browser started by a sign-in can
-    // leave a profile with junctions there): removed itself, never followed.
-    // The home and the folders above it may not be links.
-    const links = []
     function validateTree(path, depth = 0) {
       if (depth > 40)
         throw problem(
           t('main.codexAccount.treeUnsafe', 'The managed account contains a directory tree that cannot be removed safely.')
         )
-      if (within(target.home, path) && !samePath(path, target.home) && fs.lstatSync(path).isSymbolicLink()) {
-        noLinks(dirname(path))
-        links.push(path)
+      const stat = fs.lstatSync(path)
+      if (stat.isSymbolicLink()) {
+        // A link inside the account's home (a browser started by a sign-in can
+        // leave a profile with junctions there) is removed itself; anywhere
+        // else in the account's folder, refused.
+        if (!within(target.home, path) || samePath(path, target.home))
+          throw problem(
+            t('main.codexAccount.storageLink', 'Codex account storage contains a link or an invalid directory. Restore its original location and retry.')
+          )
         return
       }
-      noLinks(path)
-      const stat = fs.lstatSync(path)
       if (stat.isDirectory())
         for (const name of fs.readdirSync(path)) validateTree(join(path, name), depth + 1)
       else if (!stat.isFile())
@@ -466,11 +469,31 @@ export function createCodexAccounts({
     validateTree(target.directory)
     owned(id)
     if (validateOnly) return
-    for (const link of links) {
-      noLinks(dirname(link))
-      if (fs.lstatSync(link).isSymbolicLink()) fs.unlinkSync(link)
+    // Removed without going through a link, even one made since the check
+    // above (a browser profile still in use). The ownership marker goes last,
+    // just before the home itself: a removal that fails halfway leaves the
+    // account still marked, so it can be removed later.
+    const markerPath = join(target.home, MARKER)
+    const marker = readSmall(markerPath)
+    for (const name of fs.readdirSync(target.directory))
+      if (name !== 'home') removeTreeSync(join(target.directory, name))
+    for (const name of fs.readdirSync(target.home))
+      if (name !== MARKER) removeTreeSync(join(target.home, name))
+    fs.unlinkSync(markerPath)
+    try {
+      fs.rmdirSync(target.home)
+      fs.rmdirSync(target.directory)
+    } catch (error) {
+      // Still held (a process working in it, a file written meanwhile): marked
+      // again, so a later removal can finish it.
+      try {
+        if (!fs.existsSync(target.home)) fs.mkdirSync(target.home, { mode: 0o700 })
+        atomic(markerPath, marker)
+      } catch {
+        /* the error below is what the caller sees */
+      }
+      throw error
     }
-    fs.rmSync(target.directory, { recursive: true, force: false })
   }
   function entry(id, details) {
     return {

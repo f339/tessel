@@ -85,6 +85,10 @@ const RESYNCS_PER_MINUTE = 30
 // the invite code is blocked; handshakes a minute.
 const UNFINISHED_MAX = 8
 const UNFINISHED_MEMORY_MS = 10 * 60 * 1000
+// Guests turned away by a full room in that time and not counted (a crowd);
+// past that, counted like the others (someone keeping the room full can't try
+// codes past the count).
+const ROOM_FULL_FREE = 30
 // Connections a minute, from one address and in all (a guest let in comes
 // back past the per-code block, not past these). Addresses: Cloudflare's
 // word for the client (IPv6 by its /64); a program on this PC can claim any
@@ -209,6 +213,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   let waitUntil = 0
   // The block, kept across a restart (guardState).
   let unfinished = Array.isArray(guard && guard.unfinished) ? guard.unfinished.filter((x) => Number.isFinite(x)) : [] // times of connections that stopped after the handshake
+  let roomFull = Array.isArray(guard && guard.roomFull) ? guard.roomFull.filter((x) => Number.isFinite(x)) : [] // times of guests turned away by a full room
   let blocked = !!(guard && guard.blocked)
   let exchanges = [] // times of handshakes: [time, address]
 
@@ -424,10 +429,13 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     if (blocked || !isCurrent(g) || now() > inviteExpires) return drop(g, 'expired')
     const inOrWaiting = [...guests.values()].filter((x) => x.state === 'joined' || x.state === 'waiting')
     // The room full (guests the host let in, and at most a few waiting): the
-    // host's doing, not counted against the code. Checked first: a room full
-    // with its waiting line full too is still a full room.
+    // host's doing, not counted against the code, up to ROOM_FULL_FREE in
+    // UNFINISHED_MEMORY_MS. Checked first: a room full with its waiting line
+    // full too is still a full room.
     if (inOrWaiting.length >= MAX_GUESTS) {
-      g.byHost = true
+      const t = now()
+      roomFull = [...roomFull.filter((x) => t - x < UNFINISHED_MEMORY_MS), t]
+      if (roomFull.length <= ROOM_FULL_FREE) g.byHost = true
       return drop(g, 'busy')
     }
     // The host pausing after a no, or the waiting line full, with room left:
@@ -819,6 +827,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       inviteExpires = now() + INVITE_TTL_MS
       blocked = false
       unfinished = []
+      roomFull = []
       dropNotJoined('expired')
       return inviteExpires
     },
@@ -832,7 +841,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     },
     earlierSecrets: () => secrets.slice(1),
     // The block, to keep across a restart.
-    guardState: () => ({ blocked, unfinished: [...unfinished] }),
+    guardState: () => ({ blocked, unfinished: [...unfinished], roomFull: [...roomFull] }),
     guests: () => [...guests.values()].filter((g) => !inHandshake(g)).map(publicGuest)
   }
 }

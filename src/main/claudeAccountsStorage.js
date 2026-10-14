@@ -148,9 +148,10 @@ export async function ownedDirectory(root, path, marker, identity) {
 
 // Validate the entire owned tree first; never recurse through a link or junction
 // (one found inside is removed itself, never what it points to). The ownership
-// marker goes last: a removal that fails halfway leaves the folder still
-// marked, so a later cleanup can finish it. A Claude account's folder, used by
-// its sessions, can hold more than a sign-in's.
+// marker goes last, just before the folder itself, and comes back if the folder
+// can't go (still held): a removal that fails leaves the folder still marked,
+// so a later cleanup can finish it. A Claude account's folder, used by its
+// sessions, can hold more than a sign-in's.
 export async function removeOwnedDirectory(root, path, marker, identity, { depth: maxDepth = 12, count = 4096 } = {}) {
   if (!(await ownedDirectory(root, path, marker, identity))) return
   const markerPath = join(path, marker)
@@ -175,16 +176,28 @@ export async function removeOwnedDirectory(root, path, marker, identity, { depth
   for (const [entry, kind] of entries) {
     if (!contained(resolve(root), resolve(entry))) throw authError()
     if (kind === 'link') {
-      // Its folder was checked above; the link is unlinked, not followed.
+      // Its folder was checked above; the link is unlinked, not followed (a
+      // directory link on some systems: rmdir removes the link only).
       await inspect(dirname(entry), true)
       if (!(await fs.lstat(entry)).isSymbolicLink()) throw authError()
-      await fs.unlink(entry)
+      await fs.unlink(entry).catch(() => fs.rmdir(entry))
       continue
     }
     await inspect(entry, kind === 'directory')
     if (kind === 'directory' && entry === path) {
-      await inspect(markerPath)
+      const before = await inspect(markerPath)
       await fs.unlink(markerPath)
+      try {
+        await fs.rmdir(entry)
+      } catch (error) {
+        // Still held (a process working in it, a file written meanwhile):
+        // marked again, with its age, so a later cleanup can finish it.
+        await exclusiveText(markerPath, `${identity}\n`)
+          .then(() => before && fs.utimes(markerPath, before.atime, before.mtime))
+          .catch(() => {})
+        throw error
+      }
+      continue
     }
     if (kind === 'directory') await fs.rmdir(entry)
     else await fs.unlink(entry)

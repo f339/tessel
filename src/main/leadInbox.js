@@ -4,6 +4,7 @@
 // so only the agent told about the folder writes into it.
 import { join, resolve, isAbsolute } from 'path'
 import fs from 'fs'
+import { removeTreeSync } from './removeTree'
 
 const TOKEN_RE = /^[a-z0-9]{16,48}$/
 const MAX_FILES = 20
@@ -80,9 +81,10 @@ export function takeInbox({ dir, token } = {}) {
   return { ok: true, items }
 }
 
-// The member left the team: remove its inbox.
+// The member left the team: remove its inbox (never through a link the agent
+// made there).
 export function removeInbox({ dir, token } = {}) {
   const path = inboxPath({ dir, token })
-  if (path && fs.existsSync(path)) fs.rmSync(path, { recursive: true, force: true })
+  if (path && fs.existsSync(path)) removeTreeSync(path)
   return { ok: true }
 }

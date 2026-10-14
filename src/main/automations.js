@@ -34,6 +34,7 @@ import fs from 'fs'
 import { join } from 'path'
 import crypto from 'crypto'
 import { writeJsonSafe, readJsonSafe } from './safeJson'
+import { removeTreeSync } from './removeTree'
 import { t } from './i18n'
 import {
   normalizeAutomationInput,
@@ -464,7 +465,8 @@ export function createAutomations({
     const folder = runFolder(runId)
     if (!folder) return
     try {
-      fs.rmSync(folder, { recursive: true, force: true })
+      // The agent is told this folder: never removed through a link it made.
+      removeTreeSync(folder)
     } catch {
       // kept: removed with a later cleanup
     }
