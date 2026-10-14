@@ -904,6 +904,7 @@ defineExpose({ step, hostId, browseFor })
     <Teleport to="body">
       <RemoteHostForm
         v-if="hostForm.open"
+        class="over-add-project"
         :initial="hostForm.initial"
         :saving="hostForm.saving"
         :error="hostForm.error"
@@ -915,6 +916,11 @@ defineExpose({ step, hostId, browseFor })
 </template>
 
 <style>
+/* Add SSH host, opened from the host picker: over this dialog (the form's
+   own layer, 80, is under it). */
+.rh-backdrop.over-add-project {
+  z-index: 470;
+}
 /* Shared by the Add a project steps (unscoped: the nested step uses them). */
 .ap-backdrop {
   position: fixed;

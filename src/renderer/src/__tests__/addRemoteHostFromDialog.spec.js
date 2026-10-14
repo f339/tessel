@@ -4,6 +4,8 @@
 // the new project goes on there. Nothing opens in the current project (no
 // pane: the pane opener is never called), and Cancel comes back unchanged.
 // window.shellApi is a fake: nothing connects anywhere.
+import fs from 'fs'
+import { join } from 'path'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import AddProjectDialog from '../components/project/AddProjectDialog.vue'
@@ -89,6 +91,14 @@ describe('Add remote host from Add a project', () => {
     await openForm(w)
     expect(form()).not.toBeNull()
     expect(w.find('[data-test="add-project"]').element.contains(form())).toBe(false)
+    // In front of the dialog: a layer above the dialog's own.
+    expect(document.querySelector('.rh-backdrop').classList.contains('over-add-project')).toBe(true)
+    const css = fs.readFileSync(join(process.cwd(), 'src/renderer/src/components/project/AddProjectDialog.vue'), 'utf8')
+    const layer = (sel) => {
+      const block = css.slice(css.indexOf(sel + ' {'))
+      return Number(/z-index:\s*(\d+)/.exec(block.slice(0, block.indexOf('}')))[1])
+    }
+    expect(layer('.rh-backdrop.over-add-project')).toBeGreaterThan(layer('.ap-backdrop'))
     expect(document.querySelector('[data-test="host-list"]')).toBeNull()
     expect(w.find('[data-test="add-project"]').exists()).toBe(true)
     expect(w.emitted('close')).toBeUndefined()
