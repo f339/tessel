@@ -883,6 +883,8 @@ function answerConfirm(ok, checked) {
   if (c) c.resolve(ok === 'alt' ? 'alt' : !!ok)
 }
 provide('askConfirm', askConfirm)
+// Settings > AI provider accounts' Restart Claude sessions button (finishClaudeSwitch).
+provide('finishClaudeSwitch', () => finishClaudeSwitch(true))
 const currentWs = computed(() => wsById(currentWsId.value))
 
 // Teams: named, coloured groups of agents inside a workspace. Each member pane
@@ -4370,8 +4372,6 @@ async function finishClaudeSwitch(asked = true) {
     claudeSwitchBusy = false
   }
 }
-// Settings > AI provider accounts calls it directly (its button).
-provide('finishClaudeSwitch', () => finishClaudeSwitch(true))
 // At startup: the switch still to be undone. Sessions that version started
 // still run: offered to restart them; none: undone now.
 async function checkClaudeSwitch() {
