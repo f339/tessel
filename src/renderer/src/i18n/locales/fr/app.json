@@ -22,9 +22,7 @@
       "editor": "Éditeur",
       "browser": "Navigateur",
       "aria": "Terminal, éditeurs et navigateurs",
-      "close": "Fermer {{name}}",
-      "openEditor": "Ouvrir l’éditeur",
-      "openBrowser": "Ouvrir un navigateur"
+      "close": "Fermer {{name}}"
     },
     "unsaved": {
       "title": "Modifications non enregistrées",

@@ -97,7 +97,7 @@ function load({ tree, activeId, cwd = 'C:\\p' } = {}) {
       fnSource('function showActive(ws, id) {') +
       fnSource('function focusPane(paneId) {') +
       fnSource('function toggleMaximize(id) {') +
-      '\nthis.api = { paneViews, paneTabStrips, showViewTab, emptyGridShown, openInTesselEditor, openInBrowser, splitLeaf, closeLeaf, focusPane, toggleMaximize, tabsAlways, tabOffers, openViewTab }',
+      '\nthis.api = { paneViews, paneTabStrips, showViewTab, emptyGridShown, openInTesselEditor, openInBrowser, splitLeaf, closeLeaf, focusPane, toggleMaximize, tabsAlways }',
     ctx
   )
   const ws = reactive({ id: 'ws1', name: 'p', cwd, tree, activeId, remote: null })
@@ -154,24 +154,16 @@ describe('opening an editor or a browser', () => {
 })
 
 describe('the line of tabs, always there', () => {
-  it('Terminal first, then an Editor and a Browser to open in one click', () => {
+  it('Terminal first, always; an editor or a browser closed: its tab goes, back to Terminal', () => {
     const { api, ws, view } = twoTerminals()
     expect(api.tabsAlways(ws)).toBe(true)
-    expect(api.tabOffers(view())).toEqual(['editor', 'browser'])
-    api.openViewTab(ws, 'editor')
-    const ed = view().tabs.find((l) => l.kind === 'editor')
-    expect(ed).toBeTruthy()
-    expect(view().shown).toBe(ed.id)
-    // The grid kept its room: no pane was split.
-    expect(view().grid.id).toBe('grid')
-    expect(api.tabOffers(view())).toEqual(['browser'])
-    expect(api.paneTabStrips.value[ed.id]).toMatchObject({ offer: ['browser'] })
-    api.openViewTab(ws, 'browser')
-    const br = view().tabs.find((l) => l.kind === 'browser')
+    const br = api.openInBrowser({ url: 'https://example.com/', ws })
+    expect(view().tabs.map((l) => l.id)).toEqual([br.id])
     expect(view().shown).toBe(br.id)
-    expect(api.tabOffers(view())).toEqual([])
-    api.showViewTab(ws, 'terminal')
+    api.closeLeaf(br.id)
+    expect(view().tabs).toEqual([])
     expect(view().shown).toBe('terminal')
+    expect(api.tabsAlways(ws)).toBe(true)
   })
 })
 

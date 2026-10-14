@@ -908,10 +908,8 @@ defineExpose({ navigate, focusAddress })
           v-if="viewTabs"
           :leaves="viewTabs.leaves"
           :shown="viewTabs.shown"
-          :offer="viewTabs.offer || []"
           @select="(id) => ctx.selectViewTab(node.id, id)"
           @close="(id) => ctx.closeLeaf(id)"
-          @open="(kind) => ctx.openViewTab && ctx.openViewTab(node.id, kind)"
         />
         <template v-else>
           <span class="pane-icon" :title="t('browser.pane.title', 'Browser')">

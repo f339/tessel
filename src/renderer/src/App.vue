@@ -1047,39 +1047,13 @@ const paneTabStrips = computed(() => {
   const out = {}
   for (const ws of workspaces.value)
     for (const view of paneViews.value[ws.id] || [])
-      for (const leaf of view.tabs) out[leaf.id] = { leaves: view.tabs, shown: view.shown, offer: tabOffers(view) }
+      for (const leaf of view.tabs) out[leaf.id] = { leaves: view.tabs, shown: view.shown }
   return out
 })
-// The line of tabs is always there in a project of yours (Terminal first);
-// a Live Share guest's project shows the host's panes only.
+// The line of tabs is always there in a project of yours, Terminal first
+// (an editor or a browser closed: its tab goes); a Live Share guest's
+// project shows the host's panes only.
 const tabsAlways = (ws) => !!ws && !liveShare.isGuestWs(ws)
-// What a click can open from the tabs: an editor or a browser, when the view
-// has none yet.
-function tabOffers(view) {
-  const out = []
-  if (!view.tabs.some((l) => l.kind === 'editor')) out.push('editor')
-  if (!view.tabs.some((l) => l.kind === 'browser')) out.push('browser')
-  return out
-}
-// Opened from the tabs: an empty editor (files open in it from the explorer)
-// or a blank browser page, as a tab of its own that comes up. Its worktree
-// view is the one on screen.
-function openViewTab(ws, kind) {
-  if (!ws || liveShare.isGuestWs(ws)) return
-  if (kind === 'browser') {
-    openInBrowser({ ws, url: BLANK_URL, newPane: true, focusAddress: true })
-    return
-  }
-  if (kind !== 'editor') return
-  const from = ws.activeId && ws.tree ? findLeafIn(ws.tree, ws.activeId) : null
-  const leaf = makeEditorLeaf()
-  keepView(leaf, from, ws)
-  ws.tree = addTabLeaf(ws.tree, leaf, makeSplit)
-  selectWorkspace(ws.id)
-  ws.activeId = leaf.id
-  ws.view = leaf.id
-  refitSoon()
-}
 // The last terminal or agent made active in each project (gridLeafFor).
 watch(
   () => workspaces.value.map((w) => w.activeId),
@@ -3031,7 +3005,6 @@ provide('panelCtx', {
   // on screen (ViewTabs.vue); a click there shows another tab.
   paneTabs: (id) => paneTabStrips.value[id] || null,
   selectViewTab: (fromId, id) => showViewTab(wsOfLeaf(fromId), id),
-  openViewTab: (fromId, kind) => openViewTab(wsOfLeaf(fromId), kind),
   fontSize,
   notifyAgentDone,
   notifyAgentLimit,
@@ -12496,10 +12469,8 @@ onBeforeUnmount(() => {
                 <ViewTabs
                   :leaves="view.tabs"
                   :shown="view.shown"
-                  :offer="tabOffers(view)"
                   @select="(id) => showViewTab(ws, id)"
                   @close="(id) => closeLeaf(id)"
-                  @open="(kind) => openViewTab(ws, kind)"
                 />
               </div>
               <div class="view-room">
