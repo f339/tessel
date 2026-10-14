@@ -17,6 +17,9 @@ const ENDPOINTS = Object.freeze({
   claude: 'https://api.anthropic.com/api/oauth/usage'
 })
 const AUTH_LIMIT = 1024 * 1024
+// A Claude account's .claude.json carries the system's whole projects list,
+// several MB for some people: only its profile is read from it.
+const CONFIG_LIMIT = 16 * 1024 * 1024
 const RESPONSE_LIMIT = 256 * 1024
 const TICKET_TTL = 5 * 60 * 1000
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -274,15 +277,17 @@ async function inspect(file) {
   if (fold(await fs.realpath(absolute)) !== fold(absolute)) throw new Error('Unsafe auth path') // i18n-ignore internal
   return stat
 }
-export async function boundedCredentialRead(file) {
+export async function boundedCredentialRead(file, limit = AUTH_LIMIT) {
+  const max = finite(limit) && limit > 0 ? limit : AUTH_LIMIT
   const before = await inspect(file)
-  if (before.size > AUTH_LIMIT) throw new Error('Auth size limit') // i18n-ignore internal
+  if (before.size > max) throw new Error('Auth size limit') // i18n-ignore internal
   const handle = await fs.open(file, 'r')
   try {
     const opened = await handle.stat()
     if (opened.ino !== before.ino || opened.dev !== before.dev || !opened.isFile())
       throw new Error('Auth changed') // i18n-ignore internal
-    const buffer = Buffer.alloc(AUTH_LIMIT + 1)
+    // One byte more than the file had: a file that grew since is refused below.
+    const buffer = Buffer.alloc(before.size + 1)
     let length = 0
     while (length < buffer.length) {
       const result = await handle.read(buffer, length, buffer.length - length, length)
@@ -291,7 +296,7 @@ export async function boundedCredentialRead(file) {
     }
     const after = await inspect(file)
     if (
-      length > AUTH_LIMIT ||
+      length > before.size ||
       after.ino !== before.ino ||
       after.dev !== before.dev ||
       after.size !== before.size ||
@@ -396,14 +401,14 @@ export function createProviderUsage({
       plan: plan(account.plan)
     }
   }
-  async function localRead(file) {
+  async function localRead(file, limit = AUTH_LIMIT) {
     let raw
     try {
-      raw = await readFile(file, 'utf8')
+      raw = await readFile(file, limit)
     } catch {
       fail('auth', t('main.usage.loginUnsafe', 'The selected login could not be read safely.'))
     }
-    if (!(typeof raw === 'string' || Buffer.isBuffer(raw)) || Buffer.byteLength(raw) > AUTH_LIMIT)
+    if (!(typeof raw === 'string' || Buffer.isBuffer(raw)) || Buffer.byteLength(raw) > limit)
       fail('auth', t('main.usage.loginUnsafe', 'The selected login could not be read safely.'))
     return String(raw)
   }
@@ -426,7 +431,7 @@ export function createProviderUsage({
     let who = null
     if (snapshot.provider === 'claude' && snapshot.accountId !== null) {
       const expected = identity(snapshot.expectedIdentity)
-      who = identity(parse(await localRead(snapshot.configPath)).oauthAccount)
+      who = identity(parse(await localRead(snapshot.configPath, CONFIG_LIMIT)).oauthAccount)
       const tokenIdentity = identity(parsed.claudeAiOauth)
       const tokenConflict = ['account', 'email', 'organization'].some(
         (key) =>

@@ -6,13 +6,15 @@
 // (CLAUDE_CONFIG_DIR = its auth folder): its sign-in lives there and only there,
 // and Claude refreshes it there. The system login stays in ~/.claude, untouched.
 // Before a launch the account's folder is linked to the system Claude folder's
-// conversations, plugins, skills… and gets a copy of its settings, so every
-// account shares them. The "selected" account is the default for new sessions.
+// conversations, plugins, skills… and its settings are synced both ways with
+// the system's, so every account shares them. The "selected" account is the
+// default for new sessions.
 import os from 'os'
 import fs from 'fs/promises'
-import { join, resolve, isAbsolute } from 'path'
-import { randomUUID } from 'crypto'
+import { join, resolve, isAbsolute, dirname, relative } from 'path'
+import { randomUUID, createHash } from 'crypto'
 import { t } from './i18n'
+import { ACCOUNT_AUTH_ENV } from './providerLogin'
 import {
   authError,
   inspect,
@@ -105,10 +107,31 @@ const sharedFolderName = (name) =>
   !name.startsWith('.') &&
   !/^(daemon|agent-memory)/.test(name) &&
   !name.endsWith('.merge')
-// Copied from the system folder before each launch (the system's copy wins).
-// Copied, not linked: Claude replaces these files when it saves them. Only
-// these: an unknown file could hold a login, and a second copy of one breaks it.
+// Synced with the system folder before each launch: a change made on one side
+// since the last launch goes to the other; changed on both, the system's
+// wins. Copied, not linked: Claude replaces these files when it saves them.
+// Only these: an unknown file could hold a login, and a second copy of one
+// breaks it.
 export const COPIED_FILES = ['settings.json', 'settings.local.json', 'CLAUDE.md', 'keybindings.json']
+const SETTINGS_FILES = new Set(['settings.json', 'settings.local.json'])
+// What the last sync left on both sides, in each account's folder.
+const SYNC_STATE = '.tessel-sync.json'
+// The settings that choose how Claude signs in, and the env entries that
+// carry a key or a token: never in an account's copy (it signs in with its
+// own login), and never removed from the system's.
+const AUTH_SETTINGS = ['apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'forceLoginMethod', 'forceLoginOrgUUID']
+const AUTH_ENV = new Set(ACCOUNT_AUTH_ENV.claude.map((name) => name.toUpperCase()))
+// Tessel's own hook handlers (teamInstall.js) run this script. Tessel adds
+// them to an account's settings.json at each launch: never the person's change.
+const TESSEL_HOOK = 'tessel-team-mcp.cjs'
+const MEMORY_IMPORT = '@~/.claude/CLAUDE.md'
+// Claude's own bookkeeping in .claude.json (counters, times, what it saw or
+// did last, caches): every session changes it. The system's when it has one,
+// else the account's; never written back, kept aside or recorded.
+const BOOKKEEPING = /count|history|^last|seen|tips|cache|^example|stamp|(At|Time|Date)$/i
+// In the sync state: an entry the account keeps alone (gone from the system
+// after the account changed it).
+const OWN = '*'
 // The keys of the system's .claude.json an account's own one never takes: its
 // login and ids, first-start facts, caches, and its subscription, passes,
 // usage, organization and claude.ai state (all bound to an account).
@@ -172,6 +195,16 @@ function matches(a, b) {
     (!a.organization || a.organization === b.organization)
   )
 }
+// Who an account's folder shows signed in (its .claude.json profile, or its
+// login when that names someone), against the identity saved at sign-in:
+// 'none' (nobody yet: a new folder), 'same', or 'other' (a /login to another
+// account in one of its sessions).
+function folderIdentity(saved, value) {
+  const who = identity(value)
+  if (!who.account && !who.email) return 'none'
+  const same = (saved.account && saved.account === who.account) || (saved.email && saved.email === who.email)
+  return same && !conflict(saved, who) ? 'same' : 'other'
+}
 function credentials(raw) {
   if (raw === null) return null
   const parsed = jsonObject(raw)
@@ -204,32 +237,248 @@ function metadata(raw) {
     throw authError()
   return value
 }
-// The per-entry merge of `projects` and `mcpServers`: the system's entries win,
-// the account's own ones stay, and a folder trusted in the account (Tessel
-// trusts it right before a launch) stays trusted.
-function mergeEntries(key, own, shared) {
-  if (!object(shared)) return own === undefined ? shared : own
-  if (!object(own)) return shared
-  const merged = { ...own, ...shared }
-  if (key === 'projects')
-    for (const [path, entry] of Object.entries(shared))
-      if (object(own[path]) && own[path].hasTrustDialogAccepted === true && object(entry))
-        merged[path] = { ...entry, hasTrustDialogAccepted: true }
-  return merged
-}
-// An account's .claude.json: its own keys, the system's user-level ones over
-// them, and its own login identity. Never a token: none is in either file's
-// shared keys, and the login itself stays in .credentials.json.
-export function accountState(own, system, oauth) {
-  const next = { ...own }
-  for (const [key, value] of Object.entries(object(system) ? system : {})) {
-    if (!sharedStateKey(key)) continue
-    next[key] = key === 'projects' || key === 'mcpServers' ? mergeEntries(key, own[key], value) : value
+const digest = (value) =>
+  createHash('sha256').update(JSON.stringify(stable(value))).digest('base64url').slice(0, 16)
+const some = (map) => Object.keys(map).length > 0
+// One value of .claude.json, synced both ways. `base`: its digest at the last
+// sync (OWN: kept by the account alone; undefined: absent on both sides then,
+// or no sync yet). -> the account's and the system's values (undefined:
+// none), the next base, and `lost`: the account's value a system change
+// replaced. `removals`: an entry removed in the account is removed from the
+// system too. `bookkeeping`: Claude's own (BOOKKEEPING). `writeBack` false:
+// the system is left as it is this time.
+function syncValue(a, s, base, { removals = false, bookkeeping = false, writeBack = true } = {}) {
+  const ha = a === undefined ? undefined : digest(a)
+  const hs = s === undefined ? undefined : digest(s)
+  if (bookkeeping) return { a: s === undefined ? a : s, s }
+  if (ha === hs) return { a, s, base: ha }
+  if (base === OWN) return s === undefined ? { a, s, base: OWN } : { a: s, s, base: hs, lost: a }
+  // Only the system changed it.
+  if (ha === base) return { a: s, s, base: hs }
+  // Only the account changed it.
+  if (hs === base) {
+    if (!writeBack) return { a, s, base }
+    if (a === undefined) return removals ? { a, s: undefined, base: undefined } : { a: s, s, base: hs }
+    return { a, s: a, base: ha }
   }
-  // Claude keeps its profile there fresher than the one saved at sign-in.
-  next.oauthAccount =
-    object(own.oauthAccount) && matches(identity(oauth), identity(own.oauthAccount)) ? own.oauthAccount : oauth
+  // Both changed it: the system's wins. Gone from the system: the account keeps its own.
+  if (s === undefined) return { a, s, base: OWN }
+  return { a: s, s, base: hs, lost: a }
+}
+// One map's entries synced (`each` decides each one): the account's and the
+// system's maps keep their key order, new keys at the end.
+function syncMap(own, system, base, each) {
+  const account = { ...own }
+  const shared = { ...system }
+  const next = {}
+  const lost = {}
+  const known = object(base) ? base : {}
+  for (const key of new Set([...Object.keys(own), ...Object.keys(system), ...Object.keys(known)])) {
+    const result = each(key, own[key], system[key], known[key])
+    if (!result) continue
+    if (result.a === undefined) delete account[key]
+    else account[key] = result.a
+    if (result.s === undefined) delete shared[key]
+    else shared[key] = result.s
+    if (result.base !== undefined) next[key] = result.base
+    if (result.lost !== undefined) lost[key] = result.lost
+  }
+  return { account, system: shared, base: next, lost }
+}
+// A project's fields. Its trust stays the account's own when given there
+// (Tessel trusts a folder right before a launch), never written back.
+function syncProjectField(key, a, s, base, writeBack) {
+  if (key === 'hasTrustDialogAccepted') return { a: a === true || s === undefined ? a : s, s }
+  return syncValue(a, s, typeof base === 'string' ? base : undefined, {
+    removals: true,
+    bookkeeping: BOOKKEEPING.test(key),
+    writeBack
+  })
+}
+// Not changed in the account since the last sync, its bookkeeping and trust aside.
+function projectUnchanged(entry, base) {
+  const counted = (key) => key !== 'hasTrustDialogAccepted' && !BOOKKEEPING.test(key)
+  return [...new Set([...Object.keys(entry), ...Object.keys(base)])]
+    .filter(counted)
+    .every((key) => (entry[key] === undefined ? undefined : digest(entry[key])) === base[key])
+}
+// One project of `projects`, field by field. Gone from the system: gone from
+// the account too, unless the account changed it since (then its own).
+function syncProject(a, s, base, writeBack) {
+  if ((a !== undefined && !object(a)) || (s !== undefined && !object(s)))
+    return syncValue(a, s, typeof base === 'string' ? base : undefined, { writeBack })
+  if (a === undefined && s === undefined) return null
+  // Never removed from the system for being gone from the account.
+  if (a === undefined) return syncProject(s, s, undefined, writeBack)
+  if (s === undefined && object(base)) {
+    if (projectUnchanged(a, base)) return { a: undefined, s: undefined, base: undefined }
+    return { a, s: undefined, base: OWN }
+  }
+  if (s === undefined && base === OWN) return { a, s: undefined, base: OWN }
+  const fields = syncMap(a, s ?? {}, object(base) ? base : undefined, (key, x, y, z) =>
+    syncProjectField(key, x, y, z, writeBack)
+  )
+  return {
+    a: fields.account,
+    // Nothing of it written back: still not in the system.
+    s: s === undefined && !some(fields.system) ? undefined : fields.system,
+    base: fields.base,
+    lost: some(fields.lost) ? fields.lost : undefined
+  }
+}
+// The shared keys of the account's .claude.json and the system's, synced:
+// the user's MCP servers one by one, the projects field by field, the other
+// keys whole. An account file without its projects or MCP servers (Claude
+// started it again) takes the system's, never removing any there.
+function syncConfig(own, system, base, writeBack) {
+  return syncMap(own, system, base, (key, a, s, b) => {
+    if (!sharedStateKey(key)) return null
+    if (key !== 'projects' && key !== 'mcpServers')
+      return syncValue(a, s, typeof b === 'string' ? b : undefined, { bookkeeping: BOOKKEEPING.test(key), writeBack })
+    if (s !== undefined && !object(s)) return syncValue(a, s, typeof b === 'string' ? b : undefined, { writeBack })
+    if (!object(a)) return s === undefined ? null : { ...syncEntries(key, s, s, undefined, writeBack), a: s }
+    return syncEntries(key, a, s, b, writeBack)
+  })
+}
+function syncEntries(key, a, s, base, writeBack) {
+  const entries = syncMap(a, s ?? {}, object(base) ? base : undefined, (name, x, y, z) =>
+    key === 'projects'
+      ? syncProject(x, y, z, writeBack)
+      : syncValue(x, y, typeof z === 'string' ? z : undefined, { removals: true, writeBack })
+  )
+  return {
+    a: entries.account,
+    s: s === undefined && !some(entries.system) ? undefined : entries.system,
+    base: entries.base,
+    lost: some(entries.lost) ? entries.lost : undefined
+  }
+}
+// An account's .claude.json, synced with the system's (`base`: the sync state
+// of the last launch, null: none yet), with its own login identity. Never a
+// token: none is in either file's shared keys, and the login itself stays in
+// .credentials.json. -> { account, system (null: unchanged), base, lost }
+export function accountState(own, system, oauth, base = null, { writeBack = true, signedIn = false } = {}) {
+  let result = { account: { ...own }, system: null, base, lost: {} }
+  if (object(system)) {
+    // Most of what it had at the last sync gone: Claude started the file again
+    // (it was damaged). Its fresh defaults are not changes: it takes the
+    // system's shared keys again.
+    const had = object(base) ? Object.keys(base) : []
+    const restarted = had.length >= 4 && had.filter((key) => !Object.hasOwn(own, key)).length * 2 > had.length
+    const mine = restarted ? Object.fromEntries(Object.entries(own).filter(([key]) => !sharedStateKey(key))) : own
+    const synced = syncConfig(mine, system, base, writeBack)
+    result = { ...synced, system: equal(synced.system, system) ? null : synced.system }
+  }
+  // Claude keeps its profile there fresher than the one saved at sign-in; a
+  // folder with none yet gets the saved one. Another account's is never
+  // replaced here (the caller refuses that folder), only by a new sign-in.
+  result.account.oauthAccount =
+    signedIn || folderIdentity(identity(oauth), own.oauthAccount) === 'none' ? oauth : own.oauthAccount
+  return result
+}
+// A settings object without the handlers of Tessel's hooks, and without the
+// groups and events left empty (Tessel adds its own to an empty event).
+const tesselHook = (handler) => String(handler?.command || '').includes(TESSEL_HOOK)
+function withoutTesselHooks(settings) {
+  if (!object(settings.hooks)) return settings
+  const hooks = {}
+  for (const [event, list] of Object.entries(settings.hooks)) {
+    if (!Array.isArray(list)) {
+      hooks[event] = list
+      continue
+    }
+    const kept = []
+    for (const group of list) {
+      const others = object(group) && Array.isArray(group.hooks) ? group.hooks.filter((h) => !tesselHook(h)) : null
+      if (!others || others.length === group.hooks.length) kept.push(group)
+      else if (others.length) kept.push({ ...group, hooks: others })
+    }
+    if (kept.length) hooks[event] = kept
+  }
+  const next = { ...settings, hooks }
+  if (!some(hooks)) delete next.hooks
   return next
+}
+// Tessel's hook groups alone, as teamInstall.js adds them.
+function tesselHooks(settings) {
+  const out = {}
+  for (const [event, list] of Object.entries(object(settings.hooks) ? settings.hooks : {}))
+    for (const group of Array.isArray(list) ? list : []) {
+      const ours = object(group) && Array.isArray(group.hooks) ? group.hooks.filter(tesselHook) : []
+      if (ours.length) (out[event] ||= []).push({ ...group, hooks: ours })
+    }
+  return out
+}
+const authEnvEntries = (env, keep) =>
+  Object.fromEntries(Object.entries(object(env) ? env : {}).filter(([name]) => AUTH_ENV.has(name.toUpperCase()) === keep))
+// A settings object without its sign-in settings.
+function withoutAuth(settings) {
+  const next = { ...settings }
+  for (const key of AUTH_SETTINGS) delete next[key]
+  if (object(settings.env)) {
+    const env = authEnvEntries(settings.env, false)
+    if (Object.keys(env).length !== Object.keys(settings.env).length) {
+      if (some(env)) next.env = env
+      else delete next.env
+    }
+  }
+  return next
+}
+const parseJson = (contents) => {
+  try {
+    return JSON.parse(contents)
+  } catch {
+    return undefined
+  }
+}
+// The account's copy of a copied file: as it is, without sign-in settings.
+function accountCopy(name, contents) {
+  if (contents === null || !SETTINGS_FILES.has(name)) return contents
+  const value = parseJson(contents)
+  if (!object(value)) return contents
+  const copy = withoutAuth(value)
+  return equal(copy, value) ? contents : encode(copy)
+}
+// What tells a change made by the person in a copied file: its content,
+// formatting aside, without sign-in settings or Tessel's own hooks.
+function fingerprint(name, contents) {
+  if (contents === null) return null
+  const value = name.endsWith('.json') ? parseJson(contents) : undefined
+  const comparable =
+    value === undefined
+      ? `text:${contents}`
+      : `json:${JSON.stringify(stable(SETTINGS_FILES.has(name) && object(value) ? withoutTesselHooks(withoutAuth(value)) : value))}`
+  return createHash('sha256').update(comparable).digest('base64url').slice(0, 22)
+}
+// The system's file once the account's change is written back: the account's
+// content, with the system's own sign-in settings and Tessel hooks kept.
+// null: nothing valid to write back.
+function writtenBack(name, account, system) {
+  const own = name.endsWith('.json') ? parseJson(account) : account
+  if (own === undefined) return null
+  if (!SETTINGS_FILES.has(name)) return account
+  const current = system === null ? {} : parseJson(system)
+  if (!object(own) || !object(current)) return null
+  const next = withoutTesselHooks(withoutAuth(own))
+  for (const key of AUTH_SETTINGS) if (Object.hasOwn(current, key)) next[key] = current[key]
+  const env = authEnvEntries(current.env, true)
+  if (some(env)) next.env = { ...(object(next.env) ? next.env : {}), ...env }
+  const ours = tesselHooks(current)
+  if (some(ours)) {
+    const hooks = object(next.hooks) ? { ...next.hooks } : {}
+    for (const [event, groups] of Object.entries(ours))
+      hooks[event] = [...(Array.isArray(hooks[event]) ? hooks[event] : []), ...groups]
+    next.hooks = hooks
+  }
+  return equal(next, own) ? account : encode(next)
+}
+// The lines a session added to the account's memory file (its import of the
+// system's aside), without blank lines around them.
+function addedMemory(contents) {
+  const lines = (contents ?? '').split(/\r?\n/).filter((line) => line.trim() !== MEMORY_IMPORT)
+  while (lines.length && !lines[0].trim()) lines.shift()
+  while (lines.length && !lines.at(-1).trim()) lines.pop()
+  return lines
 }
 
 export function createClaudeAccounts({
@@ -318,6 +567,36 @@ export function createClaudeAccounts({
       return { status: 'unknown' }
     }
   }
+  // A login one of its sessions is refreshing can read half-written: read
+  // once more, a moment later, before calling it unreadable.
+  async function steady(id) {
+    const auth = await managed(id)
+    if (auth.status !== 'unknown') return auth
+    await sleep(200)
+    return managed(id)
+  }
+  // Signed in to another account in its folder (a /login in one of its
+  // sessions): its .claude.json profile, or its login when that names
+  // someone, is not the account saved at sign-in. Such a folder is never
+  // launched, selected, read for usage or "repaired": a new sign-in fixes it.
+  async function signedInElsewhere(id, saved) {
+    const folder = authPath(id)
+    try {
+      if (!(await ownedDirectory(accountsRoot, folder, MARKER, id))) return false
+      const config = await readText(join(folder, '.claude.json'))
+      if (config !== null && folderIdentity(saved, jsonObject(config).oauthAccount) === 'other') return true
+      const raw = await readText(join(folder, '.credentials.json'))
+      const login = raw === null ? null : jsonObject(raw).claudeAiOauth
+      return object(login) && folderIdentity(saved, login) === 'other'
+    } catch {
+      return false // unreadable: not known here (the login checks refuse it)
+    }
+  }
+  const otherAccount = () =>
+    t(
+      'main.claudeAccount.otherAccount',
+      'This Claude account was switched to another account by a /login in one of its sessions. Sign in to it again: Settings > AI provider accounts > Sign in again.'
+    )
   function publicAccount(account, status, selectedId) {
     return {
       id: account.id,
@@ -567,18 +846,50 @@ export function createClaudeAccounts({
       await fs.rmdir(lock).catch(() => {})
     }
   }
-  // The account's own .claude.json (accountState). Best effort: a session
-  // still starts without it (Claude fetches its profile itself).
-  async function writeOwnState(id, oauth) {
-    const file = join(authPath(id), '.claude.json')
-    let system = null
+  // What the last sync left on both sides (fingerprints): of the copied files
+  // and of .claude.json's shared keys. None or unreadable: synced as a first time.
+  async function readSync(folder) {
     try {
-      const raw = await readText(configPath)
-      system = raw === null ? {} : jsonObject(raw)
+      const raw = await readText(join(folder, SYNC_STATE))
+      const value = raw === null ? null : jsonObject(raw)
+      if (
+        value?.version === 1 &&
+        object(value.files) &&
+        Object.values(value.files).every((v) => v === null || typeof v === 'string')
+      )
+        return { files: value.files, config: object(value.config) ? value.config : null }
     } catch {
-      warn('Claude account: the system Claude settings could not be read; shared settings not updated') // i18n-ignore log
+      /* none */
     }
-    const write = async () => {
+    return { files: {}, config: null }
+  }
+  const writeSync = (folder, state) =>
+    writeText(join(folder, SYNC_STATE), encode({ version: 1, files: state.files, config: state.config }))
+  // The account's version of what changed on both sides, kept next to its
+  // file (<name>.conflict-<time>) while the system's wins.
+  async function keepAside(folder, name, contents) {
+    const aside = `${name}.conflict-${new Date(now()).toISOString().replace(/[:.]/g, '-')}`
+    await writeText(join(folder, aside), contents)
+    warn(`Claude account: ${name} changed both in its sessions and in the system; the system's kept, its own in ${aside}`) // i18n-ignore log
+  }
+  // The account's own .claude.json (accountState), synced with the system's
+  // under both files' Claude locks. Best effort: a session still starts
+  // without it (Claude fetches its profile itself). `signedIn`: right after a
+  // sign-in, whose identity replaces the folder's. -> 'switched' when its
+  // folder is signed in to another account (then left as it is).
+  async function writeOwnState(id, oauth, { signedIn = false } = {}) {
+    const folder = authPath(id)
+    const file = join(folder, '.claude.json')
+    let outcome = null
+    const write = async (writeBack) => {
+      let systemRaw = null
+      let system = null
+      try {
+        systemRaw = await readText(configPath)
+        system = systemRaw === null ? {} : jsonObject(systemRaw)
+      } catch {
+        warn('Claude account: the system Claude settings could not be read; shared settings not updated') // i18n-ignore log
+      }
       const raw = await readText(file)
       let own = {}
       try {
@@ -586,35 +897,115 @@ export function createClaudeAccounts({
       } catch {
         // Damaged: Claude starts it again too.
       }
-      const next = accountState(own, system, oauth)
-      if (raw === null || !equal(next, own)) await writeText(file, encode(next), raw)
+      if (!signedIn && folderIdentity(identity(oauth), own.oauthAccount) === 'other') {
+        outcome = 'switched'
+        return
+      }
+      const sync = await readSync(folder)
+      const next = accountState(own, system, oauth, sync.config, { writeBack: writeBack && system !== null, signedIn })
+      if (raw === null || !equal(next.account, own)) await writeText(file, encode(next.account), raw)
+      if (next.system) await writeText(configPath, encode(next.system), systemRaw)
+      if (some(next.lost)) await keepAside(folder, '.claude.json', encode(next.lost))
+      if (system !== null) await writeSync(folder, { ...sync, config: next.base })
     }
     try {
-      if (!(await underClaudeLock(file, write))) warn('Claude account: its settings file is locked; shared settings not updated') // i18n-ignore log
+      let held = false
+      let ran = false
+      // The system's lock first, then the account's: always in this order.
+      const systemHeld = await underClaudeLock(configPath, async () => {
+        ran = true
+        held = await underClaudeLock(file, () => write(true))
+      }).catch((error) => {
+        if (ran) throw error
+        return false
+      })
+      // Claude busy with the system's file (or no lock there): nothing written back this time.
+      if (!systemHeld) held = await underClaudeLock(file, () => write(false))
+      if (!held) warn('Claude account: its settings file is locked; shared settings not updated') // i18n-ignore log
     } catch {
       warn('Claude account: its settings file could not be updated') // i18n-ignore log
     }
+    if (outcome === 'switched')
+      warn('Claude account: signed in to another account in one of its sessions; its files are left as they are') // i18n-ignore log
+    return outcome
+  }
+  // Moves one file to `target`, never over one there: a hard link fails when
+  // `target` exists (where links cannot be made, an exclusive copy does).
+  // -> false when `target` exists.
+  async function moveFile(source, target) {
+    try {
+      await fs.link(source, target)
+    } catch (error) {
+      if (error.code === 'EEXIST') return false
+      if (!['EXDEV', 'EPERM', 'ENOTSUP', 'EOPNOTSUPP'].includes(error.code)) throw error
+      try {
+        await fs.copyFile(source, target, fs.constants.COPYFILE_EXCL)
+      } catch (copyError) {
+        if (copyError.code === 'EEXIST') return false
+        throw copyError
+      }
+    }
+    await fs.unlink(source)
+    return true
   }
   // Moves what `from` holds into `to`, never over something there and never
-  // through a link: what cannot move stays (counted). `from` goes once empty.
-  async function drain(from, to, depth = 0) {
-    let left = 0
+  // through a link: what cannot move stays (counted, its paths in `left`).
+  // `from` goes once empty.
+  async function drain(from, to, depth = 0, left = []) {
+    let count = 0
     for (const entry of await fs.readdir(from, { withFileTypes: true })) {
       const source = join(from, entry.name)
       const target = join(to, entry.name)
       try {
-        const there = await lstatOrNull(target)
-        if (entry.isSymbolicLink()) left++
-        else if (!there) await fs.rename(source, target)
-        else if (entry.isDirectory() && there.isDirectory() && !there.isSymbolicLink() && depth < 8)
-          left += await drain(source, target, depth + 1)
-        else left++
+        if (entry.isFile() && (await moveFile(source, target))) continue
+        if (entry.isDirectory() && depth < 8) {
+          // Made there (never over what is there), or the folder there merged into.
+          await fs.mkdir(target).catch((error) => {
+            if (error.code !== 'EEXIST') throw error
+          })
+          const there = await fs.lstat(target)
+          if (there.isDirectory() && !there.isSymbolicLink()) {
+            count += await drain(source, target, depth + 1, left)
+            continue
+          }
+        }
       } catch {
-        left++
+        /* stays */
+      }
+      count++
+      left.push(source)
+    }
+    if (!count) await fs.rmdir(from).catch(() => {})
+    return count
+  }
+  // Before an account goes: what its sessions kept in <name>.merge (entries
+  // the system folder already had) is moved there now, never over an entry
+  // there; what is still left is named in the log, then removed with it.
+  async function rescueMerged(folder) {
+    let names
+    try {
+      names = (await fs.readdir(folder)).filter((name) => name.endsWith('.merge'))
+    } catch {
+      return
+    }
+    for (const name of names) {
+      const aside = join(folder, name)
+      const left = []
+      try {
+        const entry = await fs.lstat(aside)
+        if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+        const shared = join(configDir, name.slice(0, -'.merge'.length))
+        await fs.mkdir(shared, { recursive: true })
+        if ((await fs.stat(shared)).isDirectory()) await drain(aside, shared, 0, left)
+        else left.push(aside)
+      } catch {
+        left.push(aside)
+      }
+      if (left.length) {
+        const shown = left.slice(0, 20).map((path) => relative(folder, path) || name)
+        warn(`Claude account removed: ${left.length} of its own entries could not be moved to the system folder and are deleted: ${shown.join(', ')}${left.length > 20 ? ', …' : ''}`) // i18n-ignore log
       }
     }
-    if (!left) await fs.rmdir(from).catch(() => {})
-    return left
   }
   // One shared folder: <account>/<name> a junction to <system>/<name>. A link
   // to another place is replaced (the link itself, never what it points to).
@@ -681,16 +1072,91 @@ export function createClaudeAccounts({
       throw error
     }
   }
-  async function copyShared(folder, name) {
-    let contents = await readSystemFile(join(configDir, name))
-    // ~/.claude/CLAUDE.md is also read as a parent folder's for projects in the
-    // home folder: an import of it, never a second copy of the same text.
-    if (contents !== null && name === 'CLAUDE.md' && defaultConfigDir) contents = '@~/.claude/CLAUDE.md\n'
+  // Writes a system file atomically, through the user's own link if it is one
+  // (never replacing the link), unless it changed since it was read.
+  async function writeSystemFile(path, contents, expected) {
+    const entry = await lstatOrNull(path)
+    const target = entry?.isSymbolicLink() ? await fs.realpath(path) : path
+    const temporary = join(dirname(target), `.tessel-sync-${randomUUID()}.tmp`)
+    let file
+    try {
+      file = await fs.open(temporary, 'wx')
+      await file.writeFile(contents, 'utf8')
+      await file.sync()
+      await file.close()
+      file = null
+      if ((await readSystemFile(path)) !== expected)
+        throw authError(
+          t('main.claudeAccount.changedRetry', 'Claude account files changed during the operation. Retry after other logins finish.')
+        )
+      for (let i = 0; ; i++) {
+        try {
+          await fs.rename(temporary, target)
+          break
+        } catch (error) {
+          // Open for a moment elsewhere (a session reading it, an antivirus scan).
+          if (i >= 10 || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error
+          await sleep(25)
+        }
+      }
+    } finally {
+      await file?.close()
+      await fs.unlink(temporary).catch(() => {})
+    }
+  }
+  // One copied file, synced both ways since the last launch (`base`: its
+  // fingerprint then; undefined: not known). Changed on both sides, the
+  // system's wins and the account's is kept aside. A copy gone from the
+  // account is copied again, never removed from the system. -> its fingerprint now
+  async function syncFile(folder, name, base) {
+    const systemPath = join(configDir, name)
+    const accountPath = join(folder, name)
+    const system = await readSystemFile(systemPath)
+    const own = await readText(accountPath)
+    const s = fingerprint(name, system)
+    const a = fingerprint(name, own)
+    let next = s
+    let kept = own
+    if (a !== s) {
+      // Only the account changed it, or made one the system never had.
+      const accountOnly = own !== null && a !== base && (s === base || (base === undefined && system === null))
+      const content = accountOnly ? writtenBack(name, own, system) : null
+      if (content !== null) {
+        await writeSystemFile(systemPath, content, system)
+        next = fingerprint(name, content)
+      } else {
+        if (own !== null && a !== base) await keepAside(folder, name, own)
+        // Gone from the system folder: gone from the account's too.
+        kept = accountCopy(name, system)
+      }
+    }
+    // Never sign-in settings in the account's copy.
+    kept = accountCopy(name, kept)
+    if (kept !== own) await writeText(accountPath, kept, own)
+    return next
+  }
+  // ~/.claude/CLAUDE.md is also read as a parent folder's for projects in the
+  // home folder: the account's is an import of it, never a second copy. What
+  // its sessions added there (a # note, /memory) goes at the end of the
+  // system's, then it is the import alone again.
+  async function syncMemory(folder) {
+    const systemPath = join(configDir, 'CLAUDE.md')
+    const accountPath = join(folder, 'CLAUDE.md')
+    let system = await readSystemFile(systemPath)
+    const own = await readText(accountPath)
+    const added = addedMemory(own)
+    if (added.length) {
+      const eol = system?.includes('\r\n') ? '\r\n' : '\n'
+      const next = `${system ?? ''}${system && !system.endsWith('\n') ? eol : ''}${added.join(eol)}${eol}`
+      await writeSystemFile(systemPath, next, system)
+      system = next
+    }
     // Gone from the system folder: gone from the account's too.
-    await writeText(join(folder, name), contents)
+    await writeText(accountPath, system === null ? null : `${MEMORY_IMPORT}\n`, own)
   }
   // Before each launch on a managed account: its folder shares the system
   // one's conversations, plugins, skills and settings (each item best effort).
+  // -> 'switched' when its folder is signed in to another account.
   async function prepare(id, auth) {
     const folder = authPath(id)
     if (!(await ownedDirectory(accountsRoot, folder, MARKER, id))) throw authError()
@@ -708,14 +1174,22 @@ export function createClaudeAccounts({
         warn(`Claude account: ${name} could not be shared (${error?.code || 'error'})`) // i18n-ignore log
       }
     }
+    const sync = await readSync(folder)
+    const files = { ...sync.files }
     for (const name of COPIED_FILES) {
       try {
-        await copyShared(folder, name)
+        if (name === 'CLAUDE.md' && defaultConfigDir) await syncMemory(folder)
+        else files[name] = await syncFile(folder, name, Object.hasOwn(files, name) ? files[name] : undefined)
       } catch (error) {
-        warn(`Claude account: ${name} could not be copied (${error?.code || 'error'})`) // i18n-ignore log
+        warn(`Claude account: ${name} could not be synced (${error?.code || 'error'})`) // i18n-ignore log
       }
     }
-    await writeOwnState(id, auth.oauth)
+    try {
+      await writeSync(folder, { ...sync, files })
+    } catch {
+      warn('Claude account: its sync state could not be saved') // i18n-ignore log
+    }
+    return writeOwnState(id, auth.oauth)
   }
   async function login(id, { signal, onProgress } = {}) {
     await recover()
@@ -723,7 +1197,9 @@ export function createClaudeAccounts({
     const state = await readMetadata()
     const previous = id ? state.accounts.find((a) => a.id === id) : null
     if (id && !previous) throw authError(t('main.claudeAccount.unknown', 'Unknown Claude account.'))
-    if (id && (await managed(id)).status === 'unknown') throw authError()
+    // Signed in to another account in its folder: it may sign in again.
+    if (id && (await managed(id)).status === 'unknown' && !(await signedInElsewhere(id, previous.identity)))
+      throw authError()
     if (typeof runLogin !== 'function') throw authError(t('main.claudeAccount.loginUnavailable', 'Claude login is unavailable.'))
     if (signal?.aborted) throw authError(t('main.claudeAccount.loginCancelled', 'Claude login was cancelled.'))
     await removeStaleLogins()
@@ -807,7 +1283,7 @@ export function createClaudeAccounts({
       await transaction([...accountChanges(accountId, { raw, oauth }), { kind: 'index', after: encode(next) }])
       created = null
       // Its own .claude.json right away: its usage can be read before a first session.
-      await writeOwnState(accountId, oauth)
+      await writeOwnState(accountId, oauth, { signedIn: true })
       return {
         ok: true,
         account: publicAccount(account, 'ready', state.selectedId),
@@ -864,7 +1340,17 @@ export function createClaudeAccounts({
     const account = state.accounts.find((entry) => entry.id === id)
     if (!account) return false
     const auth = await managed(id)
-    return auth.status === 'ready' && matches(account.identity, identity(auth.oauth))
+    return (
+      auth.status === 'ready' &&
+      matches(account.identity, identity(auth.oauth)) &&
+      !(await signedInElsewhere(id, account.identity))
+    )
+  }
+  // An account row's status: signed in to another account in its folder, it
+  // needs a new sign-in.
+  async function accountStatus(account) {
+    const status = (await managed(account.id)).status
+    return status !== 'missing' && (await signedInElsewhere(account.id, account.identity)) ? 'missing' : status
   }
   const systemEnv = () => (override ? { CLAUDE_CONFIG_DIR: configDir } : {})
   return {
@@ -882,7 +1368,7 @@ export function createClaudeAccounts({
         const pending = await readText(journalPath)
         const accounts = await Promise.all(
           state.accounts.map(async (a) =>
-            publicAccount(a, pending ? 'unknown' : (await managed(a.id)).status, state.selectedId)
+            publicAccount(a, pending ? 'unknown' : await accountStatus(a), state.selectedId)
           )
         )
         return {
@@ -904,10 +1390,11 @@ export function createClaudeAccounts({
         if (id !== null) {
           const account = state.accounts.find((a) => a.id === id)
           if (!account) throw authError(t('main.claudeAccount.unknown', 'Unknown Claude account.'))
-          const auth = await managed(id)
+          const auth = await steady(id)
+          if (await signedInElsewhere(id, account.identity)) throw authError(otherAccount())
           if (auth.status !== 'ready' || !matches(account.identity, identity(auth.oauth)))
             throw authError(t('main.claudeAccount.needsLogin', 'This Claude account needs a valid login before selection.'))
-          await writeOwnState(id, auth.oauth)
+          if ((await writeOwnState(id, auth.oauth)) === 'switched') throw authError(otherAccount())
         }
         await transaction([{ kind: 'index', after: encode({ ...state, selectedId: id }) }])
         return { ok: true, selectedId: id, restartRequired: false }
@@ -917,8 +1404,9 @@ export function createClaudeAccounts({
         await recover()
         await migrate()
         const state = await readMetadata()
-        if (!state.accounts.some((a) => a.id === id)) throw authError(t('main.claudeAccount.unknown', 'Unknown Claude account.'))
-        if ((await managed(id)).status === 'unknown')
+        const account = state.accounts.find((a) => a.id === id)
+        if (!account) throw authError(t('main.claudeAccount.unknown', 'Unknown Claude account.'))
+        if ((await managed(id)).status === 'unknown' && !(await signedInElsewhere(id, account.identity)))
           throw authError(t('main.claudeAccount.removeUnsafe', 'Managed Claude auth cannot be removed safely.'))
         const selectedId = state.selectedId === id ? null : state.selectedId
         await transaction([
@@ -926,6 +1414,7 @@ export function createClaudeAccounts({
         ])
         const result = { ok: true, selectedId, restartRequired: false }
         try {
+          if (await ownedDirectory(accountsRoot, authPath(id), MARKER, id)) await rescueMerged(authPath(id))
           // Its shared folders are junctions: removed themselves, never what they point to.
           await removeOwnedDirectory(accountsRoot, authPath(id), MARKER, id, { depth: 24, count: 50000 })
           await fs.rmdir(join(accountsRoot, id)).catch((error) => {
@@ -996,7 +1485,8 @@ export function createClaudeAccounts({
             ok: false,
             error: t('main.claudeAccount.removedAccount', 'This Claude account is no longer in Tessel. Start the session on another account.')
           }
-        const auth = await managed(id)
+        const auth = await steady(id)
+        if (await signedInElsewhere(id, account.identity)) return { ok: false, error: otherAccount() }
         if (auth.status === 'unknown')
           throw authError(t('main.claudeAccount.selectedAuthUnreadable', 'Selected Claude authentication is unreadable; launch was refused.'))
         if (auth.status !== 'ready' || !matches(account.identity, identity(auth.oauth)))
@@ -1004,7 +1494,7 @@ export function createClaudeAccounts({
             ok: false,
             error: t('main.claudeAccount.signInAgain', 'This Claude account needs to sign in again (Settings > AI provider accounts).')
           }
-        await prepare(id, auth)
+        if ((await prepare(id, auth)) === 'switched') return { ok: false, error: otherAccount() }
         return { ok: true, env: { CLAUDE_CONFIG_DIR: authPath(id) }, accountId: id }
       })
   }

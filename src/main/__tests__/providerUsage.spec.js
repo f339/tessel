@@ -737,6 +737,39 @@ describe('real disposable credential files', () => {
       await fs.rmdir(home)
     }
   })
+  it("reads a Claude account's profile from a .claude.json of several MB, its login still within the login limit", async () => {
+    const dir = path.join(root, 'claude-account')
+    await fs.mkdir(dir)
+    const service = () => {
+      const context = fixture()
+      context.state.selected.claude = 'managed-a'
+      context.accounts.usageScope.mockResolvedValue({
+        ok: true,
+        accountId: 'managed-a',
+        env: { CLAUDE_CONFIG_DIR: dir },
+        expectedIdentity: context.expectedIdentity
+      })
+      const usage = createProviderUsage({ accounts: context.accounts, home: root, env: {}, request: context.request, clock: () => epoch })
+      return { usage, context }
+    }
+    try {
+      const { usage, context } = service()
+      await fs.writeFile(path.join(dir, '.credentials.json'), JSON.stringify(context.state.claudeAuth))
+      // It carries the system's whole projects list.
+      const projects = Object.fromEntries(Array.from({ length: 3000 }, (_, i) => [`C:/p${i}`, { notes: 'x'.repeat(1000) }]))
+      await fs.writeFile(path.join(dir, '.claude.json'), JSON.stringify({ oauthAccount: context.state.oauth, projects }))
+      expect((await usage.read({ provider: 'claude', accountId: 'managed-a' })).ok).toBe(true)
+      const large = service()
+      await fs.writeFile(
+        path.join(dir, '.credentials.json'),
+        JSON.stringify({ ...large.context.state.claudeAuth, pad: 'x'.repeat(2 * 1024 * 1024) })
+      )
+      expect(await large.usage.read({ provider: 'claude', accountId: 'managed-a' })).toMatchObject({ ok: false, code: 'auth' })
+      expect(large.context.request).not.toHaveBeenCalled()
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('fieldNames (logged once for Claude, names only)', () => {
