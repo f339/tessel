@@ -480,7 +480,7 @@ export function cursorConfigModel(text) {
   return { model: id, ...(name ? { name } : {}), ...(effort ? { effort } : {}) }
 }
 
-function settingsModel(agentId, cwd, home) {
+function settingsModel(agentId, cwd, home, codexDir = null) {
   const files = []
   if (agentId === 'claude') {
     if (cwd) files.push(join(cwd, '.claude', 'settings.local.json'), join(cwd, '.claude', 'settings.json'))
@@ -491,7 +491,7 @@ function settingsModel(agentId, cwd, home) {
     }
     return null
   }
-  if (agentId === 'codex') return codexModelFromToml(readText(join(home, '.codex', 'config.toml')))
+  if (agentId === 'codex') return codexModelFromToml(readText(join(codexDir || join(home, '.codex'), 'config.toml')))
   if (agentId === 'cursor') return cursorConfigModel(readText(join(home, '.cursor', 'cli-config.json')))
   if (agentId === 'gemini' || agentId === 'qwen') {
     const dir = agentId === 'gemini' ? '.gemini' : '.qwen'
@@ -557,7 +557,9 @@ export function effortFromCommand(command) {
   const m = /(?:^|\s)--effort(?:=|\s+)["']?(low|medium|high|xhigh|max)\b/i.exec(String(command || ''))
   return m ? m[1].toLowerCase() : null
 }
-function agentModelFound({ agentId, sessionId, command, cwd, launchedAt = 0 } = {}, home = os.homedir()) {
+// codexDir: the Codex home of the pane's account (main resolves it from the
+// account; never a path from the window).
+function agentModelFound({ agentId, sessionId, command, cwd, launchedAt = 0, codexDir = null } = {}, home = os.homedir()) {
   if (!agentId) return null
   if (agentId === 'copilot') {
     const f = copilotLiveSession(cwd, home)
@@ -586,7 +588,7 @@ function agentModelFound({ agentId, sessionId, command, cwd, launchedAt = 0 } = 
         return { model: same ? m + '[1m]' : m, effort: turn.effort || claudeSettingsEffort(m, cwd, home), source: 'session', ...(turn.at ? { at: turn.at } : {}) }
       }
     } else if (agentId === 'codex') {
-      const f = codexRollout(sessionId, home)
+      const f = codexDir ? codexRolloutIn(codexDir, sessionId) : codexRollout(sessionId, home)
       const m = f && codexModelFromText(readTail(f))
       if (m) return { ...m, source: 'session' }
     }
@@ -597,7 +599,7 @@ function agentModelFound({ agentId, sessionId, command, cwd, launchedAt = 0 } = 
   if (picked && launchedAt && picked.mtime >= launchedAt) return { model: picked.model, effort: null, source: 'picked' }
   const flag = modelFromCommand(command)
   if (flag) return { model: flag, effort: null, source: 'command' }
-  const s = settingsModel(agentId, cwd, home)
+  const s = settingsModel(agentId, cwd, home, codexDir)
   if (s) {
     const effort = s.effort || (agentId === 'claude' ? claudeSettingsEffort(s.model, cwd, home) : null)
     return { model: s.model, effort, source: 'settings', ...(s.name ? { name: s.name } : {}) }

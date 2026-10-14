@@ -514,7 +514,10 @@ export function createClaudeAccounts({
       // Only a copy of what was saved: a failed cleanup never undoes the
       // sign-in (the folder is removed by a later one).
       if (cleanupSafe)
-        await removeOwnedDirectory(runtimeRoot, temporary, MARKER, `login:${loginId}`).catch(() => {})
+        await removeOwnedDirectory(runtimeRoot, temporary, MARKER, `login:${loginId}`).catch(async () => {
+          // At least its copy of the login goes now.
+          await writeText(join(temporary, '.credentials.json'), null).catch(() => {})
+        })
     }
   }
   // Sign-in folders an earlier sign-in left (its cleanup failed, or Tessel

@@ -28,7 +28,7 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import { createShareHost, cleanRights } from './liveShare/shareHost.js'
 import { createShareGuest } from './liveShare/shareGuest.js'
 import { newSecret, encodeInvite, decodeInvite, newSigningKey, exportSigningKey, importSigningKey } from './liveShare/shareCrypto.js'
-import { ensureCloudflared, startTunnel, waitReachable, endLeftoverTunnel, tunnelState, stopTunnelPid, stopTunnelLater, processPath, cloudflaredPath } from './liveShare/shareTunnel.js'
+import { ensureCloudflared, startTunnel, waitReachable, endLeftoverTunnel, tunnelState, stopTunnelPid, stopTunnelLater, processState } from './liveShare/shareTunnel.js'
 import { createSessionFile } from './liveShare/sharePersist.js'
 import { pidRunning as pidAlive } from './processTree.js'
 import { trimBuffer, HOST_BUFFER_BYTES } from './ptyProtocol.js'
@@ -185,11 +185,11 @@ const KEEP_FRESH_MS = 60000
 // deps: ipcMain, send(channel, payload) to the window, host (the terminal
 // host client), dataDir (cloudflared goes in its bin folder, the sessions
 // kept across a restart in its files), queueData(id, data) and sendExit(id,
-// exitCode) (the window's own pty:data / pty:exit), log. queryPath, kill,
+// exitCode) (the window's own pty:data / pty:exit), log. queryState, kill,
 // pidRunning: the process helpers (tests give their own). resume: take back a share or
 // a session at once (Tessel calls resume() itself, once it is the only copy
 // running: a second copy starting must not take them).
-export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sendExit, log, queryPath = processPath, kill = (pid) => process.kill(pid), pidRunning = pidAlive, resume = true }) {
+export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sendExit, log, queryState = processState, kill = (pid) => process.kill(pid), pidRunning = pidAlive, resume = true }) {
   const info = (msg) => log?.info?.('liveshare', msg)
   const hostFile = createSessionFile(join(dataDir, 'liveshare-host.json'))
   const guestFile = createSessionFile(join(dataDir, 'liveshare-guest.json'))
@@ -360,7 +360,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     pushHost()
     try {
       // A tunnel left running by a Tessel that did not take its share back.
-      await endLeftoverTunnel(dataDir, { queryPath, kill }).catch(() => false)
+      await endLeftoverTunnel(dataDir, { queryState, kill }).catch(() => false)
       if (s.cancelled) return { ok: false }
       const exe = await ensureCloudflared(dataDir, {
         onProgress: (p) => {
@@ -433,7 +433,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     const stops = stopRun
     const saved = hostFile.read()
     if (!saved) {
-      await endLeftoverTunnel(dataDir, { queryPath, kill }).catch(() => false)
+      await endLeftoverTunnel(dataDir, { queryState, kill }).catch(() => false)
       return false
     }
     const pid = Number(saved.pid) || 0
@@ -441,7 +441,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     // still this one: a new share may have saved its own meanwhile).
     const fail = async (why) => {
       info(`share not taken back: ${why}`)
-      if (pid) await stopTunnelPid(dataDir, pid, { queryPath, kill }).catch(() => false)
+      if (pid) await stopTunnelPid(dataDir, pid, { queryState, kill }).catch(() => false)
       hostFile.clearIf((x) => x && Number(x.pid) === pid && x.url === saved.url)
       return false
     }
@@ -456,7 +456,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     let state = 'unknown'
     for (let i = 0; i < 3 && state === 'unknown'; i++) {
       if (i) await new Promise((r) => setTimeout(r, 1500))
-      state = await tunnelState(pid, { exe: cloudflaredPath(dataDir), queryPath })
+      state = await tunnelState(pid, { dataDir, queryState })
     }
     if (check() === 'stopped') return fail('stopped meanwhile')
     if (check() !== 'ok') return false
@@ -472,7 +472,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     if (secret.length !== 32 || !hostKey || !/^wss?:\/\//.test(String(saved.url)) || !(saved.port > 0)) return fail('unreadable')
     const earlier = (Array.isArray(saved.secrets) ? saved.secrets : []).map((x) => Buffer.from(String(x), 'base64')).filter((x) => x.length === 32)
     const s = { state: 'starting', guests: [], progress: null, cancelled: false, hostName: str(saved.hostName, 40) || defaultShareName(), secret, hostKey, adopted: true }
-    const server = makeServer(s, secret, { known: saved.known, secrets: earlier, guard: saved.guard, inviteExpires: Number(saved.expiresAt) || undefined })
+    const server = makeServer(s, secret, { known: saved.known, knownAt: saved.savedAt, secrets: earlier, guard: saved.guard, inviteExpires: Number(saved.expiresAt) || undefined })
     s.server = server
     // Its port: the last Tessel may take a moment to let it go.
     let port = 0
@@ -497,7 +497,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       url: String(saved.url),
       pid,
       // Stop sharing: only while it is still this cloudflared.
-      stop: () => stopTunnelPid(dataDir, pid, { queryPath, kill }).catch(() => false),
+      stop: () => stopTunnelPid(dataDir, pid, { queryState, kill }).catch(() => false),
       // Quitting (nothing can be waited for): Windows' taskkill ends it after
       // Tessel is gone, only if that PID still runs this cloudflared.
       stopNow: () => stopTunnelLater(dataDir, pid)

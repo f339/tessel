@@ -664,6 +664,30 @@ describe('sign-in folders', () => {
     expect(fs.existsSync(foreign)).toBe(true)
     expect(read(credentialPath())).toEqual(token('system'))
   })
+  it('a cleanup that fails halfway keeps the folder marked (a later sign-in finishes it), and its copy of the login goes at once', async () => {
+    seedSystem()
+    const signIn = runner.getMockImplementation()
+    let isolated
+    runner.mockImplementationOnce(async (options) => {
+      isolated = options.home
+      put(join(isolated, 'AppData', 'Profile', 'cookies.sqlite'), 'held by a browser')
+      return signIn(options)
+    })
+    const real = fsp.unlink.bind(fsp)
+    const unlink = vi.spyOn(fsp, 'unlink').mockImplementation(async (path) => {
+      if (String(path).endsWith('cookies.sqlite')) throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+      return real(path)
+    })
+    expect((await service.add()).ok).toBe(true)
+    expect(fs.existsSync(join(isolated, MARKER))).toBe(true)
+    expect(fs.existsSync(join(isolated, '.credentials.json'))).toBe(false)
+    // The browser let go; an hour on, the next sign-in removes the folder.
+    unlink.mockRestore()
+    const hoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    fs.utimesSync(join(isolated, MARKER), hoursAgo, hoursAgo)
+    await add('other')
+    expect(fs.existsSync(isolated)).toBe(false)
+  })
   it('keeps the folder of a sign-in whose end was never confirmed until its process is gone, whatever its age', async () => {
     seedSystem()
     const alive = new Set([4242])

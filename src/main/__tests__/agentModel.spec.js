@@ -93,6 +93,18 @@ describe('conversation files', () => {
       source: 'session'
     })
   })
+
+  it('a Codex pane on a managed account: its session and settings are read in that account’s Codex home', () => {
+    const d = new Date()
+    const day = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+    const id = '01a0d616-11e1-7202-9d2b-4b4172f34999'
+    put(`accounts/one/home/sessions/${day}/rollout-2026-09-24T21-02-45-${id}.jsonl`, line({ type: 'turn_context', payload: { model: 'gpt-6-astra', effort: 'xhigh' } }) + '\n')
+    put('accounts/one/home/config.toml', 'model = "gpt-6-sol"\n')
+    const codexDir = join(home, 'accounts', 'one', 'home')
+    expect(agentModel({ agentId: 'codex', sessionId: id }, home)?.source).not.toBe('session')
+    expect(agentModel({ agentId: 'codex', sessionId: id, codexDir }, home)).toEqual({ model: 'gpt-6-astra', effort: 'xhigh', source: 'session' })
+    expect(agentModel({ agentId: 'codex', codexDir }, home)).toMatchObject({ model: 'gpt-6-sol' })
+  })
 })
 
 describe('command and settings', () => {

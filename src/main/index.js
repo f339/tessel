@@ -1594,7 +1594,16 @@ const remoteModels = createRemoteModelReader({ readAgentFile: (hostId, q) => (re
 ipcMain.handle('agents:model', async (_evt, q = {}) => {
   try {
     if (q && q.remoteHostId != null) return typeof q.remoteHostId === 'string' && remoteHosts.get(q.remoteHostId) ? await remoteAgentModel(q, remoteModels) : null
-    return await agentModelLive(q || {})
+    // A Codex pane on a managed account: its conversations are in that
+    // account's Codex home (resolved here from the account, never a path from
+    // the window).
+    const query = { ...(q || {}) }
+    delete query.codexDir
+    if (query.agentId === 'codex' && typeof query.accountId === 'string') {
+      const roots = await accountSessions.roots({ agent: 'codex', accountId: query.accountId }).catch(() => null)
+      if (roots && roots.codex) query.codexDir = roots.codex
+    }
+    return await agentModelLive(query)
   } catch {
     return null
   }
