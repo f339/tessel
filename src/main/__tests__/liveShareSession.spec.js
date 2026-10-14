@@ -822,6 +822,8 @@ describe('Live Share session', () => {
     }
     const { r, port, secret, key } = await joinOne({ t })
     await until(() => calls.length === 1)
+    // In (the host's key known) before it comes back.
+    await until(() => r.states.includes('joined'))
     // Back twice and a second guest in, while it is taken: nothing more asked
     // of the terminal host.
     const first = comeBack(port, secret, key)
