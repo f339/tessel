@@ -6,7 +6,7 @@
 // its active pane are sent to the guests each time they change, so they see
 // it live; a project you switch away from stays shared. A guest asking to
 // join waits in `asks` until you answer that guest, with the shared projects
-// it gets (all of them by default); each guest then only watches its
+// it gets (the ones you tick); each guest then only watches its
 // projects until you let them type, open or close (setRights), and what it
 // sees can change later (setGuestProjects). A project you add is no guest's
 // until you give it to them. What guests do in your panes (open a terminal or
@@ -55,7 +55,8 @@ const REASONS = {
   'host-unverified': () => t('liveShare.reason.hostUnverified', 'The host could not prove it is the same Tessel as before: join again with an invite code, and check the code with the host.'),
   'outdated-host': () => t('liveShare.reason.outdatedHost', 'The host’s Tessel is too old for this Live Share: the host needs to update Tessel.')
 }
-export const endReason = (reason) => (REASONS[reason] ? REASONS[reason]() : t('liveShare.reason.ended', 'The session ended.'))
+// Only REASONS' own words (a host's word like "constructor" is not one).
+export const endReason = (reason) => (typeof reason === 'string' && Object.hasOwn(REASONS, reason) ? REASONS[reason]() : t('liveShare.reason.ended', 'The session ended.'))
 
 // What a guest may do, in words ("type, open terminals and agents").
 export function rightsText(rights) {
@@ -237,12 +238,12 @@ export function createLiveShareWindow(deps) {
   }
 
   // Your answer to one ask (its key): a guest's join (with the shared
-  // projects it gets: all of them when not said) or a close request.
+  // projects it gets: none when not said) or a close request.
   function answerAsk({ key, yes, projects } = {}) {
     const i = state.asks.findIndex((a) => a.key === key)
     if (i < 0) return
     const [a] = state.asks.splice(i, 1)
-    if (a.kind === 'join') api()?.approve({ guestId: a.guestId, yes: !!yes, ...(Array.isArray(projects) ? { projects: projects.filter((id) => isShared(id)) } : {}) })
+    if (a.kind === 'join') api()?.approve({ guestId: a.guestId, yes: !!yes, projects: (Array.isArray(projects) ? projects : []).filter((id) => isShared(id)) })
     else if (a.kind === 'close' && yes && closeStands(a)) closeForGuest(a.paneId, a.name)
   }
 

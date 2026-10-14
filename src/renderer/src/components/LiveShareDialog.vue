@@ -1,11 +1,11 @@
 <script setup>
 // Live Share (src/main/liveShare.js): Share lets others join this Tessel from
 // theirs (the projects you share, ticked before you start and added or taken
-// out while you share; an invite code that works for an hour, who asked and
-// who is in, what each guest may do and which shared projects it sees, Stop
-// sharing); Join opens another Tessel's shared projects here with the code
-// its host gave. Why a session ended shows here while the dialog is open (a
-// toast says it too).
+// out while you share; an invite code that works for an hour, who asked, who
+// is in and who is offline, what each guest may do and which shared projects
+// it sees, Stop sharing); Join opens another Tessel's shared projects here
+// with the code its host gave. Why a session ended shows here while the
+// dialog is open (a toast says it too).
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { ScreenShare, Copy, Check, Loader2, AlertTriangle, LogIn, LogOut, UserX, RefreshCw } from 'lucide-vue-next'
 import { t } from '../i18n'
@@ -113,6 +113,9 @@ const progressText = computed(() => {
 const guests = computed(() => (Array.isArray(host.value.guests) ? host.value.guests : []))
 // Guests let in who are offline now (they come back by themselves).
 const offline = computed(() => (Array.isArray(host.value.offline) ? host.value.offline : []))
+// The guests listed: those in or waiting, then those offline (away). What one
+// in or offline may do and sees can change (one offline comes back with it).
+const rows = computed(() => [...guests.value.map((g) => ({ g, away: false })), ...offline.value.map((g) => ({ g, away: true }))])
 function removeKnown(g) {
   if (api && api.removeKnown) api.removeKnown({ id: g.id })
 }
@@ -141,15 +144,32 @@ function toggleProject(p, event) {
 // The shared projects, by name (the ones this window has).
 const sharedList = computed(() => props.projects.filter((p) => ticked.value.has(p.id)))
 
+// A change to what a guest sees or may do (a guest in, or one offline: it
+// comes back with it): main makes it against what the guest has then, so
+// two clicks in a row never undo each other; a click on a button whose
+// change is on its way does nothing. One that could not be made says so.
+const pending = ref(new Set())
+async function change(key, send) {
+  if (pending.value.has(key)) return
+  pending.value = new Set([...pending.value, key])
+  hostError.value = ''
+  const ok = await Promise.resolve()
+    .then(send)
+    .then((r) => !!(r && r.ok))
+    .catch(() => false)
+  const rest = new Set(pending.value)
+  rest.delete(key)
+  pending.value = rest
+  if (!ok) hostError.value = t('liveShare.share.changeFailed', 'That change could not be made (the guest may have left or been removed).')
+}
+
 // Which shared projects a guest sees: each one on its own; a project shared
 // after the guest came in is off until you turn it on.
 const sees = (g, p) => Array.isArray(g.projects) && g.projects.includes(p.id)
 function toggleGuestProject(g, p) {
-  if (!api || !api.setGuestProjects) return
-  const now = new Set(Array.isArray(g.projects) ? g.projects : [])
-  if (now.has(p.id)) now.delete(p.id)
-  else now.add(p.id)
-  api.setGuestProjects({ guestId: g.id, projects: sharedList.value.map((x) => x.id).filter((id) => now.has(id)) })
+  if (!api || !api.setGuestProject) return
+  const on = !sees(g, p)
+  change(`${g.id}:project:${p.id}`, () => api.setGuestProject({ guestId: g.id, project: p.id, on })) // i18n-ignore
 }
 
 async function newCode() {
@@ -169,11 +189,11 @@ const RIGHTS = [
   { key: 'open', label: () => t('liveShare.share.rightOpen', 'Open'), title: () => t('liveShare.share.rightOpenTitle2', 'Open terminals and agents in the projects they see') },
   { key: 'close', label: () => t('liveShare.share.rightClose', 'Close'), title: () => t('liveShare.share.rightCloseTitle', 'Ask to close panes (an agent or a running terminal waits for your yes)') }
 ]
+const may = (g, key) => !!(g.rights && g.rights[key])
 function toggleRight(g, key) {
-  if (!api || !api.setRights) return
-  const rights = { type: false, open: false, close: false, ...(g.rights || {}) }
-  rights[key] = !rights[key]
-  api.setRights({ guestId: g.id, rights })
+  if (!api || !api.setGuestRight) return
+  const on = !may(g, key)
+  change(`${g.id}:right:${key}`, () => api.setGuestRight({ guestId: g.id, right: key, on })) // i18n-ignore
 }
 
 async function startSharing() {
@@ -358,18 +378,18 @@ function trapTab(event) {
               {{ t('liveShare.share.addedNote', 'Each guest sees only the projects turned on next to their name. A project you share later stays off for guests already in until you turn it on.') }}
             </p>
             <ul v-if="guests.length || offline.length" class="ls-guest-list">
-              <li v-for="g in guests" :key="g.id" class="ls-guest" :data-test="'ls-guest-' + g.id">
+              <li v-for="{ g, away } in rows" :key="g.id" class="ls-guest" :class="{ 'ls-guest-offline': away }" :data-test="(away ? 'ls-offline-' : 'ls-guest-') + g.id">
                 <div class="ls-guest-row">
                   <span class="ls-guest-name">{{ g.name || t('liveShare.guest', 'A guest') }}</span>
-                  <span v-if="g.state !== 'joined'" class="ls-guest-state">{{ guestStateText(g) }}</span>
+                  <span v-if="!away && g.state !== 'joined'" class="ls-guest-state">{{ guestStateText(g) }}</span>
                   <span v-else class="ls-rights" role="group" :aria-label="t('liveShare.share.rightsLabel', 'What {{name}} can do', { name: g.name })">
                     <button
                       v-for="r in RIGHTS"
                       :key="r.key"
                       type="button"
                       class="ls-right"
-                      :class="{ on: g.rights && g.rights[r.key] }"
-                      :aria-pressed="!!(g.rights && g.rights[r.key])"
+                      :class="{ on: may(g, r.key) }"
+                      :aria-pressed="may(g, r.key)"
                       :title="r.title()"
                       :data-test="'ls-right-' + r.key + '-' + g.id"
                       @click="toggleRight(g, r.key)"
@@ -377,11 +397,12 @@ function trapTab(event) {
                       {{ r.label() }}
                     </button>
                   </span>
-                  <button class="confirm-btn ls-small" :data-test="'ls-remove-' + g.id" @click="removeGuest(g)">
+                  <button class="confirm-btn ls-small" :data-test="(away ? 'ls-remove-known-' : 'ls-remove-') + g.id" @click="away ? removeKnown(g) : removeGuest(g)">
                     <UserX :size="13" aria-hidden="true" /> {{ t('liveShare.share.remove', 'Remove') }}
                   </button>
                 </div>
-                <div v-if="g.state === 'joined' && sharedList.length" class="ls-guest-row ls-sees" role="group" :aria-label="t('liveShare.share.seesLabel', 'What {{name}} sees', { name: g.name || t('liveShare.guest', 'A guest') })">
+                <div v-if="away" class="ls-guest-state">{{ t('liveShare.share.offline', 'Offline: comes back by itself') }}</div>
+                <div v-if="(away || g.state === 'joined') && sharedList.length" class="ls-guest-row ls-sees" role="group" :aria-label="t('liveShare.share.seesLabel', 'What {{name}} sees', { name: g.name || t('liveShare.guest', 'A guest') })">
                   <span class="ls-sees-label">{{ t('liveShare.share.sees', 'Sees:') }}</span>
                   <button
                     v-for="p in sharedList"
@@ -397,13 +418,6 @@ function trapTab(event) {
                     {{ p.name }}
                   </button>
                 </div>
-              </li>
-              <li v-for="g in offline" :key="g.id" class="ls-guest ls-guest-offline" :data-test="'ls-offline-' + g.id">
-                <span class="ls-guest-name">{{ g.name || t('liveShare.guest', 'A guest') }}</span>
-                <span class="ls-guest-state">{{ t('liveShare.share.offline', 'Offline: comes back by itself') }}</span>
-                <button class="confirm-btn ls-small" :data-test="'ls-remove-known-' + g.id" @click="removeKnown(g)">
-                  <UserX :size="13" aria-hidden="true" /> {{ t('liveShare.share.remove', 'Remove') }}
-                </button>
               </li>
             </ul>
           </div>

@@ -31,6 +31,9 @@ const PROTOCOL = 4
 
 // The host closed before the handshake: why (shareHost.js CLOSE_*).
 const CLOSE_REASONS = { 4001: 'expired', 4002: 'busy', 1013: 'busy', 4003: 'outdated' }
+// Why a host says goodbye (shareHost.js drop and stop, liveShare.js
+// stopSharing); any other word from it is read as a closed connection.
+const BYE_REASONS = new Set(['stopped', 'restarting', 'denied', 'removed', 'replaced', 'slow', 'busy', 'expired', 'protocol', 'rejoin-refused', 'timeout', 'refused', 'outdated', 'closed', 'tunnel', 'error'])
 
 // callbacks: onState(state, info) with 'connecting' | 'waiting' (info:
 // { code }) | 'joined' (info: { host }), onProjects(projects) (the host's
@@ -127,7 +130,7 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
         callbacks.onRestart?.(msg.id)
         return
       case 'bye':
-        finish(String(msg.reason || 'closed'))
+        finish(BYE_REASONS.has(msg.reason) ? msg.reason : 'closed')
         return
       default:
         return

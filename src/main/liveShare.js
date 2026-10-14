@@ -7,15 +7,15 @@
 // invite code: the address and a secret that encrypts everything
 // (liveShare/shareCrypto.js). You share one project or several (chosen when
 // you start; added or taken out at any time: liveShare:share). Each guest
-// still waits for your yes (with the shared projects it gets: all of them by
-// default), and then only watches its projects until you let them type, open
-// or close (liveShare:rights); what each guest sees can change later
-// (liveShare:guestProjects). Guests get each pane's screen as it is, never
-// its scrollback (visibleScreen). Stop sharing (or quitting Tessel) ends the
-// tunnel and every guest's view. A restart of Tessel (an update, a crash, a
-// new version in development) does not: the next Tessel takes the share back
-// (resumeSharing: the same tunnel and invite code, the same projects), and
-// guests reconnect.
+// still waits for your yes (with the shared projects you tick for it), and
+// then only watches its projects until you let them type, open or close
+// (liveShare:guestRight); what each guest sees can change later
+// (liveShare:guestProject), a guest offline too. Guests get each pane's
+// screen as it is, never its scrollback (visibleScreen). Stop sharing (or
+// quitting Tessel) ends the tunnel and every guest's view. A restart of
+// Tessel (an update, a crash, a new version in development) does not: the
+// next Tessel takes the share back (resumeSharing: the same tunnel and invite
+// code, the same projects), and guests reconnect.
 //
 // Guest: Join with the code connects (liveShare/shareGuest.js); each of the
 // host's projects it sees becomes a Live Share project in the window, with
@@ -43,6 +43,9 @@ const ATTACH_WAIT_MS = 20000
 const LAYOUT_DEPTH = 16
 const LAYOUT_CHILDREN = 32
 const LAYOUT_PANES = 64
+// A host's terminals shown in a guest's window at most, all its projects
+// together (each one a terminal here, waiting for its screen).
+const GUEST_PANES = 128
 
 export const defaultShareName = () => {
   try {
@@ -278,7 +281,9 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
 
   // A snapshot of a pane's screen from the terminal host: ready() is called
   // the moment its answer is read, in order with the pane's output. Its text
-  // (the screen without the scrollback) follows.
+  // (the screen without the scrollback) follows. The terminal host is asked
+  // for no scrollback (one started by an older Tessel sends it all anyway:
+  // visibleScreen keeps the screen either way).
   function snapshot(id, ready) {
     const toSnap = (msg) => {
       if (!(msg && msg.ok)) return null
@@ -287,7 +292,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     }
     let snap
     const once = (msg) => (snap === undefined ? (snap = toSnap(msg)) : snap)
-    return host.request('attach', { id }, undefined, (msg) => ready(once(msg))).then(once)
+    return host.request('attach', { id, scrollback: 0 }, undefined, (msg) => ready(once(msg))).then(once)
   }
 
   // What the next Tessel needs to take this share back after a restart.
@@ -652,7 +657,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   }
 
   // The host's projects this guest sees, each with its layout and its
-  // terminals (a pane listed in two projects is the first one's).
+  // terminals (a pane listed in two projects is the first one's; past
+  // GUEST_PANES in all, the rest are not shown).
   function onProjects(g, list) {
     const projects = []
     const seen = new Set()
@@ -660,6 +666,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       if (!p || !isProjectId(p.id) || projects.some((x) => x.id === p.id)) continue
       projects.push({ id: p.id, layout: cleanLayout(p.layout) })
       for (const x of (Array.isArray(p.panes) ? p.panes : []).slice(0, LAYOUT_PANES)) {
+        if (seen.size >= GUEST_PANES) break
         if (!x || typeof x.id !== 'string' || !/^[\w-]{1,80}$/.test(x.id) || seen.has(x.id)) continue
         seen.add(x.id)
         let pane = g.panes.get(x.id)
@@ -953,10 +960,11 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   // What the window shows of the projects shared: [{ id, layout }]. A
   // project shared that is not in it keeps its last layout (a share taken
   // back after a restart waits for the window to find its projects again).
+  // Only the projects shared are kept (none while not sharing).
   ipcMain.on('liveShare:layouts', (_evt, list) => {
     const keep = new Set(sharing?.projects || [])
     const next = new Map([...layouts].filter(([id]) => keep.has(id)))
-    for (const item of (Array.isArray(list) ? list : []).slice(0, MAX_PROJECTS)) if (item && isProjectId(item.id)) next.set(item.id, cleanLayout(item.layout))
+    for (const item of (Array.isArray(list) ? list : []).filter((x) => x && keep.has(x.id)).slice(0, MAX_PROJECTS)) next.set(item.id, cleanLayout(item.layout))
     const before = sharing ? new Map(homes(sharing)) : new Map()
     layouts = next
     layoutsRev++
@@ -968,16 +976,21 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   })
   // A project added to the share or taken out: { id, shared }.
   ipcMain.handle('liveShare:share', (_evt, { id, shared } = {}) => setShared(id, !!shared))
+  // What a guest may do, and the shared projects it sees: guestId is a
+  // guest in, or one let in by its k- id (offline: it comes back with them).
   ipcMain.handle('liveShare:rights', (_evt, { guestId, rights } = {}) => ({ ok: !!sharing?.server?.setRights(guestId, rights) }))
-  // The shared projects a guest sees.
   ipcMain.handle('liveShare:guestProjects', (_evt, { guestId, projects } = {}) => ({ ok: !!sharing?.server?.setProjects(guestId, projects) }))
+  // One right or one project turned on or off, against what the guest has
+  // now (two clicks in a row never undo each other).
+  ipcMain.handle('liveShare:guestRight', (_evt, { guestId, right, on } = {}) => ({ ok: !!sharing?.server?.changeRight(guestId, right, !!on) }))
+  ipcMain.handle('liveShare:guestProject', (_evt, { guestId, project, on } = {}) => ({ ok: !!sharing?.server?.changeProject(guestId, project, !!on) }))
   ipcMain.handle('liveShare:newInvite', () => newInvite())
-  // The host's answer to a guest waiting, and the shared projects it gets
-  // (all of them when not said).
+  // The host's answer to a guest waiting, and the shared projects it gets:
+  // the ones listed (none when no list comes).
   ipcMain.handle('liveShare:approve', (_evt, { guestId, yes, projects } = {}) => {
     const resolve = asks.get(guestId)
     asks.delete(guestId)
-    if (resolve) resolve(yes ? { yes: true, projects: Array.isArray(projects) ? cleanProjectIds(projects) : undefined } : false)
+    if (resolve) resolve(yes ? { yes: true, projects: cleanProjectIds(projects) } : false)
     return { ok: !!resolve }
   })
   ipcMain.handle('liveShare:removeGuest', (_evt, { guestId } = {}) => {

@@ -28,7 +28,8 @@ beforeEach(() => {
     start: vi.fn().mockResolvedValue({ ok: true }),
     stop: vi.fn().mockResolvedValue({ ok: true }),
     approve: vi.fn().mockResolvedValue({ ok: true }),
-    setRights: vi.fn().mockResolvedValue({ ok: true }),
+    setGuestRight: vi.fn().mockResolvedValue({ ok: true }),
+    setGuestProject: vi.fn().mockResolvedValue({ ok: true }),
     newInvite: vi.fn().mockResolvedValue({ ok: true, state: 'sharing', invite: 'TS1.new', expiresAt: Date.now() + 3600000, guests: [] }),
     removeGuest: vi.fn().mockResolvedValue({ ok: true }),
     join: vi.fn().mockResolvedValue({ ok: true }),
@@ -100,7 +101,6 @@ describe('LiveShareDialog: Share', () => {
   })
 
   it('while sharing: projects ticked or not on the spot, the last one stays, and each guest sees the ones turned on for them', async () => {
-    api.setGuestProjects = vi.fn().mockResolvedValue({ ok: true })
     const wrapper = await open({ ...PROJECTS, projectIds: ['ws-1'] })
     const guests = [
       { id: 'g1', name: 'Bob', state: 'joined', since: 1, rights: { type: false, open: false, close: false }, projects: ['ws-1'] },
@@ -126,10 +126,11 @@ describe('LiveShareDialog: Share', () => {
     expect(chip('ws-1', 'g1').attributes('aria-pressed')).toBe('true')
     expect(chip('ws-2', 'g1').attributes('aria-pressed')).toBe('false')
     expect(chip('ws-1', 'g2').exists()).toBe(false)
+    // Each click is one change (main makes it against what Bob has then).
     await chip('ws-2', 'g1').trigger('click')
-    expect(api.setGuestProjects).toHaveBeenLastCalledWith({ guestId: 'g1', projects: ['ws-1', 'ws-2'] })
+    expect(api.setGuestProject).toHaveBeenLastCalledWith({ guestId: 'g1', project: 'ws-2', on: true })
     await chip('ws-1', 'g1').trigger('click')
-    expect(api.setGuestProjects).toHaveBeenLastCalledWith({ guestId: 'g1', projects: [] })
+    expect(api.setGuestProject).toHaveBeenLastCalledWith({ guestId: 'g1', project: 'ws-1', on: false })
     box('ws-1').element.checked = false
     await box('ws-1').trigger('change')
     expect(wrapper.emitted('toggle-project').at(-1)).toEqual(['ws-1', false])
@@ -175,7 +176,9 @@ describe('LiveShareDialog: Share', () => {
     expect(wrapper.find('[data-test="ls-right-open-g1"]').attributes('aria-pressed')).toBe('true')
     expect(wrapper.find('[data-test="ls-right-type-g2"]').exists()).toBe(false)
     await wrapper.find('[data-test="ls-right-type-g1"]').trigger('click')
-    expect(api.setRights).toHaveBeenCalledWith({ guestId: 'g1', rights: { type: true, open: true, close: false } })
+    expect(api.setGuestRight).toHaveBeenCalledWith({ guestId: 'g1', right: 'type', on: true })
+    await wrapper.find('[data-test="ls-right-open-g1"]').trigger('click')
+    expect(api.setGuestRight).toHaveBeenLastCalledWith({ guestId: 'g1', right: 'open', on: false })
     await wrapper.find('[data-test="ls-remove-g2"]').trigger('click')
     expect(api.removeGuest).toHaveBeenCalledWith({ guestId: 'g2' })
     await wrapper.find('[data-test="ls-stop"]').trigger('click')
@@ -305,7 +308,7 @@ describe('LiveShareAsk', () => {
   it('Allow only answers after a moment; Allow and Deny answer that ask; Escape or a click beside it do not', async () => {
     vi.useFakeTimers()
     try {
-      const wrapper = mount(LiveShareAsk, { props: { ask: bob } })
+      const wrapper = mount(LiveShareAsk, { props: { ask: bob, projects: [{ id: 'ws-1', name: 'tessel' }] } })
       await wrapper.find('.help-backdrop').trigger('pointerdown')
       expect(wrapper.emitted('answer')).toBeUndefined()
       // Too soon: a click meant for something else.
@@ -316,7 +319,7 @@ describe('LiveShareAsk', () => {
       await wrapper.find('[data-test="ls-ask-allow"]').trigger('click')
       await wrapper.find('[data-test="ls-ask-deny"]').trigger('click')
       await wrapper.find('[data-test="live-share-ask"]').trigger('keydown', { key: 'Escape' })
-      expect(wrapper.emitted('answer')).toEqual([[{ key: 'g1', yes: true }], [{ key: 'g1', yes: false }]])
+      expect(wrapper.emitted('answer')).toEqual([[{ key: 'g1', yes: true, projects: ['ws-1'] }], [{ key: 'g1', yes: false, projects: ['ws-1'] }]])
     } finally {
       vi.useRealTimers()
     }
@@ -375,6 +378,76 @@ describe('LiveShareAsk', () => {
     }
   })
 
+  it('no project listed yet (a share taken back after a restart): Allow waits, and says why', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mount(LiveShareAsk, { props: { ask: bob, projects: [] } })
+      vi.advanceTimersByTime(1000)
+      await nextTick()
+      expect(wrapper.find('[data-test="ls-ask-allow"]').attributes('disabled')).toBeDefined()
+      expect(wrapper.find('[data-test="ls-ask-no-projects"]').text()).toBe('Tessel is still finding the projects you share: wait a moment to allow them in.')
+      await wrapper.find('[data-test="ls-ask-allow"]').trigger('click')
+      expect(wrapper.emitted('answer')).toBeUndefined()
+      // They come: ticked (the first ones listed), and Allow waits a moment again.
+      await wrapper.setProps({ projects: [{ id: 'ws-1', name: 'tessel' }] })
+      expect(wrapper.find('[data-test="ls-ask-no-projects"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="ls-ask-allow"]').attributes('disabled')).toBeDefined()
+      vi.advanceTimersByTime(1000)
+      await nextTick()
+      await wrapper.find('[data-test="ls-ask-allow"]').trigger('click')
+      expect(wrapper.emitted('answer')).toEqual([[{ key: 'g1', yes: true, projects: ['ws-1'] }]])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a project shared while it waits comes unticked, your own ticks stay, and Allow waits a moment again', async () => {
+    vi.useFakeTimers()
+    try {
+      const two = [
+        { id: 'ws-1', name: 'tessel' },
+        { id: 'ws-2', name: 'site' }
+      ]
+      const wrapper = mount(LiveShareAsk, { props: { ask: bob, projects: two } })
+      const box = (id) => wrapper.find(`[data-test="ls-ask-project-${id}"] input`)
+      vi.advanceTimersByTime(1000)
+      await nextTick()
+      await box('ws-2').trigger('change') // unticked by you
+      await wrapper.setProps({ projects: [...two, { id: 'ws-3', name: 'api' }] })
+      expect([box('ws-1'), box('ws-2'), box('ws-3')].map((b) => b.element.checked)).toEqual([true, false, false])
+      // The list changed under the pointer: a click right away is not a yes.
+      expect(wrapper.find('[data-test="ls-ask-allow"]').attributes('disabled')).toBeDefined()
+      await wrapper.find('[data-test="ls-ask-allow"]').trigger('click')
+      expect(wrapper.emitted('answer')).toBeUndefined()
+      vi.advanceTimersByTime(1000)
+      await nextTick()
+      await wrapper.find('[data-test="ls-ask-allow"]').trigger('click')
+      expect(wrapper.emitted('answer')).toEqual([[{ key: 'g1', yes: true, projects: ['ws-1'] }]])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('one project left, unticked: it can be ticked (Allow waits until it is)', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mount(LiveShareAsk, { props: { ask: bob, projects: [{ id: 'ws-1', name: 'tessel' }, { id: 'ws-2', name: 'site' }] } })
+      vi.advanceTimersByTime(1000)
+      await nextTick()
+      await wrapper.find('[data-test="ls-ask-project-ws-2"] input').trigger('change')
+      await wrapper.setProps({ projects: [{ id: 'ws-2', name: 'site' }] })
+      vi.advanceTimersByTime(1000)
+      await nextTick()
+      expect(wrapper.find('[data-test="ls-ask-projects"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="ls-ask-allow"]').attributes('disabled')).toBeDefined()
+      await wrapper.find('[data-test="ls-ask-project-ws-2"] input').trigger('change')
+      await wrapper.find('[data-test="ls-ask-allow"]').trigger('click')
+      expect(wrapper.emitted('answer')).toEqual([[{ key: 'g1', yes: true, projects: ['ws-2'] }]])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('asks before a guest closes an agent or a busy terminal: Keep it or Close it', async () => {
     vi.useFakeTimers()
     try {
@@ -411,6 +484,54 @@ describe('LiveShareDialog: what the review found', () => {
     expect(wrapper.text()).not.toContain('No one has joined yet.')
     await wrapper.find('[data-test="ls-remove-known-k-abc"]').trigger('click')
     expect(api.removeKnown).toHaveBeenCalledWith({ id: 'k-abc' })
+    wrapper.unmount()
+  })
+
+  it('a guest offline: what it may do and sees can change too (it comes back with it)', async () => {
+    const wrapper = await open({ ...PROJECTS, projectIds: ['ws-1', 'ws-2'] })
+    await host({ state: 'sharing', invite: 'TS1.x', expiresAt: Date.now() + 3600000, projectIds: ['ws-1', 'ws-2'], guests: [], offline: [{ id: 'k-abc', name: 'Alex', rights: { type: true, open: false, close: false }, projects: ['ws-1', 'ws-2'] }] })
+    expect(wrapper.find('[data-test="ls-right-type-k-abc"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-test="ls-sees-ws-1-k-abc"]').attributes('aria-pressed')).toBe('true')
+    await wrapper.find('[data-test="ls-sees-ws-1-k-abc"]').trigger('click')
+    expect(api.setGuestProject).toHaveBeenCalledWith({ guestId: 'k-abc', project: 'ws-1', on: false })
+    await wrapper.find('[data-test="ls-right-type-k-abc"]').trigger('click')
+    expect(api.setGuestRight).toHaveBeenCalledWith({ guestId: 'k-abc', right: 'type', on: false })
+    wrapper.unmount()
+  })
+
+  it('a change that could not be made says so; a click while its change is on its way does nothing', async () => {
+    let answer
+    api.setGuestProject = vi.fn(() => new Promise((resolve) => (answer = resolve)))
+    const wrapper = await open({ ...PROJECTS, projectIds: ['ws-1', 'ws-2'] })
+    await host({ state: 'sharing', invite: 'TS1.x', expiresAt: Date.now() + 3600000, projectIds: ['ws-1', 'ws-2'], guests: [{ id: 'g1', name: 'Bob', state: 'joined', since: 1, rights: { type: false, open: false, close: false }, projects: ['ws-1'] }] })
+    const chip = wrapper.find('[data-test="ls-sees-ws-1-g1"]')
+    await chip.trigger('click')
+    await chip.trigger('click')
+    expect(api.setGuestProject).toHaveBeenCalledTimes(1)
+    answer({ ok: false })
+    await flushPromises()
+    expect(wrapper.find('[data-test="ls-host-error"]').text()).toBe('That change could not be made (the guest may have left or been removed).')
+    // Done: the next click goes (and the notice with it).
+    await chip.trigger('click')
+    expect(api.setGuestProject).toHaveBeenCalledTimes(2)
+    answer({ ok: true })
+    await flushPromises()
+    expect(wrapper.find('[data-test="ls-host-error"]').exists()).toBe(false)
+    api.setGuestRight.mockRejectedValueOnce(new Error('gone'))
+    await wrapper.find('[data-test="ls-right-type-g1"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="ls-host-error"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('an end reason the host made up shows as the session ended (none breaks the dialog)', async () => {
+    const wrapper = await open({ initialTab: 'join' })
+    for (const reason of ['__proto__', 'constructor', 'toString', 'hasOwnProperty', 'made-up']) {
+      await guest({ state: 'ended', host: 'Ada', reason })
+      expect(wrapper.find('[data-test="ls-ended"]').text()).toBe('The session ended.')
+    }
+    await guest({ state: 'ended', host: 'Ada', reason: 'removed' })
+    expect(wrapper.find('[data-test="ls-ended"]').text()).toBe('The host removed you from the session.')
     wrapper.unmount()
   })
 

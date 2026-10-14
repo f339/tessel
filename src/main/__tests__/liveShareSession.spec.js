@@ -759,6 +759,126 @@ describe('Live Share session', () => {
     ])
   })
 
+  it('a guest coming back over and over: 3 times a minute, then busy (the connection it had kept, the code not blocked), in again after its minute', async () => {
+    let clock = 1000000
+    const { t, r, port, secret, key } = await joinOne({ now: () => clock })
+    await until(() => r.states.includes('joined'))
+    let last = r
+    for (let i = 0; i < 3; i++) {
+      const back = comeBack(port, secret, key)
+      await until(() => back.states.includes('joined'))
+      await until(() => last.closed)
+      expect(last.closed).toBe('replaced')
+      last = back
+    }
+    for (let i = 0; i < 8; i++) {
+      const again = comeBack(port, secret, key)
+      await until(() => again.closed)
+      expect(again.closed).toBe('busy')
+      expect(again.states).not.toContain('joined')
+    }
+    expect(last.closed).toBe(null)
+    expect(host.guests().map((g) => g.state)).toEqual(['joined'])
+    expect(host.inviteBlocked()).toBe(false)
+    expect(t.asked).toHaveLength(1)
+    clock += 61000
+    const later = comeBack(port, secret, key)
+    await until(() => later.states.includes('joined'))
+  })
+
+  it('what a guest asks to see again (a pane screen) a minute stays counted across its reconnects', async () => {
+    let clock = 1000000
+    const { r, guest, port, secret, key } = await joinOne({ now: () => clock })
+    await until(() => r.screens.p1 === 'screen of p1')
+    const screens = (x) => x.order.filter((o) => o[0] === 'snapshot').length
+    for (let i = 0; i < 30; i++) {
+      guest.resync('p1')
+      await until(() => screens(r) === i + 2)
+    }
+    guest.resync('p1')
+    await wait(60)
+    expect(screens(r)).toBe(31)
+    // A new connection of the same guest: its screen with the welcome, and
+    // no more asked again until its minute is over.
+    const back = guestRecorder()
+    const client = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', signingKey: key, back: true, hostKey: lastHostKey, callbacks: back.callbacks })
+    client.connect()
+    await until(() => screens(back) === 1)
+    client.resync('p1')
+    await wait(60)
+    expect(screens(back)).toBe(1)
+    clock += 61000
+    client.resync('p1')
+    await until(() => screens(back) === 2)
+  })
+
+  it('one screen at a time per pane: guests coming back or joining while it is taken get that one, then the same output', async () => {
+    const t = fakeTessel()
+    const calls = []
+    const answers = []
+    t.callbacks.snapshot = (id) => {
+      calls.push(id)
+      return new Promise((resolve) => answers.push(resolve))
+    }
+    const { r, port, secret, key } = await joinOne({ t })
+    await until(() => calls.length === 1)
+    // Back twice and a second guest in, while it is taken: nothing more asked
+    // of the terminal host.
+    const first = comeBack(port, secret, key)
+    await until(() => first.states.includes('joined'))
+    const second = comeBack(port, secret, key)
+    await until(() => second.states.includes('joined'))
+    const bea = guestRecorder()
+    const beaClient = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Bea', callbacks: bea.callbacks })
+    beaClient.connect()
+    await until(() => bea.states.includes('joined'))
+    await wait(40)
+    expect(calls).toEqual(['p1'])
+    answers[0]({ data: 'SCREEN', cols: 100, rows: 30 })
+    await until(() => second.screens.p1 === 'SCREEN' && bea.screens.p1 === 'SCREEN')
+    host.sendData('p1', '+live')
+    await until(() => second.screens.p1 === 'SCREEN+live' && bea.screens.p1 === 'SCREEN+live')
+    // The connections replaced got nothing.
+    expect(r.screens.p1).toBeUndefined()
+    expect(first.screens.p1).toBeUndefined()
+    // Once it came, the next one needed is taken anew.
+    beaClient.resync('p1')
+    await until(() => calls.length === 2)
+    answers[1]({ data: 'AGAIN', cols: 100, rows: 30 })
+    await until(() => bea.screens.p1 === 'AGAIN')
+    expect(second.screens.p1).toBe('SCREEN+live')
+  })
+
+  it('a pane restarted while its screen is taken: its new screen is taken anew, the old one goes to no one', async () => {
+    const t = fakeTessel()
+    const answers = []
+    t.callbacks.snapshot = () => new Promise((resolve) => answers.push(resolve))
+    const { r } = await joinOne({ t })
+    await until(() => answers.length === 1)
+    host.paneRestarted('p1')
+    await until(() => answers.length === 2)
+    answers[0]({ data: 'OLD-TERMINAL', cols: 100, rows: 30 })
+    await wait(40)
+    expect(r.screens.p1).toBeUndefined()
+    answers[1]({ data: 'NEW-TERMINAL', cols: 100, rows: 30 })
+    await until(() => r.screens.p1 === 'NEW-TERMINAL')
+  })
+
+  it('a goodbye with a word the host never says is read as a closed connection', async () => {
+    for (const word of ['__proto__', 'constructor', 'toString', 'made-up']) {
+      const { r } = await joinOne()
+      await until(() => r.states.includes('joined'))
+      host.stop(word)
+      await until(() => r.closed)
+      expect(r.closed).toBe('closed')
+    }
+    const { r } = await joinOne()
+    await until(() => r.states.includes('joined'))
+    host.stop('tunnel')
+    await until(() => r.closed)
+    expect(r.closed).toBe('tunnel')
+  })
+
   it('removes a guest and ends everything when sharing stops', async () => {
     const secret = newSecret()
     const t = fakeTessel()

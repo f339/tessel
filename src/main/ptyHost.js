@@ -302,7 +302,10 @@ function handle(sock, msg) {
         return
       }
       p.holding++
-      snapshot(p).then((buffer) => {
+      // scrollback: the lines of history that come with the screen (all of
+      // them when not said; Live Share asks for none).
+      const rows = Number.isInteger(msg.scrollback) && msg.scrollback >= 0 ? Math.min(msg.scrollback, SCROLLBACK) : SCROLLBACK
+      snapshot(p, rows).then((buffer) => {
         reply({ ok: true, ...describePty(msg.id, p), buffer })
         p.holding--
         if (p.holding) return

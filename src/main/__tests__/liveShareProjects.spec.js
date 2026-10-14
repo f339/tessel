@@ -267,17 +267,25 @@ describe('Live Share: several projects, each guest its own', () => {
     expect(alex.snapshots).toEqual(['a1'])
   })
 
-  it('the host’s answer: the projects ticked, as shared at that moment; none ticked: nothing seen', async () => {
+  it('the host’s answer: the projects ticked, as shared at that moment; none ticked or no list: nothing seen', async () => {
     const t = fakeTessel({ 'ws-a': ['a1'], 'ws-b': ['b1'] })
     t.answers.Alex = { yes: true, projects: ['ws-b', 'ws-gone', '../x', 'ws-b'] }
     t.answers.Bea = { yes: true, projects: [] }
     t.answers.Cy = { yes: false, projects: ['ws-a'] }
+    t.answers.Dee = { yes: true }
+    t.answers.Eli = { yes: true, projects: 'ws-a' }
     const conn = await share(t)
     const alex = await joined(conn, 'Alex')
     expect(ids(alex)).toEqual(['ws-b'])
     const bea = await joined(conn, 'Bea')
     expect(ids(bea)).toEqual([])
     expect(bea.snapshots).toEqual([])
+    // A yes without a list of projects never means every shared one.
+    for (const name of ['Dee', 'Eli']) {
+      const r = await joined(conn, name)
+      expect(ids(r)).toEqual([])
+      expect(guestOf(name).projects).toEqual([])
+    }
     const cy = join(conn, 'Cy')
     await until(() => cy.closed)
     expect(cy.closed).toBe('denied')
@@ -324,6 +332,64 @@ describe('Live Share: several projects, each guest its own', () => {
     alex.client.disconnect()
     await until(() => host.offlineGuests().length === 1)
     expect(host.offlineGuests()[0].projects).toEqual(['ws-a'])
+  })
+
+  it('one project or one right at a time, against what the guest has now: two changes in a row never undo each other', async () => {
+    const t = fakeTessel({ 'ws-a': ['a1'], 'ws-b': ['b1'] })
+    t.answers.Alex = { yes: true, projects: ['ws-a'] }
+    const conn = await share(t)
+    const alex = await joined(conn, 'Alex')
+    const id = guestOf('Alex').id
+    // Both made from what the window last heard (Alex sees ws-a): ws-a taken,
+    // then ws-b given. The second does not give ws-a back.
+    expect(host.changeProject(id, 'ws-a', false)).toBe(true)
+    expect(host.changeProject(id, 'ws-b', true)).toBe(true)
+    await until(() => ids(alex).join() === 'ws-b')
+    expect(guestOf('Alex').projects).toEqual(['ws-b'])
+    host.sendData('a1', 'PRIVATE-A')
+    await wait(40)
+    expect(JSON.stringify(alex.data)).not.toContain('PRIVATE-A')
+    expect(host.changeRight(id, 'type', true)).toBe(true)
+    expect(host.changeRight(id, 'close', true)).toBe(true)
+    await until(() => alex.rights.length === 3)
+    expect(alex.rights.at(-1)).toEqual({ type: true, open: false, close: true })
+    expect(guestOf('Alex').rights).toEqual({ type: true, open: false, close: true })
+    // Only real rights, shared projects and guests.
+    for (const right of ['__proto__', 'constructor', 'toString', 'hasOwnProperty', ['type']]) expect(host.changeRight(id, right, true)).toBe(false)
+    expect(host.changeProject(id, 'ws-gone', true)).toBe(false)
+    expect(host.changeProject(id, '../x', true)).toBe(false)
+    expect(host.changeProject('g-unknown', 'ws-a', true)).toBe(false)
+    expect(host.changeRight('k-unknown', 'type', true)).toBe(false)
+    expect(guestOf('Alex').rights).toEqual({ type: true, open: false, close: true })
+  })
+
+  it('a guest offline: what it sees and may do still changes, and it comes back with that', async () => {
+    const t = fakeTessel({ 'ws-a': ['a1'], 'ws-b': ['b1'] })
+    const conn = await share(t)
+    const alex = await joined(conn, 'Alex') // sees both
+    alex.client.disconnect()
+    await until(() => host.offlineGuests().length === 1)
+    const [offline] = host.offlineGuests()
+    expect(host.changeProject(offline.id, 'ws-a', false)).toBe(true)
+    expect(host.changeRight(offline.id, 'type', true)).toBe(true)
+    expect(host.offlineGuests()[0]).toMatchObject({ id: offline.id, projects: ['ws-b'], rights: { type: true, open: false, close: false } })
+    expect(host.knownGuests()[0]).toMatchObject({ projects: ['ws-b'], rights: { type: true, open: false, close: false } })
+    expect(host.setProjects(offline.id, [])).toBe(true)
+    expect(host.setRights(offline.id, { open: true })).toBe(true)
+    expect(host.offlineGuests()[0]).toMatchObject({ projects: [], rights: { type: false, open: true, close: false } })
+    expect(host.changeProject(offline.id, 'ws-b', true)).toBe(true)
+    // Back: with ws-b only, and what it may do now.
+    const back = recorder()
+    createShareGuest({ url: `ws://127.0.0.1:${conn.port}/`, secret: conn.secret, name: 'Alex', signingKey: alex.key, back: true, hostKey: alex.hostKey, callbacks: back.callbacks }).connect()
+    await until(() => back.states.includes('joined') && back.projects)
+    expect(ids(back)).toEqual(['ws-b'])
+    expect(back.rights[0]).toEqual({ type: false, open: true, close: false })
+    await until(() => back.screens.b1)
+    expect(back.snapshots).toEqual(['b1'])
+    // Its k- id names it while it is in, too: the change goes to its connection.
+    expect(host.offlineGuests()).toEqual([])
+    expect(host.changeProject(offline.id, 'ws-a', true)).toBe(true)
+    await until(() => ids(back).join() === 'ws-a,ws-b')
   })
 
   it('project ids are checked and bounded', () => {

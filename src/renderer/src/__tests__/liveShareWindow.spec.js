@@ -220,6 +220,17 @@ describe('Live Share in the window, as a guest', () => {
     expect(t.workspaces.value).toEqual([])
     expect(t.toasts.some((x) => /stopped sharing/.test(x))).toBe(true)
   })
+
+  it('an end reason the host made up ends the session like any other, said as "the session ended"', async () => {
+    for (const reason of ['__proto__', 'constructor', 'toString']) {
+      t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-a')], layout: { project: 'x', tree: leaf('pane-ls1-a'), activeId: null, maximizedId: null } })
+      await flush()
+      expect(() => t.listeners.onGuest({ state: 'ended', host: 'Ada', session: 1, panes: [], layout: null, reason })).not.toThrow()
+      await flush()
+      expect(t.workspaces.value).toEqual([])
+      expect(t.toasts.at(-1)).toBe('Live Share with Ada ended: The session ended.')
+    }
+  })
 })
 
 describe('Live Share in the window, as a guest of several projects', () => {
@@ -427,6 +438,11 @@ describe('Live Share in the window, as the host', () => {
     // Only shared projects are given.
     t.ls.answerAsk({ key: 'g2', yes: true, projects: ['ws-2', 'ws-9'] })
     expect(t.api.approve).toHaveBeenCalledWith({ guestId: 'g2', yes: true, projects: ['ws-2'] })
+    // A yes without projects gives none (never every shared one).
+    t.listeners.onAsk({ guestId: 'g3', name: 'Cy' })
+    sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g3', name: 'Cy', state: 'waiting' }] })
+    t.ls.answerAsk({ key: 'g3', yes: true })
+    expect(t.api.approve).toHaveBeenLastCalledWith({ guestId: 'g3', yes: true, projects: [] })
     sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g2', name: 'Bea', state: 'joined' }] })
     sharingNow(['ws-1', 'ws-2'], { guests: [] })
     expect(t.toasts.filter((x) => /Bea/.test(x)).length).toBe(2)

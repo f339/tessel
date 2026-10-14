@@ -62,6 +62,7 @@
       "rightOpenTitle2": "Ouvrir des terminaux et des agents dans les projets que cette personne voit",
       "rightClose": "Fermer",
       "rightCloseTitle": "Demander à fermer des panneaux (un agent ou un terminal occupé attend votre accord)",
+      "changeFailed": "Ce changement n'a pas pu être fait (l'invité est peut-être parti ou a été retiré).",
       "remove": "Retirer"
     },
     "join": {
@@ -94,6 +95,7 @@
       "textProjects": "Cochez ce que cette personne verra en direct. Elle ne pourra que regarder tant que vous ne l'autorisez pas à taper (Live Share, dans la barre d'outils).",
       "projectsLabel": "Projets que cette personne verra",
       "needProject": "Cochez au moins un projet pour la laisser entrer.",
+      "noProjects": "Tessel cherche encore les projets que vous partagez : attendez un instant pour la laisser entrer.",
       "code": "Son Tessel affiche le code {{code}}. Vérifiez avec cette personne que c'est le même avant d'autoriser.",
       "allow": "Autoriser",
       "deny": "Refuser"

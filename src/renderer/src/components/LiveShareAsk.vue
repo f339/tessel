@@ -1,14 +1,15 @@
 <script setup>
 // What waits for your answer in your Live Share (liveShareWindow.js asks):
 // someone asks to join (Allow or Deny, with the verification code their
-// Tessel shows, and the shared projects they will see: all ticked at first,
-// at least one to allow), or a guest asks to close an agent or a running
-// terminal (Close it or Keep it). Over every dialog, Live Share's included.
-// The keyboard goes to the card, not to a button: keys typed for something
-// else (Enter, Space, Escape) answer nothing, and the yes only answers after
-// a moment, so a click meant for something else never says yes. A click
-// beside it does not answer: it keeps waiting. Each answer goes to the one
-// ask it was shown for (its key).
+// Tessel shows, and the shared projects they will see: the ones shown first
+// ticked, one shared while it waits unticked, at least one to allow), or a
+// guest asks to close an agent or a running terminal (Close it or Keep it).
+// Over every dialog, Live Share's included. The keyboard goes to the card,
+// not to a button: keys typed for something else (Enter, Space, Escape)
+// answer nothing, and the yes only answers after a moment (again each time
+// the projects listed change), so a click meant for something else never
+// says yes. A click beside it does not answer: it keeps waiting. Each answer
+// goes to the one ask it was shown for (its key).
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { UserPlus, XCircle } from 'lucide-vue-next'
 import { t } from '../i18n'
@@ -23,8 +24,7 @@ const props = defineProps({
   // ticked.
   projects: { type: Array, default: () => [] }
 })
-// answer({ key, yes, projects }): projects (a join) are the ids ticked, or
-// undefined when none is known here (main then gives all the shared ones).
+// answer({ key, yes, projects }): projects (a join) are the ids ticked.
 const emit = defineEmits(['answer'])
 
 const isClose = computed(() => !!(props.ask && props.ask.kind === 'close'))
@@ -37,17 +37,19 @@ const title = computed(() => {
     ? t('liveShare.closeAsk.title', '{{name}} wants to close {{pane}}', { name, pane: a.paneName || '?' })
     : t('liveShare.ask.title', '{{name}} wants to join your Live Share', { name })
 })
-// The projects this guest will see: every shared one but those you untick
-// (a project shared while it waits is ticked too). With one project shared,
-// nothing to choose.
-const unticked = ref(new Set())
-const choosing = computed(() => !isClose.value && props.projects.length > 1)
-const chosen = computed(() => props.projects.filter((p) => !unticked.value.has(p.id)).map((p) => p.id))
+// The projects this guest will see: the ones ticked. Those listed first are
+// ticked (once the window has them); one shared while it waits is not, and
+// your own ticks stay. With one project shared and ticked, nothing to
+// choose.
+let listed = new Set(props.projects.map((p) => p.id)) // the projects listed so far for this ask
+const ticked = ref(new Set(listed))
+const choosing = computed(() => !isClose.value && (props.projects.length > 1 || (props.projects.length === 1 && !ticked.value.has(props.projects[0].id))))
+const chosen = computed(() => props.projects.filter((p) => ticked.value.has(p.id)).map((p) => p.id))
 function toggle(p) {
-  const next = new Set(unticked.value)
+  const next = new Set(ticked.value)
   if (next.has(p.id)) next.delete(p.id)
   else next.add(p.id)
-  unticked.value = next
+  ticked.value = next
 }
 const joinText = computed(() =>
   choosing.value
@@ -62,16 +64,37 @@ const dialog = ref(null)
 const armed = ref(false)
 let armTimer = 0
 let previousFocus = null
-// Allowing needs one project ticked at least.
-const canAllow = computed(() => armed.value && (!choosing.value || chosen.value.length > 0))
+// Allowing someone in needs one project ticked at least (none listed yet: a
+// share taken back after a restart, before the window found its projects).
+const canAllow = computed(() => armed.value && (isClose.value || chosen.value.length > 0))
+const waitingForProjects = computed(() => !!props.ask && !isClose.value && !props.projects.length)
 
-function shown() {
-  if (!previousFocus) previousFocus = document.activeElement
-  unticked.value = new Set()
+function arm() {
   armed.value = false
   clearTimeout(armTimer)
   armTimer = setTimeout(() => (armed.value = true), ARM_MS)
+}
+function shown() {
+  if (!previousFocus) previousFocus = document.activeElement
+  listed = new Set(props.projects.map((p) => p.id))
+  ticked.value = new Set(listed)
+  arm()
   nextTick(() => dialog.value?.focus())
+}
+// The projects listed changed while it waits: new ones come unticked (the
+// first ones, when there were none, ticked), and the yes waits a moment
+// again.
+function listChanged() {
+  if (!props.ask || isClose.value) return
+  const first = !listed.size
+  const next = new Set(ticked.value)
+  for (const p of props.projects) {
+    if (listed.has(p.id)) continue
+    listed.add(p.id)
+    if (first) next.add(p.id)
+  }
+  ticked.value = next
+  arm()
 }
 function restoreFocus() {
   clearTimeout(armTimer)
@@ -82,6 +105,7 @@ watch(
   () => props.ask && props.ask.key,
   (key) => (key ? shown() : restoreFocus())
 )
+watch(() => props.projects.map((p) => p.id).join('\n'), listChanged)
 onMounted(() => {
   if (props.ask) shown()
 })
@@ -90,7 +114,7 @@ onUnmounted(restoreFocus)
 function answer(yes) {
   if (!props.ask || (yes && !canAllow.value)) return
   if (isClose.value) emit('answer', { key: props.ask.key, yes: !!yes })
-  else emit('answer', { key: props.ask.key, yes: !!yes, projects: props.projects.length ? [...chosen.value] : undefined })
+  else emit('answer', { key: props.ask.key, yes: !!yes, projects: [...chosen.value] })
 }
 
 function trapTab(event) {
@@ -137,12 +161,15 @@ function trapTab(event) {
           <ul v-if="choosing" class="ls-ask-projects" role="group" :aria-label="t('liveShare.ask.projectsLabel', 'Projects they will see')" data-test="ls-ask-projects">
             <li v-for="p in projects" :key="p.id">
               <label class="ls-ask-project" :data-test="'ls-ask-project-' + p.id">
-                <input type="checkbox" :checked="!unticked.has(p.id)" @change="toggle(p)" />
+                <input type="checkbox" :checked="ticked.has(p.id)" @change="toggle(p)" />
                 <span>{{ p.name }}</span>
               </label>
             </li>
           </ul>
           <p v-if="choosing && !chosen.length" class="ls-ask-p ls-ask-dim" data-test="ls-ask-need-project">{{ t('liveShare.ask.needProject', 'Tick at least one project to allow them in.') }}</p>
+          <p v-if="waitingForProjects" class="ls-ask-p ls-ask-dim" data-test="ls-ask-no-projects">
+            {{ t('liveShare.ask.noProjects', 'Tessel is still finding the projects you share: wait a moment to allow them in.') }}
+          </p>
           <p v-if="codeText" class="ls-ask-p ls-ask-code" data-test="ls-ask-code">{{ codeText }}</p>
         </template>
       </div>

@@ -668,12 +668,13 @@ const api = {
   // Live Share (src/main/liveShare.js). Host: start / stop sharing (with the
   // projects to share), a project added to the share or taken out (share),
   // the shared projects' layouts as they change, a yes / no for each guest
-  // (onAsk) with the projects it gets, what each guest may do (setRights)
-  // and sees (setGuestProjects), a new invite code, the guests' requests to
-  // open or close a pane (onHostRequest). Guest: join with an invite code,
-  // leave, open a terminal or agent on the host (in one of its projects);
-  // the host's projects, panes and the guest's rights come with onGuest, the
-  // host's notices (too many asks) with onNotice.
+  // (onAsk) with the projects it gets, what each guest may do (setRights,
+  // or one right: setGuestRight) and sees (setGuestProjects, or one
+  // project: setGuestProject), offline guests too, a new invite code, the
+  // guests' requests to open or close a pane (onHostRequest). Guest: join
+  // with an invite code, leave, open a terminal or agent on the host (in one
+  // of its projects); the host's projects, panes and the guest's rights come
+  // with onGuest, the host's notices (too many asks) with onNotice.
   liveShare: {
     state: () => ipcRenderer.invoke('liveShare:state'),
     start: ({ name, projects } = {}) => ipcRenderer.invoke('liveShare:start', { name, projects }),
@@ -683,6 +684,8 @@ const api = {
     approve: ({ guestId, yes, projects } = {}) => ipcRenderer.invoke('liveShare:approve', { guestId, yes, projects }),
     setRights: ({ guestId, rights } = {}) => ipcRenderer.invoke('liveShare:rights', { guestId, rights }),
     setGuestProjects: ({ guestId, projects } = {}) => ipcRenderer.invoke('liveShare:guestProjects', { guestId, projects }),
+    setGuestRight: ({ guestId, right, on } = {}) => ipcRenderer.invoke('liveShare:guestRight', { guestId, right, on }),
+    setGuestProject: ({ guestId, project, on } = {}) => ipcRenderer.invoke('liveShare:guestProject', { guestId, project, on }),
     newInvite: () => ipcRenderer.invoke('liveShare:newInvite'),
     removeGuest: ({ guestId } = {}) => ipcRenderer.invoke('liveShare:removeGuest', { guestId }),
     removeKnown: ({ id } = {}) => ipcRenderer.invoke('liveShare:removeKnown', { id }),
