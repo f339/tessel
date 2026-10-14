@@ -17,28 +17,45 @@ const props = defineProps({
   // The tab on screen: 'terminal' or a pane's id.
   shown: { type: String, default: 'terminal' }
 })
-const emit = defineEmits(['select', 'close'])
+// select / close (id, path): path: a file of an editor (its tab); keep (id,
+// path): a preview file's tab double-clicked stays open.
+const emit = defineEmits(['select', 'close', 'keep'])
 
-// An editor: the name of the file it shows (its path on hover). A browser:
-// its page's title, else its host.
-function editorTab(leaf) {
-  const file = (leaf.files || []).find((f) => samePath(f.path, leaf.activePath)) || null
-  const path = file ? docPathOf(file) : ''
-  const label = path ? fileName(path) : t('app.viewTabs.editor', 'Editor')
-  return { id: leaf.id, kind: 'editor', label, hint: path || label }
+// An editor: a tab per file it has open (its path on hover; in italics while
+// it is a preview, replaced by the next file opened with one click); with
+// none, one "Editor" tab. A browser: its page's title, else its host.
+function editorTabs(leaf) {
+  const files = leaf.files || []
+  if (!files.length) return [{ key: leaf.id, id: leaf.id, path: null, kind: 'editor', label: t('app.viewTabs.editor', 'Editor'), hint: t('app.viewTabs.editor', 'Editor') }]
+  return files.map((f) => {
+    const path = docPathOf(f)
+    const label = f.diff ? t('app.viewTabs.diff', '{{name}} (diff)', { name: fileName(path) }) : fileName(path)
+    return {
+      key: `${leaf.id}|${f.path}`,
+      id: leaf.id,
+      path: f.path,
+      kind: 'editor',
+      label,
+      hint: f.preview ? t('app.viewTabs.previewHint', '{{path}}\nPreview: double-click to keep it open', { path }) : path,
+      preview: !!f.preview,
+      current: samePath(f.path, leaf.activePath)
+    }
+  })
 }
 function browserTab(leaf) {
   const url = leaf.url && leaf.url !== BLANK_URL ? leaf.url : ''
   const label = leaf.title || (url && hostOf(url)) || t('app.viewTabs.browser', 'Browser')
-  return { id: leaf.id, kind: 'browser', label, hint: url ? displayUrl(url) : label }
+  return { key: leaf.id, id: leaf.id, path: null, kind: 'browser', label, hint: url ? displayUrl(url) : label }
 }
 const tabs = computed(() => [
-  { id: 'terminal', kind: 'terminal', label: t('app.viewTabs.terminal', 'Terminal'), hint: t('app.viewTabs.terminalHint', 'The terminals and agents of this project') },
-  ...props.leaves.map((leaf) => (leaf.kind === 'editor' ? editorTab(leaf) : browserTab(leaf)))
+  { key: 'terminal', id: 'terminal', path: null, kind: 'terminal', label: t('app.viewTabs.terminal', 'Terminal'), hint: t('app.viewTabs.terminalHint', 'The terminals and agents of this project') },
+  ...props.leaves.flatMap((leaf) => (leaf.kind === 'editor' ? editorTabs(leaf) : [browserTab(leaf)]))
 ])
+// On screen: its view, and for a file its editor's current file.
+const isActive = (tab) => tab.id === props.shown && (!tab.path || tab.current)
 
 function onAuxClick(e, tab) {
-  if (e.button === 1 && tab.kind !== 'terminal') emit('close', tab.id)
+  if (e.button === 1 && tab.kind !== 'terminal') emit('close', tab.id, tab.path)
 }
 </script>
 
@@ -54,18 +71,20 @@ function onAuxClick(e, tab) {
   >
     <div
       v-for="tab in tabs"
-      :key="tab.id"
+      :key="tab.key"
       class="view-tab"
-      :class="[tab.kind, { active: tab.id === shown }]"
+      :class="[tab.kind, { active: isActive(tab), preview: tab.preview }]"
       role="tab"
       tabindex="0"
       data-test="view-tab"
       :data-tab="tab.id"
-      :aria-selected="tab.id === shown"
+      :data-path="tab.path || undefined"
+      :aria-selected="isActive(tab)"
       :title="tab.hint"
-      @click="emit('select', tab.id)"
-      @keydown.enter.prevent="emit('select', tab.id)"
-      @keydown.space.prevent="emit('select', tab.id)"
+      @click="emit('select', tab.id, tab.path)"
+      @dblclick="tab.preview && emit('keep', tab.id, tab.path)"
+      @keydown.enter.prevent="emit('select', tab.id, tab.path)"
+      @keydown.space.prevent="emit('select', tab.id, tab.path)"
       @mousedown.middle.prevent
       @auxclick="onAuxClick($event, tab)"
     >
@@ -83,7 +102,7 @@ function onAuxClick(e, tab) {
         data-test="view-tab-close"
         :title="t('app.viewTabs.close', 'Close {{name}}', { name: tab.label })"
         :aria-label="t('app.viewTabs.close', 'Close {{name}}', { name: tab.label })"
-        @click.stop="emit('close', tab.id)"
+        @click.stop="emit('close', tab.id, tab.path)"
       >
         <X :size="12" aria-hidden="true" />
       </button>
@@ -92,6 +111,10 @@ function onAuxClick(e, tab) {
 </template>
 
 <style scoped>
+/* A preview file (one click): in italics, like VS Code's. */
+.view-tab.preview .view-tab-label {
+  font-style: italic;
+}
 .view-tabs {
   display: flex;
   align-items: stretch;

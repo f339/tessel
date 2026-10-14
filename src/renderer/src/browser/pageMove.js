@@ -65,12 +65,15 @@ function keptTitle(title, defaultTitle) {
   return s && s !== defaultTitle ? s.slice(0, 200) : ''
 }
 
+// A page's own zoom kept as it is; null (none set: Settings' default) stays null.
+const keptZoom = (zoom) => (Number.isFinite(zoom) ? clampZoom(zoom) : null)
+
 // A browser pane of the grid -> a side panel page ({ id, url, title, zoom }).
 // url: what the pane shows (BrowserPane keeps node.url up to date); a blank
 // page stays blank (the panel's + pages start with '').
 export function sidePageFromLeaf(leaf, id, { blankUrl = 'about:blank', defaultTitle = '' } = {}) {
   const url = typeof leaf.url === 'string' && leaf.url !== blankUrl ? leaf.url : ''
-  return { id, url, title: keptTitle(leaf.title, defaultTitle), zoom: clampZoom(leaf.zoom || 0) }
+  return { id, url, title: keptTitle(leaf.title, defaultTitle), zoom: keptZoom(leaf.zoom) }
 }
 
 // A side panel page -> a browser pane: makeLeaf(url) builds it
@@ -79,7 +82,7 @@ export function leafFromSidePage(page, makeLeaf) {
   const leaf = makeLeaf(page.url || undefined)
   const title = keptTitle(page.title, '')
   if (title) leaf.title = title
-  leaf.zoom = clampZoom(page.zoom || 0)
+  leaf.zoom = keptZoom(page.zoom)
   // Stays out of the agents' count of the pages they opened.
   delete leaf.openedBy
   return leaf
@@ -90,7 +93,7 @@ export const SIDE_BROWSER_ID = /^web-[a-z0-9]{1,16}$/
 
 // The side panel's pages to save.
 export function saveSideBrowsers(list) {
-  return (list || []).map((b) => ({ id: b.id, url: b.url || '', title: b.title || '', zoom: clampZoom(b.zoom || 0) }))
+  return (list || []).map((b) => ({ id: b.id, url: b.url || '', title: b.title || '', zoom: keptZoom(b.zoom) }))
 }
 
 // The saved pages -> the panel's pages (unknown or repeated ids dropped).
@@ -103,7 +106,7 @@ export function restoreSideBrowsers(list) {
       id: b.id,
       url: typeof b.url === 'string' ? b.url : '',
       title: typeof b.title === 'string' ? b.title : '',
-      zoom: clampZoom(b.zoom || 0)
+      zoom: keptZoom(b.zoom)
     })
   }
   return out

@@ -934,7 +934,7 @@ onMounted(async () => {
   // activate / closeTab: the explorer's Open Editors (App.vue).
   // publish: this pane's file becomes the one the Outline and Timeline show
   // (App.vue, when its project comes on screen).
-  paneApi = { focus: focusEditor, closeActiveTab, activePath: () => props.node.activePath, activate, closeTab, publish: () => publishActive(true) }
+  paneApi = { focus: focusEditor, closeActiveTab, activePath: () => props.node.activePath, activate, closeTab, pin, publish: () => publishActive(true) }
   registerEditorPane(props.node.id, paneApi)
   if (rootEl.value) rootEl.value.addEventListener('keydown', onKeydownCapture, true)
   try {
@@ -1024,8 +1024,9 @@ onBeforeUnmount(() => {
           v-if="viewTabs"
           :leaves="viewTabs.leaves"
           :shown="viewTabs.shown"
-          @select="(id) => ctx.selectViewTab(node.id, id)"
-          @close="(id) => ctx.closeLeaf(id)"
+          @select="(id, path) => ctx.selectViewTab(node.id, id, path)"
+          @close="(id, path) => (ctx.closeViewTab ? ctx.closeViewTab(id, path) : ctx.closeLeaf(id))"
+          @keep="(id, path) => ctx.keepViewTab && ctx.keepViewTab(id, path)"
         />
         <template v-else>
           <span class="pane-icon" :title="t('editor.pane.title', 'Editor')">
@@ -1091,7 +1092,8 @@ onBeforeUnmount(() => {
     <div class="ed-body">
       <!-- VS Code's editor title: the tabs, then the editor's actions. -->
       <div class="ed-titlebar">
-        <div class="ed-tabs" role="tablist" :aria-label="t('editor.tabs.aria', 'Open files')" @wheel.passive="onTabsWheel">
+        <!-- Shown as a tab above the panes: its files are tabs of that line. -->
+        <div v-show="!viewTabs" class="ed-tabs" role="tablist" :aria-label="t('editor.tabs.aria', 'Open files')" @wheel.passive="onTabsWheel">
           <div
             v-for="f in files"
             :key="f.path"

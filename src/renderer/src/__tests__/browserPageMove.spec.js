@@ -111,7 +111,19 @@ describe('grid -> side panel -> grid', () => {
     expect(made.openedBy).toBeUndefined()
     // A blank page: the pane's own blank page and name.
     const blank = leafFromSidePage({ id: 'web-b', url: '', title: '' }, (url) => makeBrowserLeaf(url))
-    expect(blank).toMatchObject({ url: 'about:blank', title: 'Browser', zoom: 0 })
+    // No zoom of its own: it follows Settings' default.
+    expect(blank).toMatchObject({ url: 'about:blank', title: 'Browser', zoom: null })
+  })
+  it("a page that follows Settings' default zoom keeps following it, moved or saved", () => {
+    const pane = leaf('pane-9', 'browser', { url: 'https://example.com/', title: 'Ex', zoom: null })
+    const page = sidePageFromLeaf(pane, 'web-z')
+    expect(page.zoom).toBeNull()
+    expect(leafFromSidePage(page, (url) => makeBrowserLeaf(url)).zoom).toBeNull()
+    const saved = saveSideBrowsers([page])
+    expect(saved[0].zoom).toBeNull()
+    expect(restoreSideBrowsers(JSON.parse(JSON.stringify(saved)))[0].zoom).toBeNull()
+    // One set in the pane stays.
+    expect(restoreSideBrowsers(saveSideBrowsers([{ ...page, zoom: -1 }]))[0].zoom).toBe(-1)
   })
 
   it('there and back: the same address, title and zoom', () => {
@@ -141,12 +153,12 @@ describe('the side panel pages saved with the layout', () => {
     const saved = JSON.parse(JSON.stringify(saveSideBrowsers(pages)))
     expect(saved).toEqual([
       { id: 'web-a1', url: 'https://example.com/', title: 'Example', zoom: 1 },
-      { id: 'web-b2', url: '', title: '', zoom: 0 }
+      { id: 'web-b2', url: '', title: '', zoom: null }
     ])
     expect(restoreSideBrowsers(saved)).toEqual(saved)
   })
 
-  it('drops what it cannot trust; an older layout (no zoom) opens at 100%', () => {
+  it("drops what it cannot trust; no zoom of its own (or an odd one): Settings' default", () => {
     const restored = restoreSideBrowsers([
       { id: 'web-a1', url: 'https://example.com/', title: 'Example' },
       { id: 'web-a1', url: 'https://dup.example/' },
@@ -155,8 +167,8 @@ describe('the side panel pages saved with the layout', () => {
       null
     ])
     expect(restored).toEqual([
-      { id: 'web-a1', url: 'https://example.com/', title: 'Example', zoom: 0 },
-      { id: 'web-z9', url: '', title: '', zoom: 0 }
+      { id: 'web-a1', url: 'https://example.com/', title: 'Example', zoom: null },
+      { id: 'web-z9', url: '', title: '', zoom: null }
     ])
     expect(restoreSideBrowsers('nope')).toEqual([])
   })

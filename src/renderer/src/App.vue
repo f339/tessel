@@ -1013,9 +1013,19 @@ function shownTabOf(ws) {
 }
 // Show a tab of `ws`: 'terminal' (the terminal or agent last used there
 // becomes the active pane) or an editor's or a browser's id.
-function showViewTab(ws, id) {
+// path: a file of that editor (its tab in the line): it becomes the
+// editor's current file.
+function showViewTab(ws, id, path = null) {
   if (!ws || !ws.tree) return
   const before = shownTabOf(ws)
+  if (path && id !== 'terminal') {
+    const leaf = findLeafIn(ws.tree, id)
+    if (leaf && leaf.kind === 'editor' && (leaf.files || []).some((f) => samePath(f.path, path))) {
+      const pane = getEditorPane(id)
+      if (pane && pane.activate) pane.activate(path)
+      else leaf.activePath = path
+    }
+  }
   if (id === 'terminal') {
     const active = ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
     const grid = isTabLeaf(active) ? gridLeafFor(ws, active) : null
@@ -1027,6 +1037,19 @@ function showViewTab(ws, id) {
     ws.activeId = id
   }
   focusAfterTabSwitch(ws, before)
+}
+// A tab's × (or a middle-click): a file of an editor closes in it (asked
+// first when it has unsaved changes; its last file closes the editor), an
+// editor or a browser closes.
+function closeViewTab(id, path = null) {
+  const pane = path ? getEditorPane(id) : null
+  if (pane && pane.closeTab) pane.closeTab(path)
+  else closeLeaf(id)
+}
+// A preview file's tab double-clicked: it stays open.
+function keepViewTab(id, path) {
+  const pane = path ? getEditorPane(id) : null
+  if (pane && pane.pin) pane.pin(path)
 }
 // The keyboard follows a tab that came up (a pane's own focus ran while its
 // tab was still hidden).
@@ -3007,7 +3030,9 @@ provide('panelCtx', {
   // The tabs above the panes, drawn in the header of the editor or browser
   // on screen (ViewTabs.vue); a click there shows another tab.
   paneTabs: (id) => paneTabStrips.value[id] || null,
-  selectViewTab: (fromId, id) => showViewTab(wsOfLeaf(fromId), id),
+  selectViewTab: (fromId, id, path) => showViewTab(wsOfLeaf(fromId), id, path),
+  closeViewTab,
+  keepViewTab,
   fontSize,
   notifyAgentDone,
   notifyAgentLimit,
@@ -12474,8 +12499,9 @@ onBeforeUnmount(() => {
                 <ViewTabs
                   :leaves="view.tabs"
                   :shown="view.shown"
-                  @select="(id) => showViewTab(ws, id)"
-                  @close="(id) => closeLeaf(id)"
+                  @select="(id, path) => showViewTab(ws, id, path)"
+                  @close="(id, path) => closeViewTab(id, path)"
+                  @keep="(id, path) => keepViewTab(id, path)"
                 />
               </div>
               <div class="view-room">
