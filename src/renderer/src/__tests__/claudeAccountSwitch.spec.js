@@ -7,7 +7,7 @@ import fs from 'fs'
 import vm from 'vm'
 import { join } from 'path'
 
-const source = fs.readFileSync(join(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
+const source = fs.readFileSync(join(process.cwd(), 'src/renderer/src/App.vue'), 'utf8').replace(/\r\n/g, '\n')
 function slice(from, to) {
   const a = source.indexOf(from)
   const b = source.indexOf(to, a)
@@ -61,6 +61,57 @@ describe('pane menu > Restart on <account>', () => {
     answer = null
     await env.api.restartOnAccount('p1', 'acct-b')
     expect(env.showToast).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('a restart in place (the real restartInPlaceNow)', () => {
+  const restartNow = (() => {
+    const a = source.indexOf('async function restartInPlaceNow(leafId, opts) {')
+    const b = source.indexOf('\n}\n', a)
+    if (a < 0 || b < 0) throw new Error('App.vue changed: restartInPlaceNow')
+    return source.slice(a, b + 3)
+  })()
+  function run(opts, created = { id: 'p1' }) {
+    const old = claude({ accountId: 'acct-a', sessionId: 's1', shellId: 'pwsh' })
+    const ws = { tree: old }
+    const createLeaf = vi.fn(async () => created)
+    const ctx = {
+      findLeaf: (id) => (id === 'p1' ? ws.tree : null),
+      wsOfLeaf: () => ws,
+      window: { shellApi: { killPty: vi.fn(), attachPty: async () => ({ ok: false }) } },
+      dropBuffer: () => {},
+      clearAgentStatus: () => {},
+      createLeaf,
+      setDraft: () => {},
+      replaceNode: (tree, id, make) => make(tree),
+      teamToolsVersion: 'v',
+      setTimeout: (fn) => fn(),
+      Promise,
+      Date
+    }
+    vm.runInNewContext(`${restartNow}\nthis.go = (o) => restartInPlaceNow('p1', o)`, ctx)
+    return ctx.go(opts).then((ok) => ({ ok, createLeaf }))
+  }
+
+  it('starts on the account asked for; on its own account otherwise', async () => {
+    let r = await run({ resume: true, accountId: 'acct-b' })
+    expect(r.ok).toBe(true)
+    expect(r.createLeaf.mock.calls[0][4]).toMatchObject({ id: 'p1', accountId: 'acct-b', sessionId: 's1', resume: true })
+    r = await run({ resume: true, accountId: null })
+    expect(r.createLeaf.mock.calls[0][4].accountId).toBeNull()
+    r = await run({ resume: true })
+    expect(r.createLeaf.mock.calls[0][4].accountId).toBe('acct-a')
+  })
+
+  it('a start that was refused: null, not "its terminal did not stop"', async () => {
+    expect((await run({ resume: true }, null)).ok).toBeNull()
+  })
+
+  it('a plain Restart keeps its account and never reads a missing opts', () => {
+    const a = source.indexOf('async function restartLeaf(leafId) {')
+    const b = source.indexOf('\n}\n', a)
+    expect(a).toBeGreaterThan(0)
+    expect(source.slice(a, b)).not.toMatch(/\bopts\b/)
   })
 })
 

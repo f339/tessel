@@ -3986,7 +3986,7 @@ async function restartLeaf(leafId) {
       : null
   const fresh = await createLeaf(old.shellId, agent, old.startDir || ws.cwd, old.worktree, {
     sessionId: old.sessionId,
-    accountId: 'accountId' in opts ? opts.accountId : old.accountId,
+    accountId: old.accountId,
     sessionOptions: old.sessionOptions,
     permissions: old.permissions,
     permissionMode: old.permissionMode,
@@ -7934,7 +7934,7 @@ async function restartInPlaceNow(leafId, opts) {
   const fresh = await createLeaf(old.shellId, agent, old.startDir || (wsOfLeaf(leafId) || {}).cwd, old.worktree, {
     id: leafId,
     sessionId: old.sessionId,
-    accountId: old.accountId,
+    accountId: 'accountId' in opts ? opts.accountId : old.accountId,
     sessionOptions: old.sessionOptions,
     permissions: old.permissions,
     permissionMode: old.permissionMode,

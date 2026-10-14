@@ -6,7 +6,7 @@ import fs from 'node:fs'
 import vm from 'node:vm'
 import { join } from 'node:path'
 
-const main = fs.readFileSync(join(__dirname, '..', 'index.js'), 'utf8')
+const main = fs.readFileSync(join(__dirname, '..', 'index.js'), 'utf8').replace(/\r\n/g, '\n')
 const start = main.indexOf("ipcMain.handle('agents:model',")
 const handlerSource = main.slice(start, main.indexOf('\n})\n', start) + 4)
 

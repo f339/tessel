@@ -177,6 +177,7 @@ it('a delayed exit cannot close the new execution registered for the same pane',
     flushData: vi.fn(),
     liveShare: null,
     send,
+    endedPtyPids: new Set(),
     log: { warn: vi.fn() }
   }).onExit
   handler('pane-1', 0, 0, 101)
