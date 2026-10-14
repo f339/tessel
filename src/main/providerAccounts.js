@@ -43,7 +43,9 @@ export function createProviderAccounts({ claude, codex, now = Date.now, uuid = r
     ok: false,
     // Backends throw sanitized, human-readable errors. Never accept raw login
     // command stdout as an error; the runner uses fixed messages only.
-    error: typeof error?.message === 'string' ? error.message : fallback
+    error: typeof error?.message === 'string' ? error.message : fallback,
+    // An older version's Claude account switch waits for its sessions.
+    ...(error?.switchPending ? { switchPending: true } : {})
   })
   async function mutate(provider, action) {
     if (busy.has(provider))

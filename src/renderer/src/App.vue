@@ -1426,7 +1426,12 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     if (!acc || acc.ok === false) {
       refused = t('app.account.refused', '{{agent}} was not started: its account could not be used ({{error}}). See Settings > AI provider accounts.', { agent: agent.name || agent.id, error: (acc && acc.error) || t('app.common.unknownError', 'unknown error') })
       if (!opts.keepOnFailure) {
-        showToast(refused, { kind: 'error', timeout: 10000 })
+        // Waiting for the sessions an older version started: restarted from here.
+        showToast(refused, {
+          kind: 'error',
+          timeout: 15000,
+          action: acc && acc.switchPending ? { label: t('settings.accounts.switchRestart', 'Restart Claude sessions'), run: () => finishClaudeSwitch(true) } : null
+        })
         return null
       }
     } else {
