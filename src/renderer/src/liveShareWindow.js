@@ -1,26 +1,33 @@
 // Live Share in the window (main side: src/main/liveShare.js).
 //
-// Host: you share one project (chosen when you start, kept when you switch
-// to another project): its layout, its panes' names and its active pane are
-// sent to the guests each time they change, so they see it live. A guest
-// asking to join waits in `asks` until you answer that guest; each guest
-// then only watches until you let them type, open or close (setRights).
-// What guests do in your panes (open a terminal or an agent) is done here,
-// with a notice; a guest asking to close an agent, or a terminal where a
-// program runs, waits in `asks` for your yes too. A request is checked again
-// when it is done: the same sharing, the guest still in with that right, the
-// pane still in the project you share.
+// Host: you share one project or several (ticked when you start; added or
+// taken out at any time, from Live Share or a project's menu; the last one
+// stays, Stop sharing ends the share). Each one's layout, its panes' names and
+// its active pane are sent to the guests each time they change, so they see
+// it live; a project you switch away from stays shared. A guest asking to
+// join waits in `asks` until you answer that guest, with the shared projects
+// it gets (all of them by default); each guest then only watches its
+// projects until you let them type, open or close (setRights), and what it
+// sees can change later (setGuestProjects). A project you add is no guest's
+// until you give it to them. What guests do in your panes (open a terminal or
+// an agent) is done here, with a notice; a guest asking to close an agent, or
+// a terminal where a program runs, waits in `asks` for your yes too. A
+// request is checked again when it is done: the same sharing, the guest still
+// in with that right, the pane (or the project it opens in) still in a
+// project you share that this guest sees.
 //
-// Guest: the host's screen becomes a Live Share project in the sidebar. Its
-// panes are the host's terminals and agents, attached like terminals kept
-// in the terminal host (attachPty gives their screen, pty:data their
-// output); its layout follows the host's, fullscreen pane and project
-// included. It is never saved with the layout; closing it leaves. What the
-// host does not let you do (type, open, close) is not done, with a notice;
-// closing one of its panes only asks the host (the pane goes when the host
-// closed it). Panes of this computer never mix with the host's: none moves in
-// or out, and one that opened there anyway (a page, a file) comes back to a
-// project of yours when the session ends.
+// Guest: each of the host's projects you see becomes a Live Share project in
+// the sidebar ("<project> — <host>"); they come and go as the host shares
+// them with you or stops. Their panes are the host's terminals and agents,
+// attached like terminals kept in the terminal host (attachPty gives their
+// screen, pty:data their output); each one's layout follows the host's,
+// fullscreen pane and project included. They are never saved with the
+// layout; closing one leaves the session. What the host does not let you do
+// (type, open, close) is not done, with a notice; closing one of its panes
+// only asks the host (the pane goes when the host closed it). Panes of this
+// computer never mix with the host's: none moves in or out, and one that
+// opened there anyway (a page, a file) comes back to a project of yours when
+// its project goes.
 import { reactive, watch } from 'vue'
 import { t } from './i18n'
 import { buildGuestTree, hostLayoutFromWorkspace } from './liveShareLayout'
@@ -61,6 +68,10 @@ export function rightsText(rights) {
   return t('liveShare.rights.can', 'You can watch and {{list}}.', { list: parts.join(', ') })
 }
 
+// A Live Share project's name in a guest's sidebar: the host's project, then
+// the host.
+export const guestWsName = (project, host) => t('liveShare.wsName2', '{{project}} — {{host}}', { project, host: host || '?' })
+
 // deps: workspaces() (the array), currentWs(), currentWsId(), maximizedId()
 // / setMaximized(id), makeWorkspace(name), selectWorkspace(id),
 // removeWorkspace(id, confirmed, editorChecked), findLeaf(id), closeLeaf(id,
@@ -68,17 +79,19 @@ export function rightsText(rights) {
 // dropBuffer(id), showToast(text, opts), isAgentLeaf(leaf),
 // probeRunningWork(id) -> Promise<{ running, unknown, names }>, killPty(id),
 // adoptLeaves(leaves) (panes of this computer, put in a project of yours),
-// hasAgent(id).
+// hasAgent(id), layoutReady() (optional: the window has its projects back
+// after a start).
 export function createLiveShareWindow(deps) {
   const api = () => (window.shellApi && window.shellApi.liveShare) || null
   const state = reactive({
-    host: { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectId: null, guests: [], progress: null, error: null },
-    guest: { state: 'off', host: null, session: null, panes: [], layout: null, reason: null, rights: null, code: null },
+    host: { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectIds: [], guests: [], progress: null, error: null },
+    guest: { state: 'off', host: null, session: null, panes: [], projects: [], reason: null, rights: null, code: null },
     defaultName: '',
-    // The project you share (its id), chosen when you start.
-    sharedWsId: null,
+    // The projects you pick to share (their ids), before you start. While
+    // sharing, the projects shared are main's (host.projectIds).
+    pickedIds: [],
     // What waits for your answer, first one shown: { kind: 'join', key,
-    // guestId, name, code, forward } or { kind: 'close', key, guestId, name,
+    // guestId, name, code } or { kind: 'close', key, guestId, name,
     // paneId, paneName, detail }.
     asks: []
   })
@@ -90,48 +103,103 @@ export function createLiveShareWindow(deps) {
   const isGuestWs = (ws) => !!(ws && ws.liveShare)
   const isGuestLeaf = (leaf) => !!(leaf && leaf.backend === 'liveshare')
   const nameOf = (g) => (g && g.name) || t('liveShare.guest', 'A guest')
-  // The host's fullscreen pane last followed (only its changes are), and
-  // whether the host's active pane is still to be taken (once, at the start).
-  let hostMaximized = null
-  let takeHostActive = true
+  // Per project of the host you see: its fullscreen pane last followed (only
+  // its changes are), and whether its active pane is still to be taken
+  // (once, when it is first shown).
+  const follow = new Map() // host project id -> { maximized, takeActive }
+  const followOf = (id) => {
+    if (!follow.has(id)) follow.set(id, { maximized: null, takeActive: true })
+    return follow.get(id)
+  }
   // Each time you start sharing: a request from an earlier sharing is stale.
   let generation = 0
-  const guestWs = (session) => deps.workspaces().find((w) => w.liveShare && w.liveShare.session === session) || null
+  const guestWss = (session) => deps.workspaces().filter((w) => w.liveShare && w.liveShare.session === session)
+  const guestWs = (session, project) => guestWss(session).find((w) => w.liveShare.project === project) || null
   const hostSharing = () => state.host.state === 'sharing'
+  const hostStarting = () => ['preparing', 'starting', 'checking'].includes(state.host.state)
 
   // --- Host ----------------------------------------------------------------
-  const sharedWs = () => (state.sharedWsId ? deps.workspaces().find((w) => w.id === state.sharedWsId && !isGuestWs(w)) || null : null)
+  const localWs = (id) => (id ? deps.workspaces().find((w) => w.id === id && !isGuestWs(w)) || null : null)
+  // The projects shared now (their ids, main's), while sharing or starting.
+  const sharedIds = () => (hostSharing() || hostStarting() ? state.host.projectIds || [] : [])
+  // The ones this window has (a share taken back after a restart waits for
+  // them to be found again).
+  const sharedWss = () => sharedIds().map(localWs).filter(Boolean)
+  const isShared = (id) => sharedIds().includes(id)
+  // What Live Share ticks: the projects shared, or the ones picked to start.
+  const chosenIds = () => (hostSharing() || hostStarting() ? sharedIds() : state.pickedIds)
 
-  function layoutNow() {
-    const ws = sharedWs()
-    if (!ws) return { project: null, tree: null, activeId: null, maximizedId: null }
-    // The fullscreen pane is the window's: only when the shared project is the one on screen.
-    return hostLayoutFromWorkspace(ws, deps.currentWsId() === ws.id ? deps.maximizedId() : null)
+  // What guests see of each shared project you have here. The fullscreen
+  // pane is the window's: only for the project on screen.
+  function layoutsNow() {
+    return sharedWss().map((ws) => ({ id: ws.id, layout: hostLayoutFromWorkspace(ws, deps.currentWsId() === ws.id ? deps.maximizedId() : null) }))
   }
 
-  // Before you start: the project on screen (or your first one when a Live
-  // Share project is on screen) is the one offered.
+  // Before you start: the projects picked last time that are still there,
+  // else the project on screen (or your first one when a Live Share project
+  // is on screen).
   function prepareShare() {
-    if (hostSharing() || ['preparing', 'starting', 'checking'].includes(state.host.state)) return
-    if (sharedWs()) return
+    if (hostSharing() || hostStarting()) return
+    const kept = state.pickedIds.filter((id) => localWs(id))
+    if (kept.length) {
+      state.pickedIds = kept
+      return
+    }
     const cur = deps.currentWs()
     const ws = cur && !isGuestWs(cur) ? cur : deps.workspaces().find((w) => !isGuestWs(w)) || null
-    state.sharedWsId = ws ? ws.id : null
+    state.pickedIds = ws ? [ws.id] : []
   }
 
-  function shareProject(id) {
-    const ws = deps.workspaces().find((w) => w.id === id && !isGuestWs(w))
-    if (ws) state.sharedWsId = ws.id
+  // A project ticked or not: before you start, what you pick; while sharing,
+  // added to the share or taken out at once. The last one shared stays (Stop
+  // sharing ends the share).
+  async function setShared(id, on) {
+    const ws = localWs(id)
+    if (on && !ws) return false
+    if (!hostSharing() && !hostStarting()) {
+      const rest = state.pickedIds.filter((x) => x !== id)
+      state.pickedIds = on ? [...rest, id] : rest
+      return true
+    }
+    if (!on === !isShared(id)) return true
+    if (!on && sharedIds().length <= 1) {
+      deps.showToast(t('liveShare.toast.lastProject', 'This is the only project you share. To stop sharing it, use Stop sharing in Live Share.'), { timeout: 6000 })
+      return false
+    }
+    const r = await Promise.resolve(api()?.share({ id, shared: !!on })).catch(() => null)
+    if (!r || !r.ok) {
+      if (r && r.reason === 'full') deps.showToast(t('liveShare.toast.tooManyProjects', 'You can share up to {{count}} projects at once.', { count: r.max || 16 }), { timeout: 6000 })
+      else if (r && r.reason === 'last') deps.showToast(t('liveShare.toast.lastProject', 'This is the only project you share. To stop sharing it, use Stop sharing in Live Share.'), { timeout: 6000 })
+      return false
+    }
+    if (Array.isArray(r.projectIds) && (hostSharing() || hostStarting())) state.host.projectIds = r.projectIds
+    const name = (ws && ws.name) || '?'
+    if (on) deps.showToast(t('liveShare.toast.projectAdded', '{{project}} is shared now. Guests already in see it only once you give it to them (Live Share, in the toolbar).', { project: name }), { timeout: 7000 })
+    else deps.showToast(t('liveShare.toast.projectRemoved', '{{project}} is no longer shared: guests no longer see it.', { project: name }), { timeout: 5000 })
+    return true
   }
+
+  // The shared projects a guest sees (main checks them too).
+  function setGuestProjects(guestId, ids) {
+    return api()?.setGuestProjects({ guestId, projects: (Array.isArray(ids) ? ids : []).filter((id) => isShared(id)) })
+  }
+
+  // The projects of this share seen in this window, with their names (a
+  // project closed after that is taken out of the share).
+  const seen = new Map()
 
   function onHost(s) {
     const before = new Map(state.host.guests.map((g) => [g.id, g]))
     const wasBlocked = !!state.host.inviteBlocked
+    const wasOn = hostSharing() || hostStarting()
+    const lastShared = sharedIds()
     if (s.state === 'sharing' && state.host.state !== 'sharing') generation++
-    Object.assign(state.host, s)
-    // The share taken back after a restart: its project (the window does not
-    // remember it).
-    if (s.state === 'sharing' && s.projectId && !sharedWs()) shareProject(s.projectId)
+    Object.assign(state.host, { projectIds: [] }, s)
+    // Sharing ended: the projects it shared are the ones picked next time.
+    if (wasOn && !hostSharing() && !hostStarting()) {
+      seen.clear()
+      if (lastShared.length) state.pickedIds = [...lastShared]
+    }
     if (s.inviteBlocked && !wasBlocked) deps.showToast(t('liveShare.toast.blocked', 'Several connections used your invite code without joining: it no longer lets anyone in. Make a new code in Live Share.'), { kind: 'error', timeout: 12000 })
     for (const g of s.guests || []) {
       const was = before.get(g.id)
@@ -140,8 +208,8 @@ export function createLiveShareWindow(deps) {
     }
     for (const g of before.values()) if (g.state === 'joined') deps.showToast(t('liveShare.toast.left', '{{name}} left your Live Share.', { name: nameOf(g) }), { timeout: 5000 })
     // A guest who is no longer waiting (gone, or answered elsewhere), and the
-    // close requests that no longer stand (the guest left or lost the right,
-    // sharing stopped).
+    // close requests that no longer stand (the guest left, lost the right or
+    // the project, sharing stopped).
     const waiting = new Set((s.guests || []).filter((g) => g.state === 'waiting').map((g) => g.id))
     for (let i = state.asks.length - 1; i >= 0; i--) {
       const a = state.asks[i]
@@ -151,25 +219,30 @@ export function createLiveShareWindow(deps) {
 
   // The guest is in, with this right, in this sharing.
   const guestMay = (guestId, right) => !!guestId && (state.host.guests || []).some((g) => g.id === guestId && g.state === 'joined' && g.rights && g.rights[right])
-  const inShared = (id) => {
-    const ws = sharedWs()
-    return !!(ws && hasLeaf(ws.tree, id))
+  // The guest is in and sees this project, and it is still shared.
+  const guestSees = (guestId, projectId) =>
+    !!guestId && !!projectId && isShared(projectId) && (state.host.guests || []).some((g) => g.id === guestId && g.state === 'joined' && Array.isArray(g.projects) && g.projects.includes(projectId))
+  // The shared project a pane of yours is in (null: none).
+  const projectOfPane = (id) => {
+    const ws = sharedWss().find((w) => hasLeaf(w.tree, id))
+    return ws ? ws.id : null
   }
   // A guest's close request still stands: same sharing, the guest still in
-  // with the right, the pane still in the project you share.
-  const closeStands = (a) => hostSharing() && a.generation === generation && guestMay(a.guestId, 'close') && inShared(a.paneId) && !!deps.findLeaf(a.paneId)
+  // with the right, the pane still in a shared project that guest sees.
+  const closeStands = (a) => hostSharing() && a.generation === generation && guestMay(a.guestId, 'close') && guestSees(a.guestId, projectOfPane(a.paneId)) && !!deps.findLeaf(a.paneId)
 
   function onAsk(a) {
     if (!a || !a.guestId || state.asks.some((x) => x.key === a.guestId)) return
     state.asks.push({ kind: 'join', key: a.guestId, guestId: a.guestId, name: a.name, code: a.code || null })
   }
 
-  // Your answer to one ask (its key): a guest's join or a close request.
-  function answerAsk({ key, yes } = {}) {
+  // Your answer to one ask (its key): a guest's join (with the shared
+  // projects it gets: all of them when not said) or a close request.
+  function answerAsk({ key, yes, projects } = {}) {
     const i = state.asks.findIndex((a) => a.key === key)
     if (i < 0) return
     const [a] = state.asks.splice(i, 1)
-    if (a.kind === 'join') api()?.approve({ guestId: a.guestId, yes: !!yes })
+    if (a.kind === 'join') api()?.approve({ guestId: a.guestId, yes: !!yes, ...(Array.isArray(projects) ? { projects: projects.filter((id) => isShared(id)) } : {}) })
     else if (a.kind === 'close' && yes && closeStands(a)) closeForGuest(a.paneId, a.name)
   }
 
@@ -201,8 +274,9 @@ export function createLiveShareWindow(deps) {
     else if (leaf.remoteHostId || leaf.shellId === 'wsl' || leaf.backend === 'ssh') ask.detail = t('liveShare.closeAsk.remote', 'It runs on another system (an SSH host or WSL): Tessel can’t see what runs in it. Closing stops anything running.')
     else {
       const work = await deps.probeRunningWork(req.id)
-      // Things changed while it checked (the guest left or lost the right,
-      // sharing stopped, the pane closed or moved): nothing is done.
+      // Things changed while it checked (the guest left or lost the right or
+      // the project, sharing stopped, the pane closed or moved): nothing is
+      // done.
       if (!closeStands(ask)) return
       if (work.unknown) ask.detail = t('liveShare.closeAsk.unknown', 'Tessel could not check whether a command still runs in it. Closing stops anything running.')
       else if (work.running) ask.detail = t('liveShare.closeAsk.running', '{{names}} still runs in it. Closing stops it.', { names: work.names.join(', ') })
@@ -217,11 +291,12 @@ export function createLiveShareWindow(deps) {
     const who = (req.guest && req.guest.name) || t('liveShare.guest', 'A guest')
     if (req.action === 'open') {
       const agent = req.spec && req.spec.kind === 'agent' ? req.spec.agent : null
-      // It opens in the project you share, beside its active pane (never in
-      // a new project, whatever "Open new panes" says); a shared project
-      // with no pane left has nowhere to put it, and an agent you don't have
-      // is not opened.
-      const ws = sharedWs()
+      // It opens in the project it was asked in (still shared, and one this
+      // guest sees), beside its active pane (never in a new project, whatever
+      // "Open new panes" says); a project with no pane left has nowhere to
+      // put it, and an agent you don't have is not opened.
+      const projectId = req.spec && req.spec.project
+      const ws = guestSees(req.guest && req.guest.id, projectId) ? localWs(projectId) : null
       const target = ws && (ws.activeId && hasLeaf(ws.tree, ws.activeId) ? ws.activeId : firstLeafId(ws.tree))
       if (!target || (agent && !deps.hasAgent(agent))) return
       deps.showToast(
@@ -234,14 +309,47 @@ export function createLiveShareWindow(deps) {
     }
   }
 
+  // Shared projects that are gone from this window: taken out of the share
+  // (guests never see another project in their place); all of them gone,
+  // sharing stops. A project not found yet after a restart waits until the
+  // window has its projects back.
+  function checkGone() {
+    if (!hostSharing()) return
+    const gone = []
+    for (const id of sharedIds()) {
+      const ws = localWs(id)
+      if (ws) seen.set(id, ws.name)
+      else if (seen.has(id) || (deps.layoutReady && deps.layoutReady())) gone.push(id)
+    }
+    if (!gone.length) return
+    const a = api()
+    if (gone.length >= sharedIds().length) {
+      seen.clear()
+      a?.stop()
+      deps.showToast(t('liveShare.toast.projectClosed', 'You closed the project you shared: Live Share stopped.'), { timeout: 6000 })
+      return
+    }
+    for (const id of gone) {
+      const name = seen.get(id)
+      seen.delete(id)
+      a?.share({ id, shared: false })
+      if (name) deps.showToast(t('liveShare.toast.projectGone', 'You closed {{project}}: guests no longer see it.', { project: name }), { timeout: 6000 })
+    }
+  }
+
   // --- Guest ---------------------------------------------------------------
-  const wsName = (s) => (s.layout && s.layout.project ? `${s.host || '?'} · ${s.layout.project}` : t('liveShare.wsName', '{{host}} · Live Share', { host: s.host || '?' }))
   // What this guest may do (a host from before rights: everything).
   const may = (right) => !state.guest.rights || !!state.guest.rights[right]
+  const projectName = (p) => (p && p.layout && p.layout.project) || ''
+  // A leaf of the host's shown here, in this project of the host's.
+  const leafIn = (id, projectId) => {
+    const leaf = id && guestLeaves.get(id)
+    return leaf && leaf.liveShare.project === projectId ? leaf : null
+  }
 
-  function applyLayout(ws) {
-    const s = state.guest
-    const built = buildGuestTree(s.layout, (l) => guestLeaves.get(l.id) || null)
+  function applyLayout(ws, p) {
+    const f = followOf(p.id)
+    const built = buildGuestTree(p.layout, (l) => leafIn(l.id, p.id))
     // Panes of this computer that opened here (a page, a file) stay, beside
     // the host's.
     const local = localLeaves(ws.tree)
@@ -253,23 +361,34 @@ export function createLiveShareWindow(deps) {
     // Your own active pane stays yours (the keyboard never jumps to the
     // host's pane while you type): the host's is taken once, when it is
     // there; after that only when yours is gone.
-    const hostActive = s.layout && s.layout.activeId && guestLeaves.has(s.layout.activeId) ? s.layout.activeId : null
-    if (takeHostActive && hostActive) {
+    const hostActive = p.layout && leafIn(p.layout.activeId, p.id) ? p.layout.activeId : null
+    if (f.takeActive && hostActive) {
       ws.activeId = hostActive
-      takeHostActive = false
-    } else if (!ws.activeId || !hasLeaf(ws.tree, ws.activeId)) ws.activeId = hostActive || (guestLeaves.size ? [...guestLeaves.keys()].find((id) => hasLeaf(ws.tree, id)) || null : null)
+      f.takeActive = false
+    } else if (!ws.activeId || !hasLeaf(ws.tree, ws.activeId)) ws.activeId = hostActive || [...guestLeaves.keys()].find((id) => leafIn(id, p.id) && hasLeaf(ws.tree, id)) || null
     // The host's fullscreen pane: followed when the host changes it (you can
     // leave it meanwhile).
-    const max = s.layout && s.layout.maximizedId && guestLeaves.has(s.layout.maximizedId) ? s.layout.maximizedId : null
-    if (max !== hostMaximized) {
-      hostMaximized = max
+    const max = p.layout && leafIn(p.layout.maximizedId, p.id) ? p.layout.maximizedId : null
+    if (max !== f.maximized) {
+      f.maximized = max
       if (deps.currentWsId() === ws.id && deps.maximizedId() !== max) deps.setMaximized(max)
     }
   }
 
-  // The host's pane started again (restarted, or the connection came back):
-  // its new screen is taken (attachPty waits for it) and given to a new
-  // terminal here (gen, SplitNode's key), never the old screen.
+  // Every project of the host's shown, built again from its layout.
+  function applyAll(session) {
+    const s = state.guest
+    if (s.session !== session) return
+    for (const p of s.projects || []) {
+      const ws = guestWs(session, p.id)
+      if (ws) applyLayout(ws, p)
+    }
+  }
+
+  // The host's pane started again (restarted, moved to another of its
+  // projects, or the connection came back): its new screen is taken
+  // (attachPty waits for it) and given to a new terminal here (gen,
+  // SplitNode's key), never the old screen; it shows in its project from then.
   async function reattachGuestPane(p, leaf, session) {
     const gen = p.gen || 0
     attaching.add(p.id)
@@ -280,9 +399,12 @@ export function createLiveShareWindow(deps) {
       deps.seedBuffer(p.id, a.buffer)
       leaf.exitedAtStart = !!a.exited
       leaf.gen = gen
+      const latest = state.guest.panes.find((x) => x.id === p.id)
+      leaf.liveShare.project = (latest && latest.project) || p.project || null
     } finally {
       attaching.delete(p.id)
     }
+    applyAll(session)
     // Restarted again meanwhile: once more.
     const now = state.guest.panes.find((x) => x.id === p.id)
     if (now && (now.gen || 0) !== (leaf.gen || 0) && state.guest.session === session && guestLeaves.get(p.id) === leaf) reattachGuestPane(now, leaf, session)
@@ -309,9 +431,9 @@ export function createLiveShareWindow(deps) {
         pid: null,
         startDir: null,
         sessionId: null,
-        // The host's pane: its size (the terminal shows it at that size),
-        // what it runs there, and whether you may type in it.
-        liveShare: { session, cols: p.cols || 0, rows: p.rows || 0, kind: p.kind, agentId: p.agentId || null, canType: may('type'), host: state.guest.host || '' },
+        // The host's pane: its project, its size (the terminal shows it at
+        // that size), what it runs there, and whether you may type in it.
+        liveShare: { session, project: p.project || null, cols: p.cols || 0, rows: p.rows || 0, kind: p.kind, agentId: p.agentId || null, canType: may('type'), host: state.guest.host || '' },
         // A new terminal here each time the host's pane starts again (or the
         // connection came back): SplitNode's key.
         gen: p.gen || 0,
@@ -322,27 +444,56 @@ export function createLiveShareWindow(deps) {
       })
       leaf.attached = true
       guestLeaves.set(p.id, leaf)
-      const ws = guestWs(session)
-      if (ws) applyLayout(ws)
+      applyAll(session)
     } finally {
       attaching.delete(p.id)
     }
-    // The host's pane started again while it was being attached: once more,
-    // with its new screen.
+    // The host's pane started again (or moved) while it was being attached:
+    // once more, with its new screen.
     const leaf = guestLeaves.get(p.id)
     const now = state.guest.panes.find((x) => x.id === p.id)
     if (leaf && now && (now.gen || 0) !== (leaf.gen || 0) && state.guest.session === session) reattachGuestPane(now, leaf, session)
   }
 
+  // A Live Share project that goes (the host no longer shares it with you, or
+  // the session ended): panes of this computer that opened in it go to a
+  // project of yours.
+  function dropGuestWs(ws) {
+    const local = localLeaves(ws.tree)
+    ws.tree = null
+    if (local.length) deps.adoptLeaves(local)
+    ws.activeId = null
+    if (ws.liveShare) follow.delete(ws.liveShare.project)
+    deps.removeWorkspace(ws.id, true, true)
+  }
+
   function syncGuest(s) {
-    let ws = guestWs(s.session)
-    if (!ws) {
-      ws = deps.makeWorkspace(wsName(s))
-      ws.liveShare = { session: s.session, host: s.host }
-      deps.workspaces().push(ws)
-      deps.selectWorkspace(ws.id)
+    const projects = s.projects || []
+    const first = !guestWss(s.session).length
+    // The projects the host no longer shares with you go.
+    for (const ws of guestWss(s.session)) {
+      if (projects.some((p) => p.id === ws.liveShare.project)) continue
+      const name = ws.liveShare.projectName || ''
+      dropGuestWs(ws)
+      if (name) deps.showToast(t('liveShare.toast.hostRemovedProject', '{{host}} no longer shares {{project}} with you.', { host: s.host || '?', project: name }), { timeout: 6000 })
     }
-    ws.name = wsName(s)
+    for (const p of projects) {
+      let ws = guestWs(s.session, p.id)
+      const name = projectName(p)
+      if (!ws) {
+        ws = deps.makeWorkspace(name ? guestWsName(name, s.host) : t('liveShare.wsName', '{{host}} · Live Share', { host: s.host || '?' }))
+        ws.liveShare = { session: s.session, host: s.host, project: p.id, projectName: name }
+        deps.workspaces().push(ws)
+        // Your first one opens; one shared with you later is said.
+        if (first && p === projects[0]) deps.selectWorkspace(ws.id)
+        else if (!first) deps.showToast(t('liveShare.toast.hostAddedProject', '{{host}} now shares {{project}} with you.', { host: s.host || '?', project: name || '?' }), { timeout: 6000 })
+      }
+      // (Its name stays while the host's layout of it is not there yet.)
+      if (name) {
+        ws.name = guestWsName(name, s.host)
+        ws.liveShare.projectName = name
+      }
+    }
     const ids = new Set(s.panes.map((p) => p.id))
     for (const [id, leaf] of [...guestLeaves]) {
       if (ids.has(id) && leaf.liveShare.session === s.session) continue
@@ -359,26 +510,20 @@ export function createLiveShareWindow(deps) {
           leaf.liveShare.rows = p.rows
         }
         leaf.liveShare.canType = may('type')
-        if ((p.gen || 0) !== (leaf.gen || 0) && !attaching.has(p.id)) reattachGuestPane(p, leaf, s.session)
+        if ((p.gen || 0) !== (leaf.gen || 0)) {
+          if (!attaching.has(p.id)) reattachGuestPane(p, leaf, s.session)
+        } else if (p.project && leaf.liveShare.project !== p.project) leaf.liveShare.project = p.project
       } else if (!attaching.has(p.id)) attachGuestPane(p, s.session)
     }
-    applyLayout(ws)
+    applyAll(s.session)
   }
 
   function endGuest(s) {
     for (const id of guestLeaves.keys()) deps.dropBuffer(id)
     guestLeaves.clear()
-    hostMaximized = null
-    takeHostActive = true
     // Its panes are not terminals of this computer: nothing to stop here.
-    // Panes of this computer that opened in it go to a project of yours.
-    for (const ws of deps.workspaces().filter((w) => w.liveShare)) {
-      const local = localLeaves(ws.tree)
-      ws.tree = null
-      if (local.length) deps.adoptLeaves(local)
-      ws.activeId = null
-      deps.removeWorkspace(ws.id, true, true)
-    }
+    for (const ws of deps.workspaces().filter((w) => w.liveShare)) dropGuestWs(ws)
+    follow.clear()
     if (s.reason && s.reason !== 'left') deps.showToast(t('liveShare.toast.ended', 'Live Share with {{host}} ended: {{reason}}', { host: s.host || '?', reason: endReason(s.reason) }), { kind: 'error', timeout: 9000 })
   }
 
@@ -387,28 +532,30 @@ export function createLiveShareWindow(deps) {
     const was = state.guest.state
     const wasIn = was === 'joined' || was === 'reconnecting'
     const before = JSON.stringify(state.guest.rights || null)
-    Object.assign(state.guest, { rights: null, code: null, ...s })
+    Object.assign(state.guest, { rights: null, code: null, projects: [] }, s)
     if (s.state === 'joined') {
       // The host changed what you may do (not the first word on it): said once.
       if (was === 'joined' && before !== 'null' && JSON.stringify(s.rights || null) !== before) deps.showToast(`${t('liveShare.toast.rights', '{{host}} changed what you can do.', { host: s.host || '?' })} ${rightsText(s.rights)}`, { timeout: 6000 })
       if (was === 'reconnecting') deps.showToast(t('liveShare.toast.reconnected', 'Back in {{host}}’s Live Share.', { host: s.host || '?' }), { timeout: 4000 })
-      syncGuest(s)
+      syncGuest(state.guest)
     } else if (s.state === 'reconnecting') {
-      // The project stays, its panes view only, until the connection is back.
+      // The projects stay, their panes view only, until the connection is back.
       if (was !== 'reconnecting') deps.showToast(t('liveShare.toast.reconnecting', 'Connection to {{host}} lost: reconnecting…', { host: s.host || '?' }), { timeout: 6000 })
       for (const leaf of guestLeaves.values()) leaf.liveShare.canType = false
     } else if (s.state === 'ended' || (s.state === 'off' && wasIn)) endGuest(s)
   }
 
-  // A new terminal or agent in a Live Share project opens on the host, when
-  // the host lets you.
-  function openOnHost(spec) {
+  // A new terminal or agent in a Live Share project opens on the host, in
+  // that project, when the host lets you.
+  function openOnHost(spec, ws = deps.currentWs()) {
     if (state.guest.state !== 'joined') return
     if (!may('open')) {
       deps.showToast(t('liveShare.toast.noOpen', '{{host}} has not let you open terminals or agents.', { host: state.guest.host || '?' }), { timeout: 5000 })
       return
     }
-    api()?.open(spec)
+    const project = ws && ws.liveShare && ws.liveShare.session === state.guest.session ? ws.liveShare.project : null
+    if (!project) return
+    api()?.open({ ...spec, project })
     deps.showToast(t('liveShare.toast.opening', 'Opening it on {{host}}’s computer…', { host: state.guest.host || '?' }), { timeout: 3000 })
   }
 
@@ -458,40 +605,20 @@ export function createLiveShareWindow(deps) {
     }
     stops.push(
       watch(
-        // (A share taken back after a restart waits for its project to be
-        // found again: guests never see it empty meanwhile.)
-        () => (hostSharing() && (state.sharedWsId || !state.host.projectId) ? JSON.stringify(layoutNow()) : ''),
+        // Only the projects this window has: one not found yet (a share taken
+        // back after a restart) keeps what guests saw of it meanwhile.
+        () => (hostSharing() ? JSON.stringify(layoutsNow()) : ''),
         (text) => {
-          if (text) a.setLayout(JSON.parse(text))
+          if (text && a.setLayouts) a.setLayouts(JSON.parse(text))
         },
         { immediate: true }
       ),
-      // A share taken back after a restart: its project once the window has
-      // its projects again.
+      // A shared project closed (or not there after a restart): out of the
+      // share; the last one: sharing stops.
       watch(
-        () => (hostSharing() && state.host.projectId && !state.sharedWsId ? deps.workspaces().some((w) => w.id === state.host.projectId) : false),
-        (found) => {
-          if (found) shareProject(state.host.projectId)
-        },
+        () => (hostSharing() ? JSON.stringify([sharedIds().map((id) => [id, (localWs(id) || {}).name || null]), !!(deps.layoutReady && deps.layoutReady())]) : ''),
+        () => checkGone(),
         { immediate: true }
-      ),
-      // The project shared, told to main (kept across a restart).
-      watch(
-        () => (hostSharing() || ['preparing', 'starting', 'checking'].includes(state.host.state) ? state.sharedWsId : null),
-        (id) => {
-          if (id && a.setProject) a.setProject(id)
-        },
-        { immediate: true }
-      ),
-      // The shared project closed: sharing stops (guests never see another one).
-      watch(
-        () => hostSharing() && !!state.sharedWsId && !sharedWs(),
-        (gone) => {
-          if (!gone) return
-          state.sharedWsId = null
-          a.stop()
-          deps.showToast(t('liveShare.toast.projectClosed', 'You closed the project you shared: Live Share stopped.'), { timeout: 6000 })
-        }
       )
     )
   }
@@ -501,7 +628,28 @@ export function createLiveShareWindow(deps) {
     for (const stop of stops.splice(0)) stop()
   }
 
-  return { state, init, dispose, isGuestWs, isGuestLeaf, openOnHost, notHere, canClose, requestClose, leave, answerAsk, setRights, newInvite, prepareShare, shareProject, sharedWs }
+  return {
+    state,
+    init,
+    dispose,
+    isGuestWs,
+    isGuestLeaf,
+    openOnHost,
+    notHere,
+    canClose,
+    requestClose,
+    leave,
+    answerAsk,
+    setRights,
+    setGuestProjects,
+    newInvite,
+    prepareShare,
+    setShared,
+    sharedIds,
+    sharedWss,
+    chosenIds,
+    isShared
+  }
 }
 
 function hasLeaf(node, id) {

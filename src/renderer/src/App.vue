@@ -2014,7 +2014,7 @@ async function splitLeaf(
   // computer; anything else this computer would run (a tool, a session, an
   // SSH connection) is not opened there.
   if (liveShare.isGuestWs(ws)) {
-    if (opts.onHost) liveShare.openOnHost(agent ? { kind: 'agent', agent: agent.id } : { kind: 'terminal' })
+    if (opts.onHost) liveShare.openOnHost(agent ? { kind: 'agent', agent: agent.id } : { kind: 'terminal' }, ws)
     else liveShare.notHere()
     return null
   }
@@ -2281,6 +2281,7 @@ const liveShare = createLiveShareWindow({
   probeRunningWork,
   killPty: (id) => window.shellApi.killPty(id),
   hasAgent: (id) => !!agentById(id),
+  layoutReady: () => layoutReady.value,
   // Panes of this computer left in a Live Share project when it ends: a
   // project of their own, so nothing running is lost.
   adoptLeaves: (leaves) => {
@@ -2293,7 +2294,14 @@ const liveShare = createLiveShareWindow({
 const liveShareOpen = ref(false)
 // The projects you can share (a Live Share project is someone else's).
 const shareableProjects = computed(() => workspaces.value.filter((w) => !w.liveShare).map((w) => ({ id: w.id, name: w.name })))
-const sharedProjectName = computed(() => (liveShare.sharedWs() || {}).name || '')
+// The projects you share, by name (a guest asking to join gets the ones you tick).
+const sharedProjectList = computed(() => liveShare.sharedWss().map((w) => ({ id: w.id, name: w.name })))
+// What the sidebar's project menus need: Share in / Remove from Live Share.
+const sidebarLiveShare = computed(() => ({
+  sharing: liveShare.state.host.state === 'sharing',
+  shared: liveShare.sharedIds(),
+  guest: workspaces.value.filter((w) => w.liveShare).map((w) => w.id)
+}))
 function openLiveShare() {
   liveShare.prepareShare()
   liveShareOpen.value = true
@@ -3151,7 +3159,7 @@ async function launch({ kind, id, sessionOptions = null, accountId }, targetId =
   // computer (its own install and settings), and shows here from there.
   const shareWs = (targetId && wsOfLeaf(targetId)) || currentWs.value
   if (liveShare.isGuestWs(shareWs)) {
-    if (kind === 'agent' || kind === 'shell') liveShare.openOnHost(kind === 'agent' ? { kind: 'agent', agent: id } : { kind: 'terminal' })
+    if (kind === 'agent' || kind === 'shell') liveShare.openOnHost(kind === 'agent' ? { kind: 'agent', agent: id } : { kind: 'terminal' }, shareWs)
     else showToast(t('liveShare.onlyTerminals', 'In a Live Share project, only terminals and agents can be opened (on the host’s computer).'), { timeout: 6000 })
     return
   }
@@ -4961,8 +4969,9 @@ function removeWorkspace(id, confirmed = false, editorChecked = false) {
   const idx = workspaces.value.findIndex((w) => w.id === id)
   if (idx < 0) return
   const ws = workspaces.value[idx]
-  // A Live Share project: closing it leaves the session (the host's panes
-  // keep running there); it goes away when the session has ended.
+  // A Live Share project: closing one leaves the session (the host's panes
+  // keep running there); every project of the host goes away when the
+  // session has ended.
   if (liveShare.isGuestWs(ws) && !confirmed && liveShare.state.guest.state === 'joined' && liveShare.state.guest.session === ws.liveShare.session) {
     liveShare.leave()
     return
@@ -12193,6 +12202,8 @@ onBeforeUnmount(() => {
         :teams="teams"
         :ports="portScanner.state.byCard"
         :now="clock"
+        :live-share="sidebarLiveShare"
+        @live-share-project="liveShare.setShared"
         @create-team="createTeam"
         @add-to-team="addToTeam"
         @rename-team="renameTeam"
@@ -12519,11 +12530,11 @@ onBeforeUnmount(() => {
       :open="liveShareOpen"
       :initial-tab="liveShare.state.guest.state === 'joined' ? 'join' : 'share'"
       :projects="shareableProjects"
-      :project-id="liveShare.state.sharedWsId"
-      @update:project-id="liveShare.shareProject"
+      :project-ids="liveShare.chosenIds()"
+      @toggle-project="liveShare.setShared"
       @close="liveShareOpen = false"
     />
-    <LiveShareAsk :ask="liveShare.state.asks[0] || null" :project="sharedProjectName" @answer="liveShare.answerAsk" />
+    <LiveShareAsk :ask="liveShare.state.asks[0] || null" :projects="sharedProjectList" @answer="liveShare.answerAsk" />
 
     <CookieImportDialog
       v-if="cookieImportOpen"

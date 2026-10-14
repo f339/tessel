@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import WebSocket, { WebSocketServer } from 'ws'
-import { createShareHost, cleanName, stripTerminalReplies, INVITE_TTL_MS, addressKey } from '../liveShare/shareHost'
+import { createShareHost, cleanName, stripTerminalReplies, INVITE_TTL_MS, addressKey, SHARE_PROTOCOL } from '../liveShare/shareHost'
 import { createShareGuest as makeGuest } from '../liveShare/shareGuest'
 import { newSecret, newNonce, newKeyPair, commitment, newSigningKey, sharedSecret, createChannel, sessionKeys } from '../liveShare/shareCrypto'
 
@@ -29,7 +29,8 @@ function fakeTessel({ approve = true } = {}) {
     guestLists: [],
     asked: [],
     callbacks: {
-      listPanes: () => t.panes,
+      // One project shared, with these panes.
+      projects: () => [{ id: 'ws-1', layout: null, panes: t.panes }],
       snapshot: async (id) => ({ data: `screen of ${id}`, cols: 100, rows: 30 }),
       write: (id, data) => t.writes.push([id, data]),
       openPane: (spec) => t.opened.push(spec),
@@ -45,13 +46,16 @@ function fakeTessel({ approve = true } = {}) {
 }
 
 function guestRecorder() {
-  const r = { states: [], info: [], panes: null, screens: {}, exits: {}, closed: null, rights: [], notices: [], order: [] }
+  const r = { states: [], info: [], projects: null, panes: null, screens: {}, exits: {}, closed: null, rights: [], notices: [], order: [] }
   r.callbacks = {
     onState: (s, info) => {
       r.states.push(s)
       r.info.push(info || null)
     },
-    onPanes: (p) => (r.panes = p),
+    onProjects: (projects) => {
+      r.projects = projects
+      r.panes = projects.flatMap((p) => p.panes)
+    },
     onSnapshot: (id, data) => {
       r.screens[id] = data
       r.order.push(['snapshot', id, data])
@@ -126,7 +130,7 @@ describe('Live Share session', () => {
 
     // Not allowed yet: nothing typed, opened or closed.
     guest.write('p1', 'whoami\r')
-    guest.open({ kind: 'terminal' })
+    guest.open({ kind: 'terminal', project: 'ws-1' })
     guest.close('p1')
     await wait(60)
     expect(t.writes).toEqual([])
@@ -141,11 +145,14 @@ describe('Live Share session', () => {
 
     guest.write('p1', 'ls\r')
     guest.write('nope', 'rm -rf /\r') // not a shared pane
-    guest.open({ kind: 'agent', agent: 'codex' })
+    guest.open({ kind: 'agent', agent: 'codex', project: 'ws-1' })
+    guest.open({ kind: 'terminal', project: 'ws-other' }) // not a project it sees
+    guest.open({ kind: 'terminal' }) // in no project
     guest.close('p1') // still not allowed
     await until(() => t.opened.length === 1)
+    await wait(30)
     expect(t.writes).toEqual([['p1', 'ls\r']])
-    expect(t.opened).toEqual([{ kind: 'agent', agent: 'codex' }])
+    expect(t.opened).toEqual([{ kind: 'agent', agent: 'codex', project: 'ws-1' }])
     expect(t.closed).toEqual([])
 
     t.panes = [...t.panes, { id: 'p2', title: 'PowerShell', kind: 'terminal', cols: 80, rows: 24 }]
@@ -231,7 +238,7 @@ describe('Live Share session', () => {
     await until(() => r.states.includes('joined'))
     host.setRights(host.guests()[0].id, ALL)
     await until(() => r.rights.length === 2)
-    for (let i = 0; i < 5; i++) guest.open({ kind: 'terminal' })
+    for (let i = 0; i < 5; i++) guest.open({ kind: 'terminal', project: 'ws-1' })
     await until(() => r.notices.length >= 2)
     expect(t.opened).toHaveLength(3)
     expect(r.notices[0]).toBe('limit')
@@ -443,7 +450,7 @@ describe('Live Share session', () => {
     await until(() => r.states.includes('joined'))
     host.setRights(host.guests()[0].id, { type: false, open: true, close: false })
     await until(() => r.rights.length === 2)
-    for (let i = 0; i < 3; i++) guest.open({ kind: 'terminal' })
+    for (let i = 0; i < 3; i++) guest.open({ kind: 'terminal', project: 'ws-1' })
     await until(() => t.opened.length === 3)
     const back = comeBack(port, secret, key)
     await until(() => back.states.includes('joined'))
@@ -452,7 +459,7 @@ describe('Live Share session', () => {
     const g2 = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', signingKey: key, back: true, hostKey: lastHostKey, callbacks: conn.callbacks })
     g2.connect()
     await until(() => conn.states.includes('joined'))
-    g2.open({ kind: 'terminal' })
+    g2.open({ kind: 'terminal', project: 'ws-1' })
     await until(() => conn.notices.length)
     expect(conn.notices[0]).toBe('limit')
     expect(t.opened).toHaveLength(3)
@@ -515,7 +522,7 @@ describe('Live Share session', () => {
     const g = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', signingKey: key, back: true, hostKey: lastHostKey, callbacks: conn.callbacks })
     g.connect()
     await until(() => conn.states.includes('joined'))
-    g.open({ kind: 'terminal' })
+    g.open({ kind: 'terminal', project: 'ws-1' })
     await until(() => conn.notices.length)
     expect(t2.opened).toEqual([])
     // New guests: the block holds.
@@ -582,7 +589,7 @@ describe('Live Share session', () => {
   it('a host with a newer protocol than this Tessel: this one is out of date', async () => {
     const newer = new WebSocketServer({ host: '127.0.0.1', port: 0 })
     await new Promise((res) => newer.once('listening', res))
-    newer.on('connection', (ws) => ws.send(JSON.stringify({ t: 'hello', app: 'tessel-liveshare', v: 4 })))
+    newer.on('connection', (ws) => ws.send(JSON.stringify({ t: 'hello', app: 'tessel-liveshare', v: SHARE_PROTOCOL + 1 })))
     const r = guestRecorder()
     createShareGuest({ url: `ws://127.0.0.1:${newer.address().port}/`, secret: newSecret(), name: 'Alex', callbacks: r.callbacks }).connect()
     await until(() => r.closed)
@@ -831,7 +838,7 @@ describe('Live Share session: round 5', () => {
       const pair = newKeyPair()
       let commit = null
       let channel = null
-      ws.send(JSON.stringify({ t: 'hello', app: 'tessel-liveshare', v: 3 }))
+      ws.send(JSON.stringify({ t: 'hello', app: 'tessel-liveshare', v: SHARE_PROTOCOL }))
       ws.on('message', (data, isBinary) => {
         if (!commit) {
           commit = JSON.parse(data.toString())
@@ -1022,7 +1029,7 @@ describe('Live Share session: round 5', () => {
     await until(() => r.states.includes('joined'))
     host.setRights(host.guests()[0].id, { type: false, open: true, close: false })
     await until(() => r.rights.length === 2)
-    for (let i = 0; i < 3; i++) g.open({ kind: 'terminal' })
+    for (let i = 0; i < 3; i++) g.open({ kind: 'terminal', project: 'ws-1' })
     await until(() => t.opened.length === 3)
     const known = host.knownGuests()
     expect(known[0].opens).toHaveLength(3)
@@ -1034,7 +1041,7 @@ describe('Live Share session: round 5', () => {
     const back = createShareGuest({ url: `ws://127.0.0.1:${port2}/`, secret, name: 'Alex', signingKey: key, back: true, hostKey: r.hostKey, callbacks: conn.callbacks })
     back.connect()
     await until(() => conn.states.includes('joined'))
-    back.open({ kind: 'terminal' })
+    back.open({ kind: 'terminal', project: 'ws-1' })
     await until(() => conn.notices.length)
     expect(t2.opened).toEqual([])
   })

@@ -195,6 +195,40 @@ describe('left sidebar', () => {
     w.unmount()
   })
 
+  it('while you share in Live Share, a project’s menu adds it to the share or takes it out (the last one stays)', async () => {
+    const items = () => [...document.querySelectorAll('.orca-menu [data-orca-menu-item]')]
+    const item = (label) => items().find((b) => b.textContent.trim() === label)
+    const openFor = async (w, name) => {
+      await w.find(`[aria-label="Project actions for ${name}"]`).trigger('click')
+      await flushPromises()
+    }
+    // Not sharing: no such item.
+    const off = mountSidebar()
+    await openFor(off, 'Shop')
+    expect(item('Share in Live Share')).toBe(undefined)
+    expect(item('Remove from Live Share')).toBe(undefined)
+    off.unmount()
+
+    const w = mountSidebar({ liveShare: { sharing: true, shared: ['ws1'], guest: [] } })
+    await openFor(w, 'Shop')
+    // The only project shared: it stays.
+    expect(item('Remove from Live Share').disabled).toBe(true)
+    expect(item('Remove from Live Share').title).toMatch(/only project you share/)
+    await openFor(w, 'Docs')
+    item('Share in Live Share').click()
+    expect(w.emitted('live-share-project')).toEqual([['ws2', true]])
+    await w.setProps({ liveShare: { sharing: true, shared: ['ws1', 'ws2'], guest: [] } })
+    await openFor(w, 'Shop')
+    expect(item('Remove from Live Share').disabled).toBe(false)
+    item('Remove from Live Share').click()
+    expect(w.emitted('live-share-project').at(-1)).toEqual(['ws1', false])
+    // A Live Share project (a host's) is not yours to share.
+    await w.setProps({ liveShare: { sharing: true, shared: ['ws1'], guest: ['ws2'] } })
+    await openFor(w, 'Docs')
+    expect(item('Share in Live Share')).toBe(undefined)
+    w.unmount()
+  })
+
   it('a workspace card menu: copy path, delete a task copy; the primary one removes the project', async () => {
     const w = mountSidebar()
     await w.findAll('.wtc-surface')[1].trigger('contextmenu', { clientX: 20, clientY: 30 })

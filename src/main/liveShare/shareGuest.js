@@ -6,7 +6,8 @@
 // and then everything is sealed with the keys both derive from them and the
 // secret. The host sees the guest's name and verification code and says yes
 // or no; once in, the guest gets what the host lets it do (onRights), the
-// host's panes (onPanes), each pane's screen (onSnapshot) and its output.
+// host's projects it sees, each with its layout and its panes (onProjects),
+// each pane's screen (onSnapshot) and its output.
 // The guest's reconnect key (signingKey, made on this computer): its public
 // half goes with the first join, with a signature of the connection (it
 // holds it); coming back (back), the guest signs the new connection with it
@@ -25,13 +26,15 @@ import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitm
 const CONNECT_TIMEOUT_MS = 20000
 const SILENCE_MS = 70000
 const MAX_FRAME = 64 * 1024 * 1024 // a snapshot of a screen
-const PROTOCOL = 3
+// shareHost.js SHARE_PROTOCOL: 4, several projects.
+const PROTOCOL = 4
 
 // The host closed before the handshake: why (shareHost.js CLOSE_*).
 const CLOSE_REASONS = { 4001: 'expired', 4002: 'busy', 1013: 'busy', 4003: 'outdated' }
 
 // callbacks: onState(state, info) with 'connecting' | 'waiting' (info:
-// { code }) | 'joined' (info: { host }), onPanes(panes, layout),
+// { code }) | 'joined' (info: { host }), onProjects(projects) (the host's
+// projects this guest sees: [{ id, layout, panes }]),
 // onSnapshot(id, data, cols, rows), onData(id, data), onExit(id, exitCode),
 // onRestart(id) (the pane restarted on the host: a new screen follows),
 // onRights(rights), onNotice(code), onClosed(reason) (once, at the end).
@@ -99,11 +102,11 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
         // What it may do first: the window takes it as the starting point.
         if (msg.rights) callbacks.onRights?.(rightsOf(msg.rights))
         callbacks.onState?.('joined', { host: String(msg.host || '') })
-        callbacks.onPanes?.(Array.isArray(msg.panes) ? msg.panes : [], msg.layout || null)
+        callbacks.onProjects?.(Array.isArray(msg.projects) ? msg.projects : [])
         return
       }
-      case 'panes':
-        callbacks.onPanes?.(Array.isArray(msg.panes) ? msg.panes : [], msg.layout || null)
+      case 'projects':
+        callbacks.onProjects?.(Array.isArray(msg.projects) ? msg.projects : [])
         return
       case 'rights':
         callbacks.onRights?.(rightsOf(msg.rights))

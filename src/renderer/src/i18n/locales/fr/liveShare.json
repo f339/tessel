@@ -6,6 +6,7 @@
     "unavailable": "Live Share n'est pas disponible dans cette version.",
     "guest": "Un invité",
     "wsName": "{{host}} · Live Share",
+    "wsName2": "{{project}} — {{host}}",
     "closeHostPane2": "Ce panneau tourne sur l'ordinateur de {{host}} : {{host}} reçoit la demande de le fermer, pour tous les participants de la session.",
     "noMove": "Un projet Live Share suit la disposition de l'hôte : ses panneaux ne se déplacent pas, et aucun panneau n'y entre.",
     "keptPanes": "Gardés de Live Share",
@@ -17,9 +18,17 @@
       "join": "Rejoindre"
     },
     "share": {
-      "intro2": "D'autres personnes vous rejoignent depuis leur propre Tessel et voient en direct le projet que vous partagez (ses terminaux et ses agents, sans leur historique). Chacune attend votre accord, puis ne peut que regarder.",
+      "intro3": "D'autres personnes vous rejoignent depuis leur propre Tessel et voient en direct les projets que vous partagez (leurs terminaux et leurs agents, sans leur historique). Chacune attend votre accord, puis ne peut que regarder.",
       "warning2": "Un invité que vous autorisez à taper peut lancer n'importe quelle commande sur ce PC en votre nom. N'autorisez que des personnes de confiance.",
-      "project": "Projet à partager",
+      "projects": "Projets à partager",
+      "projectsShared": "Projets que vous partagez (cochez ou décochez à tout moment)",
+      "needProject": "Cochez au moins un projet.",
+      "lastProject": "Pour arrêter de partager votre dernier projet, utilisez Arrêter le partage.",
+      "addedNote": "Chaque invité ne voit que les projets activés à côté de son nom. Un projet que vous partagez plus tard reste désactivé pour les invités déjà connectés tant que vous ne l'activez pas.",
+      "sees": "Voit :",
+      "seesLabel": "Ce que {{name}} voit",
+      "seesOnTitle": "Cliquez pour retirer {{project}} à cet invité",
+      "seesOffTitle": "Cliquez pour laisser cet invité voir {{project}}",
       "noProject": "Aucun projet à partager",
       "name": "Votre nom (vos invités le voient)",
       "start": "Démarrer le partage",
@@ -50,7 +59,7 @@
       "rightType": "Taper",
       "rightTypeTitle": "Taper dans vos terminaux et vos agents (cette personne peut lancer n'importe quelle commande en votre nom)",
       "rightOpen": "Ouvrir",
-      "rightOpenTitle": "Ouvrir des terminaux et des agents dans le projet que vous partagez",
+      "rightOpenTitle2": "Ouvrir des terminaux et des agents dans les projets que cette personne voit",
       "rightClose": "Fermer",
       "rightCloseTitle": "Demander à fermer des panneaux (un agent ou un terminal occupé attend votre accord)",
       "remove": "Retirer"
@@ -65,7 +74,8 @@
       "waiting": "En attente de l'accord de l'hôte…",
       "reconnecting": "Connexion perdue : reconnexion à {{host}}…",
       "code": "Votre code est {{code}}. Donnez-le à votre hôte pour qu'il sache que c'est bien vous.",
-      "joined": "Vous avez rejoint le Live Share de {{host}}. Ses panneaux sont ouverts dans le projet Live Share.",
+      "joined2": "Vous avez rejoint le Live Share de {{host}}. Chaque projet que cette personne partage avec vous s'ouvre comme un projet Live Share dans la barre latérale.",
+      "noProjects": "{{host}} ne vous a encore donné aucun projet à voir.",
       "leave": "Quitter",
       "cancel": "Annuler"
     },
@@ -81,6 +91,9 @@
       "title": "{{name}} veut rejoindre votre Live Share",
       "text": "Cette personne verra en direct le projet que vous partagez. Elle ne pourra que regarder tant que vous ne l'autorisez pas à taper (Live Share, dans la barre d'outils).",
       "textProject": "Cette personne verra {{project}} en direct. Elle ne pourra que regarder tant que vous ne l'autorisez pas à taper (Live Share, dans la barre d'outils).",
+      "textProjects": "Cochez ce que cette personne verra en direct. Elle ne pourra que regarder tant que vous ne l'autorisez pas à taper (Live Share, dans la barre d'outils).",
+      "projectsLabel": "Projets que cette personne verra",
+      "needProject": "Cochez au moins un projet pour la laisser entrer.",
       "code": "Son Tessel affiche le code {{code}}. Vérifiez avec cette personne que c'est le même avant d'autoriser.",
       "allow": "Autoriser",
       "deny": "Refuser"
@@ -133,6 +146,13 @@
       "noClose": "Vous n'avez pas le droit de fermer les panneaux de {{host}}.",
       "limit": "Le Tessel de {{host}} limite la fréquence à laquelle les invités ouvrent ou ferment des panneaux. Attendez une minute.",
       "projectClosed": "Vous avez fermé le projet que vous partagiez : Live Share s'est arrêté.",
+      "projectGone": "Vous avez fermé {{project}} : vos invités ne le voient plus.",
+      "projectAdded": "{{project}} est maintenant partagé. Les invités déjà connectés ne le voient que lorsque vous le leur donnez (Live Share, dans la barre d'outils).",
+      "projectRemoved": "{{project}} n'est plus partagé : vos invités ne le voient plus.",
+      "lastProject": "C'est le seul projet que vous partagez. Pour arrêter de le partager, utilisez Arrêter le partage dans Live Share.",
+      "tooManyProjects": "Vous pouvez partager jusqu'à {{count}} projets à la fois.",
+      "hostAddedProject": "{{host}} partage maintenant {{project}} avec vous.",
+      "hostRemovedProject": "{{host}} ne partage plus {{project}} avec vous.",
       "blocked": "Plusieurs connexions ont utilisé votre code d'invitation sans rejoindre : il ne laisse plus entrer personne. Créez un nouveau code dans Live Share.",
       "reconnecting": "Connexion à {{host}} perdue : reconnexion…",
       "reconnected": "De retour dans le Live Share de {{host}}."
@@ -143,6 +163,13 @@
       "sharing_one": "Live Share : vous partagez votre écran ({{count}} connecté)",
       "sharing_other": "Live Share : vous partagez votre écran ({{count}} connectés)",
       "joined": "Live Share : dans la session de {{host}}"
+    },
+    "sidebar": {
+      "add": "Partager dans Live Share",
+      "addHint": "Les invités déjà connectés le voient une fois que vous l'activez pour eux (Live Share, dans la barre d'outils)",
+      "remove": "Retirer de Live Share",
+      "removeHint": "Ses panneaux disparaissent aussitôt pour tous les invités",
+      "last": "C'est le seul projet que vous partagez. Pour arrêter, utilisez Arrêter le partage dans Live Share."
     }
   }
 }

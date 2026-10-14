@@ -1,11 +1,12 @@
 <script setup>
 // What waits for your answer in your Live Share (liveShareWindow.js asks):
 // someone asks to join (Allow or Deny, with the verification code their
-// Tessel shows), or a guest asks to close an agent or a running terminal
-// (Close it or Keep it). Over every dialog, Live Share's included. The
-// keyboard goes to the card, not to a button: keys typed for something else
-// (Enter, Space, Escape) answer nothing, and the yes only answers after a
-// moment, so a click meant for something else never says yes. A click
+// Tessel shows, and the shared projects they will see: all ticked at first,
+// at least one to allow), or a guest asks to close an agent or a running
+// terminal (Close it or Keep it). Over every dialog, Live Share's included.
+// The keyboard goes to the card, not to a button: keys typed for something
+// else (Enter, Space, Escape) answer nothing, and the yes only answers after
+// a moment, so a click meant for something else never says yes. A click
 // beside it does not answer: it keeps waiting. Each answer goes to the one
 // ask it was shown for (its key).
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
@@ -18,9 +19,12 @@ const props = defineProps({
   // { kind: 'join', key, name, code } or { kind: 'close', key, name,
   // paneName, detail }; null when nothing waits.
   ask: { type: Object, default: null },
-  // The project you share (its name), said in the join question.
-  project: { type: String, default: '' }
+  // The projects you share ({ id, name }): a guest let in sees the ones
+  // ticked.
+  projects: { type: Array, default: () => [] }
 })
+// answer({ key, yes, projects }): projects (a join) are the ids ticked, or
+// undefined when none is known here (main then gives all the shared ones).
 const emit = defineEmits(['answer'])
 
 const isClose = computed(() => !!(props.ask && props.ask.kind === 'close'))
@@ -33,10 +37,24 @@ const title = computed(() => {
     ? t('liveShare.closeAsk.title', '{{name}} wants to close {{pane}}', { name, pane: a.paneName || '?' })
     : t('liveShare.ask.title', '{{name}} wants to join your Live Share', { name })
 })
+// The projects this guest will see: every shared one but those you untick
+// (a project shared while it waits is ticked too). With one project shared,
+// nothing to choose.
+const unticked = ref(new Set())
+const choosing = computed(() => !isClose.value && props.projects.length > 1)
+const chosen = computed(() => props.projects.filter((p) => !unticked.value.has(p.id)).map((p) => p.id))
+function toggle(p) {
+  const next = new Set(unticked.value)
+  if (next.has(p.id)) next.delete(p.id)
+  else next.add(p.id)
+  unticked.value = next
+}
 const joinText = computed(() =>
-  props.project
-    ? t('liveShare.ask.textProject', 'They will see {{project}} live. They can only watch until you let them type (Live Share, in the toolbar).', { project: props.project })
-    : t('liveShare.ask.text', 'They will see the project you share live. They can only watch until you let them type (Live Share, in the toolbar).')
+  choosing.value
+    ? t('liveShare.ask.textProjects', 'Tick what they will see live. They can only watch until you let them type (Live Share, in the toolbar).')
+    : props.projects.length === 1
+      ? t('liveShare.ask.textProject', 'They will see {{project}} live. They can only watch until you let them type (Live Share, in the toolbar).', { project: props.projects[0].name })
+      : t('liveShare.ask.text', 'They will see the project you share live. They can only watch until you let them type (Live Share, in the toolbar).')
 )
 const codeText = computed(() => (props.ask && props.ask.code ? t('liveShare.ask.code', 'Their Tessel shows the code {{code}}. Check with them that it is the same before you allow.', { code: props.ask.code }) : ''))
 
@@ -44,9 +62,12 @@ const dialog = ref(null)
 const armed = ref(false)
 let armTimer = 0
 let previousFocus = null
+// Allowing needs one project ticked at least.
+const canAllow = computed(() => armed.value && (!choosing.value || chosen.value.length > 0))
 
 function shown() {
   if (!previousFocus) previousFocus = document.activeElement
+  unticked.value = new Set()
   armed.value = false
   clearTimeout(armTimer)
   armTimer = setTimeout(() => (armed.value = true), ARM_MS)
@@ -67,12 +88,13 @@ onMounted(() => {
 onUnmounted(restoreFocus)
 
 function answer(yes) {
-  if (!props.ask || (yes && !armed.value)) return
-  emit('answer', { key: props.ask.key, yes: !!yes })
+  if (!props.ask || (yes && !canAllow.value)) return
+  if (isClose.value) emit('answer', { key: props.ask.key, yes: !!yes })
+  else emit('answer', { key: props.ask.key, yes: !!yes, projects: props.projects.length ? [...chosen.value] : undefined })
 }
 
 function trapTab(event) {
-  const buttons = [...(dialog.value?.querySelectorAll('button:not(:disabled)') || [])]
+  const buttons = [...(dialog.value?.querySelectorAll('button:not(:disabled), input:not(:disabled)') || [])]
   if (!buttons.length) return
   const i = buttons.indexOf(document.activeElement)
   if (event.shiftKey && i <= 0) {
@@ -112,6 +134,15 @@ function trapTab(event) {
         </template>
         <template v-else>
           <p class="ls-ask-p">{{ joinText }}</p>
+          <ul v-if="choosing" class="ls-ask-projects" role="group" :aria-label="t('liveShare.ask.projectsLabel', 'Projects they will see')" data-test="ls-ask-projects">
+            <li v-for="p in projects" :key="p.id">
+              <label class="ls-ask-project" :data-test="'ls-ask-project-' + p.id">
+                <input type="checkbox" :checked="!unticked.has(p.id)" @change="toggle(p)" />
+                <span>{{ p.name }}</span>
+              </label>
+            </li>
+          </ul>
+          <p v-if="choosing && !chosen.length" class="ls-ask-p ls-ask-dim" data-test="ls-ask-need-project">{{ t('liveShare.ask.needProject', 'Tick at least one project to allow them in.') }}</p>
           <p v-if="codeText" class="ls-ask-p ls-ask-code" data-test="ls-ask-code">{{ codeText }}</p>
         </template>
       </div>
@@ -119,7 +150,7 @@ function trapTab(event) {
         <button class="confirm-btn" data-test="ls-ask-deny" @click="answer(false)">
           {{ isClose ? t('liveShare.closeAsk.keep', 'Keep it') : t('liveShare.ask.deny', 'Deny') }}
         </button>
-        <button class="confirm-btn primary" :class="{ danger: isClose }" :disabled="!armed" data-test="ls-ask-allow" @click="answer(true)">
+        <button class="confirm-btn primary" :class="{ danger: isClose }" :disabled="!canAllow" data-test="ls-ask-allow" @click="answer(true)">
           {{ isClose ? t('liveShare.closeAsk.close', 'Close it') : t('liveShare.ask.allow', 'Allow') }}
         </button>
       </div>
@@ -152,6 +183,31 @@ function trapTab(event) {
 }
 .ls-ask-code {
   color: var(--text-strong);
+}
+.ls-ask-projects {
+  max-height: 24vh;
+  margin: 0 0 8px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  list-style: none;
+}
+.ls-ask-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.ls-ask-project:hover {
+  background: var(--surface-3);
+}
+.ls-ask-project input {
+  margin: 0;
+  accent-color: var(--accent);
 }
 .help-card:focus-visible {
   outline: 2px solid var(--accent);

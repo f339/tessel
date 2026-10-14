@@ -35,7 +35,9 @@ import {
   Trash2,
   Users,
   LogOut,
-  Crown
+  Crown,
+  ScreenShare,
+  ScreenShareOff
 } from 'lucide-vue-next'
 import OrcaMenu from './OrcaMenu.vue'
 import WorktreeCard from './sidebar/WorktreeCard.vue'
@@ -70,7 +72,11 @@ const props = defineProps({
   ports: { type: Object, default: () => ({}) },
   // A clock (ms) so ages ("3m") refresh.
   now: { type: Number, default: () => Date.now() },
-  paletteShortcut: { type: String, default: 'Ctrl+Shift+P' }
+  paletteShortcut: { type: String, default: 'Ctrl+Shift+P' },
+  // Live Share while you share: { sharing, shared: [project ids], guest:
+  // [ids of Live Share projects (a host's)] }; a project's menu adds it to
+  // the share or takes it out.
+  liveShare: { type: Object, default: null }
 })
 
 const emit = defineEmits([
@@ -109,7 +115,9 @@ const emit = defineEmits([
   'port-stop',
   // Every project's id in the order you arranged (drag a project's header,
   // or Alt+Up/Down on it): App puts its workspaces in that order.
-  'reorder-projects'
+  'reorder-projects',
+  // (id, on): a project added to your Live Share or taken out of it.
+  'live-share-project'
 ])
 
 // --- Options (persisted in settings, Orca's defaults) -------------------------
@@ -871,6 +879,7 @@ function projectActionItems(project) {
       onSelect: () => startPicking(wsId, 'new')
     },
     { type: 'item', icon: StickyNote, label: t('sidebar.project.notes', 'Project Notes'), onSelect: () => emit('notes-ws', wsId) },
+    ...liveShareItem(project),
     ...hiddenWorktreesItem(project),
     ...cleanupWorktreesItem(project),
     {
@@ -884,6 +893,37 @@ function projectActionItems(project) {
     },
     { type: 'separator' },
     { type: 'item', icon: Trash2, label: t('sidebar.project.remove', 'Remove Project'), danger: true, onSelect: () => emit('remove', wsId) }
+  ]
+}
+
+// While you share in Live Share: "Share in Live Share" or "Remove from Live
+// Share" for a project of yours (not a Live Share project: a host's). The
+// last project shared stays (Stop sharing ends the share).
+function liveShareItem(project) {
+  const ls = props.liveShare
+  if (!ls || !ls.sharing || (ls.guest || []).includes(project.id)) return []
+  const shared = (ls.shared || []).includes(project.id)
+  if (!shared) {
+    return [
+      {
+        type: 'item',
+        icon: ScreenShare,
+        label: t('liveShare.sidebar.add', 'Share in Live Share'),
+        title: t('liveShare.sidebar.addHint', 'Guests already in see it once you turn it on for them (Live Share, in the toolbar)'),
+        onSelect: () => emit('live-share-project', project.id, true)
+      }
+    ]
+  }
+  const last = (ls.shared || []).length <= 1
+  return [
+    {
+      type: 'item',
+      icon: ScreenShareOff,
+      label: t('liveShare.sidebar.remove', 'Remove from Live Share'),
+      disabled: last,
+      title: last ? t('liveShare.sidebar.last', 'This is the only project you share. To stop, use Stop sharing in Live Share.') : t('liveShare.sidebar.removeHint', 'Its panes vanish for every guest at once'),
+      onSelect: () => emit('live-share-project', project.id, false)
+    }
   ]
 }
 

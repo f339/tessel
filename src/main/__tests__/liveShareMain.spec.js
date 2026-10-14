@@ -60,6 +60,8 @@ const until = async (fn, ms = 4000) => {
 }
 
 const leaf = (id, extra = {}) => ({ type: 'leaf', id, view: 'terminal', title: id, kind: 'shell', ...extra })
+// The host window's layout of a shared project (liveShare:layouts).
+const showLayout = (m, layout, id = 'ws-1') => m.on['liveShare:layouts'](null, [{ id, layout }])
 
 describe('cleanLayout', () => {
   it('keeps the tree, the active and the fullscreen pane, as plain bounded data', () => {
@@ -239,8 +241,7 @@ describe('registerLiveShare: joining a host', () => {
       secret,
       hostName: 'Cedric',
       callbacks: {
-        listPanes: () => panes,
-        layout: () => hostLayout,
+        projects: () => [{ id: 'ws-1', layout: hostLayout, panes }],
         snapshot: async (id) => ({ data: `screen of ${id}`, cols: 100, rows: 30 }),
         write: (id, data) => remote.writes.push([id, data]),
         openPane: (spec) => remote.opened.push(spec),
@@ -261,27 +262,32 @@ describe('registerLiveShare: joining a host', () => {
     await until(() => remote.approve)
     expect(remote.asked).toEqual(['Alex'])
     await until(() => m.last('liveShare:guest')?.state === 'waiting')
-    expect(m.events('liveShare:guest')[0]).toMatchObject({ state: 'connecting', panes: [], layout: null })
+    expect(m.events('liveShare:guest')[0]).toMatchObject({ state: 'connecting', panes: [], projects: [] })
     remote.approve(true)
 
     const joined = await until(() => m.events('liveShare:guest').find((s) => s.state === 'joined' && s.panes.length))
     const localId = 'pane-ls1-7-abc'
     expect(joined).toMatchObject({ host: 'Cedric', session: 1, reason: null })
-    expect(joined.panes).toEqual([{ id: localId, title: 'Claude Code', kind: 'agent', agentId: 'claude', accent: '#3366ff', cols: 100, rows: 30, gen: 0 }])
-    expect(joined.layout).toEqual({
-      project: 'tessel',
-      tree: {
-        type: 'split',
-        dir: 'row',
-        sizes: [60, 40],
-        children: [
-          { type: 'leaf', id: localId, view: 'terminal', title: 'Claude Code', kind: 'agent', agentId: 'claude', accent: null },
-          { type: 'leaf', id: 'pane-ls1-8-ed', view: 'editor', title: 'App.vue', kind: 'shell', agentId: null, accent: null }
-        ]
-      },
-      activeId: localId,
-      maximizedId: null
-    })
+    expect(joined.panes).toEqual([{ id: localId, project: 'ws-1', title: 'Claude Code', kind: 'agent', agentId: 'claude', accent: '#3366ff', cols: 100, rows: 30, gen: 0 }])
+    expect(joined.projects).toEqual([
+      {
+        id: 'ws-1',
+        layout: {
+          project: 'tessel',
+          tree: {
+            type: 'split',
+            dir: 'row',
+            sizes: [60, 40],
+            children: [
+              { type: 'leaf', id: localId, view: 'terminal', title: 'Claude Code', kind: 'agent', agentId: 'claude', accent: null },
+              { type: 'leaf', id: 'pane-ls1-8-ed', view: 'editor', title: 'App.vue', kind: 'shell', agentId: null, accent: null }
+            ]
+          },
+          activeId: localId,
+          maximizedId: null
+        }
+      }
+    ])
     expect((await m.handle['liveShare:state']()).guest).toMatchObject({ state: 'joined', host: 'Cedric' })
 
     // Its pty calls: the host's pane, never one of this computer.
@@ -311,9 +317,12 @@ describe('registerLiveShare: joining a host', () => {
     await until(() => remote.writes.length)
     expect(remote.writes).toEqual([['pane-7-abc', 'ls\r']])
 
-    expect(await m.handle['liveShare:open'](null, { kind: 'agent', agent: 'codex' })).toEqual({ ok: true })
+    // In one of the host's projects it sees.
+    expect(await m.handle['liveShare:open'](null, { kind: 'agent', agent: 'codex' })).toEqual({ ok: false, reason: 'project' })
+    expect(await m.handle['liveShare:open'](null, { kind: 'agent', agent: 'codex', project: 'ws-9' })).toEqual({ ok: false, reason: 'project' })
+    expect(await m.handle['liveShare:open'](null, { kind: 'agent', agent: 'codex', project: 'ws-1' })).toEqual({ ok: true })
     await until(() => remote.opened.length)
-    expect(remote.opened).toEqual([{ kind: 'agent', agent: 'codex' }])
+    expect(remote.opened).toEqual([{ kind: 'agent', agent: 'codex', project: 'ws-1' }])
 
     // Closing it here closes it on the host (which then removes it).
     m.api.guestKill(localId)
@@ -347,7 +356,7 @@ describe('registerLiveShare: joining a host', () => {
     expect(m.events('liveShare:guest')).toEqual([])
 
     const secret = newSecret()
-    shareHost = createShareHost({ secret, hostName: 'Cedric', callbacks: { listPanes: () => [], snapshot: async () => null, write: () => {}, askApproval: async () => false } })
+    shareHost = createShareHost({ secret, hostName: 'Cedric', callbacks: { projects: () => [], snapshot: async () => null, write: () => {}, askApproval: async () => false } })
     const port = await shareHost.start()
     await m.handle['liveShare:join'](null, { invite: encodeInvite({ url: `ws://127.0.0.1:${port}/`, secret }) })
     await until(() => m.last('liveShare:guest')?.state === 'ended')
@@ -367,15 +376,15 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
     const guest = fakeMain()
     mains.push(host, guest)
 
-    host.on['liveShare:layout'](null, { project: 'site', tree: { type: 'split', children: [leaf('pane-1-ps', { title: 'PowerShell' }), leaf('pane-2-web', { view: 'browser', title: 'localhost' })] }, activeId: 'pane-1-ps' })
+    showLayout(host, { project: 'site', tree: { type: 'split', children: [leaf('pane-1-ps', { title: 'PowerShell' }), leaf('pane-2-web', { view: 'browser', title: 'localhost' })] }, activeId: 'pane-1-ps' })
     host.api.noteSize('pane-1-ps', 120, 40)
-    const started = await host.handle['liveShare:start'](null, { name: 'Cedric' })
+    const started = await host.handle['liveShare:start'](null, { name: 'Cedric', projects: ['ws-1'] })
     expect(started).toMatchObject({ ok: true, state: 'sharing', guests: [], error: null })
     expect(host.events('liveShare:host').map((s) => s.state)).toEqual(['preparing', 'starting', 'checking', 'sharing'])
     const invite = started.invite
     expect(decodeInvite(invite).url).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/$/)
     // Starting again while sharing keeps the same session.
-    expect((await host.handle['liveShare:start'](null, {})).invite).toBe(invite)
+    expect((await host.handle['liveShare:start'](null, { projects: ['ws-1'] })).invite).toBe(invite)
 
     await guest.handle['liveShare:join'](null, { invite, name: 'Alex' })
     const ask = await until(() => host.last('liveShare:ask'))
@@ -389,8 +398,9 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
     const joined = await until(() => guest.events('liveShare:guest').find((s) => s.state === 'joined' && s.panes.length))
     const localId = 'pane-ls1-1-ps'
     expect(joined).toMatchObject({ host: 'Cedric', panes: [{ id: localId, title: 'PowerShell', kind: 'shell', cols: 120, rows: 40 }] })
-    expect(joined.layout.tree.children.map((c) => c.id)).toEqual([localId, 'pane-ls1-2-web'])
-    expect(joined.layout.activeId).toBe(localId)
+    expect(joined.projects.map((p) => p.id)).toEqual(['ws-1'])
+    expect(joined.projects[0].layout.tree.children.map((c) => c.id)).toEqual([localId, 'pane-ls1-2-web'])
+    expect(joined.projects[0].layout.activeId).toBe(localId)
     await until(() => host.last('liveShare:host').guests.some((g) => g.name === 'Alex' && g.state === 'joined'))
 
     // The snapshot is the terminal host's screen, taken through ptyClient's onReply.
@@ -414,22 +424,22 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
     expect(host.hostWrites).toEqual([['pane-1-ps', 'exit\r']])
 
     // A guest's open / close goes to the host's window to do.
-    await guest.handle['liveShare:open'](null, { kind: 'terminal' })
+    await guest.handle['liveShare:open'](null, { kind: 'terminal', project: 'ws-1' })
     guest.api.guestKill(localId)
     await until(() => host.events('liveShare:hostRequest').length === 2)
     expect(host.events('liveShare:hostRequest')).toEqual([
-      { action: 'open', spec: { kind: 'terminal', agent: undefined }, guest: expect.objectContaining({ name: 'Alex' }) },
+      { action: 'open', spec: { kind: 'terminal', agent: undefined, project: 'ws-1' }, guest: expect.objectContaining({ name: 'Alex' }) },
       { action: 'close', id: 'pane-1-ps', guest: expect.objectContaining({ name: 'Alex' }) }
     ])
 
     // A pane taken out of the shared project: its output stops at once, and
     // the guest drops it without waiting.
-    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-2-web', { view: 'browser' }), activeId: null })
+    showLayout(host, { project: 'site', tree: leaf('pane-2-web', { view: 'browser' }), activeId: null })
     host.api.onPtyData('pane-1-ps', 'PRIVATE-AFTER-MOVE\r\n')
     await until(() => guest.last('liveShare:guest').panes.length === 0)
     await new Promise((r) => setTimeout(r, 40))
     expect(guest.data.some(([, d]) => d.includes('PRIVATE'))).toBe(false)
-    host.on['liveShare:layout'](null, { project: 'site', tree: { type: 'split', children: [leaf('pane-1-ps', { title: 'PowerShell' }), leaf('pane-2-web', { view: 'browser', title: 'localhost' })] }, activeId: 'pane-1-ps' })
+    showLayout(host, { project: 'site', tree: { type: 'split', children: [leaf('pane-1-ps', { title: 'PowerShell' }), leaf('pane-2-web', { view: 'browser', title: 'localhost' })] }, activeId: 'pane-1-ps' })
     await until(() => guest.last('liveShare:guest').panes.length === 1)
 
     // The host's window resized the pane: the guest shows it at that size.
@@ -453,8 +463,8 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
     const a = fakeMain()
     const b = fakeMain()
     mains.push(host, a, b)
-    host.on['liveShare:layout'](null, { tree: leaf('pane-1-ps') })
-    const { invite } = await host.handle['liveShare:start'](null, {})
+    showLayout(host, { tree: leaf('pane-1-ps') })
+    const { invite } = await host.handle['liveShare:start'](null, { projects: ['ws-1'] })
 
     await b.handle['liveShare:join'](null, { invite, name: 'Bea' })
     const askB = await until(() => host.events('liveShare:ask').find((q) => q.name === 'Bea'))
@@ -478,7 +488,7 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
     const err = new Error('timeout')
     err.code = 'timeout'
     tunnel.startError = err
-    const r = await host.handle['liveShare:start'](null, {})
+    const r = await host.handle['liveShare:start'](null, { projects: ['ws-1'] })
     expect(r).toEqual({ ok: false, error: 'Cloudflare did not give a tunnel address in time. Try again.' })
     expect(host.last('liveShare:host')).toMatchObject({ state: 'error', error: 'Cloudflare did not give a tunnel address in time. Try again.' })
   })
@@ -494,9 +504,8 @@ describe('registerLiveShare: a restart keeps the share and the session', () => {
     const host = fakeMain()
     const guest = fakeMain()
     mains.push(host, guest)
-    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-1-ps', { title: 'PowerShell' }), activeId: 'pane-1-ps' })
-    host.on['liveShare:project'](null, 'ws-7')
-    const started = await host.handle['liveShare:start'](null, { name: 'Ada' })
+    showLayout(host, { project: 'site', tree: leaf('pane-1-ps', { title: 'PowerShell' }), activeId: 'pane-1-ps' }, 'ws-7')
+    const started = await host.handle['liveShare:start'](null, { name: 'Ada', projects: ['ws-7'] })
     await guest.handle['liveShare:join'](null, { invite: started.invite, name: 'Alex' })
     const ask = await until(() => host.last('liveShare:ask'))
     await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true })
@@ -508,7 +517,7 @@ describe('registerLiveShare: a restart keeps the share and the session', () => {
 
   it('the host Tessel restarts: the same share comes back, and guests reconnect without a question', async () => {
     const { host, guest, started } = await shareAndJoin()
-    expect(host.last('liveShare:host')).toMatchObject({ state: 'sharing', projectId: 'ws-7' })
+    expect(host.last('liveShare:host')).toMatchObject({ state: 'sharing', projectIds: ['ws-7'] })
     // An update's restart: the share is kept for the next Tessel.
     host.api.suspend()
     host.api.stopAll() // will-quit: nothing more ends
@@ -519,8 +528,8 @@ describe('registerLiveShare: a restart keeps the share and the session', () => {
     mains.push(next)
     expect(await next.api.resumed).toEqual([true, false])
     const back = next.last('liveShare:host')
-    expect(back).toMatchObject({ state: 'sharing', invite: started.invite, projectId: 'ws-7' })
-    next.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-1-ps', { title: 'PowerShell' }), activeId: 'pane-1-ps' })
+    expect(back).toMatchObject({ state: 'sharing', invite: started.invite, projectIds: ['ws-7'] })
+    showLayout(next, { project: 'site', tree: leaf('pane-1-ps', { title: 'PowerShell' }), activeId: 'pane-1-ps' }, 'ws-7')
     const rejoined = await until(() => guest.events('liveShare:guest').find((s, i, all) => s.state === 'joined' && all.slice(0, i).some((x) => x.state === 'reconnecting') && s.panes.length), 15000)
     expect(rejoined.rights).toEqual({ type: true, open: false, close: false })
     // Its panes start again (a new terminal in the window: gen).
@@ -588,8 +597,8 @@ describe('registerLiveShare: invite codes', () => {
     const late = fakeMain()
     const fresh = fakeMain()
     mains.push(host, late, fresh)
-    host.on['liveShare:layout'](null, { tree: leaf('pane-1-ps') })
-    const started = await host.handle['liveShare:start'](null, {})
+    showLayout(host, { tree: leaf('pane-1-ps') })
+    const started = await host.handle['liveShare:start'](null, { projects: ['ws-1'] })
     expect(started.expiresAt).toBeGreaterThan(Date.now() + 59 * 60 * 1000)
     const renewed = await host.handle['liveShare:newInvite']()
     expect(renewed).toMatchObject({ ok: true, state: 'sharing' })
@@ -650,8 +659,8 @@ describe('registerLiveShare: taking a share back, carefully', () => {
   async function shared() {
     const host = fakeMain()
     mains.push(host)
-    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-1-ps'), activeId: 'pane-1-ps' })
-    await host.handle['liveShare:start'](null, { name: 'Ada' })
+    showLayout(host, { project: 'site', tree: leaf('pane-1-ps'), activeId: 'pane-1-ps' })
+    await host.handle['liveShare:start'](null, { name: 'Ada', projects: ['ws-1'] })
     host.api.suspend()
     return host
   }
@@ -701,8 +710,8 @@ describe('registerLiveShare: taking a share back, carefully', () => {
     const host = fakeMain()
     const guest = fakeMain()
     mains.push(host, guest)
-    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-1-ps'), activeId: 'pane-1-ps' })
-    const started = await host.handle['liveShare:start'](null, { name: 'Ada' })
+    showLayout(host, { project: 'site', tree: leaf('pane-1-ps'), activeId: 'pane-1-ps' })
+    const started = await host.handle['liveShare:start'](null, { name: 'Ada', projects: ['ws-1'] })
     await guest.handle['liveShare:join'](null, { invite: started.invite, name: 'Alex' })
     const ask = await until(() => host.last('liveShare:ask'))
     await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true })
@@ -762,8 +771,8 @@ describe('registerLiveShare: taking a share back, carefully', () => {
     const host = fakeMain()
     const guest = fakeMain()
     mains.push(host, guest)
-    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-1-ps'), activeId: 'pane-1-ps' })
-    const started = await host.handle['liveShare:start'](null, { name: 'Ada' })
+    showLayout(host, { project: 'site', tree: leaf('pane-1-ps'), activeId: 'pane-1-ps' })
+    const started = await host.handle['liveShare:start'](null, { name: 'Ada', projects: ['ws-1'] })
     await guest.handle['liveShare:join'](null, { invite: started.invite, name: 'Alex' })
     const ask = await until(() => host.last('liveShare:ask'))
     await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true })
@@ -789,8 +798,8 @@ describe('registerLiveShare: round 5', () => {
     const host = fakeMain()
     const guest = fakeMain()
     mains.push(host, guest)
-    host.on['liveShare:layout'](null, { project: 'site', tree, activeId: 'pane-1-ps' })
-    const started = await host.handle['liveShare:start'](null, { name: 'Ada' })
+    showLayout(host, { project: 'site', tree, activeId: 'pane-1-ps' })
+    const started = await host.handle['liveShare:start'](null, { name: 'Ada', projects: ['ws-1'] })
     await guest.handle['liveShare:join'](null, { invite: started.invite, name: 'Alex' })
     const ask = await until(() => host.last('liveShare:ask'))
     await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true })
@@ -816,10 +825,167 @@ describe('registerLiveShare: round 5', () => {
     const { host, guest } = await joinedPair({ type: 'split', dir: 'row', sizes: [50, 50], children: [leaf('pane-1-ps'), leaf('pane-2-ps')] })
     const gens = () => Object.fromEntries((guest.last('liveShare:guest').panes || []).map((p) => [p.title, p.gen]))
     expect(gens()).toEqual({ 'pane-1-ps': 0, 'pane-2-ps': 0 })
-    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-2-ps'), activeId: 'pane-2-ps' })
+    showLayout(host, { project: 'site', tree: leaf('pane-2-ps'), activeId: 'pane-2-ps' })
     await until(() => guest.last('liveShare:guest').panes.length === 1)
-    host.on['liveShare:layout'](null, { project: 'site', tree: { type: 'split', dir: 'row', sizes: [50, 50], children: [leaf('pane-1-ps'), leaf('pane-2-ps')] }, activeId: 'pane-1-ps' })
+    showLayout(host, { project: 'site', tree: { type: 'split', dir: 'row', sizes: [50, 50], children: [leaf('pane-1-ps'), leaf('pane-2-ps')] }, activeId: 'pane-1-ps' })
     await until(() => guest.last('liveShare:guest').panes.length === 2)
     expect(gens()).toEqual({ 'pane-1-ps': 1, 'pane-2-ps': 0 })
+  })
+})
+
+describe('registerLiveShare: several projects shared', () => {
+  const mains = []
+  afterEach(() => {
+    for (const m of mains.splice(0)) m.api.stopAll()
+  })
+
+  // The host window's layouts of its shared projects: id -> pane ids.
+  const showLayouts = (m, projects) =>
+    m.on['liveShare:layouts'](
+      null,
+      Object.entries(projects).map(([id, ids]) => ({ id, layout: { project: `name of ${id}`, tree: ids.length ? { type: 'split', dir: 'row', sizes: ids.map(() => 100 / ids.length), children: ids.map((x) => leaf(x)) } : null, activeId: ids[0] || null } }))
+    )
+  const status = (m) => m.last('liveShare:guest')
+  const projectIds = (m) => (status(m)?.projects || []).map((p) => p.id)
+
+  // A host sharing ws-1 (pane-1-a) and ws-2 (pane-2-b); a guest let in with
+  // the projects given (all of them when not said).
+  async function sharing({ projects } = {}) {
+    const host = fakeMain()
+    const guest = fakeMain()
+    mains.push(host, guest)
+    showLayouts(host, { 'ws-1': ['pane-1-a'], 'ws-2': ['pane-2-b'] })
+    const started = await host.handle['liveShare:start'](null, { name: 'Ada', projects: ['ws-1', 'ws-2', 'ws-2', 'bad id'] })
+    expect(started.projectIds).toEqual(['ws-1', 'ws-2'])
+    await guest.handle['liveShare:join'](null, { invite: started.invite, name: 'Alex' })
+    const ask = await until(() => host.last('liveShare:ask'))
+    await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true, ...(projects ? { projects } : {}) })
+    await until(() => status(guest)?.state === 'joined' && status(guest).projects.length)
+    return { host, guest, ask, started }
+  }
+
+  it('lets a guest in with the projects ticked, and sends it only theirs', async () => {
+    const { host, guest, ask } = await sharing({ projects: ['ws-2'] })
+    expect(projectIds(guest)).toEqual(['ws-2'])
+    expect(status(guest).panes.map((p) => [p.id, p.project])).toEqual([['pane-ls1-2-b', 'ws-2']])
+    expect(status(guest).projects[0].layout).toMatchObject({ project: 'name of ws-2', activeId: 'pane-ls1-2-b' })
+    expect(host.last('liveShare:host').guests.find((g) => g.id === ask.guestId).projects).toEqual(['ws-2'])
+    expect(await guest.api.guestAttach('pane-ls1-2-b')).toMatchObject({ ok: true, buffer: 'screen of pane-2-b' })
+    host.api.onPtyData('pane-1-a', 'SECRET-OF-WS-1\r\n')
+    host.api.onPtyData('pane-2-b', 'ok\r\n')
+    await until(() => guest.data.length)
+    await new Promise((r) => setTimeout(r, 40))
+    expect(guest.data).toEqual([['pane-ls1-2-b', 'ok\r\n']])
+    expect(guest.api.isGuestPane('pane-ls1-1-a')).toBe(false)
+    // Opening goes to a project it sees, only.
+    await host.handle['liveShare:rights'](null, { guestId: ask.guestId, rights: ALL })
+    await until(() => status(guest).rights?.open)
+    expect(await guest.handle['liveShare:open'](null, { kind: 'terminal', project: 'ws-1' })).toEqual({ ok: false, reason: 'project' })
+    expect(await guest.handle['liveShare:open'](null, { kind: 'terminal', project: 'ws-2' })).toEqual({ ok: true })
+    await until(() => host.events('liveShare:hostRequest').length)
+    expect(host.events('liveShare:hostRequest')).toEqual([{ action: 'open', spec: { kind: 'terminal', agent: undefined, project: 'ws-2' }, guest: expect.objectContaining({ name: 'Alex', projects: ['ws-2'] }) }])
+  })
+
+  it('adds and takes out projects on the spot; the last one stays', async () => {
+    const { host, guest, ask } = await sharing()
+    expect(projectIds(guest)).toEqual(['ws-1', 'ws-2'])
+    // Taken out: gone for the guest at once, its output stops.
+    expect(await host.handle['liveShare:share'](null, { id: 'ws-2', shared: false })).toEqual({ ok: true, projectIds: ['ws-1'] })
+    host.api.onPtyData('pane-2-b', 'PRIVATE-AFTER-REMOVAL\r\n')
+    await until(() => projectIds(guest).join() === 'ws-1')
+    expect(guest.api.isGuestPane('pane-ls1-2-b')).toBe(false)
+    expect(host.last('liveShare:host').projectIds).toEqual(['ws-1'])
+    expect(host.last('liveShare:host').guests.find((g) => g.id === ask.guestId).projects).toEqual(['ws-1'])
+    // The last one stays.
+    expect(await host.handle['liveShare:share'](null, { id: 'ws-1', shared: false })).toEqual({ ok: false, reason: 'last' })
+    // Added: not given to a guest already in.
+    showLayouts(host, { 'ws-1': ['pane-1-a'], 'ws-3': ['pane-3-c'] })
+    expect(await host.handle['liveShare:share'](null, { id: 'ws-3', shared: true })).toEqual({ ok: true, projectIds: ['ws-1', 'ws-3'] })
+    expect(await host.handle['liveShare:share'](null, { id: 'ws-3', shared: true })).toEqual({ ok: true, projectIds: ['ws-1', 'ws-3'] })
+    expect(await host.handle['liveShare:share'](null, { id: '../x', shared: true })).toEqual({ ok: false })
+    host.api.onPtyData('pane-3-c', 'NOT-GIVEN\r\n')
+    await new Promise((r) => setTimeout(r, 120))
+    expect(projectIds(guest)).toEqual(['ws-1'])
+    // Given: there at once.
+    expect(await host.handle['liveShare:guestProjects'](null, { guestId: ask.guestId, projects: ['ws-1', 'ws-3', 'ws-2'] })).toEqual({ ok: true })
+    await until(() => projectIds(guest).join() === 'ws-1,ws-3')
+    expect(await guest.api.guestAttach('pane-ls1-3-c')).toMatchObject({ ok: true, buffer: 'screen of pane-3-c' })
+    expect(guest.data.some(([, d]) => /PRIVATE|NOT-GIVEN/.test(d))).toBe(false)
+    expect(await host.handle['liveShare:guestProjects'](null, { guestId: 'g-unknown', projects: ['ws-1'] })).toEqual({ ok: false })
+  })
+
+  it('a pane moved to another project is checked again: gone for a guest without it, a new terminal for one with it', async () => {
+    const { host, guest, ask } = await sharing({ projects: ['ws-1'] })
+    await host.handle['liveShare:rights'](null, { guestId: ask.guestId, rights: ALL })
+    await until(() => status(guest).rights?.type)
+    showLayouts(host, { 'ws-1': ['pane-1-a', 'pane-1-x'], 'ws-2': ['pane-2-b'] })
+    await until(() => status(guest).panes.length === 2)
+    // pane-1-x moves to ws-2, which the guest does not see.
+    showLayouts(host, { 'ws-1': ['pane-1-a'], 'ws-2': ['pane-2-b', 'pane-1-x'] })
+    guest.api.guestWrite('pane-ls1-1-x', 'too late\r')
+    host.api.onPtyData('pane-1-x', 'PRIVATE-AFTER-MOVE\r\n')
+    await until(() => status(guest).panes.length === 1)
+    await new Promise((r) => setTimeout(r, 40))
+    expect(host.hostWrites).toEqual([])
+    expect(guest.data.some(([, d]) => d.includes('PRIVATE'))).toBe(false)
+    // Given ws-2 too, then pane-1-a moves there: a new terminal (its gen goes on), in ws-2.
+    await host.handle['liveShare:guestProjects'](null, { guestId: ask.guestId, projects: ['ws-1', 'ws-2'] })
+    await until(() => status(guest).panes.length === 3)
+    showLayouts(host, { 'ws-1': [], 'ws-2': ['pane-2-b', 'pane-1-x', 'pane-1-a'] })
+    const moved = await until(() => status(guest).panes.find((p) => p.id === 'pane-ls1-1-a' && p.project === 'ws-2'))
+    expect(moved.gen).toBe(1)
+    expect(await guest.api.guestAttach('pane-ls1-1-a')).toMatchObject({ ok: true, buffer: 'screen of pane-1-a' })
+  })
+
+  it('a restart keeps the projects shared and what each guest sees', async () => {
+    const { host, guest } = await sharing({ projects: ['ws-2'] })
+    host.api.suspend()
+    host.api.stopAll()
+    await until(() => status(guest).state === 'reconnecting')
+    const saved = JSON.parse(fs.readFileSync(join(host.dataDir, 'liveshare-host.json'), 'utf8'))
+    expect(saved.projectIds).toEqual(['ws-1', 'ws-2'])
+    expect(saved.known.map((k) => k.projects)).toEqual([['ws-2']])
+    const next = fakeMain({ dataDir: host.dataDir, resume: true })
+    mains.push(next)
+    expect(await next.api.resumed).toEqual([true, false])
+    expect(next.last('liveShare:host').projectIds).toEqual(['ws-1', 'ws-2'])
+    showLayouts(next, { 'ws-1': ['pane-1-a'], 'ws-2': ['pane-2-b'] })
+    await until(() => guest.events('liveShare:guest').some((s, i, all) => s.state === 'joined' && all.slice(0, i).some((x) => x.state === 'reconnecting') && s.panes.length), 15000)
+    expect(projectIds(guest)).toEqual(['ws-2'])
+    expect(status(guest).panes.map((p) => p.id)).toEqual(['pane-ls1-2-b'])
+  }, 20000)
+
+  it('a share saved by a Tessel that shared one project is taken back with it, for every guest let in', async () => {
+    const { host, guest } = await sharing({ projects: ['ws-1'] })
+    host.api.suspend()
+    host.api.stopAll()
+    await until(() => status(guest).state === 'reconnecting')
+    // What the earlier Tessel saved: one projectId, guests without projects.
+    const file = join(host.dataDir, 'liveshare-host.json')
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'))
+    delete saved.projectIds
+    saved.projectId = 'ws-1'
+    for (const k of saved.known) delete k.projects
+    fs.writeFileSync(file, JSON.stringify(saved))
+    const next = fakeMain({ dataDir: host.dataDir, resume: true })
+    mains.push(next)
+    expect(await next.api.resumed).toEqual([true, false])
+    expect(next.last('liveShare:host').projectIds).toEqual(['ws-1'])
+    showLayouts(next, { 'ws-1': ['pane-1-a'] })
+    await until(() => guest.events('liveShare:guest').some((s, i, all) => s.state === 'joined' && all.slice(0, i).some((x) => x.state === 'reconnecting') && s.panes.length), 15000)
+    expect(projectIds(guest)).toEqual(['ws-1'])
+  }, 20000)
+
+  it('a layout of a project not shared is never sent, and one the window stops sending keeps its last layout', async () => {
+    const { host, guest } = await sharing()
+    showLayouts(host, { 'ws-1': ['pane-1-a'], 'ws-2': ['pane-2-b'], 'ws-9': ['pane-9-z'] })
+    host.api.onPtyData('pane-9-z', 'NOT-SHARED\r\n')
+    await new Promise((r) => setTimeout(r, 120))
+    expect(projectIds(guest)).toEqual(['ws-1', 'ws-2'])
+    expect(guest.data.some(([, d]) => d.includes('NOT-SHARED'))).toBe(false)
+    // Only ws-1 sent (ws-2 not found yet in the window): ws-2 stays as it was.
+    showLayouts(host, { 'ws-1': ['pane-1-a', 'pane-1-n'] })
+    await until(() => status(guest).panes.length === 3)
+    expect(projectIds(guest)).toEqual(['ws-1', 'ws-2'])
   })
 })

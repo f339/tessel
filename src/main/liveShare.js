@@ -1,31 +1,36 @@
 // Live Share: others join your Tessel from their own Tessel and see what
-// you see (the project shown, its layout, its terminals and agents live),
-// type in your panes, open new terminals and agents, and close panes.
+// you see (the projects you share, their layouts, their terminals and agents
+// live), type in your panes, open new terminals and agents, and close panes.
 //
 // Host: Share starts a server on 127.0.0.1 (liveShare/shareHost.js) and a
 // Cloudflare quick tunnel to it (liveShare/shareTunnel.js), and gives an
 // invite code: the address and a secret that encrypts everything
-// (liveShare/shareCrypto.js). Each guest still waits for your yes, and then
-// only watches the project you share until you let them type, open or close
-// (liveShare:rights). Guests get each pane's screen as it is, never its
-// scrollback (visibleScreen). Stop sharing (or quitting Tessel) ends the
+// (liveShare/shareCrypto.js). You share one project or several (chosen when
+// you start; added or taken out at any time: liveShare:share). Each guest
+// still waits for your yes (with the shared projects it gets: all of them by
+// default), and then only watches its projects until you let them type, open
+// or close (liveShare:rights); what each guest sees can change later
+// (liveShare:guestProjects). Guests get each pane's screen as it is, never
+// its scrollback (visibleScreen). Stop sharing (or quitting Tessel) ends the
 // tunnel and every guest's view. A restart of Tessel (an update, a crash, a
 // new version in development) does not: the next Tessel takes the share back
-// (resumeSharing: the same tunnel and invite code), and guests reconnect.
+// (resumeSharing: the same tunnel and invite code, the same projects), and
+// guests reconnect.
 //
-// Guest: Join with the code connects (liveShare/shareGuest.js); the host's
-// panes become panes of a Live Share project in the window. They are not
-// terminals of this computer: pty:attach/write/kill of their ids come here
-// (isGuestPane), their output goes through the window's usual pty:data and
-// pty:exit, and they are never saved with the layout. A connection that drops
-// is taken up again with this guest's reconnect key (shareGuest.js: it
-// signs the new connection; no new question), and a restart of this Tessel
-// joins the session again (resumeGuest).
+// Guest: Join with the code connects (liveShare/shareGuest.js); each of the
+// host's projects it sees becomes a Live Share project in the window, with
+// the host's panes. They are not terminals of this computer:
+// pty:attach/write/kill of their ids come here (isGuestPane), their output
+// goes through the window's usual pty:data and pty:exit, and they are never
+// saved with the layout. A connection that drops is taken up again with this
+// guest's reconnect key (shareGuest.js: it signs the new connection; no new
+// question), and a restart of this Tessel joins the session again
+// (resumeGuest).
 import os from 'os'
 import { join } from 'path'
 import { Terminal as HeadlessTerminal } from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
-import { createShareHost, cleanRights } from './liveShare/shareHost.js'
+import { createShareHost, cleanRights, cleanProjectIds, isProjectId, MAX_PROJECTS } from './liveShare/shareHost.js'
 import { createShareGuest } from './liveShare/shareGuest.js'
 import { newSecret, encodeInvite, decodeInvite, newSigningKey, exportSigningKey, importSigningKey } from './liveShare/shareCrypto.js'
 import { ensureCloudflared, startTunnel, waitReachable, endLeftoverTunnel, tunnelState, stopTunnelPid, stopTunnelLater, processState } from './liveShare/shareTunnel.js'
@@ -196,10 +201,14 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   let suspended = false
 
   // --- Host --------------------------------------------------------------
-  let sharing = null // { state, server, tunnel: { url, pid, stop }, secret, invite, guests, hostName, port, progress, error, blocked }
-  let layout = null // cleaned, from the window (liveShare:layout)
-  let shared = new Set() // its terminal panes: what guests may see
-  let sharedProjectId = null // the project shared (the window's id), kept across a restart
+  // sharing: { state, server, tunnel: { url, pid, stop }, secret, invite,
+  // guests, hostName, port, progress, error, blocked, projects (the ids of the
+  // projects shared, the window's, in order; kept across a restart) }
+  let sharing = null
+  // What the window shows of the projects shared (liveShare:layouts):
+  // project id -> cleaned layout; layoutsRev counts its changes.
+  let layouts = new Map()
+  let layoutsRev = 0
   const sizes = new Map() // pane id -> { cols, rows }, of every terminal
   const asks = new Map() // guest id -> resolve(yes)
   let changedTimer = null
@@ -212,7 +221,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
           invite: sharing.state === 'sharing' ? sharing.invite : null,
           expiresAt: sharing.state === 'sharing' ? sharing.server?.inviteExpires() || null : null,
           inviteBlocked: !!(sharing.server && sharing.server.inviteBlocked && sharing.server.inviteBlocked()),
-          projectId: sharedProjectId,
+          projectIds: [...(sharing.projects || [])],
           guests: sharing.guests,
           // Guests let in who are not connected now (they come back by
           // themselves; Remove keeps them out).
@@ -220,13 +229,44 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
           progress: sharing.progress ?? null,
           error: sharing.error || null
         }
-      : { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectId: null, guests: [], offline: [], progress: null, error: null }
+      : { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectIds: [], guests: [], offline: [], progress: null, error: null }
   const pushHost = () => send('liveShare:host', hostStatus())
 
-  const sharedPanes = () =>
-    layoutLeaves(layout)
-      .filter((l) => l.view === 'terminal')
-      .map((l) => ({ id: l.id, title: l.title, kind: l.kind, agentId: l.agentId, accent: l.accent, ...(sizes.get(l.id) || { cols: 0, rows: 0 }) }))
+  // Which project of a share each of its terminals is in, from the layouts (a
+  // pane listed in two is the first one's): only these panes are shared.
+  // Worked out again when the layouts or the share's projects changed.
+  function homes(s) {
+    const projects = s.projects || []
+    if (!s.homes || s.homes.rev !== layoutsRev || s.homes.of !== projects) {
+      const map = new Map()
+      for (const id of projects) for (const l of layoutLeaves(layouts.get(id))) if (l.view === 'terminal' && !map.has(l.id)) map.set(l.id, id)
+      s.homes = { rev: layoutsRev, of: projects, map }
+    }
+    return s.homes.map
+  }
+
+  // A share's projects as guests get them (shareHost.js projects()): each
+  // one's layout and terminals.
+  function sharedProjects(s) {
+    const home = homes(s)
+    return (s.projects || []).map((id) => {
+      const layout = layouts.get(id) || null
+      const panes = layoutLeaves(layout)
+        .filter((l) => l.view === 'terminal' && home.get(l.id) === id)
+        .map((l) => ({ id: l.id, title: l.title, kind: l.kind, agentId: l.agentId, accent: l.accent, ...(sizes.get(l.id) || { cols: 0, rows: 0 }) }))
+      return { id, layout, panes }
+    })
+  }
+
+  // Guests are told at once what they no longer see (a pane taken out, a
+  // project taken out of the share: nothing more of it goes out from now,
+  // shareHost checks paneProject), the rest after a short pause.
+  function changedNow() {
+    if (!sharing?.server) return
+    clearTimeout(changedTimer)
+    changedTimer = null
+    sharing.server.panesChanged()
+  }
 
   function screenChanged() {
     if (!sharing?.server || changedTimer) return
@@ -262,7 +302,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       hostName: s.hostName,
       hostKey: exportSigningKey(s.hostKey),
       expiresAt: s.server.inviteExpires(),
-      projectId: sharedProjectId,
+      projectIds: [...(s.projects || [])],
       known: s.server.knownGuests(),
       secrets: s.server.earlierSecrets().map((x) => Buffer.from(x).toString('base64')),
       guard: s.server.guardState()
@@ -277,9 +317,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       log: info,
       ...extra,
       callbacks: {
-        listPanes: sharedPanes,
-        isShared: (id) => shared.has(id),
-        layout: () => layout,
+        projects: () => sharedProjects(s),
+        paneProject: (id) => homes(s).get(id) || null,
         snapshot,
         write: (id, data) => host.send('write', { id, data }),
         openPane: (spec, guest) => send('liveShare:hostRequest', { action: 'open', spec, guest }),
@@ -330,7 +369,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     for (const resolve of asks.values()) resolve(false)
     asks.clear()
     hostFile.clear()
-    sharedProjectId = null
+    layouts = new Map()
+    layoutsRev++
     sharing = error ? { state: 'error', error, guests: [] } : null
     info(`sharing stopped (${reason})`)
     pushHost()
@@ -353,9 +393,10 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     hostTimer.unref?.()
   }
 
-  async function startSharing({ name } = {}) {
+  // projects: the ids of the projects to share (the window's).
+  async function startSharing({ name, projects } = {}) {
     if (sharing && sharing.state !== 'error') return { ok: true, ...hostStatus() }
-    const s = { state: 'preparing', guests: [], progress: null, cancelled: false, hostName: str(name, 40) || defaultShareName(), hostKey: newSigningKey() }
+    const s = { state: 'preparing', guests: [], progress: null, cancelled: false, hostName: str(name, 40) || defaultShareName(), hostKey: newSigningKey(), projects: cleanProjectIds(projects) }
     sharing = s
     pushHost()
     try {
@@ -471,8 +512,13 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     }
     if (secret.length !== 32 || !hostKey || !/^wss?:\/\//.test(String(saved.url)) || !(saved.port > 0)) return fail('unreadable')
     const earlier = (Array.isArray(saved.secrets) ? saved.secrets : []).map((x) => Buffer.from(String(x), 'base64')).filter((x) => x.length === 32)
-    const s = { state: 'starting', guests: [], progress: null, cancelled: false, hostName: str(saved.hostName, 40) || defaultShareName(), secret, hostKey, adopted: true }
-    const server = makeServer(s, secret, { known: saved.known, knownAt: saved.savedAt, secrets: earlier, guard: saved.guard, inviteExpires: Number(saved.expiresAt) || undefined })
+    // Its projects (a share saved by a Tessel that shared only one: that
+    // one), and what each guest let in sees (saved without it: the projects
+    // shared then, which is what it saw).
+    const projects = cleanProjectIds(Array.isArray(saved.projectIds) ? saved.projectIds : [saved.projectId])
+    const known = (Array.isArray(saved.known) ? saved.known : []).map((k) => (k && typeof k === 'object' && !Array.isArray(k.projects) ? { ...k, projects } : k))
+    const s = { state: 'starting', guests: [], progress: null, cancelled: false, hostName: str(saved.hostName, 40) || defaultShareName(), secret, hostKey, adopted: true, projects }
+    const server = makeServer(s, secret, { known, knownAt: saved.savedAt, secrets: earlier, guard: saved.guard, inviteExpires: Number(saved.expiresAt) || undefined })
     s.server = server
     // Its port: the last Tessel may take a moment to let it go.
     let port = 0
@@ -503,7 +549,6 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       stopNow: () => stopTunnelLater(dataDir, pid)
     }
     s.invite = encodeInvite({ url: s.tunnel.url, secret })
-    sharedProjectId = typeof saved.projectId === 'string' ? saved.projectId.slice(0, 80) : null
     s.state = 'sharing'
     sharing = s
     info(`sharing taken back after a restart (${s.tunnel.url})`)
@@ -527,22 +572,50 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     return { ok: true, ...hostStatus() }
   }
 
+  // A project added to the share or taken out of it, at any time (also while
+  // it starts). Taken out: its panes vanish for every guest at once, and no
+  // request about them is taken any more; it is no guest's any more. Added:
+  // guests already in do not see it until the host gives it to them. The last
+  // project stays (Stop sharing ends the share).
+  function setShared(id, on) {
+    const s = sharing
+    if (!s || s.state === 'error' || !isProjectId(id)) return { ok: false }
+    const projects = s.projects || []
+    const has = projects.includes(id)
+    if (on ? has : !has) return { ok: true, projectIds: [...projects] }
+    if (on && projects.length >= MAX_PROJECTS) return { ok: false, reason: 'full', max: MAX_PROJECTS }
+    if (!on && projects.length <= 1) return { ok: false, reason: 'last' }
+    s.projects = on ? [...projects, id] : projects.filter((x) => x !== id)
+    info(on ? 'a project added to the share' : 'a project taken out of the share')
+    if (sharing === s) changedNow()
+    saveHost()
+    pushHost()
+    return { ok: true, projectIds: [...s.projects] }
+  }
+
   // --- Guest -------------------------------------------------------------
   // joined: { client, session, host, state, panes: Map(remoteId -> pane),
-  // byLocal, layout, rights, code, url, secret, invite, name, signingKey
-  // (this guest's reconnect key), admitted, leaving, retry: { timer, since,
-  // tries } }
+  // byLocal, projects: [{ id, layout }] (the host's projects this guest sees,
+  // in order), rights, code, url, secret, invite, name, signingKey (this
+  // guest's reconnect key), admitted, leaving, retry: { timer, since, tries } }
   let joined = null
   let sessions = 0
   let guestTimer = null
 
   const guestPanesList = (g) =>
-    [...g.panes.values()].map((p) => ({ id: p.localId, title: p.title, kind: p.kind, agentId: p.agentId, accent: p.accent, cols: p.cols, rows: p.rows, gen: p.gen }))
-  const localLayout = (g) => {
-    if (!g.layout) return null
-    const map = (n) => (n.type === 'leaf' ? { ...n, id: n.view === 'terminal' && g.panes.has(n.id) ? g.panes.get(n.id).localId : guestPaneId(g.session, n.id) } : { ...n, children: n.children.map(map) })
-    const local = (id) => (id && g.panes.has(id) ? g.panes.get(id).localId : null)
-    return { project: g.layout.project, tree: g.layout.tree ? map(g.layout.tree) : null, activeId: local(g.layout.activeId), maximizedId: local(g.layout.maximizedId) }
+    [...g.panes.values()].map((p) => ({ id: p.localId, project: p.project, title: p.title, kind: p.kind, agentId: p.agentId, accent: p.accent, cols: p.cols, rows: p.rows, gen: p.gen }))
+  // A project's layout with this window's pane ids (only its own panes are
+  // terminals shown here).
+  const localLayout = (g, project) => {
+    const layout = project.layout
+    if (!layout) return null
+    const mine = (id) => {
+      const pane = id && g.panes.get(id)
+      return pane && pane.project === project.id ? pane : null
+    }
+    const map = (n) => (n.type === 'leaf' ? { ...n, id: n.view === 'terminal' && mine(n.id) ? mine(n.id).localId : guestPaneId(g.session, n.id) } : { ...n, children: n.children.map(map) })
+    const local = (id) => (mine(id) ? mine(id).localId : null)
+    return { project: layout.project, tree: layout.tree ? map(layout.tree) : null, activeId: local(layout.activeId), maximizedId: local(layout.maximizedId) }
   }
   const guestStatus = () =>
     joined
@@ -551,13 +624,13 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
           host: joined.host,
           session: joined.session,
           panes: guestPanesList(joined),
-          layout: localLayout(joined),
+          projects: joined.projects.map((p) => ({ id: p.id, layout: localLayout(joined, p) })),
           reason: joined.reason || null,
           // What the host lets this guest do, and the code to tell the host.
           rights: joined.rights,
           code: joined.code
         }
-      : { state: 'off', host: null, session: null, panes: [], layout: null, reason: null, rights: null, code: null }
+      : { state: 'off', host: null, session: null, panes: [], projects: [], reason: null, rights: null, code: null }
   const pushGuest = () => send('liveShare:guest', guestStatus())
 
   function saveGuest(g) {
@@ -578,28 +651,41 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     pane.gen = (pane.gen || 0) + 1
   }
 
-  function onPanes(g, panes, rawLayout) {
+  // The host's projects this guest sees, each with its layout and its
+  // terminals (a pane listed in two projects is the first one's).
+  function onProjects(g, list) {
+    const projects = []
     const seen = new Set()
-    for (const p of panes.slice(0, LAYOUT_PANES)) {
-      if (!p || typeof p.id !== 'string' || !/^[\w-]{1,80}$/.test(p.id)) continue
-      seen.add(p.id)
-      let pane = g.panes.get(p.id)
-      if (!pane) {
-        // A pane that left and comes back: a new terminal here (its gen goes
-        // on from the last one, so an attach still running is redone).
-        const gen = g.lastGen.has(p.id) ? g.lastGen.get(p.id) + 1 : 0
-        pane = { remoteId: p.id, localId: guestPaneId(g.session, p.id), screen: '', ready: false, fresh: false, attached: false, exited: false, exitCode: null, waiters: [], gen }
-        g.panes.set(p.id, pane)
-        g.byLocal.set(pane.localId, pane)
+    for (const p of (Array.isArray(list) ? list : []).slice(0, MAX_PROJECTS)) {
+      if (!p || !isProjectId(p.id) || projects.some((x) => x.id === p.id)) continue
+      projects.push({ id: p.id, layout: cleanLayout(p.layout) })
+      for (const x of (Array.isArray(p.panes) ? p.panes : []).slice(0, LAYOUT_PANES)) {
+        if (!x || typeof x.id !== 'string' || !/^[\w-]{1,80}$/.test(x.id) || seen.has(x.id)) continue
+        seen.add(x.id)
+        let pane = g.panes.get(x.id)
+        if (!pane) {
+          // A pane that left and comes back: a new terminal here (its gen goes
+          // on from the last one, so an attach still running is redone).
+          const gen = g.lastGen.has(x.id) ? g.lastGen.get(x.id) + 1 : 0
+          pane = { remoteId: x.id, localId: guestPaneId(g.session, x.id), project: p.id, screen: '', ready: false, fresh: false, attached: false, exited: false, exitCode: null, waiters: [], gen }
+          g.panes.set(x.id, pane)
+          g.byLocal.set(pane.localId, pane)
+        } else if (pane.project !== p.id) {
+          // Moved to another of its projects on the host: a new terminal
+          // there, with the screen the host sends again.
+          resetPane(pane)
+          pane.project = p.id
+        }
+        pane.title = str(x.title)
+        pane.kind = x.kind === 'agent' ? 'agent' : 'shell'
+        pane.agentId = str(x.agentId, 40) || null
+        pane.accent = /^#[0-9a-f]{3,8}$/i.test(x.accent || '') ? x.accent : null
+        pane.cols = Math.max(0, Math.min(1000, x.cols | 0))
+        pane.rows = Math.max(0, Math.min(500, x.rows | 0))
       }
-      pane.title = str(p.title)
-      pane.kind = p.kind === 'agent' ? 'agent' : 'shell'
-      pane.agentId = str(p.agentId, 40) || null
-      pane.accent = /^#[0-9a-f]{3,8}$/i.test(p.accent || '') ? p.accent : null
-      pane.cols = Math.max(0, Math.min(1000, p.cols | 0))
-      pane.rows = Math.max(0, Math.min(500, p.rows | 0))
     }
-    // Panes the host closed (or no longer shows): they end here too.
+    // Panes the host closed, no longer shows, or no longer shares with this
+    // guest: they end here too.
     for (const [remoteId, pane] of [...g.panes]) {
       if (seen.has(remoteId)) continue
       g.lastGen.set(remoteId, pane.gen || 0)
@@ -608,7 +694,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       for (const w of pane.waiters.splice(0)) w(false)
       if (pane.attached) sendExit(pane.localId, 0)
     }
-    g.layout = cleanLayout(rawLayout)
+    g.projects = projects
     pushGuest()
   }
 
@@ -675,7 +761,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
           pushGuest()
         },
         onNotice: (code) => joined === g && g.client === client && send('liveShare:notice', { code: str(code, 40) }),
-        onPanes: (panes, rawLayout) => joined === g && g.client === client && onPanes(g, panes, rawLayout),
+        onProjects: (projects) => joined === g && g.client === client && onProjects(g, projects),
         onSnapshot: (remoteId, data, cols, rows) => {
           if (joined !== g || g.client !== client) return
           const pane = g.panes.get(remoteId)
@@ -740,7 +826,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       panes: new Map(),
       byLocal: new Map(),
       lastGen: new Map(), // pane id -> gen when it left
-      layout: null,
+      projects: [],
       reason: null,
       client: null,
       rights: null,
@@ -864,32 +950,34 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     stopSharing('stopped')
     return { ok: true }
   })
-  ipcMain.on('liveShare:layout', (_evt, raw) => {
-    layout = cleanLayout(raw)
-    const before = shared
-    shared = new Set(layoutLeaves(layout).filter((l) => l.view === 'terminal').map((l) => l.id))
-    // A pane taken out: nothing more of it goes out from now (shareHost
-    // checks isShared), and guests drop it now rather than after the pause.
-    if ([...before].some((id) => !shared.has(id)) && sharing?.server) {
-      clearTimeout(changedTimer)
-      changedTimer = null
-      sharing.server.panesChanged()
-    } else screenChanged()
+  // What the window shows of the projects shared: [{ id, layout }]. A
+  // project shared that is not in it keeps its last layout (a share taken
+  // back after a restart waits for the window to find its projects again).
+  ipcMain.on('liveShare:layouts', (_evt, list) => {
+    const keep = new Set(sharing?.projects || [])
+    const next = new Map([...layouts].filter(([id]) => keep.has(id)))
+    for (const item of (Array.isArray(list) ? list : []).slice(0, MAX_PROJECTS)) if (item && isProjectId(item.id)) next.set(item.id, cleanLayout(item.layout))
+    const before = sharing ? new Map(homes(sharing)) : new Map()
+    layouts = next
+    layoutsRev++
+    const after = sharing ? homes(sharing) : new Map()
+    // A pane taken out of its project, or moved to another: guests drop it
+    // now rather than after the pause.
+    if ([...before].some(([id, project]) => after.get(id) !== project)) changedNow()
+    else screenChanged()
   })
-  // The project shared (the window's id): said again after a restart.
-  ipcMain.on('liveShare:project', (_evt, id) => {
-    const next = typeof id === 'string' && /^[\w-]{1,80}$/.test(id) ? id : null
-    if (next === sharedProjectId) return
-    sharedProjectId = next
-    saveHost()
-    pushHost()
-  })
+  // A project added to the share or taken out: { id, shared }.
+  ipcMain.handle('liveShare:share', (_evt, { id, shared } = {}) => setShared(id, !!shared))
   ipcMain.handle('liveShare:rights', (_evt, { guestId, rights } = {}) => ({ ok: !!sharing?.server?.setRights(guestId, rights) }))
+  // The shared projects a guest sees.
+  ipcMain.handle('liveShare:guestProjects', (_evt, { guestId, projects } = {}) => ({ ok: !!sharing?.server?.setProjects(guestId, projects) }))
   ipcMain.handle('liveShare:newInvite', () => newInvite())
-  ipcMain.handle('liveShare:approve', (_evt, { guestId, yes } = {}) => {
+  // The host's answer to a guest waiting, and the shared projects it gets
+  // (all of them when not said).
+  ipcMain.handle('liveShare:approve', (_evt, { guestId, yes, projects } = {}) => {
     const resolve = asks.get(guestId)
     asks.delete(guestId)
-    if (resolve) resolve(!!yes)
+    if (resolve) resolve(yes ? { yes: true, projects: Array.isArray(projects) ? cleanProjectIds(projects) : undefined } : false)
     return { ok: !!resolve }
   })
   ipcMain.handle('liveShare:removeGuest', (_evt, { guestId } = {}) => {
@@ -907,10 +995,14 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     leaveSession('left')
     return { ok: true }
   })
+  // A terminal or an agent opened on the host, in one of its projects this
+  // guest sees.
   ipcMain.handle('liveShare:open', (_evt, spec = {}) => {
     if (!joined || joined.state !== 'joined') return { ok: false }
     if (!may(joined, 'open')) return { ok: false, reason: 'rights' }
-    joined.client.open({ kind: spec.kind === 'agent' ? 'agent' : 'terminal', agent: str(spec.agent, 40) || undefined })
+    const project = spec && joined.projects.some((p) => p.id === spec.project) ? spec.project : null
+    if (!project) return { ok: false, reason: 'project' }
+    joined.client.open({ kind: spec.kind === 'agent' ? 'agent' : 'terminal', agent: str(spec.agent, 40) || undefined, project })
     return { ok: true }
   })
 
@@ -938,7 +1030,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       const old = sizes.get(id)
       if (old && old.cols === cols && old.rows === rows) return
       sizes.set(id, { cols, rows })
-      if (sharing?.server && layoutLeaves(layout).some((l) => l.id === id)) screenChanged()
+      if (sharing?.server && homes(sharing).has(id)) screenChanged()
     },
     // A terminal started under this id (a new pane, or one restarted in
     // place): guests that had it get its new screen.

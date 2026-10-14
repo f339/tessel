@@ -1,27 +1,30 @@
 <script setup>
 // Live Share (src/main/liveShare.js): Share lets others join this Tessel from
-// theirs (the project you share, an invite code that works for an hour, who
-// asked and who is in, what each guest may do, Stop sharing); Join opens
-// another Tessel's shared screen here with the code its host gave. Why a
-// session ended shows here while the dialog is open (a toast says it too).
+// theirs (the projects you share, ticked before you start and added or taken
+// out while you share; an invite code that works for an hour, who asked and
+// who is in, what each guest may do and which shared projects it sees, Stop
+// sharing); Join opens another Tessel's shared projects here with the code
+// its host gave. Why a session ended shows here while the dialog is open (a
+// toast says it too).
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { ScreenShare, Copy, Check, Loader2, AlertTriangle, LogIn, LogOut, UserX, RefreshCw } from 'lucide-vue-next'
 import { t } from '../i18n'
 import { endReason, rightsText } from '../liveShareWindow'
-import ThemedSelect from './ui/ThemedSelect.vue'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
   initialTab: { type: String, default: 'share' },
-  // Your projects ({ id, name }) and the one you share.
+  // Your projects ({ id, name }), and the ones ticked: shared, or picked to
+  // share before you start.
   projects: { type: Array, default: () => [] },
-  projectId: { type: String, default: null }
+  projectIds: { type: Array, default: () => [] }
 })
-const emit = defineEmits(['close', 'update:projectId'])
+// toggle-project(id, on): a project ticked or not (liveShareWindow.js setShared).
+const emit = defineEmits(['close', 'toggle-project'])
 
 const api = window.shellApi && window.shellApi.liveShare
-const OFF_HOST = { state: 'off', invite: null, expiresAt: null, guests: [], progress: null, error: null }
-const OFF_GUEST = { state: 'off', host: null, panes: [], layout: null, reason: null, rights: null, code: null }
+const OFF_HOST = { state: 'off', invite: null, expiresAt: null, projectIds: [], guests: [], progress: null, error: null }
+const OFF_GUEST = { state: 'off', host: null, panes: [], projects: [], reason: null, rights: null, code: null }
 
 const tab = ref(props.initialTab === 'join' ? 'join' : 'share')
 const host = ref(OFF_HOST)
@@ -122,8 +125,31 @@ const expiryText = computed(() => {
   return t('liveShare.share.expires', 'New guests can join with it until {{time}}.', { time })
 })
 
-function pickProject(event) {
-  emit('update:projectId', event.target.value)
+// The projects ticked; while sharing, the last one can't be unticked (Stop
+// sharing ends the share).
+const ticked = computed(() => new Set(props.projectIds || []))
+const lastShared = (p) => sharing.value && ticked.value.size === 1 && ticked.value.has(p.id)
+function toggleProject(p, event) {
+  const box = event && event.target
+  const on = box ? !!box.checked : !ticked.value.has(p.id)
+  // The box shows what is ticked until the answer changes it (sharing: once
+  // main says so).
+  if (box) box.checked = ticked.value.has(p.id)
+  if (!on && lastShared(p)) return
+  emit('toggle-project', p.id, on)
+}
+// The shared projects, by name (the ones this window has).
+const sharedList = computed(() => props.projects.filter((p) => ticked.value.has(p.id)))
+
+// Which shared projects a guest sees: each one on its own; a project shared
+// after the guest came in is off until you turn it on.
+const sees = (g, p) => Array.isArray(g.projects) && g.projects.includes(p.id)
+function toggleGuestProject(g, p) {
+  if (!api || !api.setGuestProjects) return
+  const now = new Set(Array.isArray(g.projects) ? g.projects : [])
+  if (now.has(p.id)) now.delete(p.id)
+  else now.add(p.id)
+  api.setGuestProjects({ guestId: g.id, projects: sharedList.value.map((x) => x.id).filter((id) => now.has(id)) })
 }
 
 async function newCode() {
@@ -140,7 +166,7 @@ async function newCode() {
 // What a guest may do: each right on its own, off until you turn it on.
 const RIGHTS = [
   { key: 'type', label: () => t('liveShare.share.rightType', 'Type'), title: () => t('liveShare.share.rightTypeTitle', 'Type in your terminals and agents (they can run any command as you)') },
-  { key: 'open', label: () => t('liveShare.share.rightOpen', 'Open'), title: () => t('liveShare.share.rightOpenTitle', 'Open terminals and agents in the project you share') },
+  { key: 'open', label: () => t('liveShare.share.rightOpen', 'Open'), title: () => t('liveShare.share.rightOpenTitle2', 'Open terminals and agents in the projects they see') },
   { key: 'close', label: () => t('liveShare.share.rightClose', 'Close'), title: () => t('liveShare.share.rightCloseTitle', 'Ask to close panes (an agent or a running terminal waits for your yes)') }
 ]
 function toggleRight(g, key) {
@@ -151,11 +177,11 @@ function toggleRight(g, key) {
 }
 
 async function startSharing() {
-  if (!api || busy.value || !props.projectId) return
+  if (!api || busy.value || !props.projectIds.length) return
   busy.value = true
   hostError.value = ''
   try {
-    const r = await api.start({ name: name.value.trim() })
+    const r = await api.start({ name: name.value.trim(), projects: [...props.projectIds] })
     if (r && !r.ok && r.error) hostError.value = r.error
   } catch {
     hostError.value = t('liveShare.share.failed', 'Sharing could not start.')
@@ -188,7 +214,10 @@ const guestStateText = (g) =>
 // --- Join ----------------------------------------------------------------
 const guestState = computed(() => guest.value.state)
 const inSession = computed(() => ['connecting', 'waiting', 'joined', 'reconnecting'].includes(guestState.value))
-const joinedText = computed(() => t('liveShare.join.joined', 'You joined {{host}}’s Live Share. Their panes are open in the Live Share project.', { host: guest.value.host || '?' }))
+const joinedText = computed(() => t('liveShare.join.joined2', 'You joined {{host}}’s Live Share. Each project they share with you opens as a Live Share project in the sidebar.', { host: guest.value.host || '?' }))
+const noProjectsText = computed(() =>
+  guest.value.state === 'joined' && !(guest.value.projects || []).length ? t('liveShare.join.noProjects', '{{host}} has not given you a project to see yet.', { host: guest.value.host || '?' }) : ''
+)
 const rightsLine = computed(() => rightsText(guest.value.rights))
 // Its {{host}} would end a template interpolation: built here.
 const reconnectingText = computed(() => t('liveShare.join.reconnecting', 'Connection lost: reconnecting to {{host}}…', { host: guest.value.host || '?' }))
@@ -262,7 +291,7 @@ function trapTab(event) {
       <!-- Share -->
       <section v-else-if="tab === 'share'" role="tabpanel" data-test="ls-share-panel">
         <p class="ls-intro">
-          {{ t('liveShare.share.intro2', 'Others join from their own Tessel and see the project you share, live (its terminals and agents, not their history). Each one waits for your yes, then can only watch.') }}
+          {{ t('liveShare.share.intro3', 'Others join from their own Tessel and see the projects you share, live (their terminals and agents, not their history). Each one waits for your yes, then can only watch.') }}
         </p>
 
         <div class="ls-warn" role="note">
@@ -270,13 +299,25 @@ function trapTab(event) {
           <span>{{ t('liveShare.share.warning2', 'A guest you let type can run any command on this PC as you. Only let people you trust type.') }}</span>
         </div>
 
-        <label class="ls-field">
-          <span class="ls-label">{{ t('liveShare.share.project', 'Project to share') }}</span>
-          <ThemedSelect class="ls-input ls-select" :model-value="projectId || ''" :disabled="preparing || !projects.length" data-test="ls-project" @change="pickProject">
-            <option v-if="!projects.length" value="" disabled>{{ t('liveShare.share.noProject', 'No project to share') }}</option>
-            <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </ThemedSelect>
-        </label>
+        <fieldset class="ls-field ls-projects" data-test="ls-projects">
+          <legend class="ls-label">{{ sharing ? t('liveShare.share.projectsShared', 'Projects you share (tick or untick at any time)') : t('liveShare.share.projects', 'Projects to share') }}</legend>
+          <p v-if="!projects.length" class="ls-empty">{{ t('liveShare.share.noProject', 'No project to share') }}</p>
+          <ul v-else class="ls-project-list">
+            <li v-for="p in projects" :key="p.id">
+              <label
+                class="ls-project"
+                :class="{ locked: lastShared(p) }"
+                :title="lastShared(p) ? t('liveShare.share.lastProject', 'To stop sharing your last project, use Stop sharing.') : ''"
+                :data-test="'ls-project-' + p.id"
+              >
+                <input type="checkbox" :checked="ticked.has(p.id)" :disabled="preparing || lastShared(p)" @change="toggleProject(p, $event)" />
+                <span class="ls-project-name">{{ p.name }}</span>
+              </label>
+            </li>
+          </ul>
+          <p v-if="!sharing && !preparing && projects.length && !projectIds.length" class="ls-hint" data-test="ls-need-project">{{ t('liveShare.share.needProject', 'Tick at least one project.') }}</p>
+          <p v-if="sharing && ticked.size === 1" class="ls-hint" data-test="ls-last-project">{{ t('liveShare.share.lastProject', 'To stop sharing your last project, use Stop sharing.') }}</p>
+        </fieldset>
 
         <label v-if="!sharing && !preparing" class="ls-field">
           <span class="ls-label">{{ t('liveShare.share.name', 'Your name (guests see it)') }}</span>
@@ -313,28 +354,49 @@ function trapTab(event) {
           <div class="ls-guests">
             <div class="ls-label">{{ t('liveShare.share.guests', 'Guests') }}</div>
             <p v-if="!guests.length && !offline.length" class="ls-empty">{{ t('liveShare.share.noGuests', 'No one has joined yet.') }}</p>
+            <p v-else-if="sharedList.length > 1 || guests.some((g) => g.state === 'joined' && sharedList.some((p) => !sees(g, p)))" class="ls-hint" data-test="ls-added-note">
+              {{ t('liveShare.share.addedNote', 'Each guest sees only the projects turned on next to their name. A project you share later stays off for guests already in until you turn it on.') }}
+            </p>
             <ul v-if="guests.length || offline.length" class="ls-guest-list">
               <li v-for="g in guests" :key="g.id" class="ls-guest" :data-test="'ls-guest-' + g.id">
-                <span class="ls-guest-name">{{ g.name || t('liveShare.guest', 'A guest') }}</span>
-                <span v-if="g.state !== 'joined'" class="ls-guest-state">{{ guestStateText(g) }}</span>
-                <span v-else class="ls-rights" role="group" :aria-label="t('liveShare.share.rightsLabel', 'What {{name}} can do', { name: g.name })">
-                  <button
-                    v-for="r in RIGHTS"
-                    :key="r.key"
-                    type="button"
-                    class="ls-right"
-                    :class="{ on: g.rights && g.rights[r.key] }"
-                    :aria-pressed="!!(g.rights && g.rights[r.key])"
-                    :title="r.title()"
-                    :data-test="'ls-right-' + r.key + '-' + g.id"
-                    @click="toggleRight(g, r.key)"
-                  >
-                    {{ r.label() }}
+                <div class="ls-guest-row">
+                  <span class="ls-guest-name">{{ g.name || t('liveShare.guest', 'A guest') }}</span>
+                  <span v-if="g.state !== 'joined'" class="ls-guest-state">{{ guestStateText(g) }}</span>
+                  <span v-else class="ls-rights" role="group" :aria-label="t('liveShare.share.rightsLabel', 'What {{name}} can do', { name: g.name })">
+                    <button
+                      v-for="r in RIGHTS"
+                      :key="r.key"
+                      type="button"
+                      class="ls-right"
+                      :class="{ on: g.rights && g.rights[r.key] }"
+                      :aria-pressed="!!(g.rights && g.rights[r.key])"
+                      :title="r.title()"
+                      :data-test="'ls-right-' + r.key + '-' + g.id"
+                      @click="toggleRight(g, r.key)"
+                    >
+                      {{ r.label() }}
+                    </button>
+                  </span>
+                  <button class="confirm-btn ls-small" :data-test="'ls-remove-' + g.id" @click="removeGuest(g)">
+                    <UserX :size="13" aria-hidden="true" /> {{ t('liveShare.share.remove', 'Remove') }}
                   </button>
-                </span>
-                <button class="confirm-btn ls-small" :data-test="'ls-remove-' + g.id" @click="removeGuest(g)">
-                  <UserX :size="13" aria-hidden="true" /> {{ t('liveShare.share.remove', 'Remove') }}
-                </button>
+                </div>
+                <div v-if="g.state === 'joined' && sharedList.length" class="ls-guest-row ls-sees" role="group" :aria-label="t('liveShare.share.seesLabel', 'What {{name}} sees', { name: g.name || t('liveShare.guest', 'A guest') })">
+                  <span class="ls-sees-label">{{ t('liveShare.share.sees', 'Sees:') }}</span>
+                  <button
+                    v-for="p in sharedList"
+                    :key="p.id"
+                    type="button"
+                    class="ls-right ls-project-chip"
+                    :class="{ on: sees(g, p) }"
+                    :aria-pressed="sees(g, p)"
+                    :title="sees(g, p) ? t('liveShare.share.seesOnTitle', 'Click to take {{project}} away from this guest', { project: p.name }) : t('liveShare.share.seesOffTitle', 'Click to let this guest see {{project}}', { project: p.name })"
+                    :data-test="'ls-sees-' + p.id + '-' + g.id"
+                    @click="toggleGuestProject(g, p)"
+                  >
+                    {{ p.name }}
+                  </button>
+                </div>
               </li>
               <li v-for="g in offline" :key="g.id" class="ls-guest ls-guest-offline" :data-test="'ls-offline-' + g.id">
                 <span class="ls-guest-name">{{ g.name || t('liveShare.guest', 'A guest') }}</span>
@@ -353,7 +415,7 @@ function trapTab(event) {
           <button class="confirm-btn" @click="emit('close')">{{ t('liveShare.close', 'Close') }}</button>
           <button v-if="preparing" class="confirm-btn" data-test="ls-cancel-share" @click="stopSharing">{{ t('liveShare.share.cancel', 'Cancel') }}</button>
           <button v-else-if="sharing" class="confirm-btn primary danger" data-test="ls-stop" @click="stopSharing">{{ t('liveShare.share.stop', 'Stop sharing') }}</button>
-          <button v-else class="confirm-btn primary" :disabled="busy || !projectId" data-test="ls-start" @click="startSharing">
+          <button v-else class="confirm-btn primary" :disabled="busy || !projectIds.length" data-test="ls-start" @click="startSharing">
             {{ t('liveShare.share.start', 'Start sharing') }}
           </button>
         </div>
@@ -391,6 +453,7 @@ function trapTab(event) {
         </template>
         <template v-else>
           <div class="ls-joined" data-test="ls-joined">{{ joinedText }}</div>
+          <p v-if="noProjectsText" class="ls-intro ls-rights-line" data-test="ls-no-projects">{{ noProjectsText }}</p>
           <p class="ls-intro ls-rights-line" data-test="ls-rights">{{ rightsLine }}</p>
         </template>
 
@@ -510,8 +573,56 @@ function trapTab(event) {
   color: var(--text-dim);
   text-decoration: line-through;
 }
-.ls-select {
+.ls-projects {
+  min-width: 0;
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+}
+.ls-projects legend {
+  padding: 0;
+}
+.ls-project-list {
+  margin: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  list-style: none;
+  max-height: 22vh;
+  overflow-y: auto;
+}
+.ls-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 12.5px;
   cursor: pointer;
+}
+.ls-project:hover {
+  background: var(--surface-3);
+}
+.ls-project.locked {
+  cursor: default;
+}
+.ls-project input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.ls-project-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ls-hint {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
 }
 .ls-expiry {
   display: flex;
@@ -592,11 +703,31 @@ function trapTab(event) {
 }
 .ls-guest {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 4px;
   padding: 5px 6px;
   border-radius: 7px;
   font-size: 12.5px;
+}
+.ls-guest-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ls-sees {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ls-sees-label {
+  margin-right: 2px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+.ls-project-chip {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ls-guest:hover {
   background: var(--surface-3);
