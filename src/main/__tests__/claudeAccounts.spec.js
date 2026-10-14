@@ -445,6 +445,25 @@ describe('sessions on their own account', () => {
     expect(await service.usageScope(id)).toMatchObject({ ok: true, env: { CLAUDE_CONFIG_DIR: authPath(id) }, accountId: id })
     expect(read(join(authPath(id), '.claude.json')).oauthAccount).toEqual(who('managed'))
   })
+  it('a usage read never writes the system settings, even when a session makes the file meanwhile', async () => {
+    seedSystem()
+    const id = await add()
+    fs.unlinkSync(join(authPath(id), '.claude.json'))
+    const system = fs.readFileSync(configPath(), 'utf8')
+    const real = fsp.open.bind(fsp)
+    let made = false
+    // Just before it is made, a session writes it (with a theme of its own).
+    vi.spyOn(fsp, 'open').mockImplementation(async (path, ...rest) => {
+      if (!made && String(path) === join(authPath(id), 'oauth-account.json')) {
+        made = true
+        put(join(authPath(id), '.claude.json'), { theme: 'session theme', oauthAccount: who('managed') })
+      }
+      return real(path, ...rest)
+    })
+    expect(await service.usageScope(id)).toMatchObject({ ok: true, accountId: id })
+    expect(fs.readFileSync(configPath(), 'utf8')).toBe(system)
+    expect(read(join(authPath(id), '.claude.json')).theme).toBe('session theme')
+  })
   it('serializes changes across service instances using the same storage', async () => {
     seedSystem()
     const first = await add('one'),

@@ -1072,9 +1072,11 @@ export function createClaudeAccounts({
   // The account's own .claude.json (accountState), synced with the system's
   // under both files' Claude locks. Best effort: a session still starts
   // without it (Claude fetches its profile itself). `signedIn`: right after a
-  // sign-in, whose identity replaces the folder's. -> 'switched' when its
-  // folder is signed in to another account (then left as it is).
-  async function writeOwnState(id, oauth, { signedIn = false } = {}) {
+  // sign-in, whose identity replaces the folder's. `initial`: made only while
+  // it is still missing, and never writing the system's file (a usage read).
+  // -> 'switched' when its folder is signed in to another account (then left
+  // as it is).
+  async function writeOwnState(id, oauth, { signedIn = false, initial = false } = {}) {
     const folder = authPath(id)
     const file = join(folder, '.claude.json')
     let outcome = null
@@ -1088,6 +1090,8 @@ export function createClaudeAccounts({
         warn('Claude account: the system Claude settings could not be read; shared settings not updated') // i18n-ignore log
       }
       const raw = await readText(file)
+      // Made by a session (or a launch) meanwhile: left to them.
+      if (initial && raw !== null) return
       let own = {}
       // Missing or damaged: what it lacks was not removed in a session.
       let removals = raw !== null
@@ -1122,14 +1126,17 @@ export function createClaudeAccounts({
       let held = false
       let ran = false
       // The system's lock first, then the account's: always in this order.
-      const systemHeld = await underClaudeLock(configPath, async () => {
-        ran = true
-        held = await underClaudeLock(file, () => write(true))
-      }).catch((error) => {
-        if (ran) throw error
-        return false
-      })
-      // Claude busy with the system's file (or no lock there): nothing written back this time.
+      const systemHeld = initial
+        ? false
+        : await underClaudeLock(configPath, async () => {
+            ran = true
+            held = await underClaudeLock(file, () => write(true))
+          }).catch((error) => {
+            if (ran) throw error
+            return false
+          })
+      // Claude busy with the system's file (or no lock there), or only made:
+      // nothing written back this time.
       if (!systemHeld) held = await underClaudeLock(file, () => write(false))
       if (!held) warn('Claude account: its settings file is locked; shared settings not updated') // i18n-ignore log
     } catch {
@@ -1775,7 +1782,7 @@ export function createClaudeAccounts({
         if (!(await inspect(join(authPath(id), '.claude.json')))) {
           await serialized(async () => {
             const auth = await managed(id)
-            if (auth.status === 'ready') await writeOwnState(id, auth.oauth)
+            if (auth.status === 'ready') await writeOwnState(id, auth.oauth, { initial: true })
           }).catch(() => {})
           if (!(await inspect(join(authPath(id), '.claude.json')))) return unavailable
         }
