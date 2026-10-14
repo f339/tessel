@@ -657,7 +657,8 @@
       "storageInvalid": "Le stockage des comptes Claude est indisponible ou non valide.",
       "awaitingRecovery": "Une opération sur un compte Claude attend une récupération.",
       "removedAccount": "Ce compte Claude n'est plus dans Tessel. Démarrez la session avec un autre compte.",
-      "signInAgain": "Ce compte Claude doit se reconnecter (Paramètres > Comptes de fournisseurs d'IA)."
+      "signInAgain": "Ce compte Claude doit se reconnecter (Paramètres > Comptes de fournisseurs d'IA).",
+      "switchPending": "Des sessions Claude démarrées avant la mise à jour utilisent encore la connexion du système. Redémarrez-les d'abord (Paramètres > Comptes de fournisseurs d'IA)."
     },
     "codexAccount": {
       "storageLink": "Le stockage des comptes Codex contient un lien ou un dossier non valide. Restaurez son emplacement d'origine et réessayez.",

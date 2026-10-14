@@ -12,6 +12,7 @@ import { agentModelLive, watchModelFiles } from './agentModel'
 import { createRemoteModelReader, remoteAgentModel } from './remoteAgentModel'
 import { createCodexAccounts } from './codexAccounts'
 import { createClaudeAccounts } from './claudeAccounts'
+import { oldClaudeSessions as findOldClaudeSessions } from './claudeSwitchSessions'
 import { createProviderLogin } from './providerLogin'
 import { createProviderAccounts } from './providerAccounts'
 import { createAccountUsage } from './providerAccountUsage'
@@ -1920,14 +1921,56 @@ const remoteArg = (q) => (q && typeof q === 'object' ? isRemotePath(q.root) || i
 // repositories in a folder.
 registerAddProject({ ipcMain, service: createAddProject({ send: (channel, payload) => send(channel, payload) }) })
 // Each Claude session runs on its own account's folder (claudeAccounts.js).
-const claudeAccounts = createClaudeAccounts({ ...accountOptions, log })
+// An older version's account switch put an account's sign-in into the system
+// Claude files; the system's own is put back once, when no Claude session
+// that version started still runs (they all use the system folder).
+const claudeAccounts = createClaudeAccounts({
+  ...accountOptions,
+  log,
+  canMigrate: async () => (await oldClaudeSessions()).length === 0
+})
 const accounts = createProviderAccounts({
   claude: claudeAccounts,
   codex: createCodexAccounts(accountOptions)
 })
-// An older version's account switch put an account's sign-in into the
-// system Claude files: the system's own is put back once, at startup.
-claudeAccounts.migrate().catch((err) => log.warn('accounts', `Claude account migration: ${err && err.message}`)) // i18n-ignore log
+// The terminals the host ran when Tessel connected to it, and the processes
+// that ended since: tells the Claude sessions an older version started.
+let hostPtysAtConnect = []
+const endedPtyPids = new Set()
+async function oldClaudeSessions() {
+  await host.ensure()
+  return findOldClaudeSessions(hostPtysAtConnect, endedPtyPids)
+}
+// Settings > AI provider accounts (and the notice at startup): the switch
+// still to be undone, and the sessions it waits for.
+ipcMain.handle('accounts:claudeSwitch', async () => {
+  try {
+    if (!(await claudeAccounts.switchPending())) return { pending: false, panes: [] }
+    return { pending: true, panes: await oldClaudeSessions() }
+  } catch {
+    return { pending: false, panes: [] }
+  }
+})
+// Those sessions stopped together (the window starts each again on its
+// account, conversation resumed), then the system's sign-in put back.
+ipcMain.handle('accounts:finishClaudeSwitch', async () => {
+  try {
+    for (const id of await oldClaudeSessions()) host.send('kill', { id })
+    for (let i = 0; i < 60 && (await oldClaudeSessions()).length; i++) await new Promise((r) => setTimeout(r, 250))
+    return await claudeAccounts.migrate()
+  } catch (err) {
+    // pending: one of those sessions did not stop (nothing else to offer).
+    return { ok: false, error: err && err.message, pending: !!(err && err.switchPending) }
+  }
+})
+// Its snapshot unusable: the system keeps the sign-in it has now.
+ipcMain.handle('accounts:discardClaudeSwitch', async () => {
+  try {
+    return await claudeAccounts.discardSwitch()
+  } catch (err) {
+    return { ok: false, error: err && err.message }
+  }
+})
 ipcMain.handle('accounts:list', safe(() => accounts.list()))
 // Usage refresh: at startup, every 2 min (Settings) while the window is in use,
 // on focus when older than 5 min, and from the chats' own rate-limit reports
@@ -3317,6 +3360,7 @@ const host = createPtyClient({
     liveShare?.onPtyData(id, data)
   },
   onExit: (id, exitCode, signal, pid) => {
+    if (pid) endedPtyPids.add(pid)
     const info = ptyInfo.get(id)
     if (pid && info?.pid && pid !== info.pid) return // a delayed exit from the previous execution
     void agentStateStore.unregister(id, info?.agentLaunchToken).catch(() => {})
@@ -3341,7 +3385,8 @@ const host = createPtyClient({
     if (msg && msg.op === 'remote-tools') return remoteToolsMissing(msg)
     sshRemote.onEvent(msg)
   },
-  onConnected: () => {
+  onConnected: (h) => {
+    hostPtysAtConnect = h && Array.isArray(h.ptys) ? h.ptys : []
     void sshRemote.onConnected()
   },
   onLost: () => {
@@ -3633,7 +3678,9 @@ ipcMain.handle('pty:create', async (_evt, opts = {}) => {
       useConpty,
       // ConPTY is required for full-screen TUIs like Claude Code to redraw on
       // resize. Set TESSEL_USE_WINPTY=1 only as a fallback.
-      meta: { shellId: shell.id, shellName: shell.name, backend, cwd: startDir, agentProvider, agentLaunchToken, agentStartedAt, agentCodexHome, teamSecret, remoteHostId: remote ? remote.target.id : null }
+      // accountsPerSession: started by a version where each Claude session
+      // has its own account folder (see oldClaudeSessions).
+      meta: { shellId: shell.id, shellName: shell.name, backend, cwd: startDir, agentProvider, agentLaunchToken, agentStartedAt, agentCodexHome, teamSecret, remoteHostId: remote ? remote.target.id : null, accountsPerSession: true }
     })
   } catch (err) {
     res = { ok: false, error: err.message }
@@ -4530,6 +4577,12 @@ Promise.all([acquireInstanceLock(), app.whenReady()]).then(([gotInstanceLock]) =
   // The share or Live Share session a restart left: taken back now that
   // this copy holds the lock (a second copy never touches them).
   liveShare?.resume()
+  // An older version's Claude account switch: undone now if none of the
+  // sessions it started still runs (else the window offers to restart them).
+  claudeAccounts.migrate().catch((err) => {
+    if (err && err.switchPending) log.info('accounts', 'Claude account switch waits for the sessions started before the update') // i18n-ignore log
+    else log.warn('accounts', `Claude account migration: ${err && err.message}`) // i18n-ignore log
+  })
   app.on('second-instance', () => {
     if (!mainWindow) return
     if (mainWindow.isMinimized()) mainWindow.restore()

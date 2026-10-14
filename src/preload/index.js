@@ -298,7 +298,11 @@ const api = {
     startLogin: (provider, id = null) => ipcRenderer.invoke('accounts:startLogin', { provider, id }),
     loginStatus: (id) => ipcRenderer.invoke('accounts:loginStatus', id),
     cancelLogin: (id) => ipcRenderer.invoke('accounts:cancelLogin', id),
-    launchEnv: (provider, accountId) => ipcRenderer.invoke('accounts:launchEnv', { provider, accountId })
+    launchEnv: (provider, accountId) => ipcRenderer.invoke('accounts:launchEnv', { provider, accountId }),
+    // An older version's Claude account switch still to be undone.
+    claudeSwitch: () => ipcRenderer.invoke('accounts:claudeSwitch'),
+    finishClaudeSwitch: () => ipcRenderer.invoke('accounts:finishClaudeSwitch'),
+    discardClaudeSwitch: () => ipcRenderer.invoke('accounts:discardClaudeSwitch')
   },
   // Claude Code's usage report (tokens and estimated cost by day, model,
   // project, conversation), from its own files on this computer.

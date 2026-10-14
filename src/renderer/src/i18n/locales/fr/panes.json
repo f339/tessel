@@ -540,6 +540,8 @@
       "model": "Modèle…",
       "modelHint": "Choisir le modèle utilisé par cet agent",
       "restartYolo": "Redémarrer en Yolo",
+      "restartOnAccount": "Redémarrer sur {{account}}",
+      "restartOnAccountHint": "Redémarrer cet agent sur {{account}} : même panneau, sa conversation reprise",
       "restartYoloHint": "Redémarrer cet agent sans demandes de permission : il exécute des commandes et modifie des fichiers sans vous demander. Même panneau, sa conversation reprise",
       "restartManual": "Redémarrer en demandant d'abord",
       "restartManualHint": "Redémarrer cet agent pour qu'il vous demande à nouveau avant d'agir : même panneau, sa conversation reprise",

@@ -365,6 +365,14 @@ describe('sessions on their own account', () => {
     expect((await service.list()).accounts).toEqual([])
     expect(read(credentialPath())).toEqual(token('system'))
   })
+  it("an added account's folder inherited by Tessel is not the system's: its sessions drop it", async () => {
+    seedSystem()
+    const id = await add()
+    const inherited = create({ env: { CLAUDE_CONFIG_DIR: authPath(id) } })
+    expect((await inherited.list()).system).toMatchObject({ email: 'system@fixture.invalid' })
+    expect(await inherited.launchEnv(null)).toEqual({ ok: true, env: {}, accountId: null, unsetEnv: ['CLAUDE_CONFIG_DIR'] })
+    expect(await inherited.launchEnv(id)).toMatchObject({ ok: true, env: { CLAUDE_CONFIG_DIR: authPath(id) }, accountId: id })
+  })
   it('uses an overridden system config folder, never the default home one', async () => {
     const override = join(root, 'custom-config')
     put(join(override, '.credentials.json'), token('custom'))
@@ -599,21 +607,72 @@ describe('the older account switch, undone once', () => {
     expect(read(credentialPath())).toEqual(token('new-system'))
     expect(fs.existsSync(runtimePath('system-default-auth.json'))).toBe(false)
   })
-  it.each(['other-identity', 'stale-token', 'embedded-conflict'])(
-    'restores the system login without capturing unproven credentials: %s',
+  it('restores the system login without capturing an older token', async () => {
+    seedSystem()
+    const id = await add()
+    const before = read(join(authPath(id), '.credentials.json'))
+    const original = legacySwitch(id, token('managed', 'changed', NOW - 1))
+    await create().launchEnv()
+    expect(read(join(authPath(id), '.credentials.json'))).toEqual(before)
+    expect(fs.readFileSync(credentialPath(), 'utf8')).toBe(original)
+  })
+  it.each(['other-identity', 'embedded-conflict', 'signed-out'])(
+    'keeps a system sign-in made since the switch, captures nothing: %s',
     async (mode) => {
       seedSystem()
       const id = await add()
       const before = read(join(authPath(id), '.credentials.json'))
-      const replacement = token('unproven', 'changed', mode === 'stale-token' ? NOW - 1 : NOW + 200000)
+      const replacement = token('other', 'changed', NOW + 200000)
       if (mode === 'embedded-conflict') replacement.claudeAiOauth.accountUuid = 'different-id'
-      const original = legacySwitch(id, replacement)
+      legacySwitch(id, replacement)
       if (mode === 'other-identity') put(configPath(), { ...read(configPath()), oauthAccount: who('other') })
-      await create().launchEnv()
+      if (mode === 'signed-out') fs.rmSync(credentialPath())
+      const now = mode === 'signed-out' ? null : fs.readFileSync(credentialPath(), 'utf8')
+      const later = create()
+      await later.launchEnv()
       expect(read(join(authPath(id), '.credentials.json'))).toEqual(before)
-      expect(fs.readFileSync(credentialPath(), 'utf8')).toBe(original)
+      expect(fs.existsSync(credentialPath()) ? fs.readFileSync(credentialPath(), 'utf8') : null).toBe(now)
+      expect(read(indexPath())).toMatchObject({ selectedId: id, perSession: true })
+      expect(fs.existsSync(runtimePath('system-default-auth.json'))).toBe(false)
+      expect((await later.list()).switchPending).toBeUndefined()
     }
   )
+  it('waits while Claude sessions an older version started still run; a sign-in still works', async () => {
+    seedSystem()
+    const id = await add()
+    const original = legacySwitch(id)
+    let free = false
+    const later = create({ canMigrate: async () => free })
+    expect((await later.list()).switchPending).toBe(true)
+    await expect(later.launchEnv()).rejects.toThrow('started before the update')
+    await expect(later.launchEnv(null)).rejects.toThrow('started before the update')
+    await expect(later.select(null)).rejects.toThrow('started before the update')
+    expect(await later.switchPending()).toBe(true)
+    // Nothing was put back meanwhile.
+    expect(fs.readFileSync(credentialPath(), 'utf8')).not.toBe(original)
+    selectedIdentity = 'second'
+    expect((await later.add()).ok).toBe(true)
+    // They stopped: undone at the next try.
+    free = true
+    expect(await later.migrate()).toEqual({ ok: true })
+    expect(fs.readFileSync(credentialPath(), 'utf8')).toBe(original)
+    expect(await later.switchPending()).toBe(false)
+    expect((await later.list()).switchPending).toBeUndefined()
+  })
+  it('gives the switch up on request: the system keeps the sign-in it has now', async () => {
+    seedSystem()
+    const id = await add()
+    legacySwitch(id)
+    put(runtimePath('system-default-auth.json'), { version: 1, binding: { credentialsPath: join(root, 'elsewhere') } })
+    const now = fs.readFileSync(credentialPath(), 'utf8')
+    const later = create()
+    await expect(later.migrate()).rejects.toThrow('snapshot is unavailable or invalid')
+    expect(await later.discardSwitch()).toEqual({ ok: true })
+    expect(fs.readFileSync(credentialPath(), 'utf8')).toBe(now)
+    expect(read(indexPath())).toMatchObject({ selectedId: id, perSession: true })
+    expect(fs.existsSync(runtimePath('system-default-auth.json'))).toBe(false)
+    expect(await later.launchEnv()).toMatchObject({ ok: true, accountId: id })
+  })
   it('restores the system login when the selected account record is gone', async () => {
     seedSystem()
     const id = await add()

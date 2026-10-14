@@ -41,7 +41,7 @@ import {
 import { promptShowsPlaceholder } from '../promptCheck'
 import { detectTaskDone } from '../agentLimit'
 import { modelLabel } from '../../../shared/modelLabel'
-import { paneAccount } from '../accountChoices'
+import { paneAccount, accountChoices } from '../accountChoices'
 import { modelFromScreen, modelFromSwitchLine } from '../../../shared/screenModel'
 import { findFileRefs } from '../../../shared/fileLinks'
 import { osc52Text } from '../../../shared/osc52'
@@ -2193,6 +2193,18 @@ function menuRestart() {
   closeCtxMenu()
   ctx.restartLeaf(props.node.id)
 }
+// Pane menu > Restart on <account>: the other accounts a Claude Code pane
+// started here can go on with its conversation on (Settings > AI provider
+// accounts; a Codex account keeps its own conversations).
+const accountRestartChoices = computed(() => {
+  const n = props.node
+  if (n.kind !== 'agent' || n.agentId !== 'claude' || !n.agentCommand || n.detected || n.remoteHostId || !ctx.restartOnAccount) return []
+  return accountChoices('claude').filter((c) => c.id !== (n.accountId ?? null))
+})
+function menuRestartOnAccount(accountId) {
+  closeCtxMenu()
+  ctx.restartOnAccount(props.node.id, accountId)
+}
 
 // Text with a number or a name in it, for the template.
 function quietFor(minutes) {
@@ -2962,6 +2974,8 @@ const paneMenuBindings = computed(() => ({
   menuOpenHere: unref(menuOpenHere),
   menuSplit: unref(menuSplit),
   menuRestart: unref(menuRestart),
+  accountRestartChoices: unref(accountRestartChoices),
+  menuRestartOnAccount: unref(menuRestartOnAccount),
   canViewTranscript: unref(canViewTranscript),
   menuViewTranscript: unref(menuViewTranscript),
   transcriptOpen: unref(transcriptOpen),

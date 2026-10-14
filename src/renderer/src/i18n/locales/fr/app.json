@@ -120,7 +120,12 @@
       "updated": "Les hooks d'état de Codex ont été mis à jour. Vérifiez-les dans /hooks pour activer l'état en direct."
     },
     "account": {
-      "refused": "{{agent}} n'a pas été démarré : son compte n'a pas pu être utilisé ({{error}}). Voir Paramètres > Comptes de fournisseurs d'IA."
+      "refused": "{{agent}} n'a pas été démarré : son compte n'a pas pu être utilisé ({{error}}). Voir Paramètres > Comptes de fournisseurs d'IA.",
+      "switchDone": "Les sessions Claude ont redémarré, chacune sur son propre compte.",
+      "switchFailed": "Le passage aux comptes par session n'a pas pu se terminer : {{error}}",
+      "switchKeep": "Garder la connexion actuelle",
+      "switchWaiting": "{{count}} sessions Claude démarrées avant la mise à jour utilisent encore la connexion du système. Redémarrez-les pour que chacune tourne sur son propre compte (conversations reprises).",
+      "switchRestart": "Les redémarrer"
     },
     "common": {
       "unknownError": "erreur inconnue",

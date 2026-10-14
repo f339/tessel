@@ -1301,7 +1301,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
   // restart or resume uses that one, not whichever is chosen now. null = the
   // system's own sign-in, chosen on purpose; undefined = not recorded (an
   // older layout, or a new pane): the account chosen now.
-  let accountId = typeof opts.accountId === 'string' || opts.accountId === null ? opts.accountId : undefined
+  let accountId = !opts.remoteHostId && (typeof opts.accountId === 'string' || opts.accountId === null) ? opts.accountId : undefined
   // The account can't be used: never started on another one without saying
   // so. A saved pane stays in the layout, with the reason and Retry.
   let refused = null
@@ -1311,7 +1311,8 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     const statusSetup = await window.shellApi.prepareAgentStatus(agent.id, { cursor: settings.cursorStatusHooks === true }).catch(() => null)
     if (statusSetup?.needsReview) showToast(t('app.codexHooks.updated', 'Codex status hooks were updated. Review them in /hooks to enable live status.'), { timeout: 10000 })
   }
-  if (agent && !attached && window.shellApi.accounts && window.shellApi.accounts.launchEnv) {
+  // An agent on an SSH host signs in there: no account of this computer.
+  if (agent && !attached && !opts.remoteHostId && window.shellApi.accounts && window.shellApi.accounts.launchEnv) {
     let acc = null
     try {
       acc = await window.shellApi.accounts.launchEnv(agent.id, accountId)
@@ -2803,6 +2804,7 @@ provide('panelCtx', {
   closeLeaf,
   restartLeaf,
   restartWithPermissions,
+  restartOnAccount,
   // Chat <-> terminal (the same conversation).
   // Asked while the agent works: done when its turn ends (never interrupted).
   switchToChat: (id) => requestSwitch(id, 'chat'),
@@ -2942,8 +2944,9 @@ function buildCommands() {
   }
   for (const a of launchableAgents.value.filter((x) => x.available)) {
     add(t('app.cmd.group.new', 'New'), t('app.cmd.newNamed', 'New {{name}}', { name: a.name }), () => launch({ kind: 'agent', id: a.id }), { hint: t('app.cmd.aiAgent', 'AI agent') })
-    // More than one account signed in (a project on this computer): one per account.
-    if (!(currentWs.value && currentWs.value.remote))
+    // More than one account signed in (a project on this computer, not a
+    // Live Share guest's): one per account.
+    if (!(currentWs.value && (currentWs.value.remote || liveShare.isGuestWs(currentWs.value))))
       for (const c of accountChoices(a.id))
         add(t('app.cmd.group.new', 'New'), t('app.cmd.newOnAccount', 'New {{name}} on {{account}}', { name: a.name, account: c.name }), () => launch({ kind: 'agent', id: a.id, accountId: c.id }), {
           hint: c.title
@@ -3973,7 +3976,7 @@ async function restartLeaf(leafId) {
     const ok = await restartInPlace(leafId, { resume: settings.resumeAgents })
     // Never a new id for an agent (its messages would stay addressed to the
     // old one): if its old terminal would not stop, say so and leave it.
-    if (!ok && findLeaf(leafId) === old)
+    if (ok === false && findLeaf(leafId) === old)
       showToast(t('app.restart.failed', '{{name}} could not be restarted: its terminal did not stop. Try again.', { name: old.title }), { kind: 'error', timeout: 8000 })
     return
   }
@@ -3983,7 +3986,7 @@ async function restartLeaf(leafId) {
       : null
   const fresh = await createLeaf(old.shellId, agent, old.startDir || ws.cwd, old.worktree, {
     sessionId: old.sessionId,
-    accountId: old.accountId,
+    accountId: 'accountId' in opts ? opts.accountId : old.accountId,
     sessionOptions: old.sessionOptions,
     permissions: old.permissions,
     permissionMode: old.permissionMode,
@@ -4094,6 +4097,73 @@ onMounted(() => {
 })
 onBeforeUnmount(() => offDropExit && offDropExit())
 
+// Pane menu > Restart on <account>: a Claude Code pane goes on with the same
+// conversation on another account (conversations are shared between
+// accounts; a Codex account keeps its own, so Codex panes don't offer it).
+async function restartOnAccount(leafId, accountId) {
+  const leaf = findLeaf(leafId)
+  if (!leaf || leaf.kind !== 'agent' || leaf.agentId !== 'claude' || leaf.remoteHostId || !leaf.agentCommand) return
+  if (!(accountId === null || typeof accountId === 'string') || restartingLeaves.has(leafId)) return
+  const ok = await restartInPlace(leafId, { resume: true, accountId })
+  if (ok === false && findLeaf(leafId) === leaf)
+    showToast(t('app.restart.failed', '{{name}} could not be restarted: its terminal did not stop. Try again.', { name: leaf.paneName || leaf.title }), { kind: 'error', timeout: 8000 })
+}
+
+// Per-session Claude accounts: an older version's account switch put an
+// account's sign-in into the system Claude folder, which every Claude
+// session it started uses. The switch is undone once none of them runs:
+// they stop together, the system's own sign-in is put back, then each
+// starts again on its account, its conversation resumed.
+let claudeSwitchBusy = false
+async function finishClaudeSwitch() {
+  const api = window.shellApi.accounts
+  if (claudeSwitchBusy || !api || !api.claudeSwitch) return
+  claudeSwitchBusy = true
+  try {
+    const state = await api.claudeSwitch().catch(() => null)
+    if (!state || !state.pending) return
+    const ids = (state.panes || []).filter((id) => findLeaf(id))
+    const res = await api.finishClaudeSwitch().catch((err) => ({ ok: false, error: err && err.message }))
+    if (res && res.ok) {
+      for (const id of ids) await restartInPlace(id, { resume: true })
+      showToast(t('app.account.switchDone', 'The Claude sessions started again, each on its own account.'), { timeout: 8000 })
+      refreshAccountChoices()
+      return
+    }
+    // Its snapshot unusable: offered to keep the system's current sign-in.
+    showToast(t('app.account.switchFailed', 'The Claude account switch could not be finished: {{error}}', { error: (res && res.error) || t('app.common.unknownError', 'unknown error') }), {
+      kind: 'error',
+      timeout: 20000,
+      action:
+        res && res.pending
+          ? null
+          : {
+              label: t('app.account.switchKeep', 'Keep the current sign-in'),
+              run: async () => {
+                const kept = await api.discardClaudeSwitch().catch(() => null)
+                if (kept && kept.ok) for (const id of ids) if (findLeaf(id)) await restartInPlace(id, { resume: true })
+                refreshAccountChoices()
+              }
+            }
+    })
+  } finally {
+    claudeSwitchBusy = false
+  }
+}
+// At startup: the switch still to be undone. Sessions that version started
+// still run: offered to restart them; none: undone now.
+async function checkClaudeSwitch() {
+  const api = window.shellApi.accounts
+  const state = api && api.claudeSwitch ? await api.claudeSwitch().catch(() => null) : null
+  if (!state || !state.pending) return
+  const count = (state.panes || []).length
+  if (!count) return finishClaudeSwitch()
+  showToast(
+    t('app.account.switchWaiting', '{{count}} Claude sessions started before the update still use the system sign-in. Restart them so each runs on its own account (conversations resumed).', { count }),
+    { timeout: 60000, action: { label: t('app.account.switchRestart', 'Restart them'), run: () => finishClaudeSwitch() } }
+  )
+}
+
 // Pane menu > Restart in Yolo / Restart asking first: the pane keeps that
 // choice (for its next restarts too) and restarts, its conversation resumed.
 async function restartWithPermissions(leafId, mode) {
@@ -4104,7 +4174,7 @@ async function restartWithPermissions(leafId, mode) {
   // Always resumed (whatever Settings > Agents > Resume says): the point is
   // to carry on the same conversation with the other mode.
   const ok = await restartInPlace(leafId, { resume: true })
-  if (!ok && findLeaf(leafId) === leaf)
+  if (ok === false && findLeaf(leafId) === leaf)
     showToast(t('app.restart.failed', '{{name}} could not be restarted: its terminal did not stop. Try again.', { name: leaf.paneName || leaf.title }), { kind: 'error', timeout: 8000 })
 }
 // The folders a pane counts as working in, for Yolo folders: its project
@@ -5227,7 +5297,7 @@ async function recheckMissingAgent(leafId) {
   // Its shell is replaced by the agent, same pane (restartInPlace keeps its
   // id, number, team and conversation).
   const ok = await restartInPlace(leafId, { resume: !!missing.resume })
-  if (!ok && findLeaf(leafId) === leaf)
+  if (ok === false && findLeaf(leafId) === leaf)
     showToast(t('app.restart.failed', '{{name}} could not be restarted: its terminal did not stop. Try again.', { name: leaf.paneName || leaf.title }), { kind: 'error', timeout: 8000 })
   return ok
 }
@@ -7824,7 +7894,11 @@ async function installTeamToolsOnce() {
 // once, in place (same pane, number, team and task, conversation resumed),
 // only when it is quiet, not waiting for an approval, and not in use.
 // opts.resume: resume the conversation (default: when it has one);
-// opts.forTools: restarted to load the team tools (it has them afterwards).
+// opts.forTools: restarted to load the team tools (it has them afterwards);
+// opts.accountId: started on that account instead of its own (null: the
+// system's sign-in).
+// false: its terminal did not stop; null: it could not start again (the
+// reason was already shown).
 async function restartInPlace(leafId, opts = {}) {
   // One restart at a time per pane (the automatic one and the user's).
   if (restartingLeaves.has(leafId)) return false
@@ -7871,7 +7945,7 @@ async function restartInPlaceNow(leafId, opts) {
     // Team messages waiting for it: its first prompt says so (see createLeaf).
     wake: { teamId: old.team || null, gen: (old.gen || 0) + 1 }
   })
-  if (!fresh) return false
+  if (!fresh) return null
   if (findLeaf(leafId) !== old) {
     // Closed while it was starting: do not leave its terminal running.
     window.shellApi.killPty(leafId)
@@ -11628,6 +11702,9 @@ onMounted(async () => {
   }
   // Shown again if it was shown before the reload (its terminal re-attached).
   floating.restoreAtStart()
+  // Settings > AI provider accounts asks for it too.
+  window.addEventListener('tessel:finish-claude-switch', finishClaudeSwitch)
+  void checkClaudeSwitch()
   loadVoiceLanguages()
   // Settings (incl. your own agents) are loaded now; detect agents with them.
   startStep = 'agent detection'

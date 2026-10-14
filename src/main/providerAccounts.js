@@ -69,6 +69,8 @@ export function createProviderAccounts({ claude, codex, now = Date.now, uuid = r
               system: publicAccount(row.system, true),
               accounts: (row.accounts || []).map((account) => publicAccount(account)),
               restartRequired: !!row.restartRequired,
+              // An older version's Claude account switch still to be undone.
+              ...(row.switchPending ? { switchPending: true } : {}),
               ...(row.error ? { error: text(row.error, 500) } : {})
             }
           } catch {
@@ -192,7 +194,7 @@ export function createProviderAccounts({ claude, codex, now = Date.now, uuid = r
       try {
         const result = await providers[provider].launchEnv(accountId)
         return result?.ok
-          ? { ...result, unsetEnv: result.accountId ? [...ACCOUNT_AUTH_ENV[provider]] : [] }
+          ? { ...result, unsetEnv: result.accountId ? [...ACCOUNT_AUTH_ENV[provider]] : Array.isArray(result.unsetEnv) ? result.unsetEnv : [] }
           : result
       } catch (error) {
         return failure(error, t('main.accounts.updateFailed', 'Could not update the account.'))

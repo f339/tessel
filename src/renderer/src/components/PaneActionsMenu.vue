@@ -4,7 +4,7 @@ import { ref } from 'vue'
 import PaneContextMenu from './PaneContextMenu.vue'
 import BrandIcon from './BrandIcon.vue'
 import { t } from '../i18n'
-const props = defineProps(["ctxMenu","paneTitle","closeCtxMenuAndRefocus","node","team","teamFactTitle","isLead","isAgent","yoloTitle","statusTitle","exited","asksApproval","limit","limitState","agentStatus","estimatedState","needsYou","stuck","track","cache","cacheTitle","cacheLeft","unsent","launchStale","menuResolveUnsent","applyTitle","menuRestartApply","menuCopy","menuPaste","menuCopyOutput","menuClear","menuResetTerminal","menuCopySession","menuFind","hasModelChoice","modelTitle","menuModel","modelText","sessionPillLabel","paneModelList","paneValues","ctx","menuVoice","settings","menuPickVoice","otherPanes","menuSendSelection","menuAskReview","closeCtxMenu","leadToggleText","leaveTeamText","startEditTitle","isMaximized","menuOpenHere","menuSplit","menuRestart","canViewTranscript","menuViewTranscript","transcriptOpen","canOpenAsChat","menuOpenAsChat","chatViewAvailable","canContinueOnHost","continueOnHostReason","menuContinueOnHost","canSwitchYolo","menuSwitchYolo","yoloFolder","yoloFolderOn","menuYoloFolder","folderName","menuClose","isChat","disabledReasons"])
+const props = defineProps(["ctxMenu","paneTitle","closeCtxMenuAndRefocus","node","team","teamFactTitle","isLead","isAgent","yoloTitle","statusTitle","exited","asksApproval","limit","limitState","agentStatus","estimatedState","needsYou","stuck","track","cache","cacheTitle","cacheLeft","unsent","launchStale","menuResolveUnsent","applyTitle","menuRestartApply","menuCopy","menuPaste","menuCopyOutput","menuClear","menuResetTerminal","menuCopySession","menuFind","hasModelChoice","modelTitle","menuModel","modelText","sessionPillLabel","paneModelList","paneValues","ctx","menuVoice","settings","menuPickVoice","otherPanes","menuSendSelection","menuAskReview","closeCtxMenu","leadToggleText","leaveTeamText","startEditTitle","isMaximized","menuOpenHere","menuSplit","menuRestart","accountRestartChoices","menuRestartOnAccount","canViewTranscript","menuViewTranscript","transcriptOpen","canOpenAsChat","menuOpenAsChat","chatViewAvailable","canContinueOnHost","continueOnHostReason","menuContinueOnHost","canSwitchYolo","menuSwitchYolo","yoloFolder","yoloFolderOn","menuYoloFolder","folderName","menuClose","isChat","disabledReasons"])
 const unavailable = name => props.disabledReasons?.[name] || ''
 const menuRef = ref(null)
 defineExpose({ focus: options => menuRef.value?.focus(options), contains: target => menuRef.value?.contains(target), getBoundingClientRect: () => menuRef.value.getBoundingClientRect() })
@@ -179,6 +179,15 @@ defineExpose({ focus: options => menuRef.value?.focus(options), contains: target
       <button class="ctx-menu-item" @click="menuRestart">
         {{ t('pane.restart', 'Restart') }}<span class="ctx-menu-shortcut">Ctrl+Shift+R</span>
       </button>
+      <button
+        v-for="choice in accountRestartChoices || []"
+        :key="choice.id || 'system'"
+        class="ctx-menu-item"
+        data-test="menu-restart-on-account"
+        :title="t('pane.menu.restartOnAccountHint', 'Restart this agent on {{account}}: same pane, its conversation resumed', { account: choice.title || choice.name })"
+        @click="menuRestartOnAccount(choice.id)"
+        v-text="t('pane.menu.restartOnAccount', 'Restart on {{account}}', { account: choice.name })"
+      ></button>
       <button
         v-if="canViewTranscript"
         class="ctx-menu-item"

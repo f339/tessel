@@ -583,6 +583,8 @@
       "reading": "Lecture des comptes…",
       "retry": "Réessayer",
       "add": "Ajouter un compte",
+      "switchPending": "Des sessions Claude démarrées avant la mise à jour utilisent encore la connexion du système. Redémarrez-les pour que chacune tourne sur son propre compte (conversations reprises).",
+      "switchRestart": "Redémarrer les sessions Claude",
       "providerReadFailed": "Impossible de lire les comptes : {{error}}",
       "useFor": "Utiliser {{account}} pour {{provider}}",
       "lastSignedIn": "Dernière connexion le {{date}}",

@@ -18,6 +18,12 @@ const copied = ref('')
 const removeTarget = ref(null)
 const names = { claude: 'Claude Code', codex: 'Codex' } // i18n-ignore
 const available = computed(() => !!window.shellApi?.accounts?.list)
+// An older version's Claude account switch, waiting for the Claude sessions
+// it started: the window restarts them (App's finishClaudeSwitch).
+const switchPending = computed(() => providers.value.some((p) => p.provider === 'claude' && p.switchPending))
+function finishSwitch() {
+  window.dispatchEvent(new CustomEvent('tessel:finish-claude-switch'))
+}
 let alive = true
 let pollTimer = null
 let polling = false
@@ -323,6 +329,12 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <p v-if="notice" class="accounts-notice accounts-banner" role="status">{{ notice }}</p>
+    <div v-if="switchPending" class="accounts-notice accounts-banner" role="status" data-test="claude-switch-pending">
+      <span>{{ t('settings.accounts.switchPending', 'Claude sessions started before the update still use the system sign-in. Restart them so each runs on its own account (conversations resumed).') }}</span>
+      <button type="button" class="exit-btn" data-test="claude-switch-finish" @click="finishSwitch">
+        {{ t('settings.accounts.switchRestart', 'Restart Claude sessions') }}
+      </button>
+    </div>
     <ProviderAccountRow
       v-for="provider in providers"
       :key="provider.provider"

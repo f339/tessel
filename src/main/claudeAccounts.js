@@ -10,7 +10,7 @@
 // account shares them. The "selected" account is the default for new sessions.
 import os from 'os'
 import fs from 'fs/promises'
-import { join, resolve, isAbsolute } from 'path'
+import { join, resolve, isAbsolute, sep } from 'path'
 import { randomUUID } from 'crypto'
 import { t } from './i18n'
 import {
@@ -239,7 +239,10 @@ export function createClaudeAccounts({
   runLogin,
   now = Date.now,
   log = null,
-  pidAlive = running
+  pidAlive = running,
+  // Whether the system Claude folder is free of sessions an older version
+  // started (they keep using it until they stop).
+  canMigrate = async () => true
 } = {}) {
   if (!text(userData) || !isAbsolute(userData) || !isAbsolute(home))
     throw authError(t('main.claudeAccount.absolutePaths', 'Absolute account storage and home paths are required.'))
@@ -250,8 +253,11 @@ export function createClaudeAccounts({
   // Left by older versions, which copied the chosen account into the system files.
   const snapshotPath = join(runtimeRoot, 'system-default-auth.json')
   const journalPath = join(runtimeRoot, 'transaction.json')
-  const override = text(env.CLAUDE_CONFIG_DIR)
-  if (override && !isAbsolute(override)) throw authError(t('main.claudeAccount.configDirAbsolute', 'CLAUDE_CONFIG_DIR must be absolute.'))
+  const given = text(env.CLAUDE_CONFIG_DIR)
+  if (given && !isAbsolute(given)) throw authError(t('main.claudeAccount.configDirAbsolute', 'CLAUDE_CONFIG_DIR must be absolute.'))
+  // One inherited from a session on an added account (Tessel started from
+  // its terminal) is that account's folder, not the system's.
+  const override = given && !(fold(given) + sep).startsWith(fold(accountsRoot) + sep) ? given : null
   const configDir = override || join(resolve(home), '.claude')
   const defaultConfigDir = fold(configDir) === fold(join(home, '.claude'))
   const credentialsPath = join(configDir, '.credentials.json')
@@ -519,31 +525,74 @@ export function createClaudeAccounts({
   // once, the account's refreshed login captured first; it stays the default
   // for new sessions. The snapshot, a copy of a login, is then deleted.
   const legacy = (state, raw) => raw !== null && state.selectedId !== null && !state.perSession
+  // The system files still hold this account's sign-in (the older version's
+  // switch), not one made since (another account, or signed out).
+  function holds(account, runtime) {
+    if (!account || runtime.credentials === null || !runtime.oauth.present) return false
+    let token
+    try {
+      token = credentials(runtime.credentials)
+    } catch {
+      return false
+    }
+    const who = identity(runtime.oauth.value)
+    return matches(account.identity, who) && !conflict(identity(token), who)
+  }
+  // Not while Claude sessions an older version started still run: they use
+  // the system folder, and would read or write the wrong sign-in there.
+  const switchPending = () =>
+    Object.assign(
+      authError(
+        t(
+          'main.claudeAccount.switchPending',
+          'Claude sessions started before the update still use the system sign-in. Restart them first (Settings > AI provider accounts).'
+        )
+      ),
+      { switchPending: true }
+    )
   async function migrate() {
     const raw = await readText(snapshotPath)
     if (raw === null) return
     const state = await readMetadata()
     if (legacy(state, raw)) {
+      if (!(await canMigrate())) throw switchPending()
       const old = state.accounts.find((a) => a.id === state.selectedId)
-      let auth = old ? await managed(old.id) : null
-      if (auth?.status === 'unknown')
-        throw authError(
-          t('main.claudeAccount.selectedUnreadable', 'The selected Claude account is unreadable. No authentication files were changed.')
+      // Put back while the system files still hold that account's sign-in
+      // (or its record is gone: only the switch left it there).
+      if (!old || holds(old, await systemAuth())) {
+        let auth = old ? await managed(old.id) : null
+        if (auth?.status === 'unknown')
+          throw authError(
+            t('main.claudeAccount.selectedUnreadable', 'The selected Claude account is unreadable. No authentication files were changed.')
+          )
+        const changes = []
+        if (auth?.status === 'ready') {
+          auth = await refreshed(old, auth)
+          changes.push(...accountChanges(old.id, auth))
+        }
+        const original = await snapshot()
+        changes.push(
+          { kind: 'credentials', after: original.credentials },
+          { kind: 'oauth', after: original.oauth },
+          { kind: 'index', after: encode({ ...state, selectedId: old ? old.id : null, perSession: true }) }
         )
-      const changes = []
-      if (auth?.status === 'ready') {
-        auth = await refreshed(old, auth)
-        changes.push(...accountChanges(old.id, auth))
+        await transaction(changes)
+        if (auth?.status === 'ready') await writeOwnState(old.id, auth.oauth)
+      } else {
+        // Signed in to another account since, or signed out: that stays.
+        await transaction([{ kind: 'index', after: encode({ ...state, perSession: true }) }])
+        warn('Claude account: the system sign-in changed since the account switch; kept as it is') // i18n-ignore log
       }
-      const original = await snapshot()
-      changes.push(
-        { kind: 'credentials', after: original.credentials },
-        { kind: 'oauth', after: original.oauth },
-        { kind: 'index', after: encode({ ...state, selectedId: old ? old.id : null, perSession: true }) }
-      )
-      await transaction(changes)
-      if (auth?.status === 'ready') await writeOwnState(old.id, auth.oauth)
     }
+    await writeText(snapshotPath, null, raw)
+  }
+  // The older version's switch, given up (its snapshot can't be used): the
+  // system files keep the sign-in they have now.
+  async function discardSwitch() {
+    const raw = await readText(snapshotPath)
+    if (raw === null) return
+    const state = await readMetadata()
+    if (legacy(state, raw)) await transaction([{ kind: 'index', after: encode({ ...state, perSession: true }) }])
     await writeText(snapshotPath, null, raw)
   }
   // Claude takes <file>.lock (a folder, proper-lockfile's way) while it writes
@@ -719,7 +768,10 @@ export function createClaudeAccounts({
   }
   async function login(id, { signal, onProgress } = {}) {
     await recover()
-    await migrate()
+    // A sign-in only writes the account's own folder: a pending switch waits.
+    await migrate().catch((error) => {
+      if (!error?.switchPending) throw error
+    })
     const state = await readMetadata()
     const previous = id ? state.accounts.find((a) => a.id === id) : null
     if (id && !previous) throw authError(t('main.claudeAccount.unknown', 'Unknown Claude account.'))
@@ -880,6 +932,8 @@ export function createClaudeAccounts({
           /* unknown, not missing */
         }
         const pending = await readText(journalPath)
+        // An older version's switch not undone yet (see migrate).
+        const switched = legacy(state, await readText(snapshotPath))
         const accounts = await Promise.all(
           state.accounts.map(async (a) =>
             publicAccount(a, pending ? 'unknown' : (await managed(a.id)).status, state.selectedId)
@@ -889,7 +943,8 @@ export function createClaudeAccounts({
           provider: 'claude',
           selectedId: state.selectedId,
           system: { id: null, label: 'System default', ...system, ...(pending ? { status: 'unknown' } : {}) },
-          accounts
+          accounts,
+          ...(switched ? { switchPending: true } : {})
         }
       }),
     add: (options) => serialized(() => login(null, options)),
@@ -939,12 +994,24 @@ export function createClaudeAccounts({
         }
         return result
       }),
-    // At startup: an older version's account switch is undone once (migrate).
+    // At startup, and once the sessions an older version started are stopped:
+    // its account switch is undone once (migrate).
     migrate: () =>
       serialized(async () => {
         await recover()
         await migrate()
+        return { ok: true }
       }),
+    // Its snapshot unusable: the switch is given up, the system sign-in kept.
+    discardSwitch: () =>
+      serialized(async () => {
+        await recover()
+        await discardSwitch()
+        return { ok: true }
+      }),
+    // Whether an older version's switch is still to be undone.
+    switchPending: () =>
+      safe(async () => legacy(await readMetadata(), await readText(snapshotPath))),
     // Quota reads: a managed account's login is in its own folder, where its
     // sessions refresh it; the caller checks the identity found there.
     usageScope: (accountId = undefined) =>
@@ -987,8 +1054,9 @@ export function createClaudeAccounts({
         if (id === null) {
           if (authStatus(await systemAuth()) === 'unknown')
             throw authError(t('main.claudeAccount.systemAuthUnreadable', 'System Claude authentication is unreadable; launch was refused.'))
-          // The configured override (if any) stays inherited by the pane.
-          return { ok: true, env: {}, accountId: null }
+          // The configured override (if any) stays inherited by the pane; an
+          // added account's folder inherited by Tessel does not.
+          return { ok: true, env: {}, accountId: null, ...(given && !override ? { unsetEnv: ['CLAUDE_CONFIG_DIR'] } : {}) }
         }
         const account = typeof id === 'string' ? state.accounts.find((a) => a.id === id) : null
         if (!account)
