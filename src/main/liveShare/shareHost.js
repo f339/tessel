@@ -145,9 +145,10 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     g.flushTimer = null
     if (!guests.has(g.id)) return
     for (const [id, data] of [...g.pending]) {
-      if (g.held.has(id)) continue
+      const sub = g.subscribed.get(id)
+      if (sub && sub.held) continue
       g.pending.delete(id)
-      if (isShared(id)) send(g, { t: 'data', id, data })
+      if (sub && isShared(id)) send(g, { t: 'data', id, data })
       else forget(g, id)
     }
   }
@@ -156,11 +157,10 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   const isShared = (id) => (callbacks.isShared ? !!callbacks.isShared(id) : sharedIds().has(id))
 
   // A pane no longer shared: what was waiting for it goes, and its screen
-  // is taken again if it comes back.
+  // is taken again if it comes back (a new subscription: what the old one
+  // still had coming is ignored).
   function forget(g, id) {
     g.subscribed.delete(id)
-    g.held.delete(id)
-    g.heldExits.delete(id)
     g.pending.delete(id)
   }
 
@@ -171,17 +171,22 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   // calls ready(snapshot) the moment the answer is read (before that output
   // is passed on), or resolves snapshot()'s promise when order can't matter.
   // The screen's text can take a moment more (snap.data a promise): output
-  // from then on waits for it.
+  // from then on waits for it (held), and so does the pane's exit.
+  // Each subscription is its own object: a screen that comes back for one
+  // already forgotten (the pane left the project, maybe came back) does
+  // nothing.
   function subscribe(g, id) {
     if (g.subscribed.has(id)) return
-    g.subscribed.set(id, 'loading')
+    const sub = { state: 'loading', held: false, exit: undefined }
+    g.subscribed.set(id, sub)
+    const current = () => guests.has(g.id) && g.subscribed.get(id) === sub
     let done = false
     const ready = (snap) => {
       if (done) return
       done = true
-      if (!guests.has(g.id) || g.subscribed.get(id) !== 'loading') return
+      if (!current() || sub.state !== 'loading') return
       if (!isShared(id)) return forget(g, id)
-      g.subscribed.set(id, 'live')
+      sub.state = 'live'
       const cols = snap?.cols || 0
       const rows = snap?.rows || 0
       const data = snap?.data
@@ -189,15 +194,16 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
         send(g, { t: 'snapshot', id, data: typeof data === 'string' ? data : '', cols, rows })
         return
       }
-      g.held.add(id)
+      sub.held = true
       Promise.resolve(data)
         .catch(() => '')
         .then((text) => {
-          if (!guests.has(g.id) || !g.held.delete(id)) return
+          if (!current() || !sub.held) return
+          sub.held = false
           if (!isShared(id)) return forget(g, id)
-          if (g.subscribed.get(id) === 'live') send(g, { t: 'snapshot', id, data: typeof text === 'string' ? text : '', cols, rows })
-          const exit = g.heldExits.get(id)
-          g.heldExits.delete(id)
+          send(g, { t: 'snapshot', id, data: typeof text === 'string' ? text : '', cols, rows })
+          const exit = sub.exit
+          sub.exit = undefined
           flush(g)
           if (exit !== undefined) send(g, { t: 'exit', id, exitCode: exit })
         })
@@ -307,10 +313,8 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       code: null,
       forward: false,
       rights: { ...NO_RIGHTS },
-      subscribed: new Map(),
+      subscribed: new Map(), // pane id -> { state: 'loading' | 'live', held, exit }
       pending: new Map(),
-      held: new Set(),
-      heldExits: new Map(),
       flushTimer: null,
       since: 0,
       alive: true,
@@ -421,7 +425,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     sendData(id, data) {
       if (!isShared(id)) return
       for (const g of guests.values()) {
-        if (g.state !== 'joined' || g.subscribed.get(id) !== 'live') continue
+        if (g.state !== 'joined' || g.subscribed.get(id)?.state !== 'live') continue
         g.pending.set(id, (g.pending.get(id) || '') + data)
         if (!g.flushTimer) g.flushTimer = setTimeout(() => flush(g), FLUSH_MS)
       }
@@ -429,9 +433,10 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     sendExit(id, exitCode) {
       if (!isShared(id)) return
       for (const g of guests.values()) {
-        if (g.state !== 'joined' || !g.subscribed.has(id)) continue
-        if (g.held.has(id)) {
-          g.heldExits.set(id, exitCode)
+        const sub = g.subscribed.get(id)
+        if (g.state !== 'joined' || !sub) continue
+        if (sub.held) {
+          sub.exit = exitCode
           continue
         }
         flush(g)

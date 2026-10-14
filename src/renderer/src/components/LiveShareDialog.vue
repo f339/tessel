@@ -8,6 +8,7 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { ScreenShare, Copy, Check, Loader2, AlertTriangle, LogIn, LogOut, UserX, RefreshCw } from 'lucide-vue-next'
 import { t } from '../i18n'
 import { endReason, rightsText } from '../liveShareWindow'
+import ThemedSelect from './ui/ThemedSelect.vue'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -264,10 +265,10 @@ function trapTab(event) {
 
         <label class="ls-field">
           <span class="ls-label">{{ t('liveShare.share.project', 'Project to share') }}</span>
-          <select class="ls-input ls-select" :value="projectId || ''" :disabled="preparing || !projects.length" data-test="ls-project" @change="pickProject">
+          <ThemedSelect class="ls-input ls-select" :model-value="projectId || ''" :disabled="preparing || !projects.length" data-test="ls-project" @change="pickProject">
             <option v-if="!projects.length" value="" disabled>{{ t('liveShare.share.noProject', 'No project to share') }}</option>
             <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
+          </ThemedSelect>
         </label>
 
         <label v-if="!sharing && !preparing" class="ls-field">

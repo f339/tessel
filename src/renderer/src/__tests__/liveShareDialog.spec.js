@@ -72,10 +72,10 @@ describe('LiveShareDialog: Share', () => {
 
   it('shares the project you pick, and needs one', async () => {
     const wrapper = await open(PROJECTS)
-    const select = wrapper.find('[data-test="ls-project"]')
-    expect(select.element.value).toBe('ws-1')
-    expect(select.findAll('option').map((o) => o.text())).toEqual(['tessel', 'site'])
-    await select.setValue('ws-2')
+    const select = wrapper.findComponent({ name: 'ThemedSelect' })
+    expect(select.props('modelValue')).toBe('ws-1')
+    expect(select.text()).toContain('tessel')
+    select.vm.$emit('change', { target: { value: 'ws-2' } })
     expect(wrapper.emitted('update:projectId')).toEqual([['ws-2']])
     wrapper.unmount()
     const none = await open({ projects: [], projectId: null })

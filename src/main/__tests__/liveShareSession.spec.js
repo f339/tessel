@@ -321,6 +321,61 @@ describe('Live Share session', () => {
     expect(r.order).toEqual([])
   })
 
+  it('a pane that leaves and comes back while its first screen is prepared gets its new screen, in order', async () => {
+    const t = fakeTessel()
+    const finish = []
+    t.callbacks.snapshot = (id, ready) => {
+      ready({ data: new Promise((resolve) => finish.push(resolve)), cols: 100, rows: 30 })
+      return new Promise(() => {})
+    }
+    const { r } = await joinOne({ t })
+    await until(() => finish.length === 1)
+    const shown = t.panes
+    t.panes = []
+    host.panesChanged()
+    t.panes = shown
+    host.panesChanged()
+    await until(() => finish.length === 2)
+    host.sendData('p1', 'LIVE')
+    // The old screen comes back first: ignored, the new one still holds the output.
+    finish[0]('OLD-SCREEN')
+    await wait(40)
+    expect(r.order).toEqual([])
+    finish[1]('NEW-SCREEN')
+    await until(() => r.order.length === 2)
+    expect(r.order).toEqual([
+      ['snapshot', 'p1', 'NEW-SCREEN'],
+      ['data', 'p1', 'LIVE']
+    ])
+  })
+
+  it('an old screen coming back after the new one changes nothing', async () => {
+    const t = fakeTessel()
+    const finish = []
+    t.callbacks.snapshot = (id, ready) => {
+      ready({ data: new Promise((resolve) => finish.push(resolve)), cols: 100, rows: 30 })
+      return new Promise(() => {})
+    }
+    const { r } = await joinOne({ t })
+    await until(() => finish.length === 1)
+    const shown = t.panes
+    t.panes = []
+    host.panesChanged()
+    t.panes = shown
+    host.panesChanged()
+    await until(() => finish.length === 2)
+    finish[1]('NEW-SCREEN')
+    await until(() => r.order.length === 1)
+    finish[0]('OLD-SCREEN')
+    host.sendData('p1', 'LIVE')
+    await until(() => r.order.length === 2)
+    await wait(30)
+    expect(r.order).toEqual([
+      ['snapshot', 'p1', 'NEW-SCREEN'],
+      ['data', 'p1', 'LIVE']
+    ])
+  })
+
   it('removes a guest and ends everything when sharing stops', async () => {
     const secret = newSecret()
     const t = fakeTessel()
