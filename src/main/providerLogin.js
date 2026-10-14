@@ -28,7 +28,13 @@ export const ACCOUNT_AUTH_ENV = {
     'CLAUDE_CODE_OAUTH_TOKEN',
     'CLAUDE_CODE_USE_BEDROCK',
     'CLAUDE_CODE_USE_VERTEX',
-    'CLAUDE_CODE_USE_FOUNDRY'
+    'CLAUDE_CODE_USE_FOUNDRY',
+    // Another endpoint (a gateway): an account's sign-in never goes there.
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_BEDROCK_BASE_URL',
+    'ANTHROPIC_VERTEX_BASE_URL',
+    'ANTHROPIC_FOUNDRY_BASE_URL',
+    'ANTHROPIC_CUSTOM_HEADERS'
   ]
 }
 const HOSTS = {

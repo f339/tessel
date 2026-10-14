@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { paneEnv, checkedEnv } from '../paneEnv'
+import { ACCOUNT_AUTH_ENV } from '../providerLogin'
 
 describe('a pane’s environment', () => {
   it('the account’s variables are kept even when the agent has 50 of its own', () => {
@@ -24,6 +25,14 @@ describe('a pane’s environment', () => {
     expect(env.HOME).toBe('h')
     expect(env.ANTHROPIC_API_KEY).toBe('a')
     expect(env.FOO).toBe('1')
+  })
+
+  it('a Claude account drops an inherited gateway: its sign-in never goes to another endpoint', () => {
+    const base = { PATH: 'p', ANTHROPIC_BASE_URL: 'https://gateway.example', anthropic_custom_headers: 'X-Key: k' }
+    const env = paneEnv(base, { accountEnv: { CLAUDE_CONFIG_DIR: 'C:\\acct' }, unsetEnv: [...ACCOUNT_AUTH_ENV.claude] })
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined()
+    expect(env.anthropic_custom_headers).toBeUndefined()
+    expect(env.CLAUDE_CONFIG_DIR).toBe('C:\\acct')
   })
 
   it('no account: nothing removed, the agent’s variables apply', () => {
