@@ -1479,6 +1479,26 @@ body.popup-open .toolbar {
   inset: 0;
 }
 
+/* Live Share (LiveShareBanner): the panes start below its banner, and the
+   project it is about has a coloured frame (red: you share it; blue: the
+   host's project, in their session). The frame lets clicks through. */
+.workspace-main.live-banner-on > .ws-layer,
+.workspace-main.live-banner-on > .project-launcher {
+  top: 30px;
+}
+.workspace-main.live-frame-host::after,
+.workspace-main.live-frame-guest::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  border: 2px solid var(--danger);
+  pointer-events: none;
+}
+.workspace-main.live-frame-guest::after {
+  border-color: var(--accent);
+}
+
 .ws-layer.hidden {
   visibility: hidden;
   pointer-events: none;
@@ -4795,6 +4815,12 @@ body.pane-dragging * {
 .tb-icon.on {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: #cfe0ff;
+}
+
+/* Sharing in Live Share: the button is red, as the banner above the panes. */
+.tb-icon.on.live-on {
+  background: color-mix(in srgb, var(--danger) 26%, transparent);
+  color: #ffd2d3;
 }
 
 .tb-icon.on.warn {
@@ -9740,6 +9766,23 @@ body.osb-project-dragging * {
   font-size: 11px;
   font-weight: 400;
   white-space: nowrap;
+}
+/* Live Share: LIVE after the project's name (red: you share it; blue: the
+   host's project, in their session). */
+.osb-live {
+  flex-shrink: 0;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 16px;
+}
+.osb-live.guest {
+  background: var(--accent);
 }
 
 .osb-section-label {

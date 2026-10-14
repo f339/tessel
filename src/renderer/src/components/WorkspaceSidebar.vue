@@ -1280,6 +1280,13 @@ defineExpose({
                   class="osb-section-host"
                   data-test="project-remote-host"
                   >{{ remoteHostLabel(r.project) }}</span
+                ><span
+                  v-if="r.project && r.project.live && editingId !== r.project.id"
+                  class="osb-live"
+                  :class="r.project.live"
+                  data-test="project-live"
+                  :title="r.project.live === 'host' ? t('sidebar.project.liveHost', 'You are sharing this project in Live Share') : t('sidebar.project.liveGuest', 'A Live Share session: these panes run on the host’s computer')"
+                  >{{ t('sidebar.project.liveBadge', 'LIVE') }}</span
                 >
               </div>
               <div class="osb-section-actions" data-repo-header-actions="" @click.stop>

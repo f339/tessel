@@ -143,6 +143,26 @@
       "sharing_one": "Live Share : vous partagez votre écran ({{count}} connecté)",
       "sharing_other": "Live Share : vous partagez votre écran ({{count}} connectés)",
       "joined": "Live Share : dans la session de {{host}}"
+    },
+    "banner": {
+      "starting": "DÉMARRAGE",
+      "live": "EN DIRECT",
+      "sharingHere": "Vous partagez ce projet ({{project}}) : les invités voient ce que vous faites ici.",
+      "sharingOther": "Vous partagez {{project}} (pas ce projet).",
+      "guests_one": "{{count}} invité connecté",
+      "guests_other": "{{count}} invités connectés",
+      "waiting_one": "{{count}} attend votre réponse",
+      "waiting_other": "{{count}} attendent votre réponse",
+      "gotoShared": "Aller au projet partagé",
+      "manage": "Gérer…",
+      "guestTag": "LIVE SHARE",
+      "reconnecting": "Reconnexion à la session de {{host}}…",
+      "guestHere": "Vous êtes dans la session de {{host}} : ces panneaux tournent sur l’ordinateur de {{host}}.",
+      "guestOther": "Vous êtes dans la session de {{host}} (ce projet est le vôtre).",
+      "gotoSession": "Aller à la session",
+      "leave": "Quitter",
+      "leaveTitle": "Quitter la session Live Share ?",
+      "leaveText": "Vous ne verrez plus les panneaux de {{host}}. Pour revenir, demandez un nouveau code d’invitation à {{host}}."
     }
   }
 }

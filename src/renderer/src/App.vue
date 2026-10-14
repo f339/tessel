@@ -62,7 +62,8 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import CookieImportDialog from './components/CookieImportDialog.vue'
 import LiveShareDialog from './components/LiveShareDialog.vue'
 import LiveShareAsk from './components/LiveShareAsk.vue'
-import { createLiveShareWindow } from './liveShareWindow'
+import { createLiveShareWindow, rightsText } from './liveShareWindow'
+import LiveShareBanner from './components/LiveShareBanner.vue'
 import { toastText as cookieImportToast } from './browser/cookieImportText'
 import { askQuitRunning } from './quitConfirm'
 import ImageViewer from './components/ImageViewer.vue'
@@ -2294,6 +2295,51 @@ const liveShareOpen = ref(false)
 // The projects you can share (a Live Share project is someone else's).
 const shareableProjects = computed(() => workspaces.value.filter((w) => !w.liveShare).map((w) => ({ id: w.id, name: w.name })))
 const sharedProjectName = computed(() => (liveShare.sharedWs() || {}).name || '')
+// Live Share said above the panes (LiveShareBanner), with a coloured frame
+// around the project it is about: you share one (host), or you are in
+// someone's session (guest). here: that project is the one on screen.
+const liveBanner = computed(() => {
+  const host = liveShare.state.host
+  if (['preparing', 'starting', 'checking', 'sharing'].includes(host.state)) {
+    const shared = liveShare.sharedWs()
+    return {
+      mode: 'host',
+      starting: host.state !== 'sharing',
+      project: shared ? shared.name : '',
+      sharedId: shared ? shared.id : null,
+      here: !!shared && shared.id === currentWsId.value,
+      guests: host.guests.filter((g) => g.state === 'joined').length,
+      waiting: liveShare.state.asks.length
+    }
+  }
+  const guest = liveShare.state.guest
+  if (['joined', 'reconnecting'].includes(guest.state)) {
+    const session = workspaces.value.find((w) => liveShare.isGuestWs(w))
+    return {
+      mode: 'guest',
+      reconnecting: guest.state !== 'joined',
+      host: guest.host || '?',
+      sessionId: session ? session.id : null,
+      here: !!currentWs.value && liveShare.isGuestWs(currentWs.value),
+      rights: guest.state === 'joined' ? rightsText(guest.rights) : ''
+    }
+  }
+  return null
+})
+function liveBannerGoto() {
+  const b = liveBanner.value
+  const id = b && (b.mode === 'host' ? b.sharedId : b.sessionId)
+  if (id) selectWorkspace(id)
+}
+async function liveBannerLeave() {
+  const ok = await askConfirm({
+    title: t('liveShare.banner.leaveTitle', 'Leave the Live Share session?'),
+    text: t('liveShare.banner.leaveText', 'You stop seeing {{host}}’s panes. To come back, ask {{host}} for an invite code.', { host: liveShare.state.guest.host || '?' }),
+    confirmLabel: t('liveShare.banner.leave', 'Leave'),
+    danger: true
+  })
+  if (ok) liveShare.leave()
+}
 function openLiveShare() {
   liveShare.prepareShare()
   liveShareOpen.value = true
@@ -5492,7 +5538,9 @@ const sidebarProjects = computed(() =>
       copies,
       worktrees: (gitKeyOf(w) && wsWorktrees[gitKeyOf(w)]) || [],
       ...(w.remote ? { remote: { host: remoteHostLabel(w.remote.hostId), path: w.remote.path, ...remoteHostWho(w.remote.hostId) } } : {}),
-      ...(w.group ? { repoCount: w.group.repos.length } : {})
+      ...(w.group ? { repoCount: w.group.repos.length } : {}),
+      // Live Share: the project you share ('host'), or the host's in their session ('guest').
+      ...(liveShare.isGuestWs(w) ? { live: 'guest' } : liveBanner.value && liveBanner.value.mode === 'host' && liveBanner.value.sharedId === w.id ? { live: 'host' } : {})
     }
   })
 )
@@ -12001,7 +12049,7 @@ onBeforeUnmount(() => {
         <NotificationsMenu @focus-pane="focusPane" />
         <button
           class="tb-icon"
-          :class="{ on: liveShare.state.host.state === 'sharing' || liveShare.state.guest.state === 'joined' }"
+          :class="{ on: liveShare.state.host.state === 'sharing' || liveShare.state.guest.state === 'joined', 'live-on': liveShare.state.host.state === 'sharing' }"
           :title="
             liveShare.state.host.state === 'sharing'
               ? t('liveShare.toolbar.sharing', 'Live Share: sharing your screen ({{count}} joined)', { count: liveShare.state.host.guests.filter((g) => g.state === 'joined').length })
@@ -12228,7 +12276,15 @@ onBeforeUnmount(() => {
         @port-copy="copyPort"
         @port-stop="stopPort"
       />
-      <div class="workspace-main">
+      <div
+        class="workspace-main"
+        :class="{
+          'live-banner-on': !!liveBanner,
+          'live-frame-host': liveBanner && liveBanner.mode === 'host' && liveBanner.here,
+          'live-frame-guest': liveBanner && liveBanner.mode === 'guest' && liveBanner.here
+        }"
+      >
+        <LiveShareBanner v-if="liveBanner" :banner="liveBanner" @manage="openLiveShare" @goto="liveBannerGoto" @leave="liveBannerLeave" />
         <div
           v-for="ws in workspaces"
           :key="ws.id"
