@@ -126,7 +126,11 @@
       "switchKeep": "Abandonner l'ancienne connexion",
       "switchSignedOut": "Le système est maintenant déconnecté de Claude (son ancienne connexion n'a pas pu être restaurée). Reconnectez-le dans un terminal avec claude /login.",
       "switchWaiting": "{{count}} sessions Claude démarrées avant la mise à jour utilisent encore la connexion du système. Redémarrez-les pour que chacune tourne sur son propre compte (conversations reprises).",
-      "switchRestart": "Les redémarrer"
+      "switchRestart": "Les redémarrer",
+      "switchUnavailable": "Redémarrez Tessel pour terminer le passage aux comptes par session.",
+      "switchBusy": "Les sessions Claude sont déjà en train de redémarrer.",
+      "switchNothing": "Chaque session Claude tourne déjà sur son propre compte.",
+      "switchStarting": "Redémarrage des sessions Claude ({{count}})…"
     },
     "common": {
       "unknownError": "erreur inconnue",

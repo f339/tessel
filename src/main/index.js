@@ -1956,9 +1956,12 @@ async function oldClaudeSessions() {
 ipcMain.handle('accounts:claudeSwitch', async () => {
   try {
     if (!(await claudeAccounts.switchPending())) return { pending: false, panes: [] }
-    return { pending: true, panes: await oldClaudeSessions() }
-  } catch {
-    return { pending: false, panes: [] }
+    const panes = await oldClaudeSessions()
+    log.info('accounts', `Claude account switch: waiting for ${panes.length} session(s) started before the update`) // i18n-ignore log
+    return { pending: true, panes }
+  } catch (err) {
+    log.warn('accounts', `Claude account switch: state unreadable (${err && err.message})`) // i18n-ignore log
+    return { pending: false, panes: [], error: err && err.message }
   }
 })
 // Those sessions stopped together (the window starts each again on its
@@ -1969,14 +1972,24 @@ ipcMain.handle('accounts:claudeSwitch', async () => {
 ipcMain.handle('accounts:finishClaudeSwitch', async () => {
   let stopped = false
   try {
+    log.info('accounts', 'Claude account switch: checking before the sessions stop') // i18n-ignore log
     const check = await claudeAccounts.checkSwitch()
-    if (!check.ok) return { ok: false, error: check.error, snapshotInvalid: !!check.snapshotInvalid }
+    if (!check.ok) {
+      log.warn('accounts', `Claude account switch: can't be undone (${check.error})`) // i18n-ignore log
+      return { ok: false, error: check.error, snapshotInvalid: !!check.snapshotInvalid }
+    }
     const ids = await oldClaudeSessions()
+    log.info('accounts', `Claude account switch: stopping ${ids.length} session(s)`) // i18n-ignore log
     for (const id of ids) host.send('kill', { id })
     stopped = ids.length > 0
     for (let i = 0; i < 60 && (await oldClaudeSessions()).length; i++) await new Promise((r) => setTimeout(r, 250))
-    return { ...(await claudeAccounts.migrate()), stopped }
+    const left = (await oldClaudeSessions()).length
+    if (left) log.warn('accounts', `Claude account switch: ${left} session(s) did not stop`) // i18n-ignore log
+    const res = { ...(await claudeAccounts.migrate()), stopped }
+    log.info('accounts', 'Claude account switch: undone, the system sign-in is back') // i18n-ignore log
+    return res
   } catch (err) {
+    log.warn('accounts', `Claude account switch failed: ${err && err.message}`) // i18n-ignore log
     // pending: one of those sessions did not stop.
     return { ok: false, error: err && err.message, pending: !!(err && err.switchPending), stopped }
   }

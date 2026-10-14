@@ -4114,15 +4114,34 @@ async function restartOnAccount(leafId, accountId) {
 // session it started uses. The switch is undone once none of them runs:
 // they stop together, the system's own sign-in is put back, then each
 // starts again on its account, its conversation resumed.
+// asked: from the button (Settings, the notice): every outcome is said;
+// false at startup (nothing to say when there is nothing to do).
 let claudeSwitchBusy = false
-async function finishClaudeSwitch() {
+async function finishClaudeSwitch(asked = true) {
   const api = window.shellApi.accounts
-  if (claudeSwitchBusy || !api || !api.claudeSwitch) return
+  if (!api || !api.claudeSwitch) {
+    if (asked) showToast(t('app.account.switchUnavailable', 'Restart Tessel to finish switching to per-session accounts.'), { kind: 'error', timeout: 10000 })
+    return
+  }
+  if (claudeSwitchBusy) {
+    if (asked) showToast(t('app.account.switchBusy', 'The Claude sessions are already being restarted.'), { timeout: 6000 })
+    return
+  }
   claudeSwitchBusy = true
   try {
-    const state = await api.claudeSwitch().catch(() => null)
-    if (!state || !state.pending) return
+    const state = await api.claudeSwitch().catch((err) => ({ pending: false, error: err && err.message }))
+    if (!state || !state.pending) {
+      if (asked)
+        showToast(
+          state && state.error
+            ? t('app.account.switchFailed', 'The Claude account switch could not be finished: {{error}}', { error: state.error })
+            : t('app.account.switchNothing', 'Each Claude session already runs on its own account.'),
+          { kind: state && state.error ? 'error' : 'info', timeout: 8000 }
+        )
+      return
+    }
     const ids = (state.panes || []).filter((id) => findLeaf(id))
+    if (asked) showToast(t('app.account.switchStarting', 'Restarting the Claude sessions ({{count}})…', { count: (state.panes || []).length }), { timeout: 8000 })
     const res = (await api.finishClaudeSwitch().catch((err) => ({ ok: false, error: err && err.message }))) || { ok: false }
     // Stopped: started again whatever happened (a start tries the switch
     // once more, or says why it can't).
@@ -4162,7 +4181,7 @@ async function checkClaudeSwitch() {
   const state = api && api.claudeSwitch ? await api.claudeSwitch().catch(() => null) : null
   if (!state || !state.pending) return
   const count = (state.panes || []).length
-  if (!count) return finishClaudeSwitch()
+  if (!count) return finishClaudeSwitch(false)
   showToast(
     t('app.account.switchWaiting', '{{count}} Claude sessions started before the update still use the system sign-in. Restart them so each runs on its own account (conversations resumed).', { count }),
     { timeout: 60000, action: { label: t('app.account.switchRestart', 'Restart them'), run: () => finishClaudeSwitch() } }

@@ -127,7 +127,9 @@ describe('an older version\'s account switch', () => {
     expect(accounts.finishClaudeSwitch).toHaveBeenCalledTimes(1)
     // A terminal no pane shows is only stopped.
     expect(env.restartInPlace.mock.calls).toEqual([['p1', { resume: true }]])
-    expect(env.showToast.mock.calls[0][0]).toContain('each on its own account')
+    // Said at once, then when done.
+    expect(env.showToast.mock.calls[0][0]).toBe('Restarting the Claude sessions (2)…')
+    expect(env.showToast.mock.calls[1][0]).toContain('each on its own account')
     expect(env.refreshAccountChoices).toHaveBeenCalled()
   })
 
@@ -140,7 +142,7 @@ describe('an older version\'s account switch', () => {
     const env = load({ leaves: { p1: claude() }, accounts })
     await env.api.finishClaudeSwitch()
     expect(env.restartInPlace).not.toHaveBeenCalled()
-    const [text, opts] = env.showToast.mock.calls[0]
+    const [text, opts] = env.showToast.mock.calls[1]
     expect(text).toContain('snapshot is unavailable or invalid')
     expect(opts.kind).toBe('error')
     expect(opts.action.label).toBe('Give up the old sign-in')
@@ -158,7 +160,7 @@ describe('an older version\'s account switch', () => {
     }
     const env = load({ leaves: { p1: claude() }, accounts })
     await env.api.finishClaudeSwitch()
-    expect(env.showToast.mock.calls[0][1].action).toBeNull()
+    expect(env.showToast.mock.calls[1][1].action).toBeNull()
     expect(env.restartInPlace).toHaveBeenCalledWith('p1', { resume: true })
     // Nothing stopped (a check failed first): nothing to start again.
     accounts.finishClaudeSwitch.mockImplementation(async () => ({ ok: false, error: 'unreadable' }))
@@ -166,6 +168,28 @@ describe('an older version\'s account switch', () => {
     await env.api.finishClaudeSwitch()
     expect(env.restartInPlace).not.toHaveBeenCalled()
     expect(env.showToast.mock.calls.at(-1)[1].action).toBeNull()
+  })
+
+  it('from the button, every outcome is said: nothing to do, already running, or not available yet', async () => {
+    let answer = { pending: false, panes: [] }
+    const accounts = { claudeSwitch: vi.fn(async () => answer), finishClaudeSwitch: vi.fn(() => new Promise(() => {})), discardClaudeSwitch: vi.fn() }
+    const env = load({ leaves: { p1: claude() }, accounts })
+    await env.api.finishClaudeSwitch()
+    expect(env.showToast.mock.calls.at(-1)[0]).toContain('already runs on its own account')
+    answer = { pending: false, panes: [], error: 'unreadable' }
+    await env.api.finishClaudeSwitch()
+    expect(env.showToast.mock.calls.at(-1)[0]).toContain('unreadable')
+    // A restart already under way (it never ends here): the second click says so.
+    answer = { pending: true, panes: ['p1'] }
+    void env.api.finishClaudeSwitch()
+    await new Promise((r) => setImmediate(r))
+    await env.api.finishClaudeSwitch()
+    expect(env.showToast.mock.calls.at(-1)[0]).toContain('already being restarted')
+    expect(accounts.finishClaudeSwitch).toHaveBeenCalledTimes(1)
+    // A window from before the update: Tessel has to start again.
+    const old = load({ leaves: {}, accounts: {} })
+    await old.api.finishClaudeSwitch()
+    expect(old.showToast.mock.calls[0][0]).toContain('Restart Tessel')
   })
 
   it('at startup: offers to restart the sessions it waits for; none: finished at once', async () => {
