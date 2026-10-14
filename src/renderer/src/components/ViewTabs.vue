@@ -120,8 +120,10 @@ function onAuxClick(e, tab) {
         class="view-tab-close"
         tabindex="-1"
         data-test="view-tab-close"
-        :title="t('app.viewTabs.close', 'Close {{name}}', { name: tab.label })"
-        :aria-label="t('app.viewTabs.close', 'Close {{name}}', { name: tab.label })"
+        :title="tab.dirty ? t('editor.tabs.closeDirty', 'Unsaved changes. Close (Ctrl+W)') : t('app.viewTabs.close', 'Close {{name}}', { name: tab.label })"
+        :aria-label="
+          tab.dirty ? t('editor.tabs.closeNameDirty', 'Close {{name}} (unsaved changes)', { name: tab.label }) : t('app.viewTabs.close', 'Close {{name}}', { name: tab.label })
+        "
         @click.stop="emit('close', tab.id, tab.path)"
       >
         <X :size="12" aria-hidden="true" />

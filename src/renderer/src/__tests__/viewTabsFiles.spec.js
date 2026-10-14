@@ -64,6 +64,8 @@ describe('the line of tabs', () => {
       expect(tabs[1].classes()).toContain('dirty')
       expect(tabs[1].find('.view-tab-dirty').exists()).toBe(true)
       expect(tabs[2].find('.view-tab-dirty').exists()).toBe(false)
+      // Said to a screen reader too, by its close button.
+      expect(tabs[1].find('[data-test="view-tab-close"]').attributes('aria-label')).toContain('unsaved changes')
     } finally {
       delete docs[pathKey('C:\\p\\x\\util.js')]
     }

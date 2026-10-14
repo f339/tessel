@@ -164,6 +164,15 @@ describe('full screen and task copies', () => {
     expect(ws.activeId).toBe('t1')
   })
 
+  it('closing the editor instead: the keyboard goes back to the pane in full screen too', () => {
+    const { api, ws, ctx } = twoTerminals()
+    api.toggleMaximize('t1')
+    const ed = api.openInTesselEditor({ file: 'C:\\p\\a.js', ws })
+    api.closeLeaf(ed.id)
+    expect(ctx.maximizedId.value).toBe('t1')
+    expect(ws.activeId).toBe('t1')
+  })
+
   it("closing a copy's editor: another tab of that copy keeps the view there, not the main project", () => {
     const tree = reactive({
       type: 'split',

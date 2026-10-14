@@ -1028,11 +1028,7 @@ function showViewTab(ws, id, path = null) {
   }
   if (id === 'terminal') {
     const active = ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
-    const grid = isTabLeaf(active) ? gridLeafFor(ws, active) : null
-    // A pane of that grid in full screen: the keyboard goes back to it (the
-    // one on screen), not to the one last used.
-    const max = grid && maximizedId.value && ws.id === currentWsId.value ? findLeafIn(ws.tree, maximizedId.value) : null
-    const target = max && !isTabLeaf(max) && viewKey(max, ws.cwd) === viewKey(grid, ws.cwd) ? max : grid
+    const target = isTabLeaf(active) ? gridReturnLeaf(ws, active) : null
     ws.view = 'terminal'
     if (target) ws.activeId = target.id
   } else {
@@ -1041,6 +1037,15 @@ function showViewTab(ws, id, path = null) {
     ws.activeId = id
   }
   focusAfterTabSwitch(ws, before)
+}
+// The terminal or agent the keyboard goes back to in `from`'s grid (an
+// editor or a browser tab left): the one in full screen there (the one on
+// screen), else the one last used (gridLeafFor). tree: where to look (the
+// workspace's, or what is left of it).
+function gridReturnLeaf(ws, from, tree = ws.tree) {
+  const grid = gridLeafFor({ ...ws, tree }, from)
+  const max = grid && maximizedId.value && ws.id === currentWsId.value ? findLeafIn(tree, maximizedId.value) : null
+  return max && !isTabLeaf(max) && viewKey(max, ws.cwd) === viewKey(grid, ws.cwd) ? max : grid
 }
 // A tab's × (or a middle-click): a file of an editor closes in it (asked
 // first when it has unsaved changes; its last file closes the editor), an
@@ -2286,7 +2291,7 @@ function closeLeaf(leafId, opts = {}) {
     // browser tab closed goes back to it), on the terminal or agent last
     // used in that grid (paneViews.js).
     if (ws.activeId === leafId) {
-      const grid = gridLeafFor(ws, closing)
+      const grid = gridReturnLeaf(ws, closing, next)
       // Its copy's grid has no terminal: a tab left in that copy keeps the
       // view there (its launcher shows under the tabs).
       let sameCopy = null
