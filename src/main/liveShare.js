@@ -498,8 +498,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       pid,
       // Stop sharing: only while it is still this cloudflared.
       stop: () => stopTunnelPid(dataDir, pid, { queryState, kill }).catch(() => false),
-      // Quitting (nothing can be waited for): Windows' taskkill ends it after
-      // Tessel is gone, only if that PID still runs this cloudflared.
+      // Quitting: ended now if that PID still runs this cloudflared (a few
+      // seconds at most); if Windows can't say in time, the next Tessel does.
       stopNow: () => stopTunnelLater(dataDir, pid)
     }
     s.invite = encodeInvite({ url: s.tunnel.url, secret })

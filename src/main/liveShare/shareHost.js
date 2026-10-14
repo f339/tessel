@@ -423,12 +423,17 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     // pausing after a no, and its reconnect key.
     if (blocked || !isCurrent(g) || now() > inviteExpires) return drop(g, 'expired')
     const inOrWaiting = [...guests.values()].filter((x) => x.state === 'joined' || x.state === 'waiting')
-    if (now() < waitUntil || inOrWaiting.filter((x) => x.state === 'waiting').length >= MAX_WAITING) return drop(g, 'busy')
-    // The room full: the host's doing, not counted against the code.
+    // The room full (guests the host let in, and at most a few waiting): the
+    // host's doing, not counted against the code. Checked first: a room full
+    // with its waiting line full too is still a full room.
     if (inOrWaiting.length >= MAX_GUESTS) {
       g.byHost = true
       return drop(g, 'busy')
     }
+    // The host pausing after a no, or the waiting line full, with room left:
+    // counted (anyone can cause those: leave while waiting, or wait three
+    // times, so they can't be a way around the count).
+    if (now() < waitUntil || inOrWaiting.filter((x) => x.state === 'waiting').length >= MAX_WAITING) return drop(g, 'busy')
     // Its reconnect key: it signed this connection with it (it holds it), not
     // a weak one, and not one already known (another guest's).
     const key = Buffer.from(String(msg.key || ''), 'base64')

@@ -145,6 +145,17 @@ describe('private browser login lifecycle', () => {
     expect(f.runStatus.mock.calls[0][1]).toEqual(['script.js', 'auth', 'status', '--json'])
     expect(f.runStatus.mock.calls[0][2].env.CLAUDE_CONFIG_DIR).toBe(home)
   })
+  it("gives the sign-in's PID as soon as it starts, and a failed record never stops it", async () => {
+    const f = fixture()
+    const onSpawn = vi.fn(async () => {
+      throw new Error('EACCES')
+    })
+    const result = f.login({ provider: 'codex', home, onSpawn })
+    await settle()
+    expect(onSpawn).toHaveBeenCalledWith(12345)
+    f.events.emit('exit', { exitCode: 0 })
+    expect(await result).toEqual({ ok: true })
+  })
   it('waits for actual child exit before cancellation resolves and temporary cleanup may run', async () => {
     const controller = new AbortController(),
       kill = vi.fn(async () => {})

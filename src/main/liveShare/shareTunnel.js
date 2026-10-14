@@ -255,11 +255,12 @@ export async function endLeftoverTunnel(dataDir, { queryState, kill, keep = 0 })
 // while that PID still runs a cloudflared of this data folder (its full path:
 // another Tessel's cloudflared is left alone). Tessel waits for PowerShell (a
 // second or two, at most 3; a PowerShell started on its own would not run
-// without a console). If it can't answer in time: Windows' taskkill, after
-// Tessel is gone, that PID only while it runs a program of cloudflared's name.
-// The PID and the folder go in as variables, never into the script's text.
-export function stopTunnelLater(dataDir, pid, { spawnSyncImpl = spawnSync, spawnImpl = spawn, env = process.env } = {}) {
-  if (!Number.isInteger(pid) || pid <= 0) return
+// without a console). If it can't answer in time, the PID stays written down
+// and the next Tessel ends it after the same check (endLeftoverTunnel): no
+// weaker check (a program name alone) is ever used. The PID and the folder go
+// in as variables, never into the script's text.
+export function stopTunnelLater(dataDir, pid, { spawnSyncImpl = spawnSync, env = process.env } = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
   const script = `$ErrorActionPreference = 'Stop'; $p = Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$env:TESSEL_TUNNEL_PID); if ($p -and $p.ExecutablePath -and $(${OURS_TEST})) { Stop-Process -Id $p.ProcessId -Force }`
   try {
     const r = spawnSyncImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
@@ -268,17 +269,15 @@ export function stopTunnelLater(dataDir, pid, { spawnSyncImpl = spawnSync, spawn
       timeout: 3000,
       env: { ...env, TESSEL_TUNNEL_PID: String(pid), TESSEL_TUNNEL_BIN: binDir(dataDir) }
     })
-    if (r && !r.error && r.status === 0) return
+    // Ended, gone, or not ours (any more): nothing left to end.
+    if (r && !r.error && r.status === 0) {
+      forgetTunnelPid(dataDir, pid)
+      return true
+    }
   } catch {
-    /* taskkill below */
+    /* the next Tessel ends it */
   }
-  try {
-    const child = spawnImpl('taskkill.exe', ['/F', '/PID', String(pid), '/FI', 'IMAGENAME eq cloudflared-*'], { windowsHide: true, detached: true, stdio: 'ignore' })
-    child.on?.('error', () => {})
-    child.unref?.()
-  } catch {
-    /* the next Tessel ends it (endLeftoverTunnel) */
-  }
+  return false
 }
 
 // Stops a tunnel by its PID (one this Tessel took back after a restart),

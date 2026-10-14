@@ -831,4 +831,42 @@ describe('sign-in folders', () => {
     await add('other')
     expect(folders.map((f) => fs.existsSync(f))).toEqual([false, true])
   })
+  it('writes its guard before the sign-in starts: if it cannot, nothing starts and its folder goes', async () => {
+    seedSystem()
+    const real = fsp.rename.bind(fsp)
+    vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+      if (String(to).endsWith('.tessel-login-pid')) throw Object.assign(new Error('denied'), { code: 'EACCES' })
+      return real(from, to)
+    })
+    await expect(service.add()).rejects.toThrow()
+    expect(runner).not.toHaveBeenCalled()
+    expect(fs.readdirSync(runtimePath('')).filter((n) => n.startsWith('login-'))).toEqual([])
+  })
+  it("keeps the folder while the sign-in's process runs, from the moment it starts (a later write that fails changes nothing)", async () => {
+    seedSystem()
+    const alive = new Set([4242])
+    service = create({ pidAlive: (pid) => alive.has(pid) })
+    let isolated
+    const real = fsp.rename.bind(fsp)
+    runner.mockImplementationOnce(async ({ home: directory, onSpawn }) => {
+      isolated = directory
+      await onSpawn(4242)
+      // Every write of the guard from now on fails.
+      vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+        if (String(to).endsWith('.tessel-login-pid')) throw Object.assign(new Error('denied'), { code: 'EACCES' })
+        return real(from, to)
+      })
+      return { ok: false, cleanupSafe: false, pid: 4242 }
+    })
+    await expect(service.add()).rejects.toThrow('could not be confirmed')
+    vi.mocked(fsp.rename).mockRestore()
+    expect(fs.readFileSync(join(isolated, '.tessel-login-pid'), 'utf8').trim()).toBe('4242')
+    const hoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    fs.utimesSync(join(isolated, MARKER), hoursAgo, hoursAgo)
+    await add()
+    expect(fs.existsSync(isolated)).toBe(true)
+    alive.clear()
+    await add('other')
+    expect(fs.existsSync(isolated)).toBe(false)
+  })
 })

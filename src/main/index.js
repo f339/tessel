@@ -1601,9 +1601,12 @@ ipcMain.handle('agents:model', async (_evt, q = {}) => {
     // the window).
     const query = { ...(q || {}) }
     delete query.codexDir
+    // That account unreadable (removed meanwhile): never the system's
+    // ~/.codex instead; the pane keeps what it showed.
     if (query.agentId === 'codex' && typeof query.accountId === 'string') {
       const roots = await accountSessions.roots({ agent: 'codex', accountId: query.accountId }).catch(() => null)
-      if (roots && roots.codex) query.codexDir = roots.codex
+      if (!roots || !roots.codex) return { keep: true }
+      query.codexDir = roots.codex
     }
     return await agentModelLive(query)
   } catch {

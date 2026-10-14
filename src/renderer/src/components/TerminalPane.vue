@@ -304,6 +304,8 @@ async function refreshModel() {
             ? n.modelChoice.model
             : undefined
     })
+    // Its account could not be read (removed meanwhile): what it showed stays.
+    if (res && res.keep) return
     if ((!res || !res.model) && !n.modelChoice) {
       const seen = modelOnScreen()
       // The effort its settings give still shows (res.chosenEffort).

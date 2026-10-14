@@ -168,7 +168,7 @@ export function createProviderLogin({
   timeoutMs = 10 * 60 * 1000,
   teardownMs = 10000
 } = {}) {
-  return async ({ provider, home, signal, onProgress = () => {} }) => {
+  return async ({ provider, home, signal, onProgress = () => {}, onSpawn = () => {} }) => {
     if (signal?.aborted) return { ok: false, error: t('main.login.cancelled', 'Sign-in cancelled.') }
     let command, child
     const childEnv = loginEnvironment(provider, home, env)
@@ -184,6 +184,13 @@ export function createProviderLogin({
         ok: false,
         error: t('main.login.startFailed', 'Could not start {{provider}} sign-in. Check that its CLI is installed.', { provider })
       }
+    }
+    // Its PID, for whoever later decides its folder can go (Tessel may stop
+    // before this sign-in does).
+    try {
+      await onSpawn(child.pid)
+    } catch {
+      /* the caller keeps the folder without it */
     }
     const loggedIn = await new Promise((resolve) => {
       let output = '',

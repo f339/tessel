@@ -733,16 +733,27 @@ export function createClaudeAccounts({
     await exclusiveText(join(temporary, MARKER), `login:${loginId}\n`)
     let created = null
     let cleanupSafe = true
+    const guard = join(temporary, LOGIN_PID)
+    const validPid = (pid) => Number.isInteger(pid) && pid > 0
     try {
+      // Written before the sign-in starts (if it can't be, nothing starts),
+      // then given the sign-in's PID: until its end is confirmed, its folder
+      // is kept while that process runs (with no PID: for good), even if
+      // Tessel stops meanwhile.
+      await writeText(guard, '\n')
       // The runner reports uncertain termination explicitly. Record that before
       // cancellation checks so an aborted, possibly live child keeps its home.
-      const result = await runLogin({ provider: 'claude', home: temporary, signal, onProgress })
+      const result = await runLogin({
+        provider: 'claude',
+        home: temporary,
+        signal,
+        onProgress,
+        onSpawn: (pid) => (validPid(pid) ? writeText(guard, `${pid}\n`) : undefined)
+      })
       cleanupSafe = result?.cleanupSafe !== false
       if (!cleanupSafe) {
-        // Its folder stays until that process is seen gone (an unknown one:
-        // for good).
-        const pid = Number.isInteger(result.pid) && result.pid > 0 ? result.pid : ''
-        await writeText(join(temporary, LOGIN_PID), `${pid}\n`).catch(() => {})
+        // Its folder stays until that process is seen gone.
+        if (validPid(result.pid)) await writeText(guard, `${result.pid}\n`).catch(() => {})
         throw Object.assign(
           authError(
             t('main.claudeAccount.stopFailed', 'Claude sign-in could not be stopped. Temporary files were retained because process termination could not be confirmed.')
@@ -813,8 +824,10 @@ export function createClaudeAccounts({
       // sign-in (the folder is removed by a later one).
       if (cleanupSafe)
         await removeOwnedDirectory(runtimeRoot, temporary, MARKER, `login:${loginId}`).catch(async () => {
-          // At least its copy of the login goes now.
+          // At least its copy of the login goes now; its end was confirmed,
+          // so a later sign-in may remove the rest.
           await writeText(join(temporary, '.credentials.json'), null).catch(() => {})
+          await writeText(guard, null).catch(() => {})
         })
     }
   }

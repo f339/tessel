@@ -177,36 +177,36 @@ describe('Live Share tunnel: round 5', () => {
   })
 
   it('quitting: checks and ends a taken-back tunnel at once (only that PID, only a cloudflared of this data folder)', () => {
+    tmp()
+    fs.mkdirSync(join(dir, 'bin'))
+    fs.writeFileSync(join(dir, 'bin', 'cloudflared.pid'), '4242')
     const ran = []
-    const spawned = []
-    const spawnImpl = (cmd, args, opts) => {
-      spawned.push({ cmd, args, opts })
-      const child = new EventEmitter()
-      child.unref = () => {}
-      return child
-    }
-    stopTunnelLater('C:\\x', 4242, { env: { SystemRoot: 'C:\\Windows' }, spawnImpl, spawnSyncImpl: (cmd, args, opts) => (ran.push({ cmd, args, opts }), { status: 0 }) })
+    const ok = stopTunnelLater(dir, 4242, { env: { SystemRoot: 'C:\\Windows' }, spawnSyncImpl: (cmd, args, opts) => (ran.push({ cmd, args, opts }), { status: 0 }) })
+    expect(ok).toBe(true)
     expect(ran[0].cmd).toBe('powershell.exe')
     const script = ran[0].args.at(-1)
     expect(script).toContain('Stop-Process -Id $p.ProcessId -Force')
     expect(script).toContain("-like 'cloudflared-*.exe'")
     expect(script).not.toContain('4242')
-    expect(ran[0].opts).toMatchObject({ windowsHide: true, timeout: 3000, env: { SystemRoot: 'C:\\Windows', TESSEL_TUNNEL_PID: '4242', TESSEL_TUNNEL_BIN: 'C:\\x\\bin' } })
-    expect(spawned).toEqual([])
+    expect(ran[0].opts).toMatchObject({ windowsHide: true, timeout: 3000, env: { SystemRoot: 'C:\\Windows', TESSEL_TUNNEL_PID: '4242', TESSEL_TUNNEL_BIN: join(dir, 'bin') } })
+    expect(readTunnelPids(dir)).toEqual([])
   })
 
-  it('quitting: if PowerShell cannot answer in time, Windows taskkill ends it later (that PID, a cloudflared name only)', () => {
-    const spawned = []
-    const spawnImpl = (cmd, args, opts) => {
-      spawned.push({ cmd, args, opts })
-      const child = new EventEmitter()
-      child.unref = () => {}
-      return child
+  it('quitting: if PowerShell cannot answer in time, nothing weaker runs; the PID stays for the next Tessel to check and end', async () => {
+    tmp()
+    fs.mkdirSync(join(dir, 'bin'))
+    fs.writeFileSync(join(dir, 'bin', 'cloudflared.pid'), '4242')
+    const ran = []
+    for (const answer of [{ status: null, error: new Error('ETIMEDOUT') }, { status: 1 }, () => { throw new Error('spawn EPERM') }]) {
+      const spawnSyncImpl = (cmd) => (ran.push(cmd), typeof answer === 'function' ? answer() : answer)
+      expect(stopTunnelLater(dir, 4242, { spawnSyncImpl })).toBe(false)
     }
-    for (const answer of [{ status: null, error: new Error('ETIMEDOUT') }, { status: 1 }]) stopTunnelLater('C:\\x', 4242, { spawnImpl, spawnSyncImpl: () => answer })
-    expect(spawned).toHaveLength(2)
-    expect(spawned[0].cmd).toBe('taskkill.exe')
-    expect(spawned[0].args).toEqual(['/F', '/PID', '4242', '/FI', 'IMAGENAME eq cloudflared-*'])
-    expect(spawned[0].opts).toMatchObject({ detached: true, windowsHide: true })
+    expect(ran).toEqual(['powershell.exe', 'powershell.exe', 'powershell.exe'])
+    expect(readTunnelPids(dir)).toEqual([4242])
+    // The next start: checked by its full path first, ended only while ours.
+    const killed = []
+    expect(await endLeftoverTunnel(dir, { queryState: async () => 'ours', kill: (p) => killed.push(p) })).toBe(true)
+    expect(killed).toEqual([4242])
+    expect(readTunnelPids(dir)).toEqual([])
   })
 })

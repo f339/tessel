@@ -902,6 +902,45 @@ describe('Live Share session: round 5', () => {
     expect(blocked).toBe(0)
   }, 30000)
 
+  it('a room full with its waiting line full too: still a full room, not counted against the code', async () => {
+    // Seven let in, then three left waiting for the host's answer.
+    let answered = 0
+    const t = fakeTessel({ approve: () => (++answered <= 7 ? true : new Promise(() => {})) })
+    let blocked = 0
+    const secret = newSecret()
+    const host = hostFor({ secret, hostName: 'Cedric', callbacks: { ...t.callbacks, onInviteBlocked: () => blocked++ } })
+    const port = await host.start()
+    const join = async (name) => {
+      const r = guestRecorder()
+      createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name, signingKey: newSigningKey(), callbacks: r.callbacks }).connect()
+      await until(() => r.states.includes('joined') || r.states.includes('waiting') || r.closed)
+      return r
+    }
+    for (let i = 0; i < 7; i++) expect((await join(`G${i}`)).states).toContain('joined')
+    for (let i = 0; i < 3; i++) expect((await join(`W${i}`)).states).toContain('waiting')
+    for (let i = 0; i < 9; i++) expect((await join(`X${i}`)).closed).toBe('busy')
+    expect(blocked).toBe(0)
+  }, 30000)
+
+  it('the waiting line full with room left: those turned away still count (anyone can fill the line)', async () => {
+    const t = fakeTessel({ approve: () => new Promise(() => {}) })
+    let blocked = 0
+    const secret = newSecret()
+    const host = hostFor({ secret, hostName: 'Cedric', callbacks: { ...t.callbacks, onInviteBlocked: () => blocked++ } })
+    const port = await host.start()
+    const join = async (name) => {
+      const r = guestRecorder()
+      createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name, signingKey: newSigningKey(), callbacks: r.callbacks }).connect()
+      await until(() => r.states.includes('waiting') || r.closed)
+      return r
+    }
+    for (let i = 0; i < 3; i++) expect((await join(`W${i}`)).states).toContain('waiting')
+    for (let i = 0; i < 8; i++) expect((await join(`X${i}`)).closed).toBe('busy')
+    // Eight counted: the code lets no new guest in.
+    expect(blocked).toBe(1)
+    expect((await join('Y')).closed).toBe('expired')
+  }, 30000)
+
   it('what a guest closes is saved at once (a crash before the next save does not reset its count)', async () => {
     const t = fakeTessel()
     let saves = 0
