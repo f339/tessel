@@ -4123,28 +4123,33 @@ async function finishClaudeSwitch() {
     const state = await api.claudeSwitch().catch(() => null)
     if (!state || !state.pending) return
     const ids = (state.panes || []).filter((id) => findLeaf(id))
-    const res = await api.finishClaudeSwitch().catch((err) => ({ ok: false, error: err && err.message }))
-    if (res && res.ok) {
-      for (const id of ids) await restartInPlace(id, { resume: true })
+    const res = (await api.finishClaudeSwitch().catch((err) => ({ ok: false, error: err && err.message }))) || { ok: false }
+    // Stopped: started again whatever happened (a start tries the switch
+    // once more, or says why it can't).
+    if (res.ok || res.stopped) for (const id of ids) if (findLeaf(id)) await restartInPlace(id, { resume: true })
+    if (res.ok) {
       showToast(t('app.account.switchDone', 'The Claude sessions started again, each on its own account.'), { timeout: 8000 })
       refreshAccountChoices()
       return
     }
-    // Its snapshot unusable: offered to keep the system's current sign-in.
-    showToast(t('app.account.switchFailed', 'The Claude account switch could not be finished: {{error}}', { error: (res && res.error) || t('app.common.unknownError', 'unknown error') }), {
+    // Only when its snapshot can't be used: offered to give the switch up.
+    showToast(t('app.account.switchFailed', 'The Claude account switch could not be finished: {{error}}', { error: res.error || t('app.common.unknownError', 'unknown error') }), {
       kind: 'error',
       timeout: 20000,
-      action:
-        res && res.pending
-          ? null
-          : {
-              label: t('app.account.switchKeep', 'Keep the current sign-in'),
-              run: async () => {
-                const kept = await api.discardClaudeSwitch().catch(() => null)
-                if (kept && kept.ok) for (const id of ids) if (findLeaf(id)) await restartInPlace(id, { resume: true })
-                refreshAccountChoices()
-              }
+      action: res.snapshotInvalid
+        ? {
+            label: t('app.account.switchKeep', 'Give up the old sign-in'),
+            run: async () => {
+              const kept = (await api.discardClaudeSwitch().catch((err) => ({ ok: false, error: err && err.message }))) || { ok: false }
+              if (kept.ok || kept.stopped) for (const id of ids) if (findLeaf(id)) await restartInPlace(id, { resume: true })
+              if (kept.signedOut)
+                showToast(t('app.account.switchSignedOut', 'The system is now signed out of Claude (its old sign-in could not be restored). Sign in again in a terminal with claude /login.'), { timeout: 15000 })
+              else if (!kept.ok)
+                showToast(t('app.account.switchFailed', 'The Claude account switch could not be finished: {{error}}', { error: kept.error || t('app.common.unknownError', 'unknown error') }), { kind: 'error', timeout: 12000 })
+              refreshAccountChoices()
             }
+          }
+        : null
     })
   } finally {
     claudeSwitchBusy = false

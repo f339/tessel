@@ -123,7 +123,8 @@
       "refused": "{{agent}} n'a pas été démarré : son compte n'a pas pu être utilisé ({{error}}). Voir Paramètres > Comptes de fournisseurs d'IA.",
       "switchDone": "Les sessions Claude ont redémarré, chacune sur son propre compte.",
       "switchFailed": "Le passage aux comptes par session n'a pas pu se terminer : {{error}}",
-      "switchKeep": "Garder la connexion actuelle",
+      "switchKeep": "Abandonner l'ancienne connexion",
+      "switchSignedOut": "Le système est maintenant déconnecté de Claude (son ancienne connexion n'a pas pu être restaurée). Reconnectez-le dans un terminal avec claude /login.",
       "switchWaiting": "{{count}} sessions Claude démarrées avant la mise à jour utilisent encore la connexion du système. Redémarrez-les pour que chacune tourne sur son propre compte (conversations reprises).",
       "switchRestart": "Les redémarrer"
     },

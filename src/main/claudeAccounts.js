@@ -893,14 +893,64 @@ export function createClaudeAccounts({
     }
     await writeText(snapshotPath, null, raw)
   }
-  // The older version's switch, given up (its snapshot can't be used): the
-  // system files keep the sign-in they have now.
+  // Before the sessions an older version started are stopped: whether its
+  // switch can be undone (the account readable, the snapshot usable), so
+  // they are never stopped for nothing. snapshotInvalid: only giving the
+  // switch up is left (discardSwitch).
+  async function checkSwitch() {
+    const raw = await readText(snapshotPath)
+    if (raw === null) return { ok: true }
+    const state = await readMetadata()
+    if (!legacy(state, raw)) return { ok: true }
+    const old = state.accounts.find((a) => a.id === state.selectedId)
+    // Signed in to another account since: nothing to put back.
+    if (old && !holds(old, await systemAuth())) return { ok: true }
+    if (old && (await managed(old.id)).status === 'unknown')
+      return {
+        ok: false,
+        error: t('main.claudeAccount.selectedUnreadable', 'The selected Claude account is unreadable. No authentication files were changed.')
+      }
+    try {
+      await snapshot()
+    } catch (error) {
+      return { ok: false, error: error?.message || '', snapshotInvalid: true }
+    }
+    return { ok: true }
+  }
+  // The older version's switch, given up (its snapshot can't be used). The
+  // system files keep a sign-in made since; if they still hold the
+  // account's, it goes to the account's own folder and the system is signed
+  // out (one sign-in kept in two places signs one of them out at its next
+  // refresh). Not while sessions that version started still run.
   async function discardSwitch() {
     const raw = await readText(snapshotPath)
-    if (raw === null) return
+    if (raw === null) return { ok: true }
     const state = await readMetadata()
-    if (legacy(state, raw)) await transaction([{ kind: 'index', after: encode({ ...state, perSession: true }) }])
+    let signedOut = false
+    if (legacy(state, raw)) {
+      if (!(await canMigrate())) throw switchPending()
+      const old = state.accounts.find((a) => a.id === state.selectedId)
+      const runtime = await systemAuth()
+      const changes = []
+      if (old && holds(old, runtime)) {
+        const saved = await managed(old.id)
+        if (saved.status === 'unknown')
+          throw authError(
+            t('main.claudeAccount.selectedUnreadable', 'The selected Claude account is unreadable. No authentication files were changed.')
+          )
+        const auth = saved.status === 'ready' ? await refreshed(old, saved) : { raw: runtime.credentials, oauth: runtime.oauth.value }
+        changes.push(
+          ...accountChanges(old.id, auth),
+          { kind: 'credentials', after: null, expected: runtime.credentials },
+          { kind: 'oauth', after: { present: false, value: null }, expected: runtime.oauth }
+        )
+        signedOut = true
+      }
+      changes.push({ kind: 'index', after: encode({ ...state, perSession: true }) })
+      await transaction(changes)
+    }
     await writeText(snapshotPath, null, raw)
+    return { ok: true, ...(signedOut ? { signedOut: true } : {}) }
   }
   // Claude takes <file>.lock (a folder, proper-lockfile's way) while it writes
   // its config; so does Tessel, never breaking it. Held: false, nothing done.
@@ -1608,12 +1658,17 @@ export function createClaudeAccounts({
         await migrate()
         return { ok: true }
       }),
-    // Its snapshot unusable: the switch is given up, the system sign-in kept.
+    // Whether the switch can be undone, before anything is stopped.
+    checkSwitch: () =>
+      serialized(async () => {
+        await recover()
+        return checkSwitch()
+      }),
+    // Its snapshot unusable: the switch is given up (see discardSwitch).
     discardSwitch: () =>
       serialized(async () => {
         await recover()
-        await discardSwitch()
-        return { ok: true }
+        return discardSwitch()
       }),
     // Whether an older version's switch is still to be undone.
     switchPending: () =>

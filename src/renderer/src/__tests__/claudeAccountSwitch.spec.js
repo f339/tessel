@@ -131,11 +131,11 @@ describe('an older version\'s account switch', () => {
     expect(env.refreshAccountChoices).toHaveBeenCalled()
   })
 
-  it('its snapshot unusable: offers to keep the current sign-in, then starts the sessions again', async () => {
+  it('its snapshot unusable (nothing stopped): offers to give the old sign-in up, then starts the sessions again', async () => {
     const accounts = {
       claudeSwitch: vi.fn(async () => ({ pending: true, panes: ['p1'] })),
-      finishClaudeSwitch: vi.fn(async () => ({ ok: false, error: 'snapshot is unavailable or invalid' })),
-      discardClaudeSwitch: vi.fn(async () => ({ ok: true }))
+      finishClaudeSwitch: vi.fn(async () => ({ ok: false, error: 'snapshot is unavailable or invalid', snapshotInvalid: true })),
+      discardClaudeSwitch: vi.fn(async () => ({ ok: true, signedOut: true, stopped: true }))
     }
     const env = load({ leaves: { p1: claude() }, accounts })
     await env.api.finishClaudeSwitch()
@@ -143,20 +143,29 @@ describe('an older version\'s account switch', () => {
     const [text, opts] = env.showToast.mock.calls[0]
     expect(text).toContain('snapshot is unavailable or invalid')
     expect(opts.kind).toBe('error')
+    expect(opts.action.label).toBe('Give up the old sign-in')
     await opts.action.run()
     expect(accounts.discardClaudeSwitch).toHaveBeenCalledTimes(1)
     expect(env.restartInPlace).toHaveBeenCalledWith('p1', { resume: true })
+    expect(env.showToast.mock.calls.at(-1)[0]).toContain('signed out of Claude')
   })
 
-  it('a session that did not stop: nothing to offer but trying again', async () => {
+  it('any other failure: nothing given up; sessions already stopped start again', async () => {
     const accounts = {
       claudeSwitch: vi.fn(async () => ({ pending: true, panes: ['p1'] })),
-      finishClaudeSwitch: vi.fn(async () => ({ ok: false, error: 'still running', pending: true })),
+      finishClaudeSwitch: vi.fn(async () => ({ ok: false, error: 'changed during the operation', stopped: true })),
       discardClaudeSwitch: vi.fn()
     }
     const env = load({ leaves: { p1: claude() }, accounts })
     await env.api.finishClaudeSwitch()
     expect(env.showToast.mock.calls[0][1].action).toBeNull()
+    expect(env.restartInPlace).toHaveBeenCalledWith('p1', { resume: true })
+    // Nothing stopped (a check failed first): nothing to start again.
+    accounts.finishClaudeSwitch.mockImplementation(async () => ({ ok: false, error: 'unreadable' }))
+    env.restartInPlace.mockClear()
+    await env.api.finishClaudeSwitch()
+    expect(env.restartInPlace).not.toHaveBeenCalled()
+    expect(env.showToast.mock.calls.at(-1)[1].action).toBeNull()
   })
 
   it('at startup: offers to restart the sessions it waits for; none: finished at once', async () => {

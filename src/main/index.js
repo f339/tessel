@@ -1962,23 +1962,38 @@ ipcMain.handle('accounts:claudeSwitch', async () => {
   }
 })
 // Those sessions stopped together (the window starts each again on its
-// account, conversation resumed), then the system's sign-in put back.
+// account, conversation resumed), then the system's sign-in put back. Never
+// stopped when it can't be undone (checked first). stopped: they were
+// stopped (the window starts them again, whatever the result);
+// snapshotInvalid: only giving the switch up is left.
 ipcMain.handle('accounts:finishClaudeSwitch', async () => {
+  let stopped = false
   try {
-    for (const id of await oldClaudeSessions()) host.send('kill', { id })
+    const check = await claudeAccounts.checkSwitch()
+    if (!check.ok) return { ok: false, error: check.error, snapshotInvalid: !!check.snapshotInvalid }
+    const ids = await oldClaudeSessions()
+    for (const id of ids) host.send('kill', { id })
+    stopped = ids.length > 0
     for (let i = 0; i < 60 && (await oldClaudeSessions()).length; i++) await new Promise((r) => setTimeout(r, 250))
-    return await claudeAccounts.migrate()
+    return { ...(await claudeAccounts.migrate()), stopped }
   } catch (err) {
-    // pending: one of those sessions did not stop (nothing else to offer).
-    return { ok: false, error: err && err.message, pending: !!(err && err.switchPending) }
+    // pending: one of those sessions did not stop.
+    return { ok: false, error: err && err.message, pending: !!(err && err.switchPending), stopped }
   }
 })
-// Its snapshot unusable: the system keeps the sign-in it has now.
+// Its snapshot unusable: the switch given up (claudeAccounts discardSwitch),
+// those sessions stopped first as well (they would write the old sign-in
+// back); the window starts them again.
 ipcMain.handle('accounts:discardClaudeSwitch', async () => {
+  let stopped = false
   try {
-    return await claudeAccounts.discardSwitch()
+    const ids = await oldClaudeSessions()
+    for (const id of ids) host.send('kill', { id })
+    stopped = ids.length > 0
+    for (let i = 0; i < 60 && (await oldClaudeSessions()).length; i++) await new Promise((r) => setTimeout(r, 250))
+    return { ...(await claudeAccounts.discardSwitch()), stopped }
   } catch (err) {
-    return { ok: false, error: err && err.message }
+    return { ok: false, error: err && err.message, stopped }
   }
 })
 ipcMain.handle('accounts:list', safe(() => accounts.list()))
