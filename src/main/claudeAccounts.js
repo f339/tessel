@@ -117,12 +117,23 @@ const SETTINGS_FILES = new Set(['settings.json', 'settings.local.json'])
 // What the last sync left on both sides, in each account's folder.
 const SYNC_STATE = '.tessel-sync.json'
 // The settings that choose how Claude signs in, and the env entries that
-// carry a key or a token: never in an account's copy (it signs in with its
-// own login), and never removed from the system's.
+// carry a key or a token or send its requests elsewhere (a gateway would get
+// the account's own token, with the headers meant for it): never in an
+// account's copy (it signs in with its own login), and never removed from
+// the system's.
 const AUTH_SETTINGS = ['apiKeyHelper', 'awsAuthRefresh', 'awsCredentialExport', 'forceLoginMethod', 'forceLoginOrgUUID']
-const AUTH_ENV = new Set(ACCOUNT_AUTH_ENV.claude.map((name) => name.toUpperCase()))
+const ENDPOINT_ENV = [
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_BEDROCK_BASE_URL',
+  'ANTHROPIC_VERTEX_BASE_URL',
+  'ANTHROPIC_FOUNDRY_BASE_URL',
+  'ANTHROPIC_CUSTOM_HEADERS'
+]
+const AUTH_ENV = new Set([...ACCOUNT_AUTH_ENV.claude, ...ENDPOINT_ENV].map((name) => name.toUpperCase()))
 // Tessel's own hook handlers (teamInstall.js) run this script. Tessel adds
-// them to an account's settings.json at each launch: never the person's change.
+// them to an account's settings.json at each launch (with the node of that
+// session) and to the system's: never the person's change. The account's
+// copy holds the system's.
 const TESSEL_HOOK = 'tessel-team-mcp.cjs'
 const MEMORY_IMPORT = '@~/.claude/CLAUDE.md'
 // Claude's own bookkeeping in .claude.json (counters, times, what it saw or
@@ -328,17 +339,36 @@ function syncProject(a, s, base, writeBack) {
 }
 // The shared keys of the account's .claude.json and the system's, synced:
 // the user's MCP servers one by one, the projects field by field, the other
-// keys whole. An account file without its projects or MCP servers (Claude
-// started it again) takes the system's, never removing any there.
-function syncConfig(own, system, base, writeBack) {
+// keys whole. A key the account's file dropped since the last sync (Claude
+// drops one set back to its default) goes from the system's too, unless
+// `removals` is false (a file missing or started again). An account file
+// without its projects or MCP servers takes the system's, never removing any
+// there.
+function syncConfig(own, system, base, writeBack, removals) {
   return syncMap(own, system, base, (key, a, s, b) => {
     if (!sharedStateKey(key)) return null
+    const known = typeof b === 'string' ? b : undefined
+    if (key === 'env') return syncEnv(a, s, known, { removals, writeBack })
     if (key !== 'projects' && key !== 'mcpServers')
-      return syncValue(a, s, typeof b === 'string' ? b : undefined, { bookkeeping: BOOKKEEPING.test(key), writeBack })
-    if (s !== undefined && !object(s)) return syncValue(a, s, typeof b === 'string' ? b : undefined, { writeBack })
+      return syncValue(a, s, known, { removals, bookkeeping: BOOKKEEPING.test(key), writeBack })
+    if (s !== undefined && !object(s)) return syncValue(a, s, known, { writeBack })
     if (!object(a)) return s === undefined ? null : { ...syncEntries(key, s, s, undefined, writeBack), a: s }
     return syncEntries(key, a, s, b, writeBack)
   })
+}
+// .claude.json's `env`, which Claude applies to its process: never a sign-in
+// or endpoint entry on the account's side (synced without them), and the
+// system's own kept when the account's change is written back.
+function syncEnv(a, s, base, options) {
+  const strip = (env) => {
+    if (!object(env)) return env
+    const rest = authEnvEntries(env, false)
+    return some(rest) || !some(env) ? rest : undefined
+  }
+  const result = syncValue(strip(a), strip(s), base, options)
+  if (equal(result.s, strip(s))) return { ...result, s }
+  const own = authEnvEntries(s, true)
+  return { ...result, s: object(result.s) ? { ...result.s, ...own } : some(own) ? own : result.s }
 }
 function syncEntries(key, a, s, base, writeBack) {
   const entries = syncMap(a, s ?? {}, object(base) ? base : undefined, (name, x, y, z) =>
@@ -356,8 +386,10 @@ function syncEntries(key, a, s, base, writeBack) {
 // An account's .claude.json, synced with the system's (`base`: the sync state
 // of the last launch, null: none yet), with its own login identity. Never a
 // token: none is in either file's shared keys, and the login itself stays in
-// .credentials.json. -> { account, system (null: unchanged), base, lost }
-export function accountState(own, system, oauth, base = null, { writeBack = true, signedIn = false } = {}) {
+// .credentials.json. `removals` false: the account's file was missing or
+// unreadable (nothing it lacks was removed in a session).
+// -> { account, system (null: unchanged), base, lost }
+export function accountState(own, system, oauth, base = null, { writeBack = true, signedIn = false, removals = true } = {}) {
   let result = { account: { ...own }, system: null, base, lost: {} }
   if (object(system)) {
     // Most of what it had at the last sync gone: Claude started the file again
@@ -366,7 +398,7 @@ export function accountState(own, system, oauth, base = null, { writeBack = true
     const had = object(base) ? Object.keys(base) : []
     const restarted = had.length >= 4 && had.filter((key) => !Object.hasOwn(own, key)).length * 2 > had.length
     const mine = restarted ? Object.fromEntries(Object.entries(own).filter(([key]) => !sharedStateKey(key))) : own
-    const synced = syncConfig(mine, system, base, writeBack)
+    const synced = syncConfig(mine, system, base, writeBack, removals && !restarted)
     result = { ...synced, system: equal(synced.system, system) ? null : synced.system }
   }
   // Claude keeps its profile there fresher than the one saved at sign-in; a
@@ -408,6 +440,26 @@ function tesselHooks(settings) {
       if (ours.length) (out[event] ||= []).push({ ...group, hooks: ours })
     }
   return out
+}
+// Settings (without Tessel's hooks) with these Tessel hook groups added at
+// the end of their events, where teamInstall.js puts them.
+function withHooks(settings, ours) {
+  if (!some(ours)) return settings
+  const hooks = object(settings.hooks) ? { ...settings.hooks } : {}
+  for (const [event, groups] of Object.entries(ours))
+    hooks[event] = [...(Array.isArray(hooks[event]) ? hooks[event] : []), ...groups]
+  return { ...settings, hooks }
+}
+// The account's copy with the system's Tessel hooks in place of its own,
+// whatever else changed: one Tessel added to or removed from the system's
+// reaches the copy.
+function withSystemHooks(name, contents, system) {
+  if (contents === null || !SETTINGS_FILES.has(name)) return contents
+  const value = parseJson(contents)
+  const current = system === null ? {} : parseJson(system)
+  if (!object(value) || !object(current)) return contents
+  const ours = tesselHooks(current)
+  return equal(tesselHooks(value), ours) ? contents : encode(withHooks(withoutTesselHooks(value), ours))
 }
 const authEnvEntries = (env, keep) =>
   Object.fromEntries(Object.entries(object(env) ? env : {}).filter(([name]) => AUTH_ENV.has(name.toUpperCase()) === keep))
@@ -459,17 +511,10 @@ function writtenBack(name, account, system) {
   if (!SETTINGS_FILES.has(name)) return account
   const current = system === null ? {} : parseJson(system)
   if (!object(own) || !object(current)) return null
-  const next = withoutTesselHooks(withoutAuth(own))
+  const next = withHooks(withoutTesselHooks(withoutAuth(own)), tesselHooks(current))
   for (const key of AUTH_SETTINGS) if (Object.hasOwn(current, key)) next[key] = current[key]
   const env = authEnvEntries(current.env, true)
   if (some(env)) next.env = { ...(object(next.env) ? next.env : {}), ...env }
-  const ours = tesselHooks(current)
-  if (some(ours)) {
-    const hooks = object(next.hooks) ? { ...next.hooks } : {}
-    for (const [event, groups] of Object.entries(ours))
-      hooks[event] = [...(Array.isArray(hooks[event]) ? hooks[event] : []), ...groups]
-    next.hooks = hooks
-  }
   return equal(next, own) ? account : encode(next)
 }
 // The lines a session added to the account's memory file (its import of the
@@ -497,7 +542,7 @@ function withoutLines(lines, moved) {
   }
   return addedMemory(rest.join('\n'))
 }
-const AUTH_NAMES = new RegExp(`\\b(${[...AUTH_SETTINGS, ...ACCOUNT_AUTH_ENV.claude].join('|')})\\b`, 'i')
+const AUTH_NAMES = new RegExp(`\\b(${[...AUTH_SETTINGS, ...AUTH_ENV].join('|')})\\b`, 'i')
 // A settings file holding a sign-in setting. Not valid JSON: any mention of
 // one counts (it can't be removed safely).
 function holdsAuth(contents) {
@@ -1031,17 +1076,20 @@ export function createClaudeAccounts({
       }
       const raw = await readText(file)
       let own = {}
+      // Missing or damaged: what it lacks was not removed in a session.
+      let removals = raw !== null
       try {
         own = raw === null ? {} : jsonObject(raw)
       } catch {
         // Damaged: Claude starts it again too.
+        removals = false
       }
       if (!signedIn && folderIdentity(identity(oauth), own.oauthAccount) === 'other') {
         outcome = 'switched'
         return
       }
       const sync = await readSync(folder)
-      let next = accountState(own, system, oauth, sync.config, { writeBack: writeBack && system !== null, signedIn })
+      let next = accountState(own, system, oauth, sync.config, { writeBack: writeBack && system !== null, signedIn, removals })
       // The account's values a system change replaces are kept aside before
       // anything is written: if they can't be, nothing is replaced.
       if (some(next.lost)) await keepAside(folder, '.claude.json', encode(next.lost))
@@ -1052,7 +1100,7 @@ export function createClaudeAccounts({
           await writeText(configPath, encode(next.system), systemRaw)
         } catch {
           warn('Claude account: the system Claude settings could not be written; its changes are kept for a later launch') // i18n-ignore log
-          next = accountState(own, system, oauth, sync.config, { writeBack: false, signedIn })
+          next = accountState(own, system, oauth, sync.config, { writeBack: false, signedIn, removals })
         }
       if (raw === null || !equal(next.account, own)) await writeText(file, encode(next.account), raw)
       if (system !== null) await writeSync(folder, { ...(await readSync(folder)), config: next.base })
@@ -1304,8 +1352,8 @@ export function createClaudeAccounts({
         kept = accountCopy(name, system)
       }
     }
-    // Never sign-in settings in the account's copy.
-    kept = accountCopy(name, kept)
+    // Never sign-in settings in the account's copy, and the system's Tessel hooks.
+    kept = withSystemHooks(name, accountCopy(name, kept), system)
     if (kept !== own) await writeText(accountPath, kept, own)
     return next
   }
@@ -1377,10 +1425,29 @@ export function createClaudeAccounts({
     }
     // Not best effort: a session must never sign in with another credential.
     if (!(await withoutForeignAuth(folder))) return 'foreignAuth'
-    return writeOwnState(id, auth.oauth)
+    const outcome = await writeOwnState(id, auth.oauth)
+    if (outcome === null && !(await configWithoutForeignAuth(folder))) return 'foreignAuth'
+    return outcome
+  }
+  // Its .claude.json's `env` (Claude applies it to the session's process)
+  // holds no sign-in or endpoint entry either: writeOwnState leaves none, so
+  // one still there means that file could not be written (tried twice).
+  async function configWithoutForeignAuth(folder) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (attempt) await sleep(100)
+        const raw = await readText(join(folder, '.claude.json'))
+        if (raw === null || !some(authEnvEntries(parseJson(raw)?.env, true))) return true
+      } catch {
+        /* tried again, then refused */
+      }
+    }
+    warn('Claude account: its .claude.json still holds a sign-in setting that could not be removed; launch refused') // i18n-ignore log
+    return false
   }
   // The account's settings files never keep a sign-in setting (an older copy
-  // of the system's could hold an API key, a token or apiKeyHelper): removed,
+  // of the system's could hold an API key, a token, apiKeyHelper or a
+  // gateway's address): removed,
   // then checked on what is in the file. -> false when one is still there or
   // the file can't be read (tried twice: a session may be writing it).
   async function withoutForeignAuth(folder) {
@@ -1741,7 +1808,7 @@ export function createClaudeAccounts({
             ok: false,
             error: t(
               'main.claudeAccount.foreignAuth',
-              "This Claude account's settings still hold another sign-in setting (an API key, a token or apiKeyHelper) that Tessel could not remove, so the session would not use this account. Close its other sessions and try again."
+              "This Claude account's settings still hold another sign-in setting (an API key, a token, apiKeyHelper or a gateway address) that Tessel could not remove, so the session would not use this account. Close its other sessions and try again."
             )
           }
         return { ok: true, env: { CLAUDE_CONFIG_DIR: authPath(id) }, accountId: id }

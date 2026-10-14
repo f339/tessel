@@ -1095,6 +1095,98 @@ describe('settings changed in a session on an added account', () => {
     await service.launchEnv(id)
     expect(fs.readFileSync(join(systemDir(), 'CLAUDE.md'), 'utf8')).toBe('System memory\n- My note\n- Second note\n')
   })
+  it("puts the system's Tessel hooks in the account's copy, added to or removed from the system after a first launch", async () => {
+    seedSystem()
+    put(join(systemDir(), 'settings.json'), { model: 'opus' })
+    const id = await add()
+    await service.launchEnv(id)
+    // Tessel sets its hooks up in the system's settings.
+    put(join(systemDir(), 'settings.json'), { model: 'opus', hooks: { Stop: [tesselHook()] } })
+    await service.launchEnv(id)
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'opus', hooks: { Stop: [tesselHook()] } })
+    // A session on the account set its own up (its node), and the model changed there.
+    put(account(id, 'settings.json'), { model: 'sonnet', hooks: { Stop: [tesselHook('D:/other/node.exe')] } })
+    // Settings > Remove Tessel hooks: gone from the system's.
+    put(join(systemDir(), 'settings.json'), { model: 'opus' })
+    await service.launchEnv(id)
+    expect(read(join(systemDir(), 'settings.json'))).toEqual({ model: 'sonnet' })
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'sonnet' })
+  })
+  it("never gives an account the sign-in and endpoint entries of .claude.json's env, nor writes its own back", async () => {
+    seedSystem()
+    const systemEnv = { ANTHROPIC_API_KEY: 'fixture-secret-key', ANTHROPIC_BASE_URL: 'https://gateway.invalid' }
+    put(configPath(), { ...read(configPath()), env: { ...systemEnv, KEEP: '1' } })
+    const id = await add()
+    await service.launchEnv(id)
+    expect(read(account(id, '.claude.json')).env).toEqual({ KEEP: '1' })
+    // A session on the account changes an entry and sets a token.
+    put(account(id, '.claude.json'), { ...read(account(id, '.claude.json')), env: { KEEP: '2', CLAUDE_CODE_OAUTH_TOKEN: 'fixture-account-token' } })
+    await service.launchEnv(id)
+    expect(read(configPath()).env).toEqual({ KEEP: '2', ...systemEnv })
+    expect(read(account(id, '.claude.json')).env).toEqual({ KEEP: '2' })
+    // Removed there (Claude drops an empty env): the system's own entries stay.
+    const own = read(account(id, '.claude.json'))
+    delete own.env
+    put(account(id, '.claude.json'), own)
+    await service.launchEnv(id)
+    expect(read(configPath()).env).toEqual(systemEnv)
+    expect(fs.readFileSync(configPath(), 'utf8')).not.toMatch(/fixture-account-token/)
+    for (const file of filesUnder(authPath(id))) expect(fs.readFileSync(file, 'utf8')).not.toMatch(/fixture-secret-key|gateway\.invalid/)
+  })
+  it(".claude.json's env: refuses the launch when a sign-in entry an older copy left there can't be removed", async () => {
+    seedSystem()
+    const id = await add()
+    await service.launchEnv(id)
+    put(account(id, '.claude.json'), { ...read(account(id, '.claude.json')), env: { ANTHROPIC_API_KEY: 'fixture-old-copy' } })
+    // A session on the account holds its file.
+    fs.mkdirSync(account(id, '.claude.json.lock'))
+    expect(await service.launchEnv(id)).toMatchObject({ ok: false, error: expect.stringContaining('another sign-in setting') })
+    fs.rmdirSync(account(id, '.claude.json.lock'))
+    expect(await service.launchEnv(id)).toMatchObject({ ok: true, accountId: id })
+    expect(read(account(id, '.claude.json')).env).toBeUndefined()
+  })
+  it("never sends an account's requests to the system's gateway, and keeps the gateway in the system's settings", async () => {
+    seedSystem()
+    const gateway = {
+      ANTHROPIC_BASE_URL: 'https://gateway.invalid',
+      ANTHROPIC_CUSTOM_HEADERS: 'x-gateway-key: fixture-secret',
+      ANTHROPIC_BEDROCK_BASE_URL: 'https://bedrock.invalid',
+      CLAUDE_CODE_USE_VERTEX: '1'
+    }
+    put(join(systemDir(), 'settings.json'), { model: 'opus', env: { ...gateway, KEEP: '1' } })
+    const id = await add()
+    await service.launchEnv(id)
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'opus', env: { KEEP: '1' } })
+    put(account(id, 'settings.json'), { model: 'sonnet', env: { KEEP: '1' } })
+    await service.launchEnv(id)
+    expect(read(join(systemDir(), 'settings.json'))).toEqual({ model: 'sonnet', env: { KEEP: '1', ...gateway } })
+    // An older copy still sends to the gateway, and it can't be removed: refused.
+    put(account(id, 'settings.json'), { model: 'sonnet', env: { KEEP: '1', ANTHROPIC_BASE_URL: 'https://gateway.invalid' } })
+    const held = refuse('rename', (from, to) => to === account(id, 'settings.json'))
+    expect(await service.launchEnv(id)).toMatchObject({ ok: false, error: expect.stringContaining('gateway') })
+    held.mockRestore()
+    expect(await service.launchEnv(id)).toMatchObject({ ok: true })
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'sonnet', env: { KEEP: '1' } })
+  })
+  it('removes from the system a preference a session set back to its default (Claude drops it from the file)', async () => {
+    seedSystem()
+    put(configPath(), { ...read(configPath()), theme: 'light' })
+    const id = await add()
+    await service.launchEnv(id)
+    const own = read(account(id, '.claude.json'))
+    delete own.theme
+    put(account(id, '.claude.json'), own)
+    await service.launchEnv(id)
+    expect(read(configPath()).theme).toBeUndefined()
+    expect(read(account(id, '.claude.json')).theme).toBeUndefined()
+    // A missing account file removes nothing.
+    put(configPath(), { ...read(configPath()), theme: 'light' })
+    await service.launchEnv(id)
+    fs.unlinkSync(account(id, '.claude.json'))
+    await service.launchEnv(id)
+    expect(read(configPath()).theme).toBe('light')
+    expect(read(account(id, '.claude.json')).theme).toBe('light')
+  })
 })
 
 describe('the older account switch, undone once', () => {
