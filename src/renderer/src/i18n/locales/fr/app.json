@@ -16,6 +16,14 @@
       "agent": "Agent",
       "browser": "Navigateur"
     },
+    "viewTabs": {
+      "terminal": "Terminal",
+      "terminalHint": "Les terminaux et les agents de ce projet",
+      "editor": "Éditeur",
+      "browser": "Navigateur",
+      "aria": "Terminal, éditeurs et navigateurs",
+      "close": "Fermer {{name}}"
+    },
     "unsaved": {
       "title": "Modifications non enregistrées",
       "one": "« {{name}} » a des modifications non enregistrées. Voulez-vous enregistrer avant de fermer ?",

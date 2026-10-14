@@ -10,6 +10,7 @@ import vm from 'vm'
 import { join } from 'path'
 import { computed, reactive, ref } from 'vue'
 import * as launcher from '../projectLauncher'
+import { viewKey, leafViewPath } from '../paneViews'
 
 // App.vue's Live Share helper (liveShareWindow.js): nothing shared or joined.
 const noLiveShare = { isGuestWs: () => false, isGuestLeaf: () => false, state: { host: { state: 'off', guests: [] }, guest: { state: 'off' } } }
@@ -62,6 +63,10 @@ function load({ projectOpen = 'ask', remoteStatus = {} } = {}) {
     newId: (p) => `${p}-${++n}`,
     agentById: (id) => AGENTS.find((a) => a.id === id) || null,
     findLeafIn: (node, id) => (node && node.id === id ? node : null),
+    viewKey,
+    leafViewPath,
+    // Its tabs above the panes (paneViews.js): none here.
+    emptyGridShown: () => false,
     createLeaf: vi.fn(async (shellId, agent, cwd, worktree, opts) => reactive({ type: 'leaf', id: `pane-${++n}`, shellId, agentId: agent ? agent.id : null, cwd, ...opts })),
     openInBrowser: vi.fn(({ ws }) => {
       ws.tree = { type: 'leaf', id: 'pane-browser', kind: 'browser' }

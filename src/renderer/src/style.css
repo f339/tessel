@@ -537,9 +537,11 @@ body.popup-open .toolbar {
 }
 /* A maximized pane can show a browser page through its page area (drawn in
    a layer under the panes): the other panes and the dividers are hidden so
-   nothing shows through it. Their terminals keep running. */
-.ws-layer:has(.pane.maximized) .divider,
-.ws-layer:has(.pane.maximized) .pane:not(.maximized) {
+   nothing shows through it. Their terminals keep running. Only in its own
+   room (the grid of the Terminal tab): an editor or browser tab is never
+   hidden by it. */
+.view-room:has(.pane.maximized) .divider,
+.view-room:has(.pane.maximized) .pane:not(.maximized) {
   visibility: hidden;
 }
 /* A maximized browser pane whose page lives in the page layer: not its own
@@ -1479,12 +1481,52 @@ body.popup-open .toolbar {
   inset: 0;
 }
 
-/* Live Share (LiveShareBanner): the panes start below its banner, and the
-   project it is about has a coloured frame (red: you share it; blue: the
-   host's project, in their session). The frame lets clicks through. */
+/* The tabs above the panes (ViewTabs.vue, paneViews.js): the grid of the
+   Terminal tab and each editor or browser tab fill the view one at a time;
+   the others stay mounted out of sight, as a hidden project's layer does
+   (.ws-layer.hidden below). A tab's room is where its panes go, and where a
+   maximized pane fills. On the Terminal tab the tabs are a line of their own
+   above the grid; an editor or browser tab draws them in its own header. */
+.view-room {
+  position: absolute;
+  inset: 0;
+}
+.view-grid.with-tabs > .view-room {
+  top: 30px;
+}
+.view-tabs-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  display: flex;
+  background: var(--chrome);
+  border-bottom: 1px solid var(--border);
+}
+.pane-nav.with-view-tabs {
+  padding-left: 0;
+  background: var(--chrome);
+}
+.pane-nav.with-view-tabs .pane-nav-left {
+  flex: 1 1 auto;
+  align-self: stretch;
+}
+/* The launcher of a Terminal tab with no terminal: under the tabs. */
+.workspace-main > .project-launcher.under-tabs {
+  top: 30px;
+}
+
+/* Live Share (LiveShareBanner): the panes start below its banner (then the
+   tabs above the panes, then the panes), and the project it is about has a
+   coloured frame (red: you share it; blue: the host's project, in their
+   session). The frame lets clicks through. */
 .workspace-main.live-banner-on > .ws-layer,
 .workspace-main.live-banner-on > .project-launcher {
   top: 30px;
+}
+.workspace-main.live-banner-on > .project-launcher.under-tabs {
+  top: 60px;
 }
 .workspace-main.live-frame-host::after,
 .workspace-main.live-frame-guest::after {

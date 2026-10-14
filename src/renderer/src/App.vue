@@ -2,6 +2,7 @@
 import { ensureAgentNames, renameAgentName, resolveAgentAddress, agentProgramLabel } from '../../shared/agentNames'
 import { ref, reactive, provide, watch, computed, nextTick, onMounted, onBeforeUnmount, toRaw } from 'vue'
 import SplitNode from './components/SplitNode.vue'
+import ViewTabs from './components/ViewTabs.vue'
 import FloatingTerminal from './components/FloatingTerminal.vue'
 import ProjectLauncher from './components/ProjectLauncher.vue'
 import { allowDropRetry, droppedRemotePane, emptiedWorkspaceChoice, launcherAgents, launcherShells, projectOpenChoice, rememberedValue, remoteAgentFound } from './projectLauncher'
@@ -16,7 +17,7 @@ import { buildProjectCards, cardTargetPane, portProbes, orderWorkspaces } from '
 import { createProjectWorktrees } from './projectWorktrees'
 import { prAgentTargets } from './prAgentTargets'
 import { withWorktreePath } from './prAgentPrompts'
-import { workspaceViews, viewKey, leafViewPath } from './paneViews'
+import { workspaceViews, viewKey, leafViewPath, isTabLeaf, addTabLeaf, gridLeafFor, pruneTree } from './paneViews'
 import { createPortScanner, browserUrlForPort, addressForPort } from './portScanner'
 import { allowedBrowserUrl, BLANK_URL, displayUrl } from '../../shared/browserUrl'
 import LaunchMenu from './components/LaunchMenu.vue'
@@ -325,8 +326,9 @@ async function openExternally({ file, line, col }) {
 // --- Tessel's code editor (EditorPane.vue) --------------------------------------------
 // A file opens in the workspace's editor pane (the active pane when it is
 // one), as a preview tab when opened with one click (replaced by the next
-// such file until edited); with no editor pane yet, the active pane is split
-// to the right with a new one. line / col: shown centred, briefly highlighted.
+// such file until edited); with no editor pane yet, a new one opens as a tab
+// of its own above the panes (paneViews.js: no pane is split). The editor's
+// tab comes up. line / col: shown centred, briefly highlighted.
 let revealSeq = 0
 function makeEditorLeaf(id = null) {
   return reactive({
@@ -349,9 +351,7 @@ function openInTesselEditor({ file, line = null, col = null, preview = true, ws 
   if (!leaf) {
     leaf = makeEditorLeaf()
     keepView(leaf, active, ws)
-    const split = (orig) => reactive({ type: 'split', id: newId('split'), dir: 'row', sizes: [50, 50], children: [orig, leaf] })
-    if (active) ws.tree = replaceNode(ws.tree, active.id, split)
-    else ws.tree = ws.tree ? split(ws.tree) : leaf
+    ws.tree = addTabLeaf(ws.tree, leaf, makeSplit)
   }
   const res = openTab(leaf.files, leaf.activePath, file, {
     preview,
@@ -369,9 +369,9 @@ function openInTesselEditor({ file, line = null, col = null, preview = true, ws 
     col: Number.isInteger(col) && col > 0 ? col : null,
     seq: ++revealSeq
   }
-  if (maximizedId.value && maximizedId.value !== leaf.id) maximizedId.value = null
   selectWorkspace(ws.id)
   ws.activeId = leaf.id
+  ws.view = leaf.id
   refitSoon()
   return leaf
 }
@@ -401,10 +401,11 @@ function makeBrowserLeaf(id = null, url = BLANK_URL) {
   })
 }
 // A page opens in the workspace's browser pane (the active pane when it is
-// one, else the first one); with none yet, or newPane, the active pane is
-// split to the right with a new one.
-// activate: false leaves the active pane as it is (a link opened in the
-// background from a page, like a browser's middle-click).
+// one, else the first one); with none yet, or newPane, in a new one: a tab
+// of its own above the panes (paneViews.js: no pane is split), which comes
+// up. activate: false leaves the active pane and the tab on screen as they
+// are (a link opened in the background from a page, like a browser's
+// middle-click).
 function openInBrowser({ url = BLANK_URL, ws = currentWs.value, newPane = false, focusAddress = false, activate = true, agentSession = false } = {}) {
   if (!ws) return null
   const target = allowedBrowserUrl(url) || BLANK_URL
@@ -419,14 +420,14 @@ function openInBrowser({ url = BLANK_URL, ws = currentWs.value, newPane = false,
     // Opened from a page of the agents' separate session: stays in it.
     if (agentSession) leaf.agentSession = true
     keepView(leaf, active, ws)
-    const split = (orig) => reactive({ type: 'split', id: newId('split'), dir: 'row', sizes: [50, 50], children: [orig, leaf] })
-    if (active) ws.tree = replaceNode(ws.tree, active.id, split)
-    else ws.tree = ws.tree ? split(ws.tree) : leaf
+    ws.tree = addTabLeaf(ws.tree, leaf, makeSplit)
   } else if (target !== BLANK_URL) leaf.url = target
   if (focusAddress || target === BLANK_URL) leaf.focusAddress = (leaf.focusAddress || 0) + 1
-  if (maximizedId.value && maximizedId.value !== leaf.id) maximizedId.value = null
   selectWorkspace(ws.id)
-  if (activate || !ws.activeId) ws.activeId = leaf.id
+  if (activate || !ws.activeId) {
+    ws.activeId = leaf.id
+    ws.view = leaf.id
+  }
   refitSoon()
   return leaf
 }
@@ -524,11 +525,15 @@ function openChatAgent({ ws = currentWs.value, agent = 'claude', accountId } = {
   if (!hostRoot && (accountId === null || typeof accountId === 'string')) leaf.accountId = accountId
   if (copy) leaf.worktree = { path: copy.path, branch: copy.branch || '' }
   const split = (orig) => reactive({ type: 'split', id: newId('split'), dir: 'row', sizes: [50, 50], children: [orig, leaf] })
-  if (active) ws.tree = replaceNode(ws.tree, active.id, split)
+  // Opened from an editor or a browser tab: in its grid, beside the terminal
+  // or agent last used there (alone when it has none), on the Terminal tab.
+  const anchor = isTabLeaf(active) ? gridLeafFor(ws, active) : active
+  if (anchor) ws.tree = replaceNode(ws.tree, anchor.id, split)
   else ws.tree = ws.tree ? split(ws.tree) : leaf
   if (maximizedId.value && maximizedId.value !== leaf.id) maximizedId.value = null
   selectWorkspace(ws.id)
   ws.activeId = leaf.id
+  ws.view = 'terminal'
   numberPanes()
   refitSoon()
   return leaf
@@ -988,6 +993,71 @@ const activeId = computed({
     if (currentWs.value) currentWs.value.activeId = v
   }
 })
+
+// --- Tabs above the panes (paneViews.js, ViewTabs.vue) --------------------------------
+// When the worktree view on screen has an editor or a browser pane, tabs show
+// above the panes: Terminal (the grid of terminals and agents), then each
+// editor and browser, each alone in the whole room. ws.view: the tab chosen
+// ('terminal' or a pane's id; shownTab decides from it and the active pane);
+// ws.gridId: the terminal or agent last made active (where a pane opened from
+// a tab goes, gridLeafFor).
+function shownView(ws) {
+  return ws ? (paneViews.value[ws.id] || []).find((v) => v.active) || null : null
+}
+function shownTabOf(ws) {
+  const view = shownView(ws)
+  return view ? view.shown : 'terminal'
+}
+// Show a tab of `ws`: 'terminal' (the terminal or agent last used there
+// becomes the active pane) or an editor's or a browser's id.
+function showViewTab(ws, id) {
+  if (!ws || !ws.tree) return
+  const before = shownTabOf(ws)
+  if (id === 'terminal') {
+    const active = ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
+    const grid = isTabLeaf(active) ? gridLeafFor(ws, active) : null
+    ws.view = 'terminal'
+    if (grid) ws.activeId = grid.id
+  } else {
+    if (!isTabLeaf(findLeafIn(ws.tree, id))) return
+    ws.view = id
+    ws.activeId = id
+  }
+  focusAfterTabSwitch(ws, before)
+}
+// The keyboard follows a tab that came up (a pane's own focus ran while its
+// tab was still hidden).
+function focusAfterTabSwitch(ws, before) {
+  if (ws.id !== currentWsId.value || shownTabOf(ws) === before) return
+  refitSoon()
+  nextTick(focusActiveInput)
+}
+// The Terminal tab of a view with no terminal or agent (only editor or
+// browser tabs) is on screen: the launcher shows under the tabs. Not in a
+// Live Share project (the host's panes only).
+function emptyGridShown(ws) {
+  const view = shownView(ws)
+  return !!view && !view.grid && view.shown === 'terminal' && !liveShare.isGuestWs(ws)
+}
+// The tabs an editor or a browser pane draws in its header while it is on
+// screen ({ leaves, shown }), by pane id.
+const paneTabStrips = computed(() => {
+  const out = {}
+  for (const ws of workspaces.value)
+    for (const view of paneViews.value[ws.id] || []) for (const leaf of view.tabs) out[leaf.id] = { leaves: view.tabs, shown: view.shown }
+  return out
+})
+// The last terminal or agent made active in each project (gridLeafFor).
+watch(
+  () => workspaces.value.map((w) => w.activeId),
+  () => {
+    for (const w of workspaces.value) {
+      const leaf = w.activeId && w.tree ? findLeafIn(w.tree, w.activeId) : null
+      if (leaf && !isTabLeaf(leaf)) w.gridId = leaf.id
+    }
+  }
+)
+
 const initError = ref('')
 const openMenu = ref(null) // toolbar dropdown: 'layout' | 'agents'
 
@@ -2019,6 +2089,17 @@ async function splitLeaf(
     else liveShare.notHere()
     return null
   }
+  // Split from an editor or a browser tab (paneViews.js): the new pane goes
+  // in that tab's grid, beside the terminal or agent last used there (alone
+  // in the grid when it has none), and the Terminal tab comes up
+  // (showActive).
+  let besideAll = false
+  const fromTab = ws ? findLeafIn(ws.tree, leafId) : null
+  if (isTabLeaf(fromTab)) {
+    const grid = gridLeafFor(ws, fromTab)
+    if (grid) leafId = grid.id
+    else besideAll = true
+  }
   // A pane you open next to one in a worktree's grid works in that worktree
   // and stays in its grid (paneViews.js).
   if (opts.inheritView && !worktree && !opts.cwd && ws) {
@@ -2032,9 +2113,10 @@ async function splitLeaf(
     window.shellApi.killPty(leaf.id)
     return
   }
-  // The pane it was split from was closed meanwhile: the new pane goes next
-  // to what is there (or is the whole workspace), never lost.
-  if (!findLeafIn(ws.tree, leafId)) {
+  // The pane it was split from was closed meanwhile (or is a tab whose grid
+  // is empty): the new pane goes next to what is there (or is the whole
+  // workspace), never lost.
+  if (besideAll || !findLeafIn(ws.tree, leafId)) {
     ws.tree = ws.tree
       ? reactive({ type: 'split', id: newId('split'), dir, sizes: [50, 50], children: opts.before ? [leaf, ws.tree] : [ws.tree, leaf] })
       : leaf
@@ -2158,7 +2240,14 @@ function closeLeaf(leafId, opts = {}) {
   const next = removeLeaf(ws.tree, leafId)
   if (next) {
     ws.tree = next
-    if (ws.activeId === leafId) ws.activeId = firstLeafId(next)
+    // The pane on screen closed: the Terminal tab comes up (an editor or a
+    // browser tab closed goes back to it), on the terminal or agent last
+    // used in that grid (paneViews.js).
+    if (ws.activeId === leafId) {
+      const grid = gridLeafFor(ws, closing)
+      ws.activeId = grid ? grid.id : firstLeafId(next)
+      ws.view = 'terminal'
+    } else if (ws.view === leafId) ws.view = 'terminal'
   } else {
     ws.tree = null
     ws.activeId = null
@@ -2190,7 +2279,9 @@ function closeLeaf(leafId, opts = {}) {
 async function buildGrid(cols, rows, ws = currentWs.value) {
   if (!ws) return
   const kept = []
-  forEachLeaf(ws.tree, (leaf) => kept.push(leaf))
+  // The editor and browser panes stay tabs of their own (paneViews.js).
+  const tabs = []
+  forEachLeaf(ws.tree, (leaf) => (isTabLeaf(leaf) ? tabs : kept).push(leaf))
   rows = Math.max(rows, Math.ceil(kept.length / cols))
 
   const rowNodes = []
@@ -2225,9 +2316,11 @@ async function buildGrid(cols, rows, ws = currentWs.value) {
         })
 
   const active = ws.activeId
-  ws.tree = root
-  // The pane you were in stays the active one.
+  ws.tree = tabs.reduce((tree, tab) => addTabLeaf(tree, tab, makeSplit), root)
+  // The pane you were in stays the active one; the grid comes up (an editor
+  // or a browser was on screen: its first pane).
   if (!active || !findLeafIn(root, active)) ws.activeId = firstLeafId(root)
+  ws.view = 'terminal'
   maximizedId.value = null
   window.dispatchEvent(new Event('terminal-layout-change'))
 }
@@ -2358,14 +2451,20 @@ onMounted(() => refreshAccountChoices())
 onBeforeUnmount(() => liveShare.dispose())
 
 function toggleMaximize(id) {
+  // An editor or a browser tab fills the room already (paneViews.js).
+  if (maximizedId.value !== id && isTabLeaf(findLeaf(id))) return
   maximizedId.value = maximizedId.value === id ? null : id
 }
 
-// Make a pane the active one in its workspace. In the workspace on screen, a
-// maximized pane gives its place to it: full screen stays, on the new pane.
+// Make a pane the active one in its workspace, on its tab (paneViews.js): an
+// editor or a browser shows its own, a terminal or an agent the Terminal tab.
+// In the workspace on screen, a maximized pane of the grid gives its place
+// to a terminal or an agent: full screen stays, on the new pane.
 function showActive(ws, id) {
   ws.activeId = id
-  if (ws.id === currentWsId.value && maximizedId.value && maximizedId.value !== id) maximizedId.value = id
+  const tab = isTabLeaf(findLeafIn(ws.tree, id))
+  ws.view = tab ? id : 'terminal'
+  if (!tab && ws.id === currentWsId.value && maximizedId.value && maximizedId.value !== id) maximizedId.value = id
 }
 
 // --- Agent Task Board (kanban side panel) ----------------------------------
@@ -2877,6 +2976,10 @@ provide('panelCtx', {
   missingAgentShell: (id) => missingAgentShell(id),
   setActive,
   toggleMaximize,
+  // The tabs above the panes, drawn in the header of the editor or browser
+  // on screen (ViewTabs.vue); a click there shows another tab.
+  paneTabs: (id) => paneTabStrips.value[id] || null,
+  selectViewTab: (fromId, id) => showViewTab(wsOfLeaf(fromId), id),
   fontSize,
   notifyAgentDone,
   notifyAgentLimit,
@@ -3722,8 +3825,9 @@ function otherPanes(paneId) {
   return out.sort((a, b) => (a.num || 99) - (b.num || 99))
 }
 
-// The grid on screen: the current workspace's, of the worktree you look at.
-const VISIBLE_GRID = '.ws-layer:not(.hidden) > .view-layer:not(.hidden)'
+// The grid on screen: the current workspace's, of the worktree you look at,
+// its tab on screen (the grid under the tabs, or an editor or a browser).
+const VISIBLE_GRID = '.ws-layer:not(.hidden) > .view-layer:not(.hidden) > .view-pane:not(.hidden) > .view-room'
 
 // Where a pane sits in the visible layout, in words ("top left", "right").
 function paneWhere(paneId) {
@@ -4278,13 +4382,19 @@ function focusPane(paneId) {
   // restores the pane first).
   const wasMax = !!maximizedId.value
   selectWorkspace(ws.id)
-  if (wasMax && maximizedId.value !== paneId) maximizedId.value = paneId
+  // Its tab comes up (paneViews.js): its own for an editor or a browser,
+  // else the Terminal tab, where full screen moves to it.
+  const before = shownTabOf(ws)
+  const tab = isTabLeaf(findLeafIn(ws.tree, paneId))
+  ws.view = tab ? paneId : 'terminal'
+  if (wasMax && !tab && maximizedId.value !== paneId) maximizedId.value = paneId
   ws.activeId = paneId
   clearAttention(paneId)
   readForPane(paneId)
   // An editor pane: the keyboard goes to its editor (a terminal pane
-  // focuses itself when it becomes active).
+  // focuses itself when it becomes active, again once its tab is up).
   if (getEditorPane(paneId)) nextTick(() => getEditorPane(paneId) && getEditorPane(paneId).focus())
+  else focusAfterTabSwitch(ws, before)
 }
 
 // An entry in the notification inbox (toolbar bell), with its sound
@@ -4785,7 +4895,9 @@ function moveSidePageToGrid(pageId, target) {
   if (sidePanelRef.value) sidePanelRef.value.closeBrowser(pageId)
   else sideBrowsers.value = sideBrowsers.value.filter((b) => b.id !== pageId)
   if (ws.id !== currentWsId.value) selectWorkspace(ws.id)
+  // A tab of its own above the grid (paneViews.js), on screen.
   ws.activeId = leaf.id
+  ws.view = leaf.id
   refitSoon()
 }
 
@@ -4830,9 +4942,11 @@ function launcherContext(ws) {
     enabled: (id) => agentEnabled(settings.agentPrefs, id)
   }
 }
+// Also the Terminal tab of a grid with no terminal or agent left (only
+// editor or browser tabs): there under the tabs (emptyGridShown).
 const launcherWs = computed(() => {
   const ws = currentWs.value
-  return layoutReady.value && ws && !ws.tree ? ws : null
+  return layoutReady.value && ws && (!ws.tree || emptyGridShown(ws)) ? ws : null
 })
 const launcherProps = computed(() => {
   const ws = launcherWs.value
@@ -4869,15 +4983,21 @@ async function startInEmptyWorkspace(ws, choice) {
   const shellId = choice.kind === 'terminal' && choice.shellId && shells.value.some((s) => s.id === choice.shellId) ? choice.shellId : selectedShell.value
   // The account chosen in the launcher (else the default one).
   const account = agent && !ws.remote && (choice.accountId === null || typeof choice.accountId === 'string') ? { accountId: choice.accountId } : {}
-  const leaf = await createLeaf(shellId, agent, ws.cwd, null, wsLeafOpts(ws, account))
+  // The empty grid of a task copy (only its editors or browsers left): the
+  // new pane works in that copy (paneViews.js).
+  const from = ws.tree && ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
+  const worktree = from && viewKey(from, ws.cwd) ? { path: leafViewPath(from), branch: '' } : null
+  const leaf = await createLeaf(shellId, agent, ws.cwd, worktree, wsLeafOpts(ws, account))
   if (!leaf) return null
   if (!workspaces.value.includes(ws)) {
     window.shellApi.killPty(leaf.id)
     return null
   }
-  // Something opened there meanwhile (a pane dropped, a second pick): next to it.
+  // Something opened there meanwhile (a pane dropped, a second pick), or
+  // only editor or browser tabs are there: next to it.
   ws.tree = ws.tree ? reactive({ type: 'split', id: newId('split'), dir: 'row', sizes: [50, 50], children: [ws.tree, leaf] }) : leaf
   ws.activeId = leaf.id
+  ws.view = 'terminal'
   return leaf
 }
 // A new project (added, created, cloned, on an SSH host): what "When a
@@ -12301,16 +12421,44 @@ onBeforeUnmount(() => {
             :class="{ hidden: !view.active }"
             :aria-hidden="!view.active"
           >
-            <SplitNode :node="view.tree" />
-            <!-- The browser panes' pages, outside the split tree so a layout
-                 change never reloads them (browser/pageHost.js). -->
-            <div class="browser-host"></div>
+            <!-- The Terminal tab: the grid of terminals and agents, under the
+                 tabs when the view has editors or browsers (paneViews.js). -->
+            <div
+              class="ws-layer view-pane view-grid"
+              :class="{ hidden: view.shown !== 'terminal', 'with-tabs': view.tabs.length > 0 }"
+              :aria-hidden="view.shown !== 'terminal'"
+            >
+              <div v-if="view.tabs.length" class="view-tabs-bar">
+                <ViewTabs :leaves="view.tabs" :shown="view.shown" @select="(id) => showViewTab(ws, id)" @close="(id) => closeLeaf(id)" />
+              </div>
+              <div class="view-room">
+                <SplitNode v-if="view.grid" :node="view.grid" />
+              </div>
+            </div>
+            <!-- Each editor and browser pane: a tab of its own, the whole room
+                 (its header holds the tabs); kept mounted while another tab
+                 shows. -->
+            <div
+              v-for="leaf in view.tabs"
+              :key="leaf.id"
+              class="ws-layer view-pane"
+              :class="{ hidden: view.shown !== leaf.id }"
+              :aria-hidden="view.shown !== leaf.id"
+            >
+              <div class="view-room">
+                <SplitNode :node="leaf" />
+              </div>
+              <!-- Its page, outside the pane so a layout change never
+                   reloads it (browser/pageHost.js). -->
+              <div class="browser-host"></div>
+            </div>
           </div>
         </div>
         <!-- A project with no pane: which program to start (projectLauncher.js). -->
         <ProjectLauncher
           v-if="launcherProps"
           :key="launcherWs.id"
+          :class="{ 'under-tabs': !!launcherWs.tree }"
           v-bind="launcherProps"
           @pick="pickFromLauncher"
           @more-sessions="showSideTab('history')"
