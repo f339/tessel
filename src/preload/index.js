@@ -673,6 +673,7 @@ const api = {
     start: ({ name } = {}) => ipcRenderer.invoke('liveShare:start', { name }),
     stop: () => ipcRenderer.invoke('liveShare:stop'),
     setLayout: (layout) => ipcRenderer.send('liveShare:layout', layout),
+    setProject: (id) => ipcRenderer.send('liveShare:project', id),
     approve: ({ guestId, yes } = {}) => ipcRenderer.invoke('liveShare:approve', { guestId, yes }),
     setRights: ({ guestId, rights } = {}) => ipcRenderer.invoke('liveShare:rights', { guestId, rights }),
     newInvite: () => ipcRenderer.invoke('liveShare:newInvite'),

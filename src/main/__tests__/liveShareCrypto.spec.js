@@ -8,18 +8,24 @@ import {
   createChannel,
   newKeyPair,
   sharedSecret,
-  verificationCode
+  verificationCode,
+  commitment,
+  commitmentMatches
 } from '../liveShare/shareCrypto'
 
-function pair(secret = newSecret()) {
+// Both sides of one connection: nonces, X25519 keys, the keys each derives.
+function handshake(secret = newSecret(), guestSecret = secret) {
   const hostNonce = newNonce()
   const guestNonce = newNonce()
-  return {
-    host: createChannel(sessionKeys(secret, hostNonce, guestNonce, 'host')),
-    guest: createChannel(sessionKeys(secret, hostNonce, guestNonce, 'guest')),
-    hostNonce,
-    guestNonce
-  }
+  const h = newKeyPair()
+  const g = newKeyPair()
+  const hostKx = { dh: sharedSecret(h.privateKey, g.publicRaw), hostKey: h.publicRaw, guestKey: g.publicRaw }
+  const guestKx = { dh: sharedSecret(g.privateKey, h.publicRaw), hostKey: h.publicRaw, guestKey: g.publicRaw }
+  return { host: sessionKeys(secret, hostNonce, guestNonce, 'host', hostKx), guest: sessionKeys(guestSecret, hostNonce, guestNonce, 'guest', guestKx), hostNonce, guestNonce, h, g }
+}
+const pair = (secret) => {
+  const k = handshake(secret)
+  return { host: createChannel(k.host), guest: createChannel(k.guest) }
 }
 
 describe('Live Share invite code', () => {
@@ -47,6 +53,10 @@ describe('Live Share invite code', () => {
       expect(decodeInvite(encodeInvite({ url, secret: newSecret() }))).not.toBe(null)
     }
   })
+
+  it('drops a query or fragment from the address (they would stop the connection)', () => {
+    expect(decodeInvite(encodeInvite({ url: 'wss://a-b.trycloudflare.com/?x=1#frag', secret: newSecret() })).url).toBe('wss://a-b.trycloudflare.com/')
+  })
 })
 
 describe('Live Share channel', () => {
@@ -58,12 +68,8 @@ describe('Live Share channel', () => {
   })
 
   it('does not open with another secret', () => {
-    const secret = newSecret()
-    const hostNonce = newNonce()
-    const guestNonce = newNonce()
-    const host = createChannel(sessionKeys(secret, hostNonce, guestNonce, 'host'))
-    const intruder = createChannel(sessionKeys(newSecret(), hostNonce, guestNonce, 'guest'))
-    expect(host.open(intruder.seal({ t: 'join', name: 'x' }))).toBe(null)
+    const k = handshake(newSecret(), newSecret())
+    expect(createChannel(k.host).open(createChannel(k.guest).seal({ t: 'join', name: 'x' }))).toBe(null)
   })
 
   it('refuses a replayed, reordered or tampered message', () => {
@@ -90,48 +96,41 @@ describe('Live Share channel', () => {
   })
 })
 
-describe('Live Share key exchange and verification code', () => {
-  function kxPair(secret = newSecret(), guestSecret = secret) {
-    const hostNonce = newNonce()
-    const guestNonce = newNonce()
-    const h = newKeyPair()
-    const g = newKeyPair()
-    const hostKx = { dh: sharedSecret(h.privateKey, g.publicRaw), hostKey: h.publicRaw, guestKey: g.publicRaw }
-    const guestKx = { dh: sharedSecret(g.privateKey, h.publicRaw), hostKey: h.publicRaw, guestKey: g.publicRaw }
-    return { host: sessionKeys(secret, hostNonce, guestNonce, 'host', hostKx), guest: sessionKeys(guestSecret, hostNonce, guestNonce, 'guest', guestKx), hostNonce, guestNonce }
-  }
-
+describe('Live Share key exchange, commitment and verification code', () => {
   it('both sides get the same keys and the same six-digit code', () => {
-    const { host, guest } = kxPair()
-    expect(host.forward).toBe(true)
-    expect(guest.forward).toBe(true)
+    const { host, guest } = handshake()
     expect(host.code).toMatch(/^\d{3} \d{3}$/)
     expect(guest.code).toBe(host.code)
     expect(createChannel(guest).open(createChannel(host).seal({ t: 'hi' }))).toEqual({ t: 'hi' })
   })
 
-  it('a wrong invite secret gives other keys and another code, even with the key exchange', () => {
-    const { host, guest } = kxPair(newSecret(), newSecret())
+  it('a wrong invite secret gives other keys and another code', () => {
+    const { host, guest } = handshake(newSecret(), newSecret())
     expect(createChannel(guest).open(createChannel(host).seal({ t: 'hi' }))).toBe(null)
     expect(guest.code).not.toBe(host.code)
   })
 
-  it('the keys depend on the exchanged keys: without them they differ', () => {
-    const secret = newSecret()
-    const { host, hostNonce, guestNonce } = kxPair(secret)
-    const plain = sessionKeys(secret, hostNonce, guestNonce, 'guest')
-    expect(plain.forward).toBe(false)
-    expect(createChannel(plain).open(createChannel(host).seal({ t: 'hi' }))).toBe(null)
+  it('needs the key exchange (no connection on the invite secret alone)', () => {
+    expect(() => sessionKeys(newSecret(), newNonce(), newNonce(), 'host')).toThrow()
+    expect(() => sessionKeys(newSecret(), newNonce(), newNonce(), 'host', { dh: null })).toThrow()
   })
 
-  it('a Tessel from before (no key exchange) still talks to one without it', () => {
+  it('every value goes into the code: another nonce or key, another code', () => {
     const secret = newSecret()
-    const hostNonce = newNonce()
-    const guestNonce = newNonce()
-    const host = sessionKeys(secret, hostNonce, guestNonce, 'host')
-    const guest = sessionKeys(secret, hostNonce, guestNonce, 'guest')
-    expect(createChannel(guest).open(createChannel(host).seal({ n: 1 }))).toEqual({ n: 1 })
-    expect(guest.code).toBe(host.code)
+    const k = handshake(secret)
+    const otherNonce = sessionKeys(secret, k.hostNonce, newNonce(), 'host', { dh: sharedSecret(k.h.privateKey, k.g.publicRaw), hostKey: k.h.publicRaw, guestKey: k.g.publicRaw })
+    expect(otherNonce.code).not.toBe(k.host.code)
+  })
+
+  it('the guest commits to its nonce and key before it sees the host’s', () => {
+    const nonce = newNonce()
+    const { publicRaw } = newKeyPair()
+    const c = commitment(nonce, publicRaw)
+    expect(c).toHaveLength(32)
+    expect(commitmentMatches(c, nonce, publicRaw)).toBe(true)
+    expect(commitmentMatches(c, newNonce(), publicRaw)).toBe(false)
+    expect(commitmentMatches(c, nonce, newKeyPair().publicRaw)).toBe(false)
+    expect(commitmentMatches(Buffer.alloc(5), nonce, publicRaw)).toBe(false)
   })
 
   it('refuses keys that are not X25519 keys', () => {

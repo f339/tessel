@@ -3,17 +3,40 @@
 // a host pane's id in a guest's window, and registerLiveShare's IPC end to
 // end over real WebSockets on 127.0.0.1 (only Cloudflare's tunnel is faked).
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import fs from 'fs'
+import os from 'os'
+import { join } from 'path'
 import { cleanLayout, layoutLeaves, guestPaneId, registerLiveShare, visibleScreen } from '../liveShare'
 import { createShareHost } from '../liveShare/shareHost'
 import { newSecret, encodeInvite, decodeInvite } from '../liveShare/shareCrypto'
 
-// The tunnel to the share server is the server itself here (no cloudflared).
+// The tunnel to the share server is the server itself here (no cloudflared);
+// its PID 4242 runs while `tunnel.alive`.
+const tunnel = vi.hoisted(() => ({ alive: true, startError: null }))
 vi.mock('../liveShare/shareTunnel.js', () => ({
   ensureCloudflared: vi.fn(async () => 'cloudflared.exe'),
-  startTunnel: vi.fn(async ({ port }) => ({ url: `ws://127.0.0.1:${port}/`, stop: vi.fn() })),
+  startTunnel: vi.fn(async ({ port }) => {
+    if (tunnel.startError) throw tunnel.startError
+    return { url: `ws://127.0.0.1:${port}/`, stop: vi.fn(), pid: 4242 }
+  }),
   waitReachable: vi.fn(async () => true),
-  endLeftoverTunnel: vi.fn(async () => false)
+  endLeftoverTunnel: vi.fn(async () => false),
+  tunnelAlive: vi.fn(async (pid) => pid === 4242 && tunnel.alive),
+  stopTunnelPid: vi.fn()
 }))
+
+// Each Tessel's data folder (its saved share and session).
+const dataDirs = []
+const newDataDir = () => {
+  const dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-ls-'))
+  dataDirs.push(dir)
+  return dir
+}
+afterEach(() => {
+  for (const dir of dataDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
+  tunnel.alive = true
+  tunnel.startError = null
+})
 
 const ALL = { type: true, open: true, close: true }
 
@@ -141,7 +164,7 @@ describe('guestPaneId', () => {
 
 // The window's side of registerLiveShare: its IPC handlers, what it sends to
 // the window, the terminal host client and the window's pty:data / pty:exit.
-function fakeMain({ snapshot = (id) => `screen of ${id}` } = {}) {
+function fakeMain({ snapshot = (id) => `screen of ${id}`, dataDir = newDataDir(), resume = false } = {}) {
   const m = {
     handle: {},
     on: {},
@@ -172,11 +195,16 @@ function fakeMain({ snapshot = (id) => `screen of ${id}` } = {}) {
     ipcMain: m.ipcMain,
     send: m.send,
     host: m.host,
-    dataDir: 'C:/fixture/userData',
+    dataDir,
     queueData: (id, data) => m.data.push([id, data]),
     sendExit: (id, exitCode) => m.exits.push([id, exitCode]),
-    log: { info: () => {} }
+    log: { info: () => {} },
+    listNames: async () => [],
+    kill: vi.fn(),
+    pidRunning: () => tunnel.alive,
+    resume
   })
+  m.dataDir = dataDir
   return m
 }
 
@@ -231,7 +259,7 @@ describe('registerLiveShare: joining a host', () => {
     const joined = await until(() => m.events('liveShare:guest').find((s) => s.state === 'joined' && s.panes.length))
     const localId = 'pane-ls1-7-abc'
     expect(joined).toMatchObject({ host: 'Cedric', session: 1, reason: null })
-    expect(joined.panes).toEqual([{ id: localId, title: 'Claude Code', kind: 'agent', agentId: 'claude', accent: '#3366ff', cols: 100, rows: 30 }])
+    expect(joined.panes).toEqual([{ id: localId, title: 'Claude Code', kind: 'agent', agentId: 'claude', accent: '#3366ff', cols: 100, rows: 30, gen: 0 }])
     expect(joined.layout).toEqual({
       project: 'tessel',
       tree: {
@@ -343,7 +371,7 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
 
     await guest.handle['liveShare:join'](null, { invite, name: 'Alex' })
     const ask = await until(() => host.last('liveShare:ask'))
-    expect(ask).toMatchObject({ name: 'Alex', forward: true })
+    expect(ask).toMatchObject({ name: 'Alex' })
     // The code the host sees is the one the guest's Tessel shows.
     await until(() => guest.last('liveShare:guest')?.code)
     expect(ask.code).toBe(guest.last('liveShare:guest').code)
@@ -412,12 +440,11 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
     expect(guest.api.isGuestPane(localId)).toBe(false)
   })
 
-  it('a guest the host removes, or says no to, is out, and the next one waits a while', async () => {
+  it('a guest the host removes is out, and the next one waits a while', async () => {
     const host = fakeMain()
     const a = fakeMain()
     const b = fakeMain()
-    const c = fakeMain()
-    mains.push(host, a, b, c)
+    mains.push(host, a, b)
     host.on['liveShare:layout'](null, { tree: leaf('pane-1-ps') })
     const { invite } = await host.handle['liveShare:start'](null, {})
 
@@ -430,17 +457,115 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
     expect(b.last('liveShare:guest').reason).toBe('removed')
     await until(() => host.last('liveShare:host').guests.length === 0)
 
+    // Right after a removal: turned away without asking the host.
     await a.handle['liveShare:join'](null, { invite, name: 'Alex' })
-    const askA = await until(() => host.events('liveShare:ask').find((q) => q.name === 'Alex'))
-    await host.handle['liveShare:approve'](null, { guestId: askA.guestId, yes: false })
     await until(() => a.last('liveShare:guest')?.state === 'ended')
-    expect(a.last('liveShare:guest').reason).toBe('denied')
+    expect(a.last('liveShare:guest').reason).toBe('busy')
+    expect(host.events('liveShare:ask').map((q) => q.name)).toEqual(['Bea'])
+  })
 
-    // Right after a no: turned away without asking the host again.
-    await c.handle['liveShare:join'](null, { invite, name: 'Alex again' })
-    await until(() => c.last('liveShare:guest')?.state === 'ended')
-    expect(c.last('liveShare:guest').reason).toBe('busy')
-    expect(host.events('liveShare:ask').map((q) => q.name)).toEqual(['Bea', 'Alex'])
+  it('says why a share could not start, in the user’s language', async () => {
+    const host = fakeMain()
+    mains.push(host)
+    const err = new Error('timeout')
+    err.code = 'timeout'
+    tunnel.startError = err
+    const r = await host.handle['liveShare:start'](null, {})
+    expect(r).toEqual({ ok: false, error: 'Cloudflare did not give a tunnel address in time. Try again.' })
+    expect(host.last('liveShare:host')).toMatchObject({ state: 'error', error: 'Cloudflare did not give a tunnel address in time. Try again.' })
+  })
+})
+
+describe('registerLiveShare: a restart keeps the share and the session', () => {
+  const mains = []
+  afterEach(() => {
+    for (const m of mains.splice(0)) m.api.stopAll()
+  })
+
+  async function shareAndJoin() {
+    const host = fakeMain()
+    const guest = fakeMain()
+    mains.push(host, guest)
+    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-1-ps', { title: 'PowerShell' }), activeId: 'pane-1-ps' })
+    host.on['liveShare:project'](null, 'ws-7')
+    const started = await host.handle['liveShare:start'](null, { name: 'Ada' })
+    await guest.handle['liveShare:join'](null, { invite: started.invite, name: 'Alex' })
+    const ask = await until(() => host.last('liveShare:ask'))
+    await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true })
+    await until(() => guest.last('liveShare:guest')?.state === 'joined' && guest.last('liveShare:guest').panes.length)
+    await host.handle['liveShare:rights'](null, { guestId: ask.guestId, rights: { type: true, open: false, close: false } })
+    await until(() => guest.last('liveShare:guest').rights?.type)
+    return { host, guest, started }
+  }
+
+  it('the host Tessel restarts: the same share comes back, and guests reconnect without a question', async () => {
+    const { host, guest, started } = await shareAndJoin()
+    expect(host.last('liveShare:host')).toMatchObject({ state: 'sharing', projectId: 'ws-7' })
+    // An update's restart: the share is kept for the next Tessel.
+    host.api.suspend()
+    host.api.stopAll() // will-quit: nothing more ends
+    await until(() => guest.last('liveShare:guest').state === 'reconnecting')
+    expect(guest.last('liveShare:guest').panes).toHaveLength(1)
+    // The next Tessel, same data folder.
+    const next = fakeMain({ dataDir: host.dataDir, resume: true })
+    mains.push(next)
+    expect(await next.api.resumed).toEqual([true, false])
+    const back = next.last('liveShare:host')
+    expect(back).toMatchObject({ state: 'sharing', invite: started.invite, projectId: 'ws-7' })
+    next.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-1-ps', { title: 'PowerShell' }), activeId: 'pane-1-ps' })
+    const rejoined = await until(() => guest.events('liveShare:guest').find((s, i, all) => s.state === 'joined' && all.slice(0, i).some((x) => x.state === 'reconnecting') && s.panes.length), 15000)
+    expect(rejoined.rights).toEqual({ type: true, open: false, close: false })
+    // Its panes start again (a new terminal in the window: gen).
+    expect(rejoined.panes[0].gen).toBe(1)
+    expect(next.events('liveShare:ask')).toEqual([])
+    await until(() => next.last('liveShare:host').guests.some((g) => g.name === 'Alex' && g.state === 'joined'))
+  }, 20000)
+
+  it('a share whose tunnel stopped meanwhile is not taken back', async () => {
+    const { host } = await shareAndJoin()
+    host.api.suspend()
+    tunnel.alive = false
+    const next = fakeMain({ dataDir: host.dataDir, resume: true })
+    mains.push(next)
+    expect(await next.api.resumed).toEqual([false, false])
+    expect((await next.handle['liveShare:state']()).host.state).toBe('off')
+  })
+
+  it('stopping or quitting ends the share for good (nothing taken back)', async () => {
+    const { host } = await shareAndJoin()
+    host.api.stopAll()
+    const next = fakeMain({ dataDir: host.dataDir, resume: true })
+    mains.push(next)
+    expect(await next.api.resumed).toEqual([false, false])
+  })
+
+  it('the guest Tessel restarts: it joins the session again by itself, without a question', async () => {
+    const { host, guest } = await shareAndJoin()
+    guest.api.suspend()
+    await until(() => host.last('liveShare:host').guests.length === 0)
+    const next = fakeMain({ dataDir: guest.dataDir, resume: true })
+    mains.push(next)
+    expect(await next.api.resumed).toEqual([false, true])
+    const joined = await until(() => next.events('liveShare:guest').find((s) => s.state === 'joined' && s.panes.length))
+    expect(joined.rights).toEqual({ type: true, open: false, close: false })
+    expect(host.events('liveShare:ask')).toHaveLength(1)
+  })
+
+  it('a guest who leaves is gone for good: no session taken back', async () => {
+    const { guest } = await shareAndJoin()
+    await guest.handle['liveShare:leave']()
+    const next = fakeMain({ dataDir: guest.dataDir, resume: true })
+    mains.push(next)
+    expect(await next.api.resumed).toEqual([false, false])
+  })
+
+  it('an update that did not install: the share comes back at once', async () => {
+    const { host, started } = await shareAndJoin()
+    const before = host.events('liveShare:host').length
+    host.api.suspend()
+    host.api.unsuspend()
+    await until(() => host.events('liveShare:host').length > before && host.last('liveShare:host').state === 'sharing')
+    expect(host.last('liveShare:host').invite).toBe(started.invite)
   })
 })
 

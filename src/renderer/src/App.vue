@@ -2005,10 +2005,13 @@ async function splitLeaf(
   opts = {}
 ) {
   const ws = wsOfLeaf(leafId) || currentWs.value
-  // A Live Share project: the new pane opens on the host's computer.
+  // A Live Share project: a pane you split there opens on the host's
+  // computer; anything else this computer would run (a tool, a session, an
+  // SSH connection) is not opened there.
   if (liveShare.isGuestWs(ws)) {
-    liveShare.openOnHost(agent ? { kind: 'agent', agent: agent.id } : { kind: 'terminal' })
-    return
+    if (opts.onHost) liveShare.openOnHost(agent ? { kind: 'agent', agent: agent.id } : { kind: 'terminal' })
+    else liveShare.notHere()
+    return null
   }
   // A pane you open next to one in a worktree's grid works in that worktree
   // and stays in its grid (paneViews.js).
@@ -2272,6 +2275,7 @@ const liveShare = createLiveShareWindow({
   isAgentLeaf,
   probeRunningWork,
   killPty: (id) => window.shellApi.killPty(id),
+  hasAgent: (id) => !!agentById(id),
   // Panes of this computer left in a Live Share project when it ends: a
   // project of their own, so nothing running is lost.
   adoptLeaves: (leaves) => {
@@ -2873,7 +2877,7 @@ provide('panelCtx', {
 })
 
 function splitActive(dir) {
-  if (activeId.value) splitLeaf(activeId.value, dir, null, selectedShell.value, null, { inheritView: true })
+  if (activeId.value) splitLeaf(activeId.value, dir, null, selectedShell.value, null, { inheritView: true, onHost: true })
 }
 
 function closeActive() {
@@ -3227,6 +3231,11 @@ async function loadAgents(refresh = false) {
 async function openPaneBelow(shellId, agent = null, opts = {}) {
   const ws = currentWs.value
   if (!ws) return null
+  // What this computer runs never opens in a Live Share project.
+  if (liveShare.isGuestWs(ws)) {
+    liveShare.notHere()
+    return null
+  }
   if (activeId.value && ws.tree) return splitLeaf(activeId.value, 'col', agent, shellId, null, { inheritView: true, ...opts })
   const leaf = await createLeaf(shellId, agent, ws.cwd, null, wsLeafOpts(ws, opts))
   if (leaf) {

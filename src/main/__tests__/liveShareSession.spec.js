@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import WebSocket from 'ws'
+import WebSocket, { WebSocketServer } from 'ws'
 import { createShareHost, cleanName, stripTerminalReplies, INVITE_TTL_MS } from '../liveShare/shareHost'
 import { createShareGuest } from '../liveShare/shareGuest'
-import { newSecret, newNonce, sessionKeys, createChannel } from '../liveShare/shareCrypto'
+import { newSecret, newNonce, newKeyPair, commitment } from '../liveShare/shareCrypto'
 
 const until = async (fn, ms = 3000) => {
   const end = Date.now() + ms
@@ -61,9 +61,26 @@ function guestRecorder() {
     },
     onRights: (rights) => r.rights.push(rights),
     onNotice: (code) => r.notices.push(code),
+    onToken: (token) => (r.token = token),
+    onRestart: (id) => r.order.push(['restart', id]),
     onClosed: (reason) => (r.closed = reason)
   }
   return r
+}
+
+// A connection that goes as far as the host's keys, then stops (what someone
+// in the middle trying codes would do).
+function stopAfterKeys(port) {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/`)
+    ws.on('message', (data) => {
+      const msg = JSON.parse(data.toString())
+      if (msg.t === 'hello') ws.send(JSON.stringify({ t: 'commit', c: commitment(newNonce(), newKeyPair().publicRaw).toString('base64') }))
+      else if (msg.t === 'keys') ws.close()
+    })
+    ws.on('close', () => setTimeout(resolve, 20))
+    ws.on('error', () => resolve())
+  })
 }
 
 const ALL = { type: true, open: true, close: true }
@@ -128,13 +145,52 @@ describe('Live Share session', () => {
     await until(() => host.guests().length === 0)
   })
 
-  it('both sides show the same verification code, with the key exchange', async () => {
+  it('both sides show the same verification code', async () => {
     const { t, r } = await joinOne()
     await until(() => r.states.includes('joined'))
     const waiting = r.info[r.states.indexOf('waiting')]
     expect(waiting.code).toMatch(/^\d{3} \d{3}$/)
     expect(t.asked[0].code).toBe(waiting.code)
-    expect(t.asked[0].forward).toBe(true)
+  })
+
+  it('a guest that does not reveal what it committed to is dropped', async () => {
+    const t = fakeTessel()
+    host = createShareHost({ secret: newSecret(), hostName: 'Cedric', callbacks: t.callbacks })
+    const port = await host.start()
+    const closed = await new Promise((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/`)
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString())
+        if (msg.t === 'hello') ws.send(JSON.stringify({ t: 'commit', c: commitment(newNonce(), newKeyPair().publicRaw).toString('base64') }))
+        else if (msg.t === 'keys') ws.send(JSON.stringify({ t: 'reveal', n: newNonce().toString('base64'), kx: newKeyPair().publicRaw.toString('base64') }))
+      })
+      ws.on('close', () => resolve(true))
+    })
+    expect(closed).toBe(true)
+    expect(t.asked).toEqual([])
+  })
+
+  it('connections that stop after the handshake block the code until a new one', async () => {
+    const t = fakeTessel()
+    let blocked = 0
+    t.callbacks.onInviteBlocked = () => blocked++
+    const secret = newSecret()
+    host = createShareHost({ secret, hostName: 'Cedric', callbacks: t.callbacks })
+    const port = await host.start()
+    for (let i = 0; i < 8; i++) await stopAfterKeys(port)
+    await until(() => blocked === 1)
+    expect(host.inviteBlocked()).toBe(true)
+    const r = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', callbacks: r.callbacks }).connect()
+    await until(() => r.closed)
+    expect(r.closed).toBe('expired')
+    // A new code lets guests in again.
+    const fresh = newSecret()
+    host.rotate(fresh)
+    expect(host.inviteBlocked()).toBe(false)
+    const r2 = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret: fresh, name: 'Alex', callbacks: r2.callbacks }).connect()
+    await until(() => r2.states.includes('joined'))
   })
 
   it('drops what a guest terminal answers by itself, keeps what is typed', async () => {
@@ -237,30 +293,139 @@ describe('Live Share session', () => {
     expect(result).toBe('refused')
   })
 
-  it('lets in a Tessel from before the key exchange, and says so', async () => {
-    const secret = newSecret()
+  it('tells a Tessel with the first protocol it is out of date, both ways', async () => {
     const t = fakeTessel()
+    host = createShareHost({ secret: newSecret(), hostName: 'Cedric', callbacks: t.callbacks })
+    const port = await host.start()
+    // An older guest sends its nonce right away.
+    const code = await new Promise((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/`)
+      ws.on('message', () => ws.send(JSON.stringify({ t: 'nonce', n: newNonce().toString('base64') })))
+      ws.on('close', (c) => resolve(c))
+    })
+    expect(code).toBe(4003)
+    expect(t.asked).toEqual([])
+    // An older host puts its nonce in its hello.
+    const old = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+    await new Promise((r) => old.once('listening', r))
+    old.on('connection', (ws) => ws.send(JSON.stringify({ t: 'hello', app: 'tessel-liveshare', v: 1, n: newNonce().toString('base64') })))
+    const r = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${old.address().port}/`, secret: newSecret(), name: 'Alex', callbacks: r.callbacks }).connect()
+    await until(() => r.closed)
+    expect(r.closed).toBe('outdated-host')
+    old.close()
+  })
+
+  it('a guest let in comes back with its key: in at once, with its rights, no question', async () => {
+    const { t, r, port, secret } = await joinOne()
+    await until(() => r.token)
+    host.setRights(host.guests()[0].id, { type: true, open: false, close: false })
+    await until(() => r.rights.length === 2)
+    // Its connection drops; it comes back with the key.
+    const back = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', token: r.token, callbacks: back.callbacks }).connect()
+    await until(() => back.states.includes('joined'))
+    expect(t.asked).toHaveLength(1)
+    expect(back.rights[0]).toEqual({ type: true, open: false, close: false })
+    expect(back.token).toBeUndefined() // the same key stays
+    // Its old connection is replaced.
+    await until(() => r.closed)
+    expect(r.closed).toBe('replaced')
+    expect(host.guests().map((g) => g.state)).toEqual(['joined'])
+  })
+
+  it('an unknown key is turned away without a question, and a guest who left loses its key', async () => {
+    const { t, r, guest, port, secret } = await joinOne()
+    await until(() => r.token)
+    const stranger = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Mallory', token: 'not-a-key', callbacks: stranger.callbacks }).connect()
+    await until(() => stranger.closed)
+    expect(stranger.closed).toBe('rejoin-refused')
+    guest.leave()
+    await until(() => host.guests().length === 0)
+    const again = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', token: r.token, callbacks: again.callbacks }).connect()
+    await until(() => again.closed)
+    expect(again.closed).toBe('rejoin-refused')
+    expect(t.asked).toHaveLength(1)
+  })
+
+  it('the keys carry over to the next Tessel (a restart), and an expired code still lets them back', async () => {
+    let clock = 1000
+    const { r, secret } = await joinOne({ now: () => clock })
+    await until(() => r.token)
+    host.setRights(host.guests()[0].id, { type: true, open: true, close: true })
+    const known = host.knownGuests()
+    expect(known).toEqual([{ hash: expect.stringMatching(/^[0-9a-f]{64}$/), name: 'Alex', rights: { type: true, open: true, close: true } }])
+    expect(JSON.stringify(known)).not.toContain(r.token)
+    const expires = host.inviteExpires()
+    host.stop('restarting')
+    await until(() => r.closed)
+    expect(r.closed).toBe('restarting')
+    // The next Tessel, an hour and more later.
+    clock += 2 * 60 * 60 * 1000
+    const t2 = fakeTessel()
+    host = createShareHost({ secret, hostName: 'Cedric', callbacks: t2.callbacks, known, inviteExpires: expires, now: () => clock })
+    const port = await host.start()
+    const back = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', token: r.token, callbacks: back.callbacks }).connect()
+    await until(() => back.states.includes('joined'))
+    expect(back.rights[0]).toEqual({ type: true, open: true, close: true })
+    expect(t2.asked).toEqual([])
+    // A new guest with the expired code: turned away.
+    const late = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Late', callbacks: late.callbacks }).connect()
+    await until(() => late.closed)
+    expect(late.closed).toBe('expired')
+  })
+
+  it('a new code turns away guests still waiting under the old one', async () => {
+    const t = fakeTessel({ approve: () => new Promise(() => {}) })
+    const secret = newSecret()
     host = createShareHost({ secret, hostName: 'Cedric', callbacks: t.callbacks })
     const port = await host.start()
-    // An older guest: no X25519 key in its handshake.
-    const msgs = []
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/`)
-    let channel = null
-    ws.on('message', (data, isBinary) => {
-      if (!channel) {
-        const hello = JSON.parse(data.toString())
-        const guestNonce = newNonce()
-        ws.send(JSON.stringify({ t: 'nonce', n: guestNonce.toString('base64') }))
-        channel = createChannel(sessionKeys(secret, Buffer.from(hello.n, 'base64'), guestNonce, 'guest'))
-        ws.send(channel.seal({ t: 'join', name: 'Old' }))
-        return
-      }
-      msgs.push(isBinary ? channel.open(data) : null)
-    })
-    await until(() => msgs.some((m) => m && m.t === 'snapshot'))
-    expect(msgs[0]).toEqual({ t: 'waiting' })
-    expect(t.asked[0]).toMatchObject({ name: 'Old', forward: false })
-    ws.close()
+    const r = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Leaked', callbacks: r.callbacks }).connect()
+    await until(() => r.states.includes('waiting'))
+    host.rotate(newSecret())
+    await until(() => r.closed)
+    expect(r.closed).toBe('expired')
+    expect(host.guests()).toEqual([])
+  })
+
+  it('a guest leaving while waiting makes the next one wait, as after a no', async () => {
+    const t = fakeTessel({ approve: () => new Promise(() => {}) })
+    const secret = newSecret()
+    host = createShareHost({ secret, hostName: 'Cedric', callbacks: t.callbacks })
+    const port = await host.start()
+    const r = guestRecorder()
+    const g = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Pest', callbacks: r.callbacks })
+    g.connect()
+    await until(() => r.states.includes('waiting'))
+    g.leave()
+    await until(() => host.guests().length === 0)
+    const next = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Pest', callbacks: next.callbacks }).connect()
+    await until(() => next.closed)
+    expect(next.closed).toBe('busy')
+  })
+
+  it('a pane restarted on the host: guests are told, then get its new screen', async () => {
+    const { r } = await joinOne()
+    await until(() => r.screens.p1 === 'screen of p1')
+    host.paneRestarted('p1')
+    await until(() => r.order.filter((o) => o[0] === 'snapshot').length === 2)
+    expect(r.order.slice(-2)).toEqual([
+      ['restart', 'p1'],
+      ['snapshot', 'p1', 'screen of p1']
+    ])
+  })
+
+  it('a guest whose window reloaded gets the pane screen again', async () => {
+    const { r, guest } = await joinOne()
+    await until(() => r.screens.p1 === 'screen of p1')
+    guest.resync('p1')
+    await until(() => r.order.filter((o) => o[0] === 'snapshot').length === 2)
   })
 
   it('sends a screen that takes a moment first, then the output that came meanwhile', async () => {
@@ -397,7 +562,7 @@ describe('Live Share session', () => {
 
   it('cleans guest names', () => {
     expect(cleanName('  Al\u0000ex  ')).toBe('Alex')
-    expect(cleanName('')).toBe('Guest')
+    expect(cleanName('')).toBe('')
     expect(cleanName('x'.repeat(100)).length).toBe(40)
   })
 })

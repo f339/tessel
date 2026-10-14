@@ -2,14 +2,26 @@
 //
 // It listens on 127.0.0.1 only (the Cloudflare tunnel, shareTunnel.js, is
 // what reaches it from outside), and refuses browsers (any Origin header). A
-// connection first trades two random nonces and two X25519 keys in clear,
-// then everything is sealed with keys derived from them and the invite's
-// secret (shareCrypto.js): a guest without the invite code is dropped at its
-// first message. A guest with it still waits until the host says yes
-// (askApproval) to that guest (its id, and the verification code both sides
-// show), and the host can remove any guest at any time. After a no, new
-// guests wait a while before they can ask again; an invite code works for
-// an hour (rotate() makes a new one).
+// connection first runs the handshake of shareCrypto.js in clear (the
+// guest's commitment, the host's nonce and X25519 key, the guest's), then
+// everything is sealed with keys derived from them and the invite's secret:
+// a guest without the invite code is dropped at its first message. A guest
+// with it still waits until the host says yes (askApproval) to that guest
+// (its id, and the verification code both sides show), and the host can
+// remove any guest at any time. After a no (or a guest who left while
+// waiting, or one removed), new guests wait a while before they can ask
+// again. An invite code works for an hour; rotate() makes a new one, and
+// guests not in yet under the old one are turned away. Connections that stop
+// after the handshake without joining are counted: past a few, the code
+// stops working (onInviteBlocked), since someone in the middle could be
+// trying to make the verification codes match.
+//
+// A guest let in gets a reconnect key (welcome's token). When its connection
+// drops (its network, its Tessel or this one restarting), it comes back with
+// that key and is in again at once, with the rights it had: no new question.
+// The keys (their hashes, the names, the rights) survive a restart of this
+// Tessel (knownGuests, given back to createShareHost). A guest who leaves or
+// is removed loses its key.
 //
 // Once in, a guest sees the host's screen: the layout of the project shared
 // (layout: splits, sizes, the active and fullscreen pane), and each of its
@@ -22,10 +34,13 @@
 //
 // Tessel itself is reached only through the callbacks below, so this file
 // runs (and is tested) without Electron.
+import crypto from 'crypto'
 import { WebSocketServer } from 'ws'
-import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, NONCE_BYTES } from './shareCrypto.js'
+import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitmentMatches, NONCE_BYTES, COMMIT_BYTES } from './shareCrypto.js'
 
-export const SHARE_PROTOCOL = 1
+// 2: the guest commits first (shareCrypto.js). A Tessel with protocol 1
+// (no commitment) is told it is out of date.
+export const SHARE_PROTOCOL = 2
 const MAX_GUESTS = 10
 const MAX_WAITING = 3 // guests waiting for the host's answer at once
 const MAX_FRAME = 1024 * 1024 // a guest's message (typing, a paste)
@@ -44,19 +59,28 @@ const DENY_MEMORY_MS = 10 * 60 * 1000
 const OPENS_PER_MINUTE = 3
 const OPENS_IN_ALL = 12
 const CLOSES_PER_MINUTE = 6
+const RESYNCS_PER_MINUTE = 30
+// Connections that stopped after the handshake without joining, in 10 min,
+// before the invite code is blocked.
+const UNFINISHED_MAX = 8
+const UNFINISHED_MEMORY_MS = 10 * 60 * 1000
+// How a connection the guest's side stopped ends (not the host's doing).
+const EARLY_STOPS = new Set(['closed', 'timeout', 'refused', 'protocol'])
 // WebSocket close codes a guest reads as a reason (shareGuest.js).
 export const CLOSE_EXPIRED = 4001
 export const CLOSE_BUSY = 4002
+export const CLOSE_OUTDATED = 4003
 
 export const NO_RIGHTS = Object.freeze({ type: false, open: false, close: false })
 export const cleanRights = (r) => ({ type: !!(r && r.type), open: !!(r && r.open), close: !!(r && r.close) })
 
+// A guest's name as given ('' when none: the window says "A guest").
 export const cleanName = (name) =>
   String(name || '')
     // eslint-disable-next-line no-control-regex -- control characters are what it removes
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .trim()
-    .slice(0, 40) || 'Guest'
+    .slice(0, 40)
 
 // What a terminal sends by itself when a program asks (xterm's reports), not
 // what someone types: the cursor position, the terminal's identity and
@@ -94,21 +118,37 @@ export function stripTerminalReplies(data) {
 //   write(id, data)
 //   openPane(spec, guest)  -> spec: { kind: 'terminal' | 'agent', agent? }
 //   closePane(id, guest)
-//   askApproval(guest)     -> Promise<boolean>; guest: { id, name, code, forward }
+//   askApproval(guest)     -> Promise<boolean>; guest: { id, name, code }
 //   onGuests(list)         -> the guest list changed
-export function createShareHost({ secret, hostName, callbacks, log = () => {}, now = Date.now }) {
+//   onInviteBlocked()      -> too many connections stopped after the
+//                             handshake: the code lets no one in until rotate()
+//   onKnownChanged()       -> the reconnect keys changed (knownGuests())
+// known: the reconnect keys of a share taken back after a restart;
+// inviteExpires: that share's invite code's end.
+export function createShareHost({ secret, hostName, callbacks, log = () => {}, now = Date.now, known = [], inviteExpires: expiresAt = null }) {
   const guests = new Map() // id -> guest
   let wss = null
   let pingTimer = null
   let nextGuest = 1
   let stopped = false
   let inviteSecret = secret
-  let inviteExpires = now() + INVITE_TTL_MS
+  let inviteExpires = Number.isFinite(expiresAt) ? expiresAt : now() + INVITE_TTL_MS
+  // Reconnect keys: sha256 of the token -> { name, rights }.
+  const keys = new Map()
+  for (const k of Array.isArray(known) ? known : []) {
+    if (k && typeof k.hash === 'string' && /^[0-9a-f]{64}$/.test(k.hash)) keys.set(k.hash, { name: cleanName(k.name), rights: cleanRights(k.rights) })
+  }
+  const tokenHash = (token) => crypto.createHash('sha256').update(String(token)).digest('hex')
+  const keysChanged = () => callbacks.onKnownChanged?.()
+  let epoch = 0 // the invite code's: rotate() makes a new one
   let denials = [] // times of the host's no
   let waitUntil = 0
+  let unfinished = [] // times of connections that stopped after the handshake
+  let blocked = false
 
-  const publicGuest = (g) => ({ id: g.id, name: g.name, state: g.state, since: g.since, code: g.code, forward: g.forward, rights: { ...g.rights } })
-  const notifyGuests = () => callbacks.onGuests?.([...guests.values()].filter((g) => g.state !== 'handshake' && g.state !== 'secured').map(publicGuest))
+  const inHandshake = (g) => g.state === 'handshake' || g.state === 'committed' || g.state === 'secured'
+  const publicGuest = (g) => ({ id: g.id, name: g.name, state: g.state, since: g.since, code: g.code, rights: { ...g.rights } })
+  const notifyGuests = () => callbacks.onGuests?.([...guests.values()].filter((g) => !inHandshake(g)).map(publicGuest))
 
   function send(g, message) {
     if (g.socket.readyState !== 1) return
@@ -134,8 +174,25 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       /* already closed */
     }
     g.resolveApproval?.(false)
-    if (g.state !== 'handshake' && g.state !== 'secured') log(`guest ${g.name} left (${reason})`)
+    // Past the host's values without joining, by its own doing: counted (see
+    // onInviteBlocked).
+    if ((g.state === 'committed' || g.state === 'secured') && EARLY_STOPS.has(reason)) stoppedEarly()
+    // A guest who left while waiting, or one removed: new guests wait as
+    // after a no (asking again and again costs something).
+    if ((g.state === 'waiting' && (reason === 'left' || reason === 'closed')) || reason === 'removed') denied()
+    // Left on purpose, or removed: its reconnect key goes with it.
+    if (g.keyHash && (reason === 'left' || reason === 'removed') && keys.delete(g.keyHash)) keysChanged()
+    if (!inHandshake(g)) log(`guest ${g.name || '?'} left (${reason})`)
     notifyGuests()
+  }
+
+  function stoppedEarly() {
+    const t = now()
+    unfinished = [...unfinished.filter((x) => t - x < UNFINISHED_MEMORY_MS), t]
+    if (unfinished.length < UNFINISHED_MAX || blocked) return
+    blocked = true
+    log('invite code blocked: connections stopped after the handshake')
+    callbacks.onInviteBlocked?.()
   }
 
   // Output waiting for a guest; a pane whose screen is still being prepared
@@ -213,14 +270,42 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       .then(ready, () => ready(null))
   }
 
-  function welcome(g) {
+  // In: a new guest gets its reconnect key; a returning one keeps its own.
+  function welcome(g, back = false) {
     g.state = 'joined'
     g.since = now()
-    log(`guest ${g.name} joined`)
+    let token
+    if (!g.keyHash) {
+      token = crypto.randomBytes(32).toString('base64url')
+      g.keyHash = tokenHash(token)
+    }
+    keys.set(g.keyHash, { name: g.name, rights: { ...g.rights } })
+    keysChanged()
+    log(`guest ${g.name || '?'} ${back ? 'came back' : 'joined'}`)
     notifyGuests()
     const panes = callbacks.listPanes()
-    send(g, { t: 'welcome', host: hostName, protocol: SHARE_PROTOCOL, panes, layout: callbacks.layout?.() || null, rights: { ...g.rights } })
+    send(g, { t: 'welcome', host: hostName, protocol: SHARE_PROTOCOL, panes, layout: callbacks.layout?.() || null, rights: { ...g.rights }, ...(token ? { token } : {}) })
     for (const p of panes) subscribe(g, p.id)
+  }
+
+  // A guest coming back with its reconnect key: in at once, as it was (the
+  // connection it had, if any, ends). An unknown key: turned away, no question.
+  function rejoin(g, token) {
+    const hash = tokenHash(token)
+    const known = keys.get(hash)
+    if (!known) return drop(g, 'rejoin-refused')
+    for (const other of [...guests.values()]) if (other !== g && other.keyHash === hash) drop(other, 'replaced')
+    g.keyHash = hash
+    g.name = known.name || cleanName(g.name)
+    g.rights = { ...known.rights }
+    welcome(g, true)
+  }
+
+  // The pane's screen again, then its output (a guest's window reloaded, a
+  // pane restarted on the host).
+  function resubscribe(g, id) {
+    forget(g, id)
+    subscribe(g, id)
   }
 
   function denied() {
@@ -230,8 +315,10 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   }
 
   async function onJoin(g, msg) {
-    if (now() < waitUntil || [...guests.values()].filter((x) => x.state === 'waiting').length >= MAX_WAITING) return drop(g, 'busy')
     g.name = cleanName(msg.name)
+    if (typeof msg.token === 'string' && msg.token) return rejoin(g, msg.token.slice(0, 100))
+    if (blocked || g.epoch !== epoch || now() > inviteExpires) return drop(g, 'expired')
+    if (now() < waitUntil || [...guests.values()].filter((x) => x.state === 'waiting').length >= MAX_WAITING) return drop(g, 'busy')
     g.state = 'waiting'
     notifyGuests()
     send(g, { t: 'waiting' })
@@ -273,6 +360,11 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     if (msg.t === 'leave') return drop(g, 'left')
     if (g.state !== 'joined') return
     switch (msg.t) {
+      case 'resync':
+        if (!isShared(msg.id) || !g.subscribed.has(msg.id)) return
+        if (!allowed(g, g.resyncs, RESYNCS_PER_MINUTE)) return
+        resubscribe(g, msg.id)
+        return
       case 'write': {
         if (!g.rights.type || typeof msg.data !== 'string' || msg.data.length > MAX_WRITE || !isShared(msg.id)) return
         const data = stripTerminalReplies(msg.data)
@@ -295,23 +387,38 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     }
   }
 
+  // Guests not in yet when the code changed or expired: turned away.
+  function dropNotJoined(reason) {
+    for (const g of [...guests.values()]) if (g.state !== 'joined' && (g.epoch !== epoch || now() > inviteExpires || blocked)) drop(g, reason)
+  }
+
+  const parse = (data, isBinary) => {
+    try {
+      return isBinary ? null : JSON.parse(data.toString())
+    } catch {
+      return null
+    }
+  }
+
   function onConnection(socket) {
     if (stopped || guests.size >= MAX_GUESTS || now() < waitUntil) {
       socket.close(CLOSE_BUSY)
       return
     }
-    if (now() > inviteExpires) {
+    // (An expired code still lets guests with a reconnect key back in: the
+    // check is at join.)
+    if (blocked) {
       socket.close(CLOSE_EXPIRED)
       return
     }
     const g = {
       id: `g${nextGuest++}`,
-      name: 'Guest',
+      name: '',
       state: 'handshake',
+      epoch,
       socket,
       channel: null,
       code: null,
-      forward: false,
       rights: { ...NO_RIGHTS },
       subscribed: new Map(), // pane id -> { state: 'loading' | 'live', held, exit }
       pending: new Map(),
@@ -320,41 +427,46 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       alive: true,
       opens: [],
       opened: 0,
-      closes: []
+      closes: [],
+      resyncs: []
     }
     guests.set(g.id, g)
     const hostNonce = newNonce()
-    const keys = newKeyPair()
+    const pair = newKeyPair()
     const secretNow = inviteSecret
+    let commit = null
     const timer = setTimeout(() => {
-      if (g.state === 'handshake' || g.state === 'secured') drop(g, 'timeout')
+      if (inHandshake(g)) drop(g, 'timeout')
     }, HANDSHAKE_MS)
-    socket.send(JSON.stringify({ t: 'hello', app: 'tessel-liveshare', v: SHARE_PROTOCOL, n: hostNonce.toString('base64'), kx: keys.publicRaw.toString('base64') }))
+    socket.send(JSON.stringify({ t: 'hello', app: 'tessel-liveshare', v: SHARE_PROTOCOL }))
     socket.on('pong', () => (g.alive = true))
     socket.on('message', (data, isBinary) => {
       if (!guests.has(g.id)) return
+      // 1. The guest's commitment; then the host's nonce and key.
       if (g.state === 'handshake') {
-        let msg
-        try {
-          msg = isBinary ? null : JSON.parse(data.toString())
-        } catch {
-          msg = null
+        const msg = parse(data, isBinary)
+        // A Tessel with the first protocol sends its nonce right away.
+        if (msg && msg.t === 'nonce') {
+          socket.close(CLOSE_OUTDATED)
+          return drop(g, 'outdated')
         }
-        const guestNonce = msg && msg.t === 'nonce' ? Buffer.from(String(msg.n || ''), 'base64') : null
-        if (!guestNonce || guestNonce.length !== NONCE_BYTES) return drop(g, 'protocol')
-        // A guest's X25519 key; a Tessel from before has none (the invite's
-        // secret alone then), a key that is not one ends it.
-        let kx = null
-        if (msg.kx != null) {
-          const guestKey = Buffer.from(String(msg.kx), 'base64')
-          const dh = sharedSecret(keys.privateKey, guestKey)
-          if (!dh) return drop(g, 'protocol')
-          kx = { dh, hostKey: keys.publicRaw, guestKey }
-        }
-        const session = sessionKeys(secretNow, hostNonce, guestNonce, 'host', kx)
+        commit = msg && msg.t === 'commit' ? Buffer.from(String(msg.c || ''), 'base64') : null
+        if (!commit || commit.length !== COMMIT_BYTES) return drop(g, 'protocol')
+        g.state = 'committed'
+        socket.send(JSON.stringify({ t: 'keys', n: hostNonce.toString('base64'), kx: pair.publicRaw.toString('base64') }))
+        return
+      }
+      // 2. The guest's nonce and key, as committed.
+      if (g.state === 'committed') {
+        const msg = parse(data, isBinary)
+        const guestNonce = msg && msg.t === 'reveal' ? Buffer.from(String(msg.n || ''), 'base64') : null
+        const guestKey = msg && msg.t === 'reveal' ? Buffer.from(String(msg.kx || ''), 'base64') : null
+        if (!guestNonce || guestNonce.length !== NONCE_BYTES || !commitmentMatches(commit, guestNonce, guestKey)) return drop(g, 'protocol')
+        const dh = sharedSecret(pair.privateKey, guestKey)
+        if (!dh) return drop(g, 'protocol')
+        const session = sessionKeys(secretNow, hostNonce, guestNonce, 'host', { dh, hostKey: pair.publicRaw, guestKey })
         g.channel = createChannel(session)
         g.code = session.code
-        g.forward = session.forward
         g.state = 'secured'
         return
       }
@@ -393,7 +505,10 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
         // A guest that did not answer the last ping is gone (a dead tunnel
         // or computer): dropped.
         pingTimer = setInterval(() => {
+          // An expired code: guests still waiting under it are turned away.
+          if (now() > inviteExpires) dropNotJoined('expired')
           for (const g of [...guests.values()]) {
+            if (!guests.has(g.id)) continue
             if (!g.alive) {
               drop(g, 'timeout')
               continue
@@ -459,13 +574,28 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     approve(guestId, yes) {
       guests.get(guestId)?.resolveApproval?.(!!yes)
     },
+    // A pane restarted on the host (same id, a new terminal): guests are told,
+    // then get its new screen.
+    paneRestarted(id) {
+      if (!isShared(id)) return
+      for (const g of guests.values()) {
+        if (g.state !== 'joined' || !g.subscribed.has(id)) continue
+        flush(g)
+        send(g, { t: 'restart', id })
+        resubscribe(g, id)
+      }
+    },
     // What a guest may do (type, open, close); it is told.
     setRights(guestId, rights) {
       const g = guests.get(guestId)
       if (!g || g.state !== 'joined') return false
       g.rights = cleanRights(rights)
+      if (g.keyHash && keys.has(g.keyHash)) {
+        keys.set(g.keyHash, { name: g.name, rights: { ...g.rights } })
+        keysChanged()
+      }
       send(g, { t: 'rights', rights: { ...g.rights } })
-      log(`guest ${g.name} may ${Object.keys(g.rights).filter((k) => g.rights[k]).join(', ') || 'only watch'}`)
+      log(`guest ${g.name || '?'} may ${Object.keys(g.rights).filter((k) => g.rights[k]).join(', ') || 'only watch'}`)
       notifyGuests()
       return true
     },
@@ -473,14 +603,23 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       const g = guests.get(guestId)
       if (g) drop(g, 'removed')
     },
-    // A new invite code's secret: the old code stops letting anyone in;
-    // guests already in stay. Good for INVITE_TTL_MS from now.
+    // A new invite code's secret: the old code stops letting anyone in, and
+    // guests not in yet under it (waiting for your answer, or connecting)
+    // are turned away; guests already in stay. Good for INVITE_TTL_MS from
+    // now, and unblocks a blocked code.
     rotate(newSecret) {
       inviteSecret = newSecret
       inviteExpires = now() + INVITE_TTL_MS
+      epoch++
+      blocked = false
+      unfinished = []
+      dropNotJoined('expired')
       return inviteExpires
     },
     inviteExpires: () => inviteExpires,
-    guests: () => [...guests.values()].filter((g) => g.state !== 'handshake' && g.state !== 'secured').map(publicGuest)
+    inviteBlocked: () => blocked,
+    // The reconnect keys, to keep across a restart of this Tessel.
+    knownGuests: () => [...keys].map(([hash, k]) => ({ hash, name: k.name, rights: { ...k.rights } })),
+    guests: () => [...guests.values()].filter((g) => !inHandshake(g)).map(publicGuest)
   }
 }

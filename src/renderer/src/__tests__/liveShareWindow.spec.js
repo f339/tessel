@@ -55,7 +55,8 @@ function setup() {
     isAgentLeaf: (l) => l.kind === 'agent',
     probeRunningWork: vi.fn(async (id) => (id === 'pane-busy' ? { running: true, unknown: false, names: ['npm'] } : { running: false, unknown: false, names: [] })),
     killPty: vi.fn(),
-    adoptLeaves: vi.fn()
+    adoptLeaves: vi.fn(),
+    hasAgent: (id) => id !== 'nope'
   }
   const ls = createLiveShareWindow(deps)
   return { ls, api, listeners, deps, workspaces, currentWsId, maximizedId, seeded, toasts }
@@ -232,9 +233,9 @@ describe('Live Share in the window, as the host', () => {
 
   it('asks before a guest joins, answers that guest only, and says who joined and left', async () => {
     t.listeners.onHost({ state: 'sharing', invite: 'x', guests: [{ id: 'g1', name: 'Alex', state: 'waiting' }, { id: 'g2', name: 'Bea', state: 'waiting' }] })
-    t.listeners.onAsk({ guestId: 'g1', name: 'Alex', code: '123 456', forward: true })
-    t.listeners.onAsk({ guestId: 'g2', name: 'Bea', code: '654 321', forward: false })
-    expect(t.ls.state.asks[0]).toEqual({ kind: 'join', key: 'g1', guestId: 'g1', name: 'Alex', code: '123 456', forward: true })
+    t.listeners.onAsk({ guestId: 'g1', name: 'Alex', code: '123 456' })
+    t.listeners.onAsk({ guestId: 'g2', name: 'Bea', code: '654 321' })
+    expect(t.ls.state.asks[0]).toEqual({ kind: 'join', key: 'g1', guestId: 'g1', name: 'Alex', code: '123 456' })
     // Alex leaves before the answer: a yes meant for Alex never lets Bea in.
     t.listeners.onHost({ state: 'sharing', invite: 'x', guests: [{ id: 'g2', name: 'Bea', state: 'waiting' }] })
     t.ls.answerAsk({ key: 'g1', yes: true })
@@ -346,5 +347,148 @@ describe('Live Share in the window, as the host', () => {
     t.ls.state.asks.push(busy)
     t.ls.answerAsk({ key: busy.key, yes: true })
     expect(t.deps.closeLeaf).not.toHaveBeenCalled()
+  })
+})
+
+describe('Live Share in the window: what the review found', () => {
+  let t
+  beforeEach(async () => {
+    t = setup()
+    await t.ls.init()
+  })
+  afterEach(() => t.ls.dispose())
+
+  const twoPanes = (extra = {}) => ({
+    state: 'joined',
+    host: 'Ada',
+    session: 1,
+    panes: [pane('pane-ls1-a'), pane('pane-ls1-b')],
+    layout: { project: 'x', tree: { type: 'split', dir: 'row', sizes: [50, 50], children: [leaf('pane-ls1-a'), leaf('pane-ls1-b')] }, activeId: 'pane-ls1-a', maximizedId: null },
+    rights: { type: true, open: false, close: false },
+    ...extra
+  })
+
+  it('the keyboard stays in the pane you chose when the host changes its layout', async () => {
+    t.listeners.onGuest(twoPanes())
+    await flush()
+    const ws = t.workspaces.value[0]
+    expect(ws.activeId).toBe('pane-ls1-a') // the host's, at first
+    ws.activeId = 'pane-ls1-b' // you click pane b
+    t.listeners.onGuest(twoPanes({ layout: { ...twoPanes().layout, tree: { ...twoPanes().layout.tree, sizes: [30, 70] } } }))
+    t.listeners.onGuest(twoPanes({ layout: { ...twoPanes().layout, activeId: 'pane-ls1-a' } }))
+    await flush()
+    expect(ws.activeId).toBe('pane-ls1-b')
+  })
+
+  it('the host going fullscreen is followed when it changes, not on every update', async () => {
+    t.listeners.onGuest(twoPanes({ layout: { ...twoPanes().layout, maximizedId: 'pane-ls1-a' } }))
+    await flush()
+    expect(t.maximizedId.value).toBe('pane-ls1-a')
+    t.maximizedId.value = null // you leave fullscreen
+    t.listeners.onGuest(twoPanes({ layout: { ...twoPanes().layout, maximizedId: 'pane-ls1-a', tree: { ...twoPanes().layout.tree, sizes: [40, 60] } } }))
+    await flush()
+    expect(t.maximizedId.value).toBe(null)
+  })
+
+  it('a pane the host restarted gets a new terminal here (gen)', async () => {
+    t.listeners.onGuest(twoPanes())
+    await flush()
+    const leafA = t.workspaces.value[0].tree.children[0]
+    expect(leafA.gen).toBe(0)
+    t.listeners.onGuest(twoPanes({ panes: [pane('pane-ls1-a', { gen: 1 }), pane('pane-ls1-b')] }))
+    await flush()
+    expect(leafA.gen).toBe(1)
+  })
+
+  it('a lost connection keeps the project, view only, until it comes back', async () => {
+    t.listeners.onGuest(twoPanes())
+    await flush()
+    const ws = t.workspaces.value[0]
+    const leafA = ws.tree.children[0]
+    expect(leafA.liveShare.canType).toBe(true)
+    t.listeners.onGuest({ ...twoPanes(), state: 'reconnecting', reason: 'closed' })
+    await flush()
+    expect(t.workspaces.value).toEqual([ws])
+    expect(leafA.liveShare.canType).toBe(false)
+    expect(t.toasts.at(-1)).toBe('Connection to Ada lost: reconnecting…')
+    t.listeners.onGuest(twoPanes())
+    await flush()
+    expect(leafA.liveShare.canType).toBe(true)
+    expect(t.toasts.at(-1)).toBe('Back in Ada’s Live Share.')
+    // Given up: the project goes.
+    t.listeners.onGuest({ ...twoPanes(), state: 'reconnecting' })
+    t.listeners.onGuest({ state: 'ended', host: 'Ada', session: 1, panes: [], layout: null, reason: 'lost' })
+    await flush()
+    expect(t.workspaces.value).toEqual([])
+  })
+
+  it('the first word on rights is not a change', async () => {
+    t.listeners.onGuest(twoPanes({ rights: null }))
+    t.listeners.onGuest(twoPanes())
+    await flush()
+    expect(t.toasts.some((x) => /changed what you can do/.test(x))).toBe(false)
+  })
+
+  it('a share taken back after a restart finds its project again, and its waiting guests are asked', async () => {
+    t.ls.dispose()
+    t = setup()
+    t.api.state.mockResolvedValue({
+      host: { state: 'sharing', invite: 'TS1.x.y', projectId: 'ws-1', guests: [{ id: 'g3', name: 'Cy', state: 'waiting', code: '111 222' }] },
+      guest: { state: 'off', panes: [] },
+      defaultName: 'ada'
+    })
+    t.api.setProject = vi.fn()
+    await t.ls.init()
+    await flush()
+    expect(t.ls.state.asks.map((a) => [a.kind, a.guestId, a.code])).toEqual([['join', 'g3', '111 222']])
+    // Guests are not sent an empty project while it is not found yet.
+    expect(t.api.setLayout).not.toHaveBeenCalled()
+    t.workspaces.value.push(reactive({ id: 'ws-1', name: 'tessel', activeId: 'pane-1', tree: { type: 'leaf', id: 'pane-1', kind: 'shell', title: 'PowerShell' } }))
+    await flush()
+    expect(t.ls.state.sharedWsId).toBe('ws-1')
+    expect(t.api.setLayout).toHaveBeenLastCalledWith(expect.objectContaining({ project: 'tessel' }))
+    expect(t.api.setProject).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('asks before a guest closes a pane on an SSH host or in WSL (Tessel cannot see what runs there)', async () => {
+    const ws = reactive({ id: 'ws-1', name: 'tessel', activeId: 'pane-ssh', tree: { type: 'leaf', id: 'pane-ssh', kind: 'shell', title: 'box' } })
+    t.workspaces.value.push(ws)
+    t.currentWsId.value = 'ws-1'
+    t.deps.findLeaf = (id) => (id === 'pane-ssh' ? { id, title: 'box', kind: 'shell', remoteHostId: 'box' } : null)
+    t.ls.prepareShare()
+    t.listeners.onHost({ state: 'sharing', invite: 'x', guests: [{ id: 'g1', name: 'Alex', state: 'joined', rights: { close: true } }] })
+    t.listeners.onHostRequest({ action: 'close', id: 'pane-ssh', guest: { id: 'g1', name: 'Alex' } })
+    await flush()
+    expect(t.deps.closeLeaf).not.toHaveBeenCalled()
+    expect(t.ls.state.asks[0]).toMatchObject({ kind: 'close', paneId: 'pane-ssh' })
+    expect(t.ls.state.asks[0].detail).toMatch(/SSH host or WSL/)
+    expect(t.deps.probeRunningWork).not.toHaveBeenCalled()
+  })
+
+  it('says nothing about an agent it does not open', async () => {
+    const ws = reactive({ id: 'ws-1', name: 'tessel', activeId: 'pane-1', tree: { type: 'leaf', id: 'pane-1', kind: 'shell', title: 'p' } })
+    t.workspaces.value.push(ws)
+    t.currentWsId.value = 'ws-1'
+    t.ls.prepareShare()
+    t.listeners.onHost({ state: 'sharing', invite: 'x', guests: [] })
+    const before = t.toasts.length
+    t.listeners.onHostRequest({ action: 'open', spec: { kind: 'agent', agent: 'nope' }, guest: { id: 'g1', name: 'Alex' } })
+    expect(t.deps.launch).not.toHaveBeenCalled()
+    expect(t.toasts.length).toBe(before)
+  })
+
+  it('a guest without a name is "A guest" in the notices', () => {
+    t.listeners.onHost({ state: 'sharing', invite: 'x', guests: [{ id: 'g1', name: '', state: 'joined' }] })
+    expect(t.toasts.at(-1)).toBe('A guest joined your Live Share.')
+  })
+
+  it('what this computer would run in a Live Share project is not opened there', () => {
+    t.ls.notHere()
+    expect(t.toasts.at(-1)).toMatch(/runs on your computer/)
+  })
+
+  it('tells the host when the code got blocked', () => {
+    t.listeners.onHost({ state: 'sharing', invite: 'x', guests: [], inviteBlocked: true })
+    expect(t.toasts.at(-1)).toMatch(/no longer lets anyone in/)
   })
 })

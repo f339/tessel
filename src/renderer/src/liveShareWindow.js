@@ -40,7 +40,11 @@ const REASONS = {
   tunnel: () => t('liveShare.reason.tunnel', 'The host’s tunnel stopped.'),
   replaced: () => t('liveShare.reason.replaced', 'You joined another session.'),
   left: () => t('liveShare.reason.left', 'You left the session.'),
-  error: () => t('liveShare.reason.error', 'The connection failed.')
+  error: () => t('liveShare.reason.error', 'The connection failed.'),
+  lost: () => t('liveShare.reason.lost', 'The connection to the host was lost and did not come back.'),
+  'rejoin-refused': () => t('liveShare.reason.rejoinRefused', 'The host no longer knows this Tessel: join again with an invite code.'),
+  outdated: () => t('liveShare.reason.outdated', 'Your Tessel is too old for the host’s Live Share: update Tessel and join again.'),
+  'outdated-host': () => t('liveShare.reason.outdatedHost', 'The host’s Tessel is too old for this Live Share: the host needs to update Tessel.')
 }
 export const endReason = (reason) => (REASONS[reason] ? REASONS[reason]() : t('liveShare.reason.ended', 'The session ended.'))
 
@@ -61,11 +65,12 @@ export function rightsText(rights) {
 // opts), launch(spec, targetId, where), selectedShell(), seedBuffer(id, text),
 // dropBuffer(id), showToast(text, opts), isAgentLeaf(leaf),
 // probeRunningWork(id) -> Promise<{ running, unknown, names }>, killPty(id),
-// adoptLeaves(leaves) (panes of this computer, put in a project of yours).
+// adoptLeaves(leaves) (panes of this computer, put in a project of yours),
+// hasAgent(id).
 export function createLiveShareWindow(deps) {
   const api = () => (window.shellApi && window.shellApi.liveShare) || null
   const state = reactive({
-    host: { state: 'off', invite: null, expiresAt: null, guests: [], progress: null, error: null },
+    host: { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectId: null, guests: [], progress: null, error: null },
     guest: { state: 'off', host: null, session: null, panes: [], layout: null, reason: null, rights: null, code: null },
     defaultName: '',
     // The project you share (its id), chosen when you start.
@@ -82,6 +87,11 @@ export function createLiveShareWindow(deps) {
 
   const isGuestWs = (ws) => !!(ws && ws.liveShare)
   const isGuestLeaf = (leaf) => !!(leaf && leaf.backend === 'liveshare')
+  const nameOf = (g) => (g && g.name) || t('liveShare.guest', 'A guest')
+  // The host's fullscreen pane last followed (only its changes are), and
+  // whether the host's active pane is still to be taken (once, at the start).
+  let hostMaximized = null
+  let takeHostActive = true
   // Each time you start sharing: a request from an earlier sharing is stale.
   let generation = 0
   const guestWs = (session) => deps.workspaces().find((w) => w.liveShare && w.liveShare.session === session) || null
@@ -114,14 +124,19 @@ export function createLiveShareWindow(deps) {
 
   function onHost(s) {
     const before = new Map(state.host.guests.map((g) => [g.id, g]))
+    const wasBlocked = !!state.host.inviteBlocked
     if (s.state === 'sharing' && state.host.state !== 'sharing') generation++
     Object.assign(state.host, s)
+    // The share taken back after a restart: its project (the window does not
+    // remember it).
+    if (s.state === 'sharing' && s.projectId && !sharedWs()) shareProject(s.projectId)
+    if (s.inviteBlocked && !wasBlocked) deps.showToast(t('liveShare.toast.blocked', 'Several connections used your invite code without joining: it no longer lets anyone in. Make a new code in Live Share.'), { kind: 'error', timeout: 12000 })
     for (const g of s.guests || []) {
       const was = before.get(g.id)
-      if (g.state === 'joined' && (!was || was.state !== 'joined')) deps.showToast(t('liveShare.toast.joined', '{{name}} joined your Live Share.', { name: g.name }), { timeout: 5000 })
+      if (g.state === 'joined' && (!was || was.state !== 'joined')) deps.showToast(t('liveShare.toast.joined', '{{name}} joined your Live Share.', { name: nameOf(g) }), { timeout: 5000 })
       before.delete(g.id)
     }
-    for (const g of before.values()) if (g.state === 'joined') deps.showToast(t('liveShare.toast.left', '{{name}} left your Live Share.', { name: g.name }), { timeout: 5000 })
+    for (const g of before.values()) if (g.state === 'joined') deps.showToast(t('liveShare.toast.left', '{{name}} left your Live Share.', { name: nameOf(g) }), { timeout: 5000 })
     // A guest who is no longer waiting (gone, or answered elsewhere), and the
     // close requests that no longer stand (the guest left or lost the right,
     // sharing stopped).
@@ -144,7 +159,7 @@ export function createLiveShareWindow(deps) {
 
   function onAsk(a) {
     if (!a || !a.guestId || state.asks.some((x) => x.key === a.guestId)) return
-    state.asks.push({ kind: 'join', key: a.guestId, guestId: a.guestId, name: a.name, code: a.code || null, forward: a.forward !== false })
+    state.asks.push({ kind: 'join', key: a.guestId, guestId: a.guestId, name: a.name, code: a.code || null })
   }
 
   // Your answer to one ask (its key): a guest's join or a close request.
@@ -179,6 +194,9 @@ export function createLiveShareWindow(deps) {
     const ask = { kind: 'close', key, guestId: (req.guest && req.guest.id) || null, name: who, paneId: req.id, paneName: leaf ? leaf.paneName || leaf.title : '', detail: null, generation }
     if (!leaf || state.asks.some((a) => a.key === key) || !closeStands(ask)) return
     if (deps.isAgentLeaf(leaf)) ask.detail = t('liveShare.closeAsk.agent', 'Its agent session ends (it can be resumed later from Agent sessions).')
+    // A pane on an SSH host or in WSL: what runs there is out of Windows'
+    // sight, so Tessel can't tell; you are asked.
+    else if (leaf.remoteHostId || leaf.shellId === 'wsl' || leaf.backend === 'ssh') ask.detail = t('liveShare.closeAsk.remote', 'It runs on another system (an SSH host or WSL): Tessel can’t see what runs in it. Closing stops anything running.')
     else {
       const work = await deps.probeRunningWork(req.id)
       // Things changed while it checked (the guest left or lost the right,
@@ -197,16 +215,17 @@ export function createLiveShareWindow(deps) {
     const who = (req.guest && req.guest.name) || t('liveShare.guest', 'A guest')
     if (req.action === 'open') {
       const agent = req.spec && req.spec.kind === 'agent' ? req.spec.agent : null
+      // It opens in the project you share, beside its active pane (never in
+      // a new project, whatever "Open new panes" says); a shared project
+      // with no pane left has nowhere to put it, and an agent you don't have
+      // is not opened.
+      const ws = sharedWs()
+      const target = ws && (ws.activeId && hasLeaf(ws.tree, ws.activeId) ? ws.activeId : firstLeafId(ws.tree))
+      if (!target || (agent && !deps.hasAgent(agent))) return
       deps.showToast(
         agent ? t('liveShare.toast.openedAgent', '{{name}} opened {{agent}} in your Tessel.', { name: who, agent }) : t('liveShare.toast.openedTerminal', '{{name}} opened a terminal in your Tessel.', { name: who }),
         { timeout: 5000 }
       )
-      // It opens in the project you share, beside its active pane (never in
-      // a new project, whatever "Open new panes" says); a shared project
-      // with no pane left has nowhere to put it.
-      const ws = sharedWs()
-      const target = ws && (ws.activeId && hasLeaf(ws.tree, ws.activeId) ? ws.activeId : firstLeafId(ws.tree))
-      if (!target) return
       deps.launch(agent ? { kind: 'agent', id: agent } : { kind: 'shell', id: deps.selectedShell() }, target, 'right')
     } else if (req.action === 'close') {
       askClose(req, who)
@@ -229,12 +248,20 @@ export function createLiveShareWindow(deps) {
       const children = built ? [built, ...local] : local
       ws.tree = children.length === 1 ? children[0] : reactive({ type: 'split', id: 'ls-split-local', dir: 'row', sizes: children.map(() => 100 / children.length), children })
     }
-    const active = s.layout && s.layout.activeId && guestLeaves.has(s.layout.activeId) ? s.layout.activeId : null
-    if (active) ws.activeId = active
-    else if (!ws.activeId || !guestLeaves.has(ws.activeId)) ws.activeId = guestLeaves.size ? [...guestLeaves.keys()].find((id) => hasLeaf(ws.tree, id)) || null : null
-    if (deps.currentWsId() === ws.id) {
-      const max = s.layout && s.layout.maximizedId && guestLeaves.has(s.layout.maximizedId) ? s.layout.maximizedId : null
-      if (deps.maximizedId() !== max) deps.setMaximized(max)
+    // Your own active pane stays yours (the keyboard never jumps to the
+    // host's pane while you type): the host's is taken once, when it is
+    // there; after that only when yours is gone.
+    const hostActive = s.layout && s.layout.activeId && guestLeaves.has(s.layout.activeId) ? s.layout.activeId : null
+    if (takeHostActive && hostActive) {
+      ws.activeId = hostActive
+      takeHostActive = false
+    } else if (!ws.activeId || !hasLeaf(ws.tree, ws.activeId)) ws.activeId = hostActive || (guestLeaves.size ? [...guestLeaves.keys()].find((id) => hasLeaf(ws.tree, id)) || null : null)
+    // The host's fullscreen pane: followed when the host changes it (you can
+    // leave it meanwhile).
+    const max = s.layout && s.layout.maximizedId && guestLeaves.has(s.layout.maximizedId) ? s.layout.maximizedId : null
+    if (max !== hostMaximized) {
+      hostMaximized = max
+      if (deps.currentWsId() === ws.id && deps.maximizedId() !== max) deps.setMaximized(max)
     }
   }
 
@@ -262,6 +289,9 @@ export function createLiveShareWindow(deps) {
         // The host's pane: its size (the terminal shows it at that size),
         // what it runs there, and whether you may type in it.
         liveShare: { session, cols: p.cols || 0, rows: p.rows || 0, kind: p.kind, agentId: p.agentId || null, canType: may('type'), host: state.guest.host || '' },
+        // A new terminal here each time the host's pane starts again (or the
+        // connection came back): SplitNode's key.
+        gen: p.gen || 0,
         launchedAt: Date.now(),
         exitedAtStart: !!a.exited,
         restoredText: '',
@@ -301,6 +331,7 @@ export function createLiveShareWindow(deps) {
           leaf.liveShare.rows = p.rows
         }
         leaf.liveShare.canType = may('type')
+        if ((p.gen || 0) !== (leaf.gen || 0)) leaf.gen = p.gen || 0
       } else if (!attaching.has(p.id)) attachGuestPane(p, s.session)
     }
     applyLayout(ws)
@@ -309,6 +340,8 @@ export function createLiveShareWindow(deps) {
   function endGuest(s) {
     for (const id of guestLeaves.keys()) deps.dropBuffer(id)
     guestLeaves.clear()
+    hostMaximized = null
+    takeHostActive = true
     // Its panes are not terminals of this computer: nothing to stop here.
     // Panes of this computer that opened in it go to a project of yours.
     for (const ws of deps.workspaces().filter((w) => w.liveShare)) {
@@ -323,14 +356,20 @@ export function createLiveShareWindow(deps) {
 
   function onGuest(s) {
     if (!s) return
-    const wasJoined = state.guest.state === 'joined'
+    const was = state.guest.state
+    const wasIn = was === 'joined' || was === 'reconnecting'
     const before = JSON.stringify(state.guest.rights || null)
     Object.assign(state.guest, { rights: null, code: null, ...s })
     if (s.state === 'joined') {
-      // The host changed what you may do: said once.
-      if (wasJoined && JSON.stringify(s.rights || null) !== before) deps.showToast(`${t('liveShare.toast.rights', '{{host}} changed what you can do.', { host: s.host || '?' })} ${rightsText(s.rights)}`, { timeout: 6000 })
+      // The host changed what you may do (not the first word on it): said once.
+      if (was === 'joined' && before !== 'null' && JSON.stringify(s.rights || null) !== before) deps.showToast(`${t('liveShare.toast.rights', '{{host}} changed what you can do.', { host: s.host || '?' })} ${rightsText(s.rights)}`, { timeout: 6000 })
+      if (was === 'reconnecting') deps.showToast(t('liveShare.toast.reconnected', 'Back in {{host}}’s Live Share.', { host: s.host || '?' }), { timeout: 4000 })
       syncGuest(s)
-    } else if (s.state === 'ended' || (s.state === 'off' && wasJoined)) endGuest(s)
+    } else if (s.state === 'reconnecting') {
+      // The project stays, its panes view only, until the connection is back.
+      if (was !== 'reconnecting') deps.showToast(t('liveShare.toast.reconnecting', 'Connection to {{host}} lost: reconnecting…', { host: s.host || '?' }), { timeout: 6000 })
+      for (const leaf of guestLeaves.values()) leaf.liveShare.canType = false
+    } else if (s.state === 'ended' || (s.state === 'off' && wasIn)) endGuest(s)
   }
 
   // A new terminal or agent in a Live Share project opens on the host, when
@@ -343,6 +382,12 @@ export function createLiveShareWindow(deps) {
     }
     api()?.open(spec)
     deps.showToast(t('liveShare.toast.opening', 'Opening it on {{host}}’s computer…', { host: state.guest.host || '?' }), { timeout: 3000 })
+  }
+
+  // Something this computer would run (a tool, a session, an SSH connection)
+  // asked for in a Live Share project: not there.
+  function notHere() {
+    deps.showToast(t('liveShare.notHere', 'This runs on your computer: open it in one of your projects (a Live Share project shows the host’s panes).'), { timeout: 6000 })
   }
 
   // Whether you may ask the host to close its panes (else a notice).
@@ -377,15 +422,36 @@ export function createLiveShareWindow(deps) {
       const s = await a.state()
       state.defaultName = s.defaultName || ''
       onHost(s.host)
+      // Guests waiting for your answer before this window (re)loaded.
+      for (const g of (s.host && s.host.guests) || []) if (g.state === 'waiting') onAsk({ guestId: g.id, name: g.name, code: g.code })
       onGuest(s.guest)
     } catch {
       /* not available */
     }
     stops.push(
       watch(
-        () => (hostSharing() ? JSON.stringify(layoutNow()) : ''),
+        // (A share taken back after a restart waits for its project to be
+        // found again: guests never see it empty meanwhile.)
+        () => (hostSharing() && (state.sharedWsId || !state.host.projectId) ? JSON.stringify(layoutNow()) : ''),
         (text) => {
           if (text) a.setLayout(JSON.parse(text))
+        },
+        { immediate: true }
+      ),
+      // A share taken back after a restart: its project once the window has
+      // its projects again.
+      watch(
+        () => (hostSharing() && state.host.projectId && !state.sharedWsId ? deps.workspaces().some((w) => w.id === state.host.projectId) : false),
+        (found) => {
+          if (found) shareProject(state.host.projectId)
+        },
+        { immediate: true }
+      ),
+      // The project shared, told to main (kept across a restart).
+      watch(
+        () => (hostSharing() || ['preparing', 'starting', 'checking'].includes(state.host.state) ? state.sharedWsId : null),
+        (id) => {
+          if (id && a.setProject) a.setProject(id)
         },
         { immediate: true }
       ),
@@ -407,7 +473,7 @@ export function createLiveShareWindow(deps) {
     for (const stop of stops.splice(0)) stop()
   }
 
-  return { state, init, dispose, isGuestWs, isGuestLeaf, openOnHost, canClose, requestClose, leave, answerAsk, setRights, newInvite, prepareShare, shareProject, sharedWs }
+  return { state, init, dispose, isGuestWs, isGuestLeaf, openOnHost, notHere, canClose, requestClose, leave, answerAsk, setRights, newInvite, prepareShare, shareProject, sharedWs }
 }
 
 function hasLeaf(node, id) {

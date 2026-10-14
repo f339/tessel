@@ -7,6 +7,10 @@
 // pinned version whose SHA-256 is checked before it is ever run, and kept in
 // Tessel's data folder. One already on PATH (winget, choco) is not used: its
 // version is unknown. The tunnel only carries ciphertext (shareCrypto.js).
+//
+// cloudflared runs on its own (detached, its log in a file, no pipe to
+// Tessel), so a restart of Tessel does not stop it: the next Tessel takes the
+// same tunnel back (liveShare.js resume), and the invite code stays the same.
 import fs from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
@@ -17,8 +21,21 @@ export const CLOUDFLARED_VERSION = '2026.9.3'
 const CLOUDFLARED_URL = `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-windows-amd64.exe`
 const CLOUDFLARED_SHA256 = 'f096265ec2fcbe9bb6e2d64268db167ced3fcbb83d894bdb9e2fcdb26f2ea7e2'
 const START_TIMEOUT_MS = 45000
+const LOG_POLL_MS = 200
 
-const ADDRESS_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i
+// The address in cloudflared's box ("|  https://a-b-c-d.trycloudflare.com  |"),
+// never another trycloudflare.com address it names (api.trycloudflare.com in
+// its errors): quick tunnel names are words joined by dashes.
+const ADDRESS_RE = /\|\s*(https:\/\/[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com)\/?\s*\|/i
+
+// Why a share could not start (liveShare.js says it in the user's language).
+export class TunnelError extends Error {
+  constructor(code, detail = '') {
+    super(detail ? `${code}: ${detail}` : code) // i18n-ignore internal: the code is shown translated
+    this.code = code
+    this.detail = detail
+  }
+}
 
 export function cloudflaredPath(dataDir) {
   return join(dataDir, 'bin', `cloudflared-${CLOUDFLARED_VERSION}.exe`)
@@ -36,7 +53,7 @@ export async function ensureCloudflared(dataDir, { fetchImpl = fetch, onProgress
     /* not downloaded yet */
   }
   const res = await fetchImpl(CLOUDFLARED_URL, { redirect: 'follow' })
-  if (!res.ok) throw new Error(`cloudflared download failed (HTTP ${res.status})`) // i18n-ignore shown with the share error
+  if (!res.ok) throw new TunnelError('download', `HTTP ${res.status}`)
   const total = Number(res.headers?.get?.('content-length')) || 0
   const chunks = []
   let got = 0
@@ -53,7 +70,7 @@ export async function ensureCloudflared(dataDir, { fetchImpl = fetch, onProgress
     chunks.push(Buffer.from(await res.arrayBuffer()))
   }
   const data = Buffer.concat(chunks)
-  if (sha256(data) !== CLOUDFLARED_SHA256) throw new Error('cloudflared download does not match its published SHA-256') // i18n-ignore shown with the share error
+  if (sha256(data) !== CLOUDFLARED_SHA256) throw new TunnelError('checksum')
   fs.mkdirSync(join(dataDir, 'bin'), { recursive: true })
   const tmp = exe + '.part'
   fs.writeFileSync(tmp, data)
@@ -61,19 +78,19 @@ export async function ensureCloudflared(dataDir, { fetchImpl = fetch, onProgress
   return exe
 }
 
-// The tunnel's address in cloudflared's output, as a wss:// URL, or null.
+// The tunnel's address in cloudflared's log, as a wss:// URL, or null.
 export function parseTunnelAddress(text) {
   const m = ADDRESS_RE.exec(String(text || ''))
-  return m ? m[0].replace(/^https:/i, 'wss:') + '/' : null
+  return m ? m[1].replace(/^https:/i, 'wss:') + '/' : null
 }
 
 // A new tunnel's address takes a few seconds to resolve everywhere: try it
 // (the share server's first message proves it is ours) before the invite
-// code is shown, so a guest does not join too early.
-export async function waitReachable(url, { WebSocketImpl = WebSocket, timeoutMs = 60000, everyMs = 2000 } = {}) {
+// code is shown, so a guest does not join too early. cancelled(): stop now.
+export async function waitReachable(url, { WebSocketImpl = WebSocket, timeoutMs = 60000, everyMs = 2000, cancelled = () => false } = {}) {
   const WS = WebSocketImpl
   const end = Date.now() + timeoutMs
-  while (Date.now() < end) {
+  while (Date.now() < end && !cancelled()) {
     const ok = await new Promise((resolve) => {
       let socket
       const done = (v) => {
@@ -103,49 +120,90 @@ export async function waitReachable(url, { WebSocketImpl = WebSocket, timeoutMs 
       socket.on('close', () => done(false))
     })
     if (ok) return true
+    if (cancelled()) return false
     await new Promise((r) => setTimeout(r, everyMs))
   }
   return false
 }
 
-// What cloudflared gets of Tessel's environment: none of its own settings
-// (TUNNEL_*, CLOUDFLARED_*: a token or origin of the user's named tunnels
-// would change what it does), nor Tessel's or an agent session's secrets.
+// What cloudflared gets of Tessel's environment: only what any program needs
+// to run and reach the internet (Windows' own variables, the proxy settings),
+// none of the API keys, tokens or tunnel settings (TUNNEL_*) it may hold.
+const TUNNEL_ENV = new Set(
+  [
+    'PATH',
+    'PATHEXT',
+    'SYSTEMROOT',
+    'SYSTEMDRIVE',
+    'WINDIR',
+    'COMSPEC',
+    'TEMP',
+    'TMP',
+    'USERPROFILE',
+    'HOMEDRIVE',
+    'HOMEPATH',
+    'APPDATA',
+    'LOCALAPPDATA',
+    'PROGRAMDATA',
+    'PROGRAMFILES',
+    'PROGRAMFILES(X86)',
+    'COMPUTERNAME',
+    'USERNAME',
+    'USERDOMAIN',
+    'OS',
+    'NUMBER_OF_PROCESSORS',
+    'PROCESSOR_ARCHITECTURE',
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'NO_PROXY',
+    'ALL_PROXY',
+    'SSL_CERT_FILE',
+    'SSL_CERT_DIR'
+  ].map((k) => k.toUpperCase())
+)
 export function tunnelEnv(env = process.env) {
   const out = {}
-  for (const [k, v] of Object.entries(env || {})) {
-    if (/^(TUNNEL_|CLOUDFLARED_|TESSEL_|CLAUDE_CODE_|CODEX_)/i.test(k) || /^(ELECTRON_RUN_AS_NODE|CLAUDECODE)$/i.test(k)) continue
-    out[k] = v
-  }
+  for (const [k, v] of Object.entries(env || {})) if (TUNNEL_ENV.has(k.toUpperCase())) out[k] = v
   return out
 }
 
 const pidFile = (dataDir) => join(dataDir, 'bin', 'cloudflared.pid')
+const logFile = (dataDir) => join(dataDir, 'bin', 'cloudflared.log')
+const isOurName = (name) => String(name || '').toLowerCase() === `cloudflared-${CLOUDFLARED_VERSION}.exe`.toLowerCase()
 
-// A cloudflared this Tessel started and could not stop (it crashed or was
-// killed while sharing) still runs a tunnel to nothing: ended before a new
-// one starts. Only the PID it wrote down, and only while that PID is still
-// this cloudflared (its file name: the exact version Tessel downloads).
+export function readTunnelPid(dataDir) {
+  try {
+    const pid = Number(fs.readFileSync(pidFile(dataDir), 'utf8').trim())
+    return Number.isInteger(pid) && pid > 0 ? pid : 0
+  } catch {
+    return 0
+  }
+}
+
+// Whether this PID is still the cloudflared Tessel started (its file name:
+// the exact version Tessel downloads). listNames() -> [{ pid, name }] or null.
+export async function tunnelAlive(pid, { listNames }) {
+  if (!pid) return false
+  const procs = await Promise.resolve()
+    .then(listNames)
+    .catch(() => null)
+  const it = Array.isArray(procs) && procs.find((p) => p.pid === pid)
+  return !!it && isOurName(it.name)
+}
+
+// A cloudflared this Tessel started and that no share uses (Tessel quit
+// without stopping it, and the share was not taken back): ended. Only the PID
+// it wrote down, and only while that PID is still this cloudflared.
 // listNames() -> [{ pid, name }] or null; kill(pid).
 export async function endLeftoverTunnel(dataDir, { listNames, kill }) {
-  let pid = 0
-  try {
-    pid = Number(fs.readFileSync(pidFile(dataDir), 'utf8').trim())
-  } catch {
-    return false
-  }
+  const pid = readTunnelPid(dataDir)
+  if (!pid) return false
   try {
     fs.rmSync(pidFile(dataDir), { force: true })
   } catch {
     /* written again at the next start */
   }
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  const procs = await Promise.resolve()
-    .then(listNames)
-    .catch(() => null)
-  const name = `cloudflared-${CLOUDFLARED_VERSION}.exe`.toLowerCase()
-  const it = Array.isArray(procs) && procs.find((p) => p.pid === pid)
-  if (!it || String(it.name || '').toLowerCase() !== name) return false
+  if (!(await tunnelAlive(pid, { listNames }))) return false
   try {
     kill(pid)
     return true
@@ -154,36 +212,66 @@ export async function endLeftoverTunnel(dataDir, { listNames, kill }) {
   }
 }
 
-// Starts a quick tunnel to 127.0.0.1:port. Resolves { url, stop } once
-// Cloudflare gave the address; onExit(code) is called if it stops by itself.
+// Stops a tunnel by its PID (one this Tessel adopted after a restart), and
+// forgets it.
+export function stopTunnelPid(dataDir, pid, kill = (p) => process.kill(p)) {
+  try {
+    kill(pid)
+  } catch {
+    /* already stopped */
+  }
+  try {
+    if (readTunnelPid(dataDir) === pid) fs.rmSync(pidFile(dataDir), { force: true })
+  } catch {
+    /* not written */
+  }
+}
+
+// Starts a quick tunnel to 127.0.0.1:port. Resolves { url, stop, pid } once
+// Cloudflare gave the address; onExit(code) is called if it stops by itself
+// (while this Tessel runs).
 export function startTunnel({ exe, port, dataDir, spawnImpl = spawn, onExit, timeoutMs = START_TIMEOUT_MS, env = tunnelEnv() }) {
   // An empty config of its own: a quick tunnel refuses to start when the
   // user's ~/.cloudflared/config.yml exists (a named tunnel of theirs).
   const config = join(dataDir, 'bin', 'cloudflared-quick.yml')
+  const log = logFile(dataDir)
   try {
     fs.mkdirSync(join(dataDir, 'bin'), { recursive: true })
     fs.writeFileSync(config, '')
+    fs.rmSync(log, { force: true })
   } catch {
     /* cloudflared then reports what is wrong */
   }
-  const args = ['tunnel', '--no-autoupdate', '--config', config, '--url', `http://127.0.0.1:${port}`]
+  const args = ['tunnel', '--no-autoupdate', '--config', config, '--logfile', log, '--management-diagnostics=false', '--url', `http://127.0.0.1:${port}`]
   return new Promise((resolve, reject) => {
-    const child = spawnImpl(exe, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env })
-    // Its PID, for endLeftoverTunnel after a crash; gone once it stopped.
+    let child
+    try {
+      child = spawnImpl(exe, args, { windowsHide: true, detached: true, stdio: 'ignore', env })
+    } catch (err) {
+      reject(new TunnelError('start', (err && err.message) || ''))
+      return
+    }
+    child.unref?.()
+    // Its PID, for the next Tessel (to take the tunnel back, or end it).
     try {
       if (child.pid) fs.writeFileSync(pidFile(dataDir), String(child.pid))
     } catch {
-      /* only the clean-up after a crash is lost */
+      /* only taking it back after a restart is lost */
     }
     const forgetPid = () => {
       try {
-        if (child.pid && fs.readFileSync(pidFile(dataDir), 'utf8').trim() === String(child.pid)) fs.rmSync(pidFile(dataDir), { force: true })
+        if (child.pid && readTunnelPid(dataDir) === child.pid) fs.rmSync(pidFile(dataDir), { force: true })
       } catch {
         /* not written */
       }
     }
-    let output = ''
     let settled = false
+    let poll = null
+    const finish = () => {
+      settled = true
+      clearTimeout(timer)
+      clearInterval(poll)
+    }
     const stop = () => {
       try {
         child.kill()
@@ -192,36 +280,50 @@ export function startTunnel({ exe, port, dataDir, spawnImpl = spawn, onExit, tim
       }
       forgetPid()
     }
+    // Its last words (the log's lines are JSON: their messages).
+    const lastLines = () => {
+      try {
+        const message = (line) => {
+          try {
+            return String(JSON.parse(line).message || line)
+          } catch {
+            return line
+          }
+        }
+        return fs.readFileSync(log, 'utf8').trim().split(/\r?\n/).slice(-3).map(message).join(' | ')
+      } catch {
+        return ''
+      }
+    }
     const timer = setTimeout(() => {
       if (settled) return
-      settled = true
+      finish()
       stop()
-      reject(new Error('Cloudflare did not give a tunnel address in time')) // i18n-ignore shown with the share error
+      reject(new TunnelError('timeout'))
     }, timeoutMs)
-    const onData = (chunk) => {
+    poll = setInterval(() => {
       if (settled) return
-      output = (output + chunk.toString()).slice(-20000)
-      const url = parseTunnelAddress(output)
+      let text
+      try {
+        text = fs.readFileSync(log, 'utf8')
+      } catch {
+        return
+      }
+      const url = parseTunnelAddress(text)
       if (!url) return
-      settled = true
-      clearTimeout(timer)
+      finish()
       resolve({ url, stop, pid: child.pid })
-    }
-    child.stdout?.on('data', onData)
-    child.stderr?.on('data', onData)
+    }, LOG_POLL_MS)
     child.on('error', (err) => {
       if (settled) return
-      settled = true
-      clearTimeout(timer)
-      reject(err)
+      finish()
+      reject(new TunnelError('start', (err && err.message) || ''))
     })
     child.on('exit', (code) => {
-      clearTimeout(timer)
       forgetPid()
       if (!settled) {
-        settled = true
-        const last = output.trim().split(/\r?\n/).slice(-3).join(' | ')
-        reject(new Error(`cloudflared stopped (${code})${last ? ': ' + last : ''}`)) // i18n-ignore shown with the share error
+        finish()
+        reject(new TunnelError('stopped', `${code}${lastLines() ? ': ' + lastLines() : ''}`))
         return
       }
       onExit?.(code)

@@ -4,6 +4,7 @@
 // dir, sizes, children }) and panes ({ type: 'leaf', id, view, title, kind,
 // agentId, accent }). Pure functions: App sends the one and draws the other.
 import { reactive } from 'vue'
+import { workspaceViews } from './paneViews'
 
 const VIEWS = ['editor', 'browser', 'chat']
 
@@ -16,11 +17,14 @@ function hasLeaf(node, id) {
 function layoutNode(node) {
   if (!node) return null
   if (node.type === 'leaf') {
+    const view = VIEWS.includes(node.kind) ? node.kind : 'terminal'
     return {
       type: 'leaf',
       id: node.id,
-      view: VIEWS.includes(node.kind) ? node.kind : 'terminal',
-      title: node.paneName || node.title || '',
+      view,
+      // Only terminals are shared: the others' names (a file, a page) are not
+      // sent, their place is.
+      title: view === 'terminal' ? node.paneName || node.title || '' : '',
       kind: node.kind === 'agent' ? 'agent' : 'shell',
       agentId: node.agentId || null,
       accent: node.accent || null
@@ -31,11 +35,15 @@ function layoutNode(node) {
   return { type: 'split', dir: node.dir, sizes: (node.sizes || []).slice(), children }
 }
 
-// What the host's window shows: the project on screen (a Tessel workspace
-// { name, tree, activeId }) and its fullscreen pane.
+// What the host's window shows: the project shared (a Tessel workspace
+// { name, tree, activeId }), the view of it on screen (a project's task
+// copies each have their own, paneViews.js: only that one), and its
+// fullscreen pane.
 export function hostLayoutFromWorkspace(ws, maximizedId = null) {
   if (!ws) return null
-  const tree = layoutNode(ws.tree)
+  const views = workspaceViews(ws)
+  const onScreen = views.find((v) => v.active) || views[0]
+  const tree = layoutNode(onScreen ? onScreen.tree : ws.tree)
   return {
     project: ws.name || null,
     tree,

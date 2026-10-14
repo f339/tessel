@@ -3,29 +3,37 @@
 // The host makes a random 32-byte secret when it starts sharing and puts it
 // in the invite code with the session's address. The secret never travels
 // over the connection: whoever relays it (the Cloudflare tunnel, a proxy)
-// only sees the two random nonces of the handshake and then ciphertext.
+// only sees the handshake and then ciphertext.
 //
-// Each connection gets its own keys: HKDF-SHA256 of the secret, salted with
-// the host's and the guest's nonces, one key per direction. Every message is
-// sealed with AES-256-GCM under a counter nonce (one counter per direction,
-// in order: WebSocket runs over TCP). A message that does not open (wrong
-// secret, tampered, replayed, out of order) ends the connection, so a guest
-// without the invite code can't get past its first message.
+// The handshake (shareHost.js, shareGuest.js): the guest first commits to a
+// random nonce and a fresh X25519 key (their hash), then the host sends its
+// own nonce and X25519 key, then the guest reveals its nonce and key, which
+// the host checks against the commitment. Each connection's keys are
+// HKDF-SHA256 of the invite's secret and the X25519 shared secret, salted
+// with both nonces and both keys, one key per direction: a recording of the
+// session stays unreadable even if the invite code leaks later (forward
+// secrecy). Every message is sealed with AES-256-GCM under a counter nonce
+// (one counter per direction, in order: WebSocket runs over TCP). A message
+// that does not open (wrong secret, tampered, replayed, out of order) ends
+// the connection, so a guest without the invite code can't get past its
+// first message.
 //
-// Both sides also trade a fresh X25519 key in the handshake, and its shared
-// secret goes into the keys with the invite's: a recording of the session
-// stays unreadable even if the invite code leaks later (forward secrecy).
-// A Tessel from before this (no key in its handshake) still connects, with
-// the invite's secret alone. Both sides show a short verification code
-// derived from the same keys, so the host can check who they let in.
+// Both sides show a six-digit verification code derived from the same keys.
+// Someone in the middle with the invite code could only make the two codes
+// match by luck, one try per connection to the host (the guest committed
+// before seeing the host's values, the host's values come after the
+// guest's commitment), and the host counts connections that stop after the
+// handshake (shareHost.js).
 import crypto from 'crypto'
 
 const PREFIX = 'TS1.'
 const SECRET_BYTES = 32
 export const NONCE_BYTES = 16
 export const KX_BYTES = 32
+export const COMMIT_BYTES = 32
 const TAG_BYTES = 16
-const SALT_LABEL = 'tessel-liveshare-v1'
+const SALT_LABEL = 'tessel-liveshare-v2'
+const COMMIT_LABEL = 'tessel-liveshare-commit-v2'
 // The DER header of an X25519 public key (SubjectPublicKeyInfo): the raw 32
 // bytes follow it.
 const X25519_SPKI = Buffer.from('302a300506032b656e032100', 'hex')
@@ -48,7 +56,8 @@ export function encodeInvite({ url, secret }) {
 
 // The address and secret of an invite code, or null when it is not one.
 // Only wss:// addresses (and ws:// to this PC or the local network, for
-// tests and a same-network share) are accepted.
+// tests and a same-network share) are accepted; a query or fragment in the
+// address is dropped.
 export function decodeInvite(code) {
   const text = String(code || '').trim()
   if (!text.startsWith(PREFIX)) return null
@@ -64,6 +73,8 @@ export function decodeInvite(code) {
   }
   if (secret.length !== SECRET_BYTES) return null
   if (url.protocol !== 'wss:' && !(url.protocol === 'ws:' && isLocalHost(url.hostname))) return null
+  url.hash = ''
+  url.search = ''
   return { url: url.toString(), secret }
 }
 
@@ -94,6 +105,16 @@ export function sharedSecret(privateKey, peerRaw) {
   }
 }
 
+// The guest's commitment to its nonce and key (sent before it sees the
+// host's), and its check by the host.
+export function commitment(nonce, publicRaw) {
+  return crypto.createHash('sha256').update(COMMIT_LABEL).update(nonce).update(publicRaw).digest()
+}
+export function commitmentMatches(commit, nonce, publicRaw) {
+  if (!Buffer.isBuffer(commit) || commit.length !== COMMIT_BYTES) return false
+  return crypto.timingSafeEqual(commit, commitment(nonce, publicRaw))
+}
+
 // "123 456": what both sides show, to compare out loud or in a chat.
 export function verificationCode(bytes) {
   const n = Buffer.from(bytes).readUInt32BE(0) % 1000000
@@ -102,25 +123,19 @@ export function verificationCode(bytes) {
 }
 
 // The two keys of one connection, named from each side's point of view, and
-// its verification code. kx: { dh, hostKey, guestKey } when both sides traded
-// an X25519 key (dh: the shared secret; the keys: the raw public keys).
-export function sessionKeys(secret, hostNonce, guestNonce, side, kx = null) {
+// its verification code. kx: { dh, hostKey, guestKey } (dh: the X25519
+// shared secret; the keys: both raw public keys).
+export function sessionKeys(secret, hostNonce, guestNonce, side, kx) {
   if (!Buffer.isBuffer(hostNonce) || hostNonce.length !== NONCE_BYTES) throw new Error('bad host nonce') // i18n-ignore internal
   if (!Buffer.isBuffer(guestNonce) || guestNonce.length !== NONCE_BYTES) throw new Error('bad guest nonce') // i18n-ignore internal
-  const withKx = !!(kx && kx.dh)
-  const ikm = withKx ? Buffer.concat([Buffer.from(secret), kx.dh]) : secret
-  const salt = Buffer.concat([Buffer.from(SALT_LABEL), hostNonce, guestNonce, ...(withKx ? [kx.hostKey, kx.guestKey] : [])])
+  if (!kx || !Buffer.isBuffer(kx.dh) || !Buffer.isBuffer(kx.hostKey) || !Buffer.isBuffer(kx.guestKey)) throw new Error('no key exchange') // i18n-ignore internal
+  const ikm = Buffer.concat([Buffer.from(secret), kx.dh])
+  const salt = Buffer.concat([Buffer.from(SALT_LABEL), hostNonce, guestNonce, kx.hostKey, kx.guestKey])
   const key = (info, bytes = 32) => Buffer.from(crypto.hkdfSync('sha256', ikm, salt, Buffer.from(info), bytes))
   const toGuest = key('host-to-guest')
   const toHost = key('guest-to-host')
   const code = verificationCode(key('verify-code', 4))
-  return side === 'host' ? { send: toGuest, recv: toHost, code, forward: withKx } : { send: toHost, recv: toGuest, code, forward: withKx }
-}
-
-function counterIv(n) {
-  const iv = Buffer.alloc(12)
-  iv.writeBigUInt64BE(BigInt(n), 4)
-  return iv
+  return side === 'host' ? { send: toGuest, recv: toHost, code } : { send: toHost, recv: toGuest, code }
 }
 
 // Seals and opens the messages of one connection, in order.
@@ -148,4 +163,10 @@ export function createChannel({ send, recv }) {
       }
     }
   }
+}
+
+function counterIv(n) {
+  const iv = Buffer.alloc(12)
+  iv.writeBigUInt64BE(BigInt(n), 4)
+  return iv
 }

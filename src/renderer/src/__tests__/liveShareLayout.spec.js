@@ -36,8 +36,9 @@ describe('hostLayoutFromWorkspace', () => {
             sizes: [50, 25, 25],
             children: [
               { type: 'leaf', id: 'pane-2', view: 'terminal', title: 'PowerShell', kind: 'shell', agentId: null, accent: null },
-              { type: 'leaf', id: 'pane-3', view: 'editor', title: 'App.vue', kind: 'shell', agentId: null, accent: null },
-              { type: 'leaf', id: 'pane-4', view: 'browser', title: 'Docs', kind: 'shell', agentId: null, accent: null }
+              // Not shared: their place only, not their names (a file, a page).
+              { type: 'leaf', id: 'pane-3', view: 'editor', title: '', kind: 'shell', agentId: null, accent: null },
+              { type: 'leaf', id: 'pane-4', view: 'browser', title: '', kind: 'shell', agentId: null, accent: null }
             ]
           }
         ]
@@ -59,6 +60,26 @@ describe('hostLayoutFromWorkspace', () => {
   it('an empty project has no tree; no project gives null', () => {
     expect(hostLayoutFromWorkspace({ name: 'empty', tree: null, activeId: null })).toEqual({ project: 'empty', tree: null, activeId: null, maximizedId: null })
     expect(hostLayoutFromWorkspace(null)).toBeNull()
+  })
+
+  it('only the view on screen: the panes of a task copy (its own grid) stay out', () => {
+    const project = {
+      name: 'tessel',
+      cwd: 'C:/code/tessel',
+      activeId: 'pane-1',
+      tree: {
+        type: 'split',
+        dir: 'row',
+        sizes: [50, 50],
+        children: [leaf('pane-1', { kind: 'shell', title: 'PowerShell' }), leaf('pane-wt', { kind: 'agent', title: 'Codex', worktree: { path: 'C:/code/tessel-wt/fix', branch: 'fix' } })]
+      }
+    }
+    const layout = hostLayoutFromWorkspace(project)
+    expect(layout.tree).toMatchObject({ type: 'leaf', id: 'pane-1' })
+    // The copy's view on screen: only its panes.
+    const copy = hostLayoutFromWorkspace({ ...project, activeId: 'pane-wt' })
+    expect(copy.tree).toMatchObject({ type: 'leaf', id: 'pane-wt' })
+    expect(copy.activeId).toBe('pane-wt')
   })
 
   it('does not change the workspace', () => {

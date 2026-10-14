@@ -9,6 +9,7 @@
     "closeHostPane2": "Ce panneau tourne sur l'ordinateur de {{host}} : {{host}} reçoit la demande de le fermer, pour tous les participants de la session.",
     "noMove": "Un projet Live Share suit la disposition de l'hôte : ses panneaux ne se déplacent pas, et aucun panneau n'y entre.",
     "keptPanes": "Gardés de Live Share",
+    "notHere": "Ceci tourne sur votre ordinateur : ouvrez-le dans un de vos projets (un projet Live Share montre les panneaux de l'hôte).",
     "onlyTerminals": "Dans un projet Live Share, seuls des terminaux et des agents peuvent être ouverts (sur l'ordinateur de l'hôte).",
     "viewOnly": "Lecture seule : {{host}} ne vous a pas donné le droit de taper ici.",
     "tabs": {
@@ -38,6 +39,7 @@
       "newCode": "Nouveau code",
       "newCodeTitle": "Un nouveau code : l'ancien ne laisse plus entrer personne (les invités déjà connectés restent)",
       "newCodeFailed": "Impossible de créer un nouveau code.",
+      "blocked": "Plusieurs connexions ont utilisé ce code sans rejoindre (quelqu'un essaie peut-être d'entrer) : il ne laisse plus entrer personne. Créez un nouveau code pour laisser entrer des invités.",
       "guests": "Invités",
       "noGuests": "Personne n'a encore rejoint la session.",
       "guestJoined": "Connecté",
@@ -60,6 +62,7 @@
       "failed": "Impossible de rejoindre la session.",
       "connecting": "Connexion…",
       "waiting": "En attente de l'accord de l'hôte…",
+      "reconnecting": "Connexion perdue : reconnexion à {{host}}…",
       "code": "Votre code est {{code}}. Donnez-le à votre hôte pour qu'il sache que c'est bien vous.",
       "joined": "Vous avez rejoint le Live Share de {{host}}. Ses panneaux sont ouverts dans le projet Live Share.",
       "leave": "Quitter",
@@ -78,7 +81,6 @@
       "text": "Cette personne verra en direct le projet que vous partagez. Elle ne pourra que regarder tant que vous ne l'autorisez pas à taper (Live Share, dans la barre d'outils).",
       "textProject": "Cette personne verra {{project}} en direct. Elle ne pourra que regarder tant que vous ne l'autorisez pas à taper (Live Share, dans la barre d'outils).",
       "code": "Son Tessel affiche le code {{code}}. Vérifiez avec cette personne que c'est le même avant d'autoriser.",
-      "older": "Son Tessel est plus ancien : la session n'est chiffrée qu'avec le code d'invitation.",
       "allow": "Autoriser",
       "deny": "Refuser"
     },
@@ -88,6 +90,7 @@
       "agent": "Sa session d'agent se termine (elle pourra être reprise plus tard depuis les sessions d'agents).",
       "unknown": "Tessel n'a pas pu vérifier si une commande tourne encore dedans. Le fermer arrête tout ce qui tourne.",
       "running": "{{names}} tourne encore dedans. Le fermer l'arrête.",
+      "remote": "Il tourne sur un autre système (un hôte SSH ou WSL) : Tessel ne voit pas ce qui tourne dedans. Le fermer arrête tout ce qui tourne.",
       "keep": "Le garder",
       "close": "Le fermer"
     },
@@ -107,6 +110,10 @@
       "replaced": "Vous avez rejoint une autre session.",
       "left": "Vous avez quitté la session.",
       "error": "La connexion a échoué.",
+      "lost": "La connexion à l'hôte a été perdue et n'est pas revenue.",
+      "rejoinRefused": "L'hôte ne connaît plus ce Tessel : rejoignez-le de nouveau avec un code d'invitation.",
+      "outdated": "Votre Tessel est trop ancien pour le Live Share de l'hôte : mettez Tessel à jour et rejoignez de nouveau.",
+      "outdatedHost": "Le Tessel de l'hôte est trop ancien pour ce Live Share : l'hôte doit mettre Tessel à jour.",
       "ended": "La session est terminée."
     },
     "toast": {
@@ -122,7 +129,10 @@
       "noOpen": "{{host}} ne vous a pas donné le droit d'ouvrir des terminaux ou des agents.",
       "noClose": "Vous n'avez pas le droit de fermer les panneaux de {{host}}.",
       "limit": "Le Tessel de {{host}} limite la fréquence à laquelle les invités ouvrent ou ferment des panneaux. Attendez une minute.",
-      "projectClosed": "Vous avez fermé le projet que vous partagiez : Live Share s'est arrêté."
+      "projectClosed": "Vous avez fermé le projet que vous partagiez : Live Share s'est arrêté.",
+      "blocked": "Plusieurs connexions ont utilisé votre code d'invitation sans rejoindre : il ne laisse plus entrer personne. Créez un nouveau code dans Live Share.",
+      "reconnecting": "Connexion à {{host}} perdue : reconnexion…",
+      "reconnected": "De retour dans le Live Share de {{host}}."
     },
     "toolbar": {
       "label": "Live Share",

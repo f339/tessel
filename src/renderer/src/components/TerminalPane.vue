@@ -1448,10 +1448,42 @@ function liveShareSize() {
   return ls && ls.cols > 1 && ls.rows > 0 ? { cols: ls.cols, rows: ls.rows } : null
 }
 
+// A Live Share pane keeps the host's columns and rows, drawn here: its text
+// is sized so they fill this pane, whether it is smaller or larger than the
+// host's (from 6 px to twice the usual size), never cut and with no empty
+// band beside them.
+function fitLiveShareFont({ cols, rows }) {
+  const base = paneFontSize()
+  const max = base * 2
+  let size = term.options.fontSize || base
+  const room = () => {
+    const p = fit.proposeDimensions()
+    return p && p.cols > 0 && p.rows > 0 ? Math.min(p.cols / cols, p.rows / rows) : null
+  }
+  // Toward the size where they just fit (the cells grow with the text).
+  for (let i = 0; i < 4; i++) {
+    const scale = room()
+    if (scale == null || (scale >= 1 && scale < 1.06) || (scale >= 1 && size >= max)) break
+    const next = Math.max(6, Math.min(max, Math.floor(size * scale * 2) / 2))
+    if (next === size) break
+    size = next
+    term.options.fontSize = size
+  }
+  // Then a half point at a time until nothing is cut.
+  for (let i = 0; i < 12; i++) {
+    const scale = room()
+    if (scale == null || scale >= 1 || size <= 6) break
+    size = Math.max(6, size - 0.5)
+    term.options.fontSize = size
+  }
+}
+
 function doFit() {
   if (!term || !fit) return
   try {
-    const dims = liveShareSize() || fit.proposeDimensions()
+    const shared = liveShareSize()
+    if (shared) fitLiveShareFont(shared)
+    const dims = shared || fit.proposeDimensions()
     if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
     // Never shrink to nothing (e.g. while the pane is momentarily unmeasurable).
     if (dims.cols < 2 || dims.rows < 1) return

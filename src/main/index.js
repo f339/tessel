@@ -3650,6 +3650,8 @@ ipcMain.handle('pty:create', async (_evt, opts = {}) => {
     catch { agentStatusWarning = t('main.agents.statusUnavailable', 'Agent status observations are unavailable.') }
   }
   liveShare?.noteSize(id, cols, rows)
+  // A pane restarted in place: Live Share guests get its new screen.
+  liveShare?.paneStarted(id)
   return {
     ok: true,
     shell: { id: shell.id, name: shell.name },
@@ -3720,6 +3722,8 @@ async function createSshPane(opts, target, spec, shell, startedAt) {
   // The host's shim and agents (its shared connection: no new question).
   void remoteAgentCheck.hostStarted(target.id)
   liveShare?.noteSize(id, cols, rows)
+  // A pane restarted in place: Live Share guests get its new screen.
+  liveShare?.paneStarted(id)
   return {
     ok: true,
     shell: { id: shell.id, name: shell.name },
@@ -3970,10 +3974,12 @@ app.on('session-end', () => {
   saveScrollback()
 })
 
-async function shutdownTerminals() {
+async function shutdownTerminals({ keepShare = false } = {}) {
   quitting = true
-  // Ends the sharing (guests told, cloudflared killed) or the joined session.
-  liveShare?.stopAll()
+  // Ends the sharing (guests told, cloudflared killed) or the joined session;
+  // an update's restart keeps them for the next Tessel (liveShare.js).
+  if (keepShare) liveShare?.suspend()
+  else liveShare?.stopAll()
   await saveScrollback()
   // Only a host that runs is asked to stop (asking would start a new one).
   if (!(await host.connectIfRunning())) return
@@ -4000,12 +4006,13 @@ const updater = createUpdater({
     // Installing: the window closes without asking (the user chose to install).
     appQuitting = true
     // The chat agents too: before-quit skips its shutdown after this one.
-    await Promise.allSettled([shutdownTerminals(), chatSessions.closeAll({ kill: true })])
+    await Promise.allSettled([shutdownTerminals({ keepShare: true }), chatSessions.closeAll({ kill: true })])
     shutdownDone = true
   },
   // The installer never started: back to a normal running app (the
   // terminals start again as panes restart or reattach).
   onInstallFailed: () => {
+    liveShare?.unsuspend()
     shutdownDone = false
     quitting = false
     appQuitting = false

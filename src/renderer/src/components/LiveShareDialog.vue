@@ -182,9 +182,11 @@ const guestStateText = (g) =>
 
 // --- Join ----------------------------------------------------------------
 const guestState = computed(() => guest.value.state)
-const inSession = computed(() => ['connecting', 'waiting', 'joined'].includes(guestState.value))
+const inSession = computed(() => ['connecting', 'waiting', 'joined', 'reconnecting'].includes(guestState.value))
 const joinedText = computed(() => t('liveShare.join.joined', 'You joined {{host}}’s Live Share. Their panes are open in the Live Share project.', { host: guest.value.host || '?' }))
 const rightsLine = computed(() => rightsText(guest.value.rights))
+// Its {{host}} would end a template interpolation: built here.
+const reconnectingText = computed(() => t('liveShare.join.reconnecting', 'Connection lost: reconnecting to {{host}}…', { host: guest.value.host || '?' }))
 const codeLine = computed(() => (guest.value.code ? t('liveShare.join.code', 'Your code is {{code}}. Tell your host, so they know it is you.', { code: guest.value.code }) : ''))
 
 const endedText = computed(() => (ended.value ? endReason(ended.value.reason) : ''))
@@ -293,6 +295,9 @@ function trapTab(event) {
               </button>
             </span>
           </label>
+          <div v-if="host.inviteBlocked" class="ls-error" role="alert" data-test="ls-blocked">
+            {{ t('liveShare.share.blocked', 'Several connections used this code without joining (someone may be trying to get in): it no longer lets anyone in. Make a new code to let guests join.') }}
+          </div>
           <div class="ls-expiry" :class="{ expired }" data-test="ls-expiry">
             <span>{{ expiryText }}</span>
             <button class="confirm-btn ls-small" :title="t('liveShare.share.newCodeTitle', 'A new code: the old one stops letting anyone in (guests already in stay)')" data-test="ls-new-code" @click="newCode">
@@ -305,7 +310,7 @@ function trapTab(event) {
             <p v-if="!guests.length" class="ls-empty">{{ t('liveShare.share.noGuests', 'No one has joined yet.') }}</p>
             <ul v-else class="ls-guest-list">
               <li v-for="g in guests" :key="g.id" class="ls-guest" :data-test="'ls-guest-' + g.id">
-                <span class="ls-guest-name">{{ g.name }}</span>
+                <span class="ls-guest-name">{{ g.name || t('liveShare.guest', 'A guest') }}</span>
                 <span v-if="g.state !== 'joined'" class="ls-guest-state">{{ guestStateText(g) }}</span>
                 <span v-else class="ls-rights" role="group" :aria-label="t('liveShare.share.rightsLabel', 'What {{name}} can do', { name: g.name })">
                   <button
@@ -361,6 +366,10 @@ function trapTab(event) {
           <Loader2 :size="15" class="bp-spin" aria-hidden="true" />
           <span>{{ t('liveShare.join.connecting', 'Connecting…') }}</span>
         </div>
+        <div v-else-if="guestState === 'reconnecting'" class="ls-status" data-test="ls-reconnecting">
+          <Loader2 :size="15" class="bp-spin" aria-hidden="true" />
+          <span>{{ reconnectingText }}</span>
+        </div>
         <template v-else-if="guestState === 'waiting'">
           <div class="ls-status" data-test="ls-waiting">
             <Loader2 :size="15" class="bp-spin" aria-hidden="true" />
@@ -377,7 +386,7 @@ function trapTab(event) {
 
         <div class="confirm-actions">
           <button class="confirm-btn" @click="emit('close')">{{ t('liveShare.close', 'Close') }}</button>
-          <button v-if="guestState === 'joined'" class="confirm-btn primary danger" data-test="ls-leave" @click="leave">
+          <button v-if="guestState === 'joined' || guestState === 'reconnecting'" class="confirm-btn primary danger" data-test="ls-leave" @click="leave">
             <LogOut :size="14" aria-hidden="true" /> {{ t('liveShare.join.leave', 'Leave') }}
           </button>
           <button v-else-if="inSession" class="confirm-btn" data-test="ls-cancel-join" @click="leave">{{ t('liveShare.join.cancel', 'Cancel') }}</button>

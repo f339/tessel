@@ -233,25 +233,20 @@ describe('LiveShareAsk', () => {
     expect(wrapper.find('[data-test="live-share-ask"]').exists()).toBe(false)
   })
 
-  const bob = { kind: 'join', key: 'g1', guestId: 'g1', name: 'Bob', code: '123 456', forward: true }
+  const bob = { kind: 'join', key: 'g1', guestId: 'g1', name: 'Bob', code: '123 456' }
 
-  it('names who asks, the project, the code to check, and starts on Deny', async () => {
+  it('names who asks, the project, the code to check, and takes the keyboard on the card (not a button)', async () => {
     const wrapper = mount(LiveShareAsk, { props: { ask: bob, project: 'tessel' }, attachTo: document.body })
     await flushPromises()
     expect(wrapper.text()).toContain('Bob wants to join your Live Share')
     expect(wrapper.text()).toContain('They will see tessel live. They can only watch until you let them type')
     expect(wrapper.find('[data-test="ls-ask-code"]').text()).toContain('123 456')
-    expect(wrapper.find('[data-test="ls-ask-old"]').exists()).toBe(false)
-    expect(document.activeElement).toBe(wrapper.find('[data-test="ls-ask-deny"]').element)
+    // Keys typed for something else (Enter, Space) answer nothing.
+    expect(document.activeElement).toBe(wrapper.find('[data-test="live-share-ask"]').element)
     wrapper.unmount()
   })
 
-  it('says when the guest Tessel is older (no forward secrecy)', () => {
-    const wrapper = mount(LiveShareAsk, { props: { ask: { ...bob, forward: false } } })
-    expect(wrapper.find('[data-test="ls-ask-old"]').text()).toContain('encrypted with the invite code only')
-  })
-
-  it('Allow only answers after a moment; Allow, Deny and Escape answer that ask; a click beside it does not', async () => {
+  it('Allow only answers after a moment; Allow and Deny answer that ask; Escape or a click beside it do not', async () => {
     vi.useFakeTimers()
     try {
       const wrapper = mount(LiveShareAsk, { props: { ask: bob } })
@@ -265,7 +260,7 @@ describe('LiveShareAsk', () => {
       await wrapper.find('[data-test="ls-ask-allow"]').trigger('click')
       await wrapper.find('[data-test="ls-ask-deny"]').trigger('click')
       await wrapper.find('[data-test="live-share-ask"]').trigger('keydown', { key: 'Escape' })
-      expect(wrapper.emitted('answer')).toEqual([[{ key: 'g1', yes: true }], [{ key: 'g1', yes: false }], [{ key: 'g1', yes: false }]])
+      expect(wrapper.emitted('answer')).toEqual([[{ key: 'g1', yes: true }], [{ key: 'g1', yes: false }]])
     } finally {
       vi.useRealTimers()
     }
@@ -292,5 +287,24 @@ describe('LiveShareAsk', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('LiveShareDialog: what the review found', () => {
+  it('says when the code is blocked, and names a guest without a name', async () => {
+    const wrapper = await open(PROJECTS)
+    await host({ state: 'sharing', invite: 'TS1.x', expiresAt: Date.now() + 3600000, inviteBlocked: true, guests: [{ id: 'g1', name: '', state: 'joined', since: 1, rights: { type: false, open: false, close: false } }] })
+    expect(wrapper.find('[data-test="ls-blocked"]').text()).toContain('no longer lets anyone in')
+    expect(wrapper.find('[data-test="ls-guest-g1"]').text()).toContain('A guest')
+    wrapper.unmount()
+  })
+
+  it('says it is reconnecting, and Leave still works', async () => {
+    const wrapper = await open({ initialTab: 'join' })
+    await guest({ state: 'reconnecting', host: 'Ada' })
+    expect(wrapper.find('[data-test="ls-reconnecting"]').text()).toBe('Connection lost: reconnecting to Ada…')
+    await wrapper.find('[data-test="ls-leave"]').trigger('click')
+    expect(api.leave).toHaveBeenCalled()
+    wrapper.unmount()
   })
 })

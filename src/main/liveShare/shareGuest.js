@@ -1,45 +1,61 @@
 // Live Share, guest side: the connection to a host's share server.
 //
 // The invite code (shareCrypto.js) gives the address and the secret. The
-// host's first message brings its nonce and X25519 key; the guest answers
-// with its own, then everything is sealed with the keys both derive from
-// them and the secret. The host sees the guest's name and verification code
-// and says yes or no; once in, the guest gets the host's panes (onPanes),
-// each pane's screen (onSnapshot) and its output, and what the host lets it
-// do (onRights; a host from before rights lets a guest do everything).
+// host's first message says it is a Tessel Live Share; the guest commits to
+// a random nonce and a fresh X25519 key, gets the host's, reveals its own,
+// and then everything is sealed with the keys both derive from them and the
+// secret. The host sees the guest's name and verification code and says yes
+// or no; once in, the guest gets what the host lets it do (onRights), the
+// host's panes (onPanes), each pane's screen (onSnapshot) and its output.
+// A connection that hears nothing from the host (not even its pings, every
+// 25 s) for 70 s is over.
 //
 // Tessel itself is reached only through the callbacks, so this file runs
 // (and is tested) without Electron.
 import WebSocket from 'ws'
-import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, NONCE_BYTES } from './shareCrypto.js'
+import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitment, NONCE_BYTES, KX_BYTES } from './shareCrypto.js'
 
 const CONNECT_TIMEOUT_MS = 20000
+const SILENCE_MS = 70000
 const MAX_FRAME = 64 * 1024 * 1024 // a snapshot of a screen
+const PROTOCOL = 2
 
 // The host closed before the handshake: why (shareHost.js CLOSE_*).
-const CLOSE_REASONS = { 4001: 'expired', 4002: 'busy', 1013: 'busy' }
+const CLOSE_REASONS = { 4001: 'expired', 4002: 'busy', 1013: 'busy', 4003: 'outdated' }
 
 // callbacks: onState(state, info) with 'connecting' | 'waiting' (info:
 // { code }) | 'joined' (info: { host }), onPanes(panes, layout),
 // onSnapshot(id, data, cols, rows), onData(id, data), onExit(id, exitCode),
-// onRights(rights), onNotice(code), onClosed(reason) (once, at the end).
-export function createShareGuest({ url, secret, name, callbacks }) {
+// onRestart(id) (the pane restarted on the host: a new screen follows),
+// onRights(rights), onToken(token) (the reconnect key the host gave),
+// onNotice(code), onClosed(reason) (once, at the end).
+// token: the reconnect key of a guest coming back (shareHost.js rejoin).
+export function createShareGuest({ url, secret, name, token = null, callbacks }) {
   let socket = null
   let channel = null
   let code = null
   let closed = false
   let timer = null
+  let silence = null
+  let mine = null // { nonce, keys } until the host's keys came
 
   function finish(reason) {
     if (closed) return
     closed = true
     clearTimeout(timer)
+    clearTimeout(silence)
     try {
       socket?.close(1000)
     } catch {
       /* already closed */
     }
     callbacks.onClosed?.(reason)
+  }
+
+  // Anything from the host (a message, a ping) shows the connection lives.
+  function heard() {
+    clearTimeout(silence)
+    silence = setTimeout(() => finish('timeout'), SILENCE_MS)
   }
 
   function send(message) {
@@ -56,8 +72,10 @@ export function createShareGuest({ url, secret, name, callbacks }) {
         return
       case 'welcome':
         clearTimeout(timer)
-        callbacks.onState?.('joined', { host: String(msg.host || '') })
+        if (typeof msg.token === 'string' && msg.token) callbacks.onToken?.(msg.token)
+        // What it may do first: the window takes it as the starting point.
         if (msg.rights) callbacks.onRights?.(rightsOf(msg.rights))
+        callbacks.onState?.('joined', { host: String(msg.host || '') })
         callbacks.onPanes?.(Array.isArray(msg.panes) ? msg.panes : [], msg.layout || null)
         return
       case 'panes':
@@ -78,6 +96,9 @@ export function createShareGuest({ url, secret, name, callbacks }) {
       case 'exit':
         callbacks.onExit?.(msg.id, msg.exitCode)
         return
+      case 'restart':
+        callbacks.onRestart?.(msg.id)
+        return
       case 'bye':
         finish(String(msg.reason || 'closed'))
         return
@@ -86,42 +107,56 @@ export function createShareGuest({ url, secret, name, callbacks }) {
     }
   }
 
+  const parse = (data, isBinary) => {
+    try {
+      return isBinary ? null : JSON.parse(data.toString())
+    } catch {
+      return null
+    }
+  }
+
+  // The handshake, before the channel: the host's hello (commit), then its
+  // keys (reveal and join).
+  function onHandshake(msg) {
+    if (!mine) {
+      if (!msg || msg.t !== 'hello' || msg.app !== 'tessel-liveshare') return finish('not-tessel')
+      // A host with the first protocol (its nonce in the hello) or older.
+      if (msg.v !== PROTOCOL || msg.n != null) return finish('outdated-host')
+      mine = { nonce: newNonce(), keys: newKeyPair() }
+      socket.send(JSON.stringify({ t: 'commit', c: commitment(mine.nonce, mine.keys.publicRaw).toString('base64') }))
+      return
+    }
+    const hostNonce = msg && msg.t === 'keys' ? Buffer.from(String(msg.n || ''), 'base64') : null
+    const hostKey = msg && msg.t === 'keys' ? Buffer.from(String(msg.kx || ''), 'base64') : null
+    if (!hostNonce || hostNonce.length !== NONCE_BYTES || !hostKey || hostKey.length !== KX_BYTES) return finish('not-tessel')
+    const dh = sharedSecret(mine.keys.privateKey, hostKey)
+    if (!dh) return finish('not-tessel')
+    socket.send(JSON.stringify({ t: 'reveal', n: mine.nonce.toString('base64'), kx: mine.keys.publicRaw.toString('base64') }))
+    const session = sessionKeys(secret, hostNonce, mine.nonce, 'guest', { dh, hostKey, guestKey: mine.keys.publicRaw })
+    mine = null
+    channel = createChannel(session)
+    code = session.code
+    send({ t: 'join', name, ...(token ? { token } : {}) })
+  }
+
   return {
     connect() {
       callbacks.onState?.('connecting')
-      socket = new WebSocket(url, { maxPayload: MAX_FRAME, perMessageDeflate: false, handshakeTimeout: CONNECT_TIMEOUT_MS })
+      try {
+        socket = new WebSocket(url, { maxPayload: MAX_FRAME, perMessageDeflate: false, handshakeTimeout: CONNECT_TIMEOUT_MS })
+      } catch {
+        finish('error')
+        return
+      }
       // Until the host says yes, a connection that goes nowhere ends here;
       // waiting for the host's answer has no limit (cleared on 'waiting').
       timer = setTimeout(() => finish('timeout'), CONNECT_TIMEOUT_MS)
+      heard()
+      socket.on('ping', heard)
       socket.on('message', (data, isBinary) => {
         if (closed) return
-        if (!channel) {
-          let hello
-          try {
-            hello = isBinary ? null : JSON.parse(data.toString())
-          } catch {
-            hello = null
-          }
-          const hostNonce = hello && hello.t === 'hello' && hello.app === 'tessel-liveshare' ? Buffer.from(String(hello.n || ''), 'base64') : null
-          if (!hostNonce || hostNonce.length !== NONCE_BYTES) return finish('not-tessel')
-          const guestNonce = newNonce()
-          // The host's X25519 key (a host from before has none).
-          let kx = null
-          let mine = null
-          if (hello.kx != null) {
-            mine = newKeyPair()
-            const hostKey = Buffer.from(String(hello.kx), 'base64')
-            const dh = sharedSecret(mine.privateKey, hostKey)
-            if (!dh) return finish('not-tessel')
-            kx = { dh, hostKey, guestKey: mine.publicRaw }
-          }
-          socket.send(JSON.stringify({ t: 'nonce', n: guestNonce.toString('base64'), ...(mine ? { kx: mine.publicRaw.toString('base64') } : {}) }))
-          const session = sessionKeys(secret, hostNonce, guestNonce, 'guest', kx)
-          channel = createChannel(session)
-          code = session.code
-          send({ t: 'join', name })
-          return
-        }
+        heard()
+        if (!channel) return onHandshake(parse(data, isBinary))
         const msg = isBinary ? channel.open(data) : null
         if (!msg) return finish('refused')
         if (msg.t === 'waiting') clearTimeout(timer)
@@ -139,9 +174,18 @@ export function createShareGuest({ url, secret, name, callbacks }) {
     close(id) {
       send({ t: 'close', id })
     },
+    // The pane's screen again (this window reloaded).
+    resync(id) {
+      send({ t: 'resync', id })
+    },
     leave() {
       send({ t: 'leave' })
       finish('left')
+    },
+    // Gone without leaving (this Tessel restarting): the host keeps the
+    // reconnect key, and the next Tessel comes back with it.
+    disconnect() {
+      finish('suspended')
     }
   }
 }

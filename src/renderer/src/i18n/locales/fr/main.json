@@ -934,7 +934,15 @@
       "tunnelStopped": "Le tunnel Cloudflare s’est arrêté (code {{code}}). Le partage est terminé.",
       "unreachable": "L’adresse du tunnel est injoignable. Vérifiez votre connexion Internet et réessayez.",
       "badInvite": "Ce n’est pas un code d’invitation Live Share de Tessel.",
-      "notLocal": "Ce volet appartient à une session Live Share : il ne peut pas lancer de terminal sur cet ordinateur."
+      "notLocal": "Ce volet appartient à une session Live Share : il ne peut pas lancer de terminal sur cet ordinateur.",
+      "tunnelGone": "Le tunnel Cloudflare s'est arrêté. Le partage est terminé.",
+      "err": {
+        "download": "cloudflared n'a pas pu être téléchargé ({{detail}}).",
+        "checksum": "Le téléchargement de cloudflared ne correspond pas à son empreinte publiée : il n'a pas été utilisé.",
+        "timeout": "Cloudflare n'a pas donné d'adresse de tunnel à temps. Réessayez.",
+        "stopped": "cloudflared s'est arrêté avant de donner une adresse ({{detail}}).",
+        "start": "cloudflared n'a pas pu démarrer ({{detail}})."
+      }
     }
   },
   "main.chat.image.tooLarge": "Cette image dépasse {{mb}} Mo.",
