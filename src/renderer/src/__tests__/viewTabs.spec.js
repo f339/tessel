@@ -153,6 +153,36 @@ describe('opening an editor or a browser', () => {
   })
 })
 
+describe('full screen and task copies', () => {
+  it('back to Terminal: the keyboard goes to the pane in full screen (the one on screen)', () => {
+    const { api, ws, ctx } = twoTerminals()
+    // t2 used last, t1 made full screen by its button (it does not become active).
+    api.toggleMaximize('t1')
+    api.openInTesselEditor({ file: 'C:\\p\\a.js', ws })
+    api.showViewTab(ws, 'terminal')
+    expect(ctx.maximizedId.value).toBe('t1')
+    expect(ws.activeId).toBe('t1')
+  })
+
+  it("closing a copy's editor: another tab of that copy keeps the view there, not the main project", () => {
+    const tree = reactive({
+      type: 'split',
+      id: 's',
+      dir: 'row',
+      sizes: [34, 33, 33],
+      children: [leaf('t1'), leaf('ed', { kind: 'editor', files: [], viewPath: 'C:\\copy' }), leaf('br', { kind: 'browser', url: 'https://example.com/', viewPath: 'C:\\copy' })]
+    })
+    const { api, ws, view } = load({ tree, activeId: 'ed' })
+    ws.view = 'ed'
+    const copyKey = view().key
+    api.closeLeaf('ed')
+    expect(ws.activeId).toBe('br')
+    expect(view().key).toBe(copyKey)
+    // Its grid has no terminal: the Terminal tab (the launcher) shows there.
+    expect(view().shown).toBe('terminal')
+  })
+})
+
 describe('the line of tabs, always there', () => {
   it('Terminal first, always; an editor or a browser closed: its tab goes, back to Terminal', () => {
     const { api, ws, view } = twoTerminals()

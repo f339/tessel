@@ -4,6 +4,8 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ViewTabs from '../components/ViewTabs.vue'
+import { docs } from '../editor/documents'
+import { pathKey } from '../editor/editorTabs'
 
 const editor = {
   type: 'leaf',
@@ -40,6 +42,44 @@ describe('the line of tabs', () => {
     // A kept file: a double-click does nothing more.
     await w.findAll('[data-test="view-tab"]')[2].trigger('dblclick')
     expect(w.emitted('keep')).toHaveLength(1)
+  })
+
+  it("the editor's names: the folder for same-named files, what a diff shows; the unsaved dot", () => {
+    const leaf = {
+      ...editor,
+      activePath: 'C:\\p\\x\\util.js',
+      files: [
+        { path: 'C:\\p\\x\\util.js' },
+        { path: 'C:\\p\\y\\util.js' },
+        { path: 'diff:C:\\p\\a.js', diff: { area: 'staged', full: 'C:\\p\\a.js' } }
+      ]
+    }
+    docs[pathKey('C:\\p\\x\\util.js')] = { path: 'C:\\p\\x\\util.js', dirty: true }
+    try {
+      const w = mount(ViewTabs, { props: { leaves: [leaf], shown: 'ed1' } })
+      const tabs = w.findAll('[data-test="view-tab"]')
+      expect(tabs[1].text()).toContain('util.js · x')
+      expect(tabs[2].text()).toContain('util.js · y')
+      expect(tabs[3].text()).toContain('(staged diff)')
+      expect(tabs[1].classes()).toContain('dirty')
+      expect(tabs[1].find('.view-tab-dirty').exists()).toBe(true)
+      expect(tabs[2].find('.view-tab-dirty').exists()).toBe(false)
+    } finally {
+      delete docs[pathKey('C:\\p\\x\\util.js')]
+    }
+  })
+
+  it("an editor's or a browser's tab pulled moves that pane; the Terminal tab and an x don't", async () => {
+    const w = mount(ViewTabs, { props: { leaves: [editor, browser], shown: 'ed1' } })
+    const tabs = w.findAll('[data-test="view-tab"]')
+    await tabs[3].trigger('pointerdown')
+    expect(w.emitted('drag').at(-1)[0]).toBe('br1')
+    await tabs[0].trigger('pointerdown')
+    await tabs[1].find('[data-test="view-tab-close"]').trigger('pointerdown')
+    expect(w.emitted('drag')).toHaveLength(1)
+    // The line's free space: the pane it sits in.
+    await w.find('[data-test="view-tabs"]').trigger('pointerdown')
+    expect(w.emitted('drag').at(-1)[0]).toBeNull()
   })
 
   it('an editor with no file: one Editor tab', () => {

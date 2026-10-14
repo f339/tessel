@@ -8,7 +8,9 @@
 import { computed } from 'vue'
 import { Globe, SquareTerminal, X } from 'lucide-vue-next'
 import { t } from '../i18n'
-import { fileName, docPathOf, samePath } from '../editor/editorTabs'
+import { docPathOf, samePath, pathKey } from '../editor/editorTabs'
+import { docs } from '../editor/documents'
+import { tabLabel } from '../editor/tabLabels'
 import { BLANK_URL, displayUrl, hostOf } from '../../../shared/browserUrl'
 
 const props = defineProps({
@@ -18,8 +20,10 @@ const props = defineProps({
   shown: { type: String, default: 'terminal' }
 })
 // select / close (id, path): path: a file of an editor (its tab); keep (id,
-// path): a preview file's tab double-clicked stays open.
-const emit = defineEmits(['select', 'close', 'keep'])
+// path): a preview file's tab double-clicked stays open; drag (id, event):
+// an editor's or a browser's tab (or the line's free space: id null) pulled,
+// to move that pane as by its header.
+const emit = defineEmits(['select', 'close', 'keep', 'drag'])
 
 // An editor: a tab per file it has open (its path on hover; in italics while
 // it is a preview, replaced by the next file opened with one click); with
@@ -29,16 +33,21 @@ function editorTabs(leaf) {
   if (!files.length) return [{ key: leaf.id, id: leaf.id, path: null, kind: 'editor', label: t('app.viewTabs.editor', 'Editor'), hint: t('app.viewTabs.editor', 'Editor') }]
   return files.map((f) => {
     const path = docPathOf(f)
-    const label = f.diff ? t('app.viewTabs.diff', '{{name}} (diff)', { name: fileName(path) }) : fileName(path)
+    const doc = docs[pathKey(path)] || null
+    const label = tabLabel(f, files)
     return {
       key: `${leaf.id}|${f.path}`,
       id: leaf.id,
       path: f.path,
       kind: 'editor',
       label,
-      hint: f.preview ? t('app.viewTabs.previewHint', '{{path}}\nPreview: double-click to keep it open', { path }) : path,
+      hint: f.preview ? t('app.viewTabs.previewHint', '{{path}}\nPreview: double-click to keep it open', { path: label === path ? path : `${label}\n${path}` }) : label === path ? path : `${label}\n${path}`,
       preview: !!f.preview,
-      current: samePath(f.path, leaf.activePath)
+      current: samePath(f.path, leaf.activePath),
+      // Unsaved changes (a dot, as in the editor), deleted on disk, or failed to open.
+      dirty: !!(doc && doc.dirty),
+      deleted: !f.diff && !!(doc && doc.deleted),
+      failed: !f.diff && !!(doc && doc.error)
     }
   })
 }
@@ -54,6 +63,15 @@ const tabs = computed(() => [
 // On screen: its view, and for a file its editor's current file.
 const isActive = (tab) => tab.id === props.shown && (!tab.path || tab.current)
 
+// An editor's or a browser's tab pulled moves that pane (not its x); the
+// line's free space moves the pane it sits in (id null).
+function onTabPointerDown(e, tab) {
+  if (e.button !== 0 || tab.kind === 'terminal' || (e.target.closest && e.target.closest('button'))) return
+  emit('drag', tab.id, e)
+}
+function onStripPointerDown(e) {
+  if (e.button === 0 && e.target === e.currentTarget) emit('drag', null, e)
+}
 function onAuxClick(e, tab) {
   if (e.button === 1 && tab.kind !== 'terminal') emit('close', tab.id, tab.path)
 }
@@ -66,14 +84,14 @@ function onAuxClick(e, tab) {
     data-test="view-tabs"
     :aria-label="t('app.viewTabs.aria', 'Terminal, editors and browsers')"
     @mousedown.stop
-    @pointerdown.stop
+    @pointerdown.stop="onStripPointerDown"
     @dblclick.stop
   >
     <div
       v-for="tab in tabs"
       :key="tab.key"
       class="view-tab"
-      :class="[tab.kind, { active: isActive(tab), preview: tab.preview }]"
+      :class="[tab.kind, { active: isActive(tab), preview: tab.preview, dirty: tab.dirty, deleted: tab.deleted, failed: tab.failed }]"
       role="tab"
       tabindex="0"
       data-test="view-tab"
@@ -86,6 +104,7 @@ function onAuxClick(e, tab) {
       @keydown.enter.prevent="emit('select', tab.id, tab.path)"
       @keydown.space.prevent="emit('select', tab.id, tab.path)"
       @mousedown.middle.prevent
+      @pointerdown="onTabPointerDown($event, tab)"
       @auxclick="onAuxClick($event, tab)"
     >
       <SquareTerminal v-if="tab.kind === 'terminal'" class="view-tab-icon" :size="14" aria-hidden="true" />
@@ -94,6 +113,7 @@ function onAuxClick(e, tab) {
       </svg>
       <Globe v-else class="view-tab-icon" :size="14" aria-hidden="true" />
       <span class="view-tab-label">{{ tab.label }}</span>
+      <span v-if="tab.dirty" class="view-tab-dirty" :title="t('app.viewTabs.unsaved', 'Unsaved changes')" aria-hidden="true"></span>
       <button
         v-if="tab.kind !== 'terminal'"
         type="button"
@@ -114,6 +134,22 @@ function onAuxClick(e, tab) {
 /* A preview file (one click): in italics, like VS Code's. */
 .view-tab.preview .view-tab-label {
   font-style: italic;
+}
+/* Unsaved changes: a dot before the x; deleted on disk: struck through;
+   failed to open: in the error colour. */
+.view-tab-dirty {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.85;
+}
+.view-tab.deleted .view-tab-label {
+  text-decoration: line-through;
+}
+.view-tab.failed .view-tab-label {
+  color: var(--danger);
 }
 .view-tabs {
   display: flex;

@@ -108,7 +108,7 @@ export function createLiveShareWindow(deps) {
   // (once, when it is first shown).
   const follow = new Map() // host project id -> { maximized, takeActive }
   const followOf = (id) => {
-    if (!follow.has(id)) follow.set(id, { maximized: null, takeActive: true })
+    if (!follow.has(id)) follow.set(id, { maximized: null, takeActive: true, pending: false })
     return follow.get(id)
   }
   // Each time you start sharing: a request from an earlier sharing is stale.
@@ -371,7 +371,11 @@ export function createLiveShareWindow(deps) {
     const max = p.layout && leafIn(p.layout.maximizedId, p.id) ? p.layout.maximizedId : null
     if (max !== f.maximized) {
       f.maximized = max
-      if (deps.currentWsId() === ws.id && deps.maximizedId() !== max) deps.setMaximized(max)
+      // Not on screen: applied when that project comes up (pending).
+      if (deps.currentWsId() === ws.id) {
+        f.pending = false
+        if (deps.maximizedId() !== max) deps.setMaximized(max)
+      } else f.pending = true
     }
   }
 
@@ -612,6 +616,18 @@ export function createLiveShareWindow(deps) {
           if (text && a.setLayouts) a.setLayouts(JSON.parse(text))
         },
         { immediate: true }
+      ),
+      // A host's project comes on screen: the fullscreen pane the host chose
+      // while it was not on screen is applied then.
+      watch(
+        () => deps.currentWsId(),
+        (id) => {
+          const ws = deps.workspaces().find((w) => w.id === id)
+          const f = ws && isGuestWs(ws) && ws.liveShare ? follow.get(ws.liveShare.project) : null
+          if (!f || !f.pending) return
+          f.pending = false
+          if (deps.maximizedId() !== f.maximized) deps.setMaximized(f.maximized)
+        }
       ),
       // A shared project closed (or not there after a restart): out of the
       // share; the last one: sharing stops.

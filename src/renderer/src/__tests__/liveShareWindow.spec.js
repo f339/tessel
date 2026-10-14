@@ -96,6 +96,29 @@ describe('Live Share in the window, as a guest', () => {
   })
   afterEach(() => t.ls.dispose())
 
+  it("a fullscreen pane the host chose in a project not on screen is applied when that project comes up", async () => {
+    const lay = (project, tree, maximizedId = null) => ({ project, tree, activeId: null, maximizedId })
+    const two = { type: 'split', dir: 'row', sizes: [50, 50], children: [leaf('pane-ls1-b1'), leaf('pane-ls1-b2')] }
+    t.listeners.onGuest({
+      state: 'joined',
+      host: 'Ada',
+      session: 1,
+      panes: [pane('pane-ls1-a1', { project: 'ws-a' }), pane('pane-ls1-b1', { project: 'ws-b' }), pane('pane-ls1-b2', { project: 'ws-b' })],
+      projects: [
+        { id: 'ws-a', layout: lay('a', leaf('pane-ls1-a1')) },
+        { id: 'ws-b', layout: lay('b', two, 'pane-ls1-b2') }
+      ]
+    })
+    await flush()
+    const b = t.workspaces.value.find((w) => w.liveShare && w.liveShare.project === 'ws-b')
+    expect(b).toBeTruthy()
+    expect(t.currentWsId.value).not.toBe(b.id)
+    expect(t.maximizedId.value).toBeNull()
+    t.currentWsId.value = b.id
+    await flush()
+    expect(t.maximizedId.value).toBe('pane-ls1-b2')
+  })
+
   it('shows the host screen as a Live Share project that follows its layout', async () => {
     const layout = {
       project: 'tessel',

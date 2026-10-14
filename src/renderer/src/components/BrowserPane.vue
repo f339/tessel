@@ -924,6 +924,7 @@ defineExpose({ navigate, focusAddress })
           @select="(id, path) => ctx.selectViewTab(node.id, id, path)"
           @close="(id, path) => (ctx.closeViewTab ? ctx.closeViewTab(id, path) : ctx.closeLeaf(id))"
           @keep="(id, path) => ctx.keepViewTab && ctx.keepViewTab(id, path)"
+          @drag="(id, e) => ctx.beginPaneDrag(id || node.id, e)"
         />
         <template v-else>
           <span class="pane-icon" :title="t('browser.pane.title', 'Browser')">

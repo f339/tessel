@@ -19,7 +19,7 @@ import { settings } from '../settings'
 import { editorOptionsFor, diffOptionsFor } from '../editor/editorOptions'
 import { loadMonaco, textmateIfLoaded, outlineIfLoaded } from '../editor/loadMonaco'
 import { setActiveEditor, noteEdited, noteCursor, clearActiveEditor } from '../editor/activeEditor'
-import { localDiffLabel } from '../explorer/timeline'
+import { tabLabel as sharedTabLabel } from '../editor/tabLabels'
 import {
   docs,
   getDoc,
@@ -37,7 +37,7 @@ import {
   registerEditorPane,
   unregisterEditorPane
 } from '../editor/documents'
-import { pathKey, samePath, fileName, closeTab as closeTabData, pinTab, docPathOf } from '../editor/editorTabs'
+import { pathKey, samePath, closeTab as closeTabData, pinTab, docPathOf } from '../editor/editorTabs'
 import { fileKind } from '../../../shared/fileKinds'
 import { pickLanguage } from '../../../shared/editorLanguage'
 import { formatDiffComments } from '../../../shared/sourceControl'
@@ -155,29 +155,8 @@ const richText = ref('')
 const title = computed(() => props.node.title || t('editor.pane.title', 'Editor'))
 const docOf = (f) => docs[pathKey(docPathOf(f))] || null
 
-// Orca's editor-labels.ts: "name (diff)", "name (staged diff)".
-function baseLabel(f) {
-  const name = fileName(docPathOf(f))
-  const twins = files.value.filter((o) => fileName(docPathOf(o)).toLowerCase() === name.toLowerCase() && !!o.diff === !!f.diff)
-  if (twins.length < 2) return name
-  const parts = docPathOf(f).split(/[\\/]/)
-  return parts.length > 1 ? `${name} · ${parts[parts.length - 2]}` : name
-}
-function tabLabel(f) {
-  if (!f.diff) return baseLabel(f)
-  if (f.diff.area === 'branch')
-    return t('editor.tab.branchDiff', '{{name}} ({{base}}..{{commit}})', {
-      name: baseLabel(f),
-      base: String(f.diff.base || '').slice(0, 7),
-      commit: String(f.diff.commit || '').slice(0, 7)
-    })
-  if (f.diff.area === 'commit')
-    return t('editor.tab.commitDiff', '{{name}} ({{commit}})', { name: baseLabel(f), commit: String(f.diff.commit || '').slice(0, 7) })
-  if (f.diff.area === 'local') return localDiffLabel(baseLabel(f), f.diff.localTime)
-  return f.diff.area === 'staged'
-    ? t('editor.tab.stagedDiff', '{{name}} (staged diff)', { name: baseLabel(f) })
-    : t('editor.tab.diff', '{{name}} (diff)', { name: baseLabel(f) })
-}
+// A tab's name (editor/tabLabels.js, the line of tabs above uses it too).
+const tabLabel = (f) => sharedTabLabel(f, files.value)
 
 // What the body shows instead of the editor (loading, an error).
 const message = computed(() => {
@@ -1027,6 +1006,7 @@ onBeforeUnmount(() => {
           @select="(id, path) => ctx.selectViewTab(node.id, id, path)"
           @close="(id, path) => (ctx.closeViewTab ? ctx.closeViewTab(id, path) : ctx.closeLeaf(id))"
           @keep="(id, path) => ctx.keepViewTab && ctx.keepViewTab(id, path)"
+          @drag="(id, e) => ctx.beginPaneDrag(id || node.id, e)"
         />
         <template v-else>
           <span class="pane-icon" :title="t('editor.pane.title', 'Editor')">

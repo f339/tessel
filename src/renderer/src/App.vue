@@ -1029,8 +1029,12 @@ function showViewTab(ws, id, path = null) {
   if (id === 'terminal') {
     const active = ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
     const grid = isTabLeaf(active) ? gridLeafFor(ws, active) : null
+    // A pane of that grid in full screen: the keyboard goes back to it (the
+    // one on screen), not to the one last used.
+    const max = grid && maximizedId.value && ws.id === currentWsId.value ? findLeafIn(ws.tree, maximizedId.value) : null
+    const target = max && !isTabLeaf(max) && viewKey(max, ws.cwd) === viewKey(grid, ws.cwd) ? max : grid
     ws.view = 'terminal'
-    if (grid) ws.activeId = grid.id
+    if (target) ws.activeId = target.id
   } else {
     if (!isTabLeaf(findLeafIn(ws.tree, id))) return
     ws.view = id
@@ -2283,7 +2287,14 @@ function closeLeaf(leafId, opts = {}) {
     // used in that grid (paneViews.js).
     if (ws.activeId === leafId) {
       const grid = gridLeafFor(ws, closing)
-      ws.activeId = grid ? grid.id : firstLeafId(next)
+      // Its copy's grid has no terminal: a tab left in that copy keeps the
+      // view there (its launcher shows under the tabs).
+      let sameCopy = null
+      if (!grid)
+        forEachLeaf(next, (leaf) => {
+          if (!sameCopy && viewKey(leaf, ws.cwd) === viewKey(closing, ws.cwd)) sameCopy = leaf
+        })
+      ws.activeId = grid ? grid.id : sameCopy ? sameCopy.id : firstLeafId(next)
       ws.view = 'terminal'
     } else if (ws.view === leafId) ws.view = 'terminal'
   } else {
@@ -12502,6 +12513,7 @@ onBeforeUnmount(() => {
                   @select="(id, path) => showViewTab(ws, id, path)"
                   @close="(id, path) => closeViewTab(id, path)"
                   @keep="(id, path) => keepViewTab(id, path)"
+                  @drag="(id, e) => id && beginPaneDrag(id, e)"
                 />
               </div>
               <div class="view-room">

@@ -193,7 +193,7 @@ describe('the page layer (browser/pageHost.js)', () => {
     await nextTick()
     expect(box.style.visibility).toBe('hidden')
     await wrapper.find('[data-tab="terminal"]').trigger('click')
-    expect(ctx.selectViewTab).toHaveBeenCalledWith('b1', 'terminal')
+    expect(ctx.selectViewTab).toHaveBeenCalledWith('b1', 'terminal', null)
   })
 
   it('another workspace shown: the page stays as it is, hidden with its layer', async () => {
