@@ -1482,7 +1482,7 @@ function fitLiveShareFont({ cols, rows }) {
   const shrink = left != null && left < 1 ? left : 1
   if (term.element) {
     term.element.style.transformOrigin = shrink < 1 ? '0 0' : ''
-    term.element.style.transform = shrink < 1 ? `scale(${shrink})` : ''
+    term.element.style.transform = shrink < 1 ? `scale(${shrink})` : '' // i18n-ignore
   }
 }
 
