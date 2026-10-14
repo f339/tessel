@@ -1759,13 +1759,26 @@ export function createClaudeAccounts({
       safe(async () => {
         const state = await readMetadata()
         const id = accountId === undefined ? state.selectedId : accountId
+        const unavailable = { ok: false, error: t('main.claudeAccount.changedUnavailable', 'The selected Claude account changed or is unavailable.') }
+        // Before an older version's switch is undone (see migrate), the
+        // switched account's sign-in is in the system files, where its
+        // sessions refresh it; the system's own is only in the snapshot.
+        if (legacy(state, await readText(snapshotPath))) {
+          if (id === null) return { ok: false, error: switchPending().message }
+          if (id === state.selectedId && (await validSavedAccount(state, id)))
+            return { ok: true, env: systemEnv(), accountId: id, expectedIdentity: { ...state.accounts.find((row) => row.id === id).identity } }
+        }
         if (id === null) return { ok: true, env: systemEnv(), accountId: null, expectedIdentity: null }
-        if (
-          typeof id !== 'string' ||
-          !(await validSavedAccount(state, id)) ||
-          !(await inspect(join(authPath(id), '.claude.json')))
-        )
-          return { ok: false, error: t('main.claudeAccount.changedUnavailable', 'The selected Claude account changed or is unavailable.') }
+        if (typeof id !== 'string' || !(await validSavedAccount(state, id))) return unavailable
+        // An account an older version added has no .claude.json of its own
+        // until its first session: made now (its usage reads its profile there).
+        if (!(await inspect(join(authPath(id), '.claude.json')))) {
+          await serialized(async () => {
+            const auth = await managed(id)
+            if (auth.status === 'ready') await writeOwnState(id, auth.oauth)
+          }).catch(() => {})
+          if (!(await inspect(join(authPath(id), '.claude.json')))) return unavailable
+        }
         return {
           ok: true,
           env: { CLAUDE_CONFIG_DIR: authPath(id) },

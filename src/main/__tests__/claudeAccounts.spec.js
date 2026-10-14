@@ -429,6 +429,22 @@ describe('sessions on their own account', () => {
     expect(await service.usageScope(second)).toMatchObject({ ok: false })
     expect(rename).not.toHaveBeenCalled()
   })
+  it('reads usage where each sign-in is: before the old switch is undone, the switched account in the system files', async () => {
+    seedSystem()
+    const id = await add()
+    legacySwitch(id)
+    const later = create({ canMigrate: async () => false })
+    expect(await later.usageScope()).toEqual({ ok: true, env: {}, accountId: id, expectedIdentity: read(indexPath()).accounts[0].identity })
+    // The system's own sign-in is only in the snapshot until then.
+    expect(await later.usageScope(null)).toMatchObject({ ok: false, error: expect.stringContaining('started before the update') })
+  })
+  it("an account an older version added gets its .claude.json when its usage is read", async () => {
+    seedSystem()
+    const id = await add()
+    fs.unlinkSync(join(authPath(id), '.claude.json'))
+    expect(await service.usageScope(id)).toMatchObject({ ok: true, env: { CLAUDE_CONFIG_DIR: authPath(id) }, accountId: id })
+    expect(read(join(authPath(id), '.claude.json')).oauthAccount).toEqual(who('managed'))
+  })
   it('serializes changes across service instances using the same storage', async () => {
     seedSystem()
     const first = await add('one'),

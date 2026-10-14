@@ -4581,12 +4581,14 @@ ipcMain.handle('cli:reveal', (event) => {
 // In the dev build, electron-vite restarts the app on every code change and
 // can start the new copy a moment before the old one has exited. The new copy
 // then found the old one's lock and quit, and electron-vite (which stops when
-// its app exits) stopped with it. So the dev build waits a few seconds for
-// the lock instead of giving up at once.
+// its app exits) stopped with it. So the dev build waits for the lock
+// instead of giving up at once: up to a minute, since an old copy running
+// many terminals can take well over 8 seconds to be gone.
 async function acquireInstanceLock() {
   if (app.requestSingleInstanceLock()) return true
   if (app.isPackaged) return false
-  const until = Date.now() + 8000
+  log.info('app', 'waiting for the previous Tessel to exit (dev restart)')
+  const until = Date.now() + 60000
   while (Date.now() < until) {
     await new Promise((r) => setTimeout(r, 250))
     if (app.requestSingleInstanceLock()) return true
