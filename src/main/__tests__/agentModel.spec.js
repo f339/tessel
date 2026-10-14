@@ -66,6 +66,13 @@ describe('conversation files', () => {
     expect(codexModelFromText(text.split('\n').slice(0, 2).join('\n'))).toEqual({ model: 'gpt-6-sol', effort: 'high' })
   })
 
+  it('Codex: the effort of its collaboration mode when the turn has none, and when the turn ran', () => {
+    const text = line({ timestamp: '2026-10-14T01:54:31.711Z', type: 'turn_context', payload: { model: 'gpt-6-astra', collaboration_mode: { mode: 'default', settings: { model: 'gpt-6-astra', reasoning_effort: 'xhigh' } } } })
+    expect(codexModelFromText(text)).toEqual({ model: 'gpt-6-astra', effort: 'xhigh', at: Date.parse('2026-10-14T01:54:31.711Z') })
+    const settings = line({ timestamp: '2026-10-14T01:54:31.600Z', type: 'event_msg', payload: { type: 'thread_settings_applied', thread_settings: { model: 'gpt-6-astra', reasoning_effort: 'xhigh' } } })
+    expect(codexModelFromText(settings)).toEqual({ model: 'gpt-6-astra', effort: 'xhigh', at: Date.parse('2026-10-14T01:54:31.600Z') })
+  })
+
   it('reads the pane session file, before any setting', () => {
     put(`.claude/projects/C--x/${ID}.jsonl`, line({ type: 'assistant', message: { model: 'claude-opus-5-5' } }) + '\n')
     put('.claude/settings.json', '{"model":"sonnet"}')

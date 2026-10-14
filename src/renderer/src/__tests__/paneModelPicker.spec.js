@@ -307,6 +307,22 @@ describe('pane menu > Model', () => {
     expect(wrapper.get('[data-test="pane-model-chip"]').text()).toBe('GPT-5.5 · Medium')
   })
 
+  it('a model and effort chosen at the start give way once the session answers after it (Codex running xhigh, chosen medium)', async () => {
+    const started = Date.now() - 60000
+    mountPane({ agentId: 'codex', sessionOptions: { model: 'gpt-6-astra', effort: 'medium' }, modelChoice: { model: 'gpt-6-astra', effort: 'medium', at: started } })
+    // A turn from before the start: the choice still shows.
+    window.shellApi.agentModel.mockResolvedValue({ model: 'gpt-6-astra', effort: 'xhigh', source: 'session', at: started - 1000 })
+    await wrapper.setProps({ node: { ...wrapper.props('node'), sessionId: 's1' } })
+    await flushPromises()
+    expect(wrapper.get('[data-test="pane-model-chip"]').text()).toContain('Medium')
+    // A turn after it: what runs.
+    window.shellApi.agentModel.mockResolvedValue({ model: 'gpt-6-astra', effort: 'xhigh', source: 'session', at: started + 1000 })
+    await wrapper.setProps({ node: { ...wrapper.props('node'), sessionId: 's2' } })
+    await flushPromises()
+    expect(wrapper.get('[data-test="pane-model-chip"]').text()).not.toContain('Medium')
+    expect(wrapper.props('node').modelChoice).toBeUndefined()
+  })
+
   it('a pane launched with its own model shows it over the default from settings, until its session says otherwise', async () => {
     mountPane({ sessionOptions: { model: 'opus' } })
     window.shellApi.agentModel.mockResolvedValue({ model: 'claude-sonnet-5', effort: null, source: 'settings' })

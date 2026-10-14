@@ -117,7 +117,8 @@ function claudeCommandLine(o, after) {
   return { result: null }
 }
 
-// The model (and reasoning effort) of the latest turn in a Codex rollout.
+// The model (and reasoning effort) of the latest turn in a Codex rollout,
+// and when that turn ran (at: a pick made in Tessel before it gives way).
 export function codexModelFromText(text) {
   const lines = String(text || '').split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -127,13 +128,18 @@ export function codexModelFromText(text) {
       const o = JSON.parse(line)
       const p = o && o.payload
       if (!p) continue
+      const at = Date.parse(o.timestamp)
+      const when = Number.isFinite(at) ? { at } : {}
       if (o.type === 'turn_context' && typeof p.model === 'string' && p.model) {
-        return { model: p.model, effort: typeof p.effort === 'string' ? p.effort : null }
+        // Its effort: on the turn, else in its collaboration mode's settings.
+        const mode = p.collaboration_mode && p.collaboration_mode.settings
+        const effort = p.effort || p.reasoning_effort || (mode && mode.reasoning_effort)
+        return { model: p.model, effort: typeof effort === 'string' ? effort : null, ...when }
       }
       const s = p.type === 'thread_settings_applied' && p.thread_settings
       if (s && typeof s.model === 'string' && s.model) {
         const effort = s.reasoning_effort || s.effort
-        return { model: s.model, effort: typeof effort === 'string' ? effort : null }
+        return { model: s.model, effort: typeof effort === 'string' ? effort : null, ...when }
       }
     } catch {
       /* a line cut by the tail read */

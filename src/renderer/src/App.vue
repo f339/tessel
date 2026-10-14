@@ -1411,9 +1411,10 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     ...(panePermissions ? { permissions: panePermissions } : {}),
     ...(permissionMode ? { permissionMode } : {}),
     // Started with a chosen model: the header shows it until the agent's
-    // conversation answers with another one.
+    // conversation answers after this start (its model or effort may differ:
+    // what the conversation says is what runs).
     ...(!attached && modelApplied
-      ? { modelChoice: { model: sessionValues.model, effort: typeof sessionValues.effort === 'string' ? sessionValues.effort : null } }
+      ? { modelChoice: { model: sessionValues.model, effort: typeof sessionValues.effort === 'string' ? sessionValues.effort : null, at: Date.now() } }
       : {}),
     launchedAt: Date.now(),
     teamTools: !attached && teamToolsReady,
