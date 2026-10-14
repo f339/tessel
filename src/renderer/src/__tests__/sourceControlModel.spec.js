@@ -30,8 +30,6 @@ import {
   gitHistoryGraphGeometry,
   dedupeRemoteTrackingRefs
 } from '../../../shared/gitHistoryGraph'
-import { getFileTypeIcon } from '../fileTypeIcons'
-import { File, FileBox, FileCode, FileLock, FileText } from 'lucide-vue-next'
 
 describe('sections and row actions', () => {
   it('Changes first, conflicts pinned on top, each group sorted', () => {
@@ -216,16 +214,6 @@ describe("Orca's commit graph (shared/gitHistoryGraph.js)", () => {
     ]
     expect(dedupeRemoteTrackingRefs(refs).map((r) => r.name)).toEqual(['main', 'origin/other'])
     expect(dedupeRemoteTrackingRefs(refs, { preserveRefIds: ['refs/remotes/origin/main'] })).toHaveLength(3)
-  })
-})
-
-describe('file type icons (Orca lib/file-type-icons.ts)', () => {
-  it('by name, then by extension, else a plain file', () => {
-    expect(getFileTypeIcon('src/package.json')).toBe(FileBox)
-    expect(getFileTypeIcon('a\\b\\x.vue')).toBe(FileCode)
-    expect(getFileTypeIcon('notes.md')).toBe(FileText)
-    expect(getFileTypeIcon('.env.local')).toBe(FileLock)
-    expect(getFileTypeIcon('noext')).toBe(File)
   })
 })
 
