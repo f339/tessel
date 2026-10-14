@@ -115,6 +115,8 @@
       "rejoinRefused": "L'hôte ne connaît plus ce Tessel : rejoignez-le de nouveau avec un code d'invitation.",
       "outdated": "Votre Tessel est trop ancien pour le Live Share de l'hôte : mettez Tessel à jour et rejoignez de nouveau.",
       "outdatedHost": "Le Tessel de l'hôte est trop ancien pour ce Live Share : l'hôte doit mettre Tessel à jour.",
+      "protocol": "Les deux Tessel ne parlent pas le même Live Share : mettez-les à jour tous les deux et rejoignez de nouveau.",
+      "hostUnverified": "L'hôte n'a pas pu prouver qu'il s'agit du même Tessel qu'avant : rejoignez de nouveau avec un code d'invitation et vérifiez le code avec l'hôte.",
       "ended": "La session est terminée."
     },
     "toast": {

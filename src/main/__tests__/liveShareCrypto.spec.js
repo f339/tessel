@@ -15,8 +15,10 @@ import {
   signBinding,
   bindingSigned,
   exportSigningKey,
-  importSigningKey
+  importSigningKey,
+  isWeakSigningKey
 } from '../liveShare/shareCrypto'
+import crypto from 'crypto'
 
 // Both sides of one connection: nonces, X25519 keys, the keys each derives.
 function handshake(secret = newSecret(), guestSecret = secret) {
@@ -181,5 +183,29 @@ describe('Live Share reconnect key', () => {
     const { host, guest } = handshake()
     expect(bindingSigned(key.publicRaw, host.binding, signBinding(back, guest.binding))).toBe(true)
     expect(importSigningKey('not a key')).toBe(null)
+  })
+})
+
+describe('Live Share weak keys', () => {
+  const ff = (first, last) => Buffer.concat([Buffer.from([first]), Buffer.alloc(30, 0xff), Buffer.from([last])])
+  const identity = Buffer.concat([Buffer.from([1]), Buffer.alloc(31)])
+  const universal = Buffer.concat([identity, Buffer.alloc(32)])
+
+  it('refuses the small-order keys (with them a forged signature can hold for anything)', () => {
+    for (const weak of [Buffer.alloc(32), identity, ff(0xec, 0x7f), ff(0xed, 0x7f), ff(0xee, 0x7f), Buffer.from('26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05', 'hex')]) {
+      expect(isWeakSigningKey(weak)).toBe(true)
+      // The sign bit set: the same point, the same refusal.
+      const flipped = Buffer.from(weak)
+      flipped[31] |= 0x80
+      expect(isWeakSigningKey(flipped)).toBe(true)
+    }
+    expect(isWeakSigningKey(newSigningKey().publicRaw)).toBe(false)
+    // The identity key would take this forged signature for any binding.
+    expect(bindingSigned(identity, crypto.randomBytes(32), universal)).toBe(false)
+  })
+
+  it('takes back only an Ed25519 key from the file', () => {
+    const x = crypto.generateKeyPairSync('x25519').privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64')
+    expect(importSigningKey(x)).toBe(null)
   })
 })

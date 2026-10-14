@@ -142,6 +142,8 @@ describe('a Live Share pane on a guest screen', () => {
     // 120 columns of 3.6 px, scaled, fit in 360 px.
     expect(120 * 3.6 * scale).toBeLessThanOrEqual(360)
     expect(term.element.style.transformOrigin).toBe('0 0')
+    // Its mouse is off while scaled (a click would hit the wrong cell).
+    expect(term.element.style.pointerEvents).toBe('none')
   })
 
   it('a larger pane: larger text, no empty band (up to twice the usual size)', async () => {

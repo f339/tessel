@@ -28,9 +28,9 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import { createShareHost, cleanRights } from './liveShare/shareHost.js'
 import { createShareGuest } from './liveShare/shareGuest.js'
 import { newSecret, encodeInvite, decodeInvite, newSigningKey, exportSigningKey, importSigningKey } from './liveShare/shareCrypto.js'
-import { ensureCloudflared, startTunnel, waitReachable, endLeftoverTunnel, tunnelAlive, stopTunnelPid } from './liveShare/shareTunnel.js'
+import { ensureCloudflared, startTunnel, waitReachable, endLeftoverTunnel, tunnelState, stopTunnelPid, processPath, cloudflaredPath } from './liveShare/shareTunnel.js'
 import { createSessionFile } from './liveShare/sharePersist.js'
-import { listProcessNames } from './processTree.js'
+import { pidRunning as pidAlive } from './processTree.js'
 import { trimBuffer, HOST_BUFFER_BYTES } from './ptyProtocol.js'
 import { t } from './i18n'
 
@@ -185,11 +185,11 @@ const KEEP_FRESH_MS = 60000
 // deps: ipcMain, send(channel, payload) to the window, host (the terminal
 // host client), dataDir (cloudflared goes in its bin folder, the sessions
 // kept across a restart in its files), queueData(id, data) and sendExit(id,
-// exitCode) (the window's own pty:data / pty:exit), log. listNames, kill:
-// the process helpers (tests give their own). resume: take back a share or
+// exitCode) (the window's own pty:data / pty:exit), log. queryPath, kill,
+// pidRunning: the process helpers (tests give their own). resume: take back a share or
 // a session at once (Tessel calls resume() itself, once it is the only copy
 // running: a second copy starting must not take them).
-export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sendExit, log, listNames = listProcessNames, kill = (pid) => process.kill(pid), resume = true }) {
+export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sendExit, log, queryPath = processPath, kill = (pid) => process.kill(pid), pidRunning = pidAlive, resume = true }) {
   const info = (msg) => log?.info?.('liveshare', msg)
   const hostFile = createSessionFile(join(dataDir, 'liveshare-host.json'))
   const guestFile = createSessionFile(join(dataDir, 'liveshare-guest.json'))
@@ -260,10 +260,12 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       port: s.port,
       pid: s.tunnel.pid || 0,
       hostName: s.hostName,
+      hostKey: exportSigningKey(s.hostKey),
       expiresAt: s.server.inviteExpires(),
       projectId: sharedProjectId,
       known: s.server.knownGuests(),
-      secrets: s.server.earlierSecrets().map((x) => Buffer.from(x).toString('base64'))
+      secrets: s.server.earlierSecrets().map((x) => Buffer.from(x).toString('base64')),
+      guard: s.server.guardState()
     })
   }
 
@@ -271,6 +273,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     return createShareHost({
       secret,
       hostName: s.hostName,
+      hostKey: s.hostKey,
       log: info,
       ...extra,
       callbacks: {
@@ -293,6 +296,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         },
         onInviteBlocked: () => {
           info('invite code blocked: too many connections stopped after the handshake')
+          saveHost()
           pushHost()
         },
         onKnownChanged: () => {
@@ -303,9 +307,10 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     })
   }
 
-  function stopSharing(reason = 'stopped', error = null) {
-    // A share being taken back after a restart: not any more.
-    resumeRun++
+  // Stop sharing (or quitting: now, nothing waited for). A share being taken
+  // back after a restart is stopped too (stopRun).
+  function stopSharing(reason = 'stopped', error = null, { now = false } = {}) {
+    stopRun++
     const s = sharing
     if (!s) return
     s.cancelled = true
@@ -317,7 +322,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       /* already stopped */
     }
     try {
-      s.tunnel?.stop()
+      if (now && s.tunnel?.stopNow) s.tunnel.stopNow()
+      else s.tunnel?.stop()
     } catch {
       /* already stopped */
     }
@@ -332,13 +338,14 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   }
 
   // While sharing: the saved share kept fresh; a tunnel taken back after a
-  // restart (not this Tessel's child) watched by its PID and file name.
+  // restart (not this Tessel's child) watched by its PID (cheap: its program
+  // was checked when it was taken back).
   function watchHost(s) {
     clearInterval(hostTimer)
-    hostTimer = setInterval(async () => {
+    hostTimer = setInterval(() => {
       if (sharing !== s) return
-      if (s.adopted && !(await tunnelAlive(s.tunnel.pid, { listNames }).catch(() => true))) {
-        if (sharing === s) stopSharing('tunnel', t('main.liveShare.tunnelGone', 'The Cloudflare tunnel stopped. Sharing ended.'))
+      if (s.adopted && !pidRunning(s.tunnel.pid)) {
+        stopSharing('tunnel', t('main.liveShare.tunnelGone', 'The Cloudflare tunnel stopped. Sharing ended.'))
         return
       }
       saveHost()
@@ -348,12 +355,12 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
 
   async function startSharing({ name } = {}) {
     if (sharing && sharing.state !== 'error') return { ok: true, ...hostStatus() }
-    const s = { state: 'preparing', guests: [], progress: null, cancelled: false, hostName: str(name, 40) || defaultShareName() }
+    const s = { state: 'preparing', guests: [], progress: null, cancelled: false, hostName: str(name, 40) || defaultShareName(), hostKey: newSigningKey() }
     sharing = s
     pushHost()
     try {
       // A tunnel left running by a Tessel that did not take its share back.
-      await endLeftoverTunnel(dataDir, { listNames, kill }).catch(() => false)
+      await endLeftoverTunnel(dataDir, { queryPath, kill }).catch(() => false)
       if (s.cancelled) return { ok: false }
       const exe = await ensureCloudflared(dataDir, {
         onProgress: (p) => {
@@ -403,62 +410,97 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   }
 
   // After a restart: the share the last Tessel left (its tunnel still runs,
-  // with the same address), taken back with the same invite code, its earlier
-  // secrets and the guests it let in. Guests reconnect by themselves.
-  // Anything missing (too old, the tunnel gone, its port taken): no share,
-  // and a tunnel left running is ended (only if it is still cloudflared).
-  // Stop sharing or quitting meanwhile (resumeRun) ends it too.
+  // with the same address), taken back with the same invite code, its keys,
+  // its earlier secrets, its block and the guests it let in. Guests reconnect
+  // by themselves. Anything missing (too old, the tunnel gone or not ours,
+  // its port taken): no share, and a tunnel left running is ended (only if it
+  // is still this cloudflared). Stop sharing or quitting meanwhile (stopRun)
+  // ends it too; another taking-back or a suspend meanwhile (resumeRun) only
+  // lets it go, the tunnel and the saved share kept.
   let resumeRun = 0
+  let stopRun = 0
   async function resumeSharing() {
     const run = ++resumeRun
-    const live = () => run === resumeRun && !suspended && !sharing
+    const stops = stopRun
     const saved = hostFile.read()
     if (!saved) {
-      await endLeftoverTunnel(dataDir, { listNames, kill }).catch(() => false)
+      await endLeftoverTunnel(dataDir, { queryPath, kill }).catch(() => false)
       return false
     }
     const pid = Number(saved.pid) || 0
+    // Ended for good: the tunnel (if still ours) and the saved share (if it is
+    // still this one: a new share may have saved its own meanwhile).
     const fail = async (why) => {
       info(`share not taken back: ${why}`)
-      if (pid) await stopTunnelPid(dataDir, pid, { listNames, kill }).catch(() => false)
-      hostFile.clear()
+      if (pid) await stopTunnelPid(dataDir, pid, { queryPath, kill }).catch(() => false)
+      hostFile.clearIf((x) => x && Number(x.pid) === pid && x.url === saved.url)
       return false
     }
-    if (!live()) return false
-    if (!pid || !(await tunnelAlive(pid, { listNames }).catch(() => false))) return fail('its tunnel stopped')
-    if (!live()) return run === resumeRun && !suspended ? false : fail('stopped meanwhile')
+    // Still the one to take it back? Stopped meanwhile: ended; superseded or
+    // suspended: let go quietly.
+    const check = () => {
+      if (stopRun !== stops) return 'stopped'
+      if (run !== resumeRun || suspended || sharing) return 'superseded'
+      return 'ok'
+    }
+    // Is that PID still this cloudflared? Windows may not say at once.
+    let state = 'unknown'
+    for (let i = 0; i < 3 && state === 'unknown'; i++) {
+      if (i) await new Promise((r) => setTimeout(r, 1500))
+      state = await tunnelState(pid, { exe: cloudflaredPath(dataDir), queryPath })
+    }
+    if (check() === 'stopped') return fail('stopped meanwhile')
+    if (check() !== 'ok') return false
+    if (state === 'gone' || state === 'other' || (state === 'unknown' && !pidRunning(pid))) return fail('its tunnel stopped')
     let secret
+    let hostKey
     try {
       secret = Buffer.from(String(saved.secret), 'base64')
+      hostKey = importSigningKey(saved.hostKey)
     } catch {
       return fail('unreadable')
     }
-    if (secret.length !== 32 || !/^wss?:\/\//.test(String(saved.url)) || !(saved.port > 0)) return fail('unreadable')
+    if (secret.length !== 32 || !hostKey || !/^wss?:\/\//.test(String(saved.url)) || !(saved.port > 0)) return fail('unreadable')
     const earlier = (Array.isArray(saved.secrets) ? saved.secrets : []).map((x) => Buffer.from(String(x), 'base64')).filter((x) => x.length === 32)
-    const s = { state: 'starting', guests: [], progress: null, cancelled: false, hostName: str(saved.hostName, 40) || defaultShareName(), secret, adopted: true }
-    const server = makeServer(s, secret, { known: saved.known, secrets: earlier, inviteExpires: Number(saved.expiresAt) || undefined })
+    const s = { state: 'starting', guests: [], progress: null, cancelled: false, hostName: str(saved.hostName, 40) || defaultShareName(), secret, hostKey, adopted: true }
+    const server = makeServer(s, secret, { known: saved.known, secrets: earlier, guard: saved.guard, inviteExpires: Number(saved.expiresAt) || undefined })
     s.server = server
     // Its port: the last Tessel may take a moment to let it go.
     let port = 0
-    for (let i = 0; i < 6 && !port; i++) {
+    for (let i = 0; i < 6 && !port && check() === 'ok'; i++) {
       try {
         port = await server.start(saved.port)
       } catch {
-        if (!live()) break
         await new Promise((r) => setTimeout(r, 500))
       }
     }
-    if (!live()) {
+    if (check() !== 'ok' || !port) {
       try {
         server.stop('stopped')
       } catch {
         /* not started */
       }
-      return run === resumeRun && !suspended ? false : fail('stopped meanwhile')
+      if (check() === 'superseded') return false
+      return fail(port ? 'stopped meanwhile' : `port ${saved.port} taken`)
     }
-    if (!port) return fail(`port ${saved.port} taken`)
     s.port = port
-    s.tunnel = { url: String(saved.url), pid, stop: () => stopTunnelPid(dataDir, pid, { listNames, kill }).catch(() => false) }
+    s.tunnel = {
+      url: String(saved.url),
+      pid,
+      // Stop sharing: only while it is still this cloudflared.
+      stop: () => stopTunnelPid(dataDir, pid, { queryPath, kill }).catch(() => false),
+      // Quitting (nothing can be waited for): its program was checked when it
+      // was taken back; only while that PID still runs.
+      stopNow: () => {
+        if (state === 'ours' && pidRunning(pid)) {
+          try {
+            kill(pid)
+          } catch {
+            /* already stopped */
+          }
+        }
+      }
+    }
     s.invite = encodeInvite({ url: s.tunnel.url, secret })
     sharedProjectId = typeof saved.projectId === 'string' ? saved.projectId.slice(0, 80) : null
     s.state = 'sharing'
@@ -518,8 +560,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   const pushGuest = () => send('liveShare:guest', guestStatus())
 
   function saveGuest(g) {
-    if (joined !== g || !g.admitted) return
-    guestFile.write({ invite: g.invite, name: g.name, key: exportSigningKey(g.signingKey) })
+    if (joined !== g || !g.admitted || !g.hostKey) return
+    guestFile.write({ invite: g.invite, name: g.name, key: exportSigningKey(g.signingKey), hostKey: g.hostKey.toString('base64') })
   }
 
   // A pane whose terminal starts again here (the host restarted it, or the
@@ -600,7 +642,11 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       name: g.name,
       signingKey: g.signingKey,
       back: g.admitted,
+      hostKey: g.hostKey,
       callbacks: {
+        onHostKey: (key) => {
+          if (joined === g && g.client === client) g.hostKey = key
+        },
         onState: (state, extra) => {
           if (joined !== g || g.client !== client) return
           if (extra?.host) g.host = str(extra.host, 40)
@@ -678,7 +724,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     client.connect()
   }
 
-  function joinSession({ invite, name, signingKey = null } = {}) {
+  function joinSession({ invite, name, signingKey = null, hostKey = null } = {}) {
     const code = decodeInvite(invite)
     if (!code) return { ok: false, error: t('main.liveShare.badInvite', 'This is not a Tessel Live Share invite code.') }
     if (joined) leaveSession('replaced')
@@ -700,7 +746,10 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       // This guest's reconnect key: made now, or the one of a session taken
       // back after a restart (as good as admitted: a refused key ends it).
       signingKey: signingKey || newSigningKey(),
-      admitted: !!signingKey,
+      // The host's key (from its first welcome): a returning guest checks the
+      // host signs with it.
+      hostKey: signingKey ? hostKey : null,
+      admitted: !!(signingKey && hostKey),
       leaving: false,
       retry: null
     }
@@ -725,15 +774,21 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
 
   // After a restart of this Tessel: the session it was in, joined again with
   // its reconnect key (no new question for the host).
-  function resumeGuest() {
+  function resumeGuest(stops = stopRun) {
+    // Quitting meanwhile (stopAll): not joined again, and nothing to take back.
+    if (stopRun !== stops) {
+      guestFile.clear()
+      return false
+    }
     const saved = guestFile.read()
     const signingKey = saved && typeof saved.invite === 'string' ? importSigningKey(saved.key) : null
-    if (!signingKey || suspended || joined) {
+    const hostKey = saved && typeof saved.hostKey === 'string' ? Buffer.from(saved.hostKey, 'base64') : null
+    if (!signingKey || !hostKey || hostKey.length !== 32 || suspended || joined) {
       if (!joined) guestFile.clear()
       return false
     }
     info('joining again the session left by a restart')
-    return joinSession({ invite: saved.invite, name: saved.name, signingKey }).ok
+    return joinSession({ invite: saved.invite, name: saved.name, signingKey, hostKey }).ok
   }
 
   // --- The window's pty calls for a guest pane ----------------------------
@@ -854,7 +909,12 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   // A share or a session the last Tessel left (a restart, an update, a
   // crash): taken back, once.
   let resumed = null
-  const takeBack = () => (resumed = resumed || Promise.all([resumeSharing().catch(() => false), Promise.resolve().then(resumeGuest).catch(() => false)]))
+  const takeBack = () => {
+    if (resumed) return resumed
+    const stops = stopRun
+    resumed = Promise.all([resumeSharing().catch(() => false), Promise.resolve().then(() => resumeGuest(stops)).catch(() => false)])
+    return resumed
+  }
   if (resume) takeBack()
 
   return {
@@ -898,7 +958,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         }
         sharing = null
         info('sharing kept for the next Tessel')
-      } else stopSharing('stopped')
+      } else if (s) stopSharing('stopped')
+      // (A share still being taken back lets go by itself: suspended.)
       const g = joined
       if (g && g.admitted) {
         saveGuest(g)
@@ -914,14 +975,19 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     unsuspend() {
       if (!suspended) return
       suspended = false
+      const stops = stopRun
       resumeSharing().catch(() => false)
-      Promise.resolve().then(resumeGuest).catch(() => false)
+      Promise.resolve()
+        .then(() => resumeGuest(stops))
+        .catch(() => false)
     },
     // Quitting Tessel: the share and the session end.
     stopAll() {
       if (suspended) return
-      resumeRun++
-      stopSharing('stopped')
+      // Quitting: nothing can be waited for (a tunnel taken back is stopped
+      // at once), and a session not yet joined again never will be.
+      stopSharing('stopped', null, { now: true })
+      stopRun++
       leaveSession('left')
     }
   }

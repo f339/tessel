@@ -36,11 +36,24 @@ export function createSessionFile(path, { now = Date.now } = {}) {
       }
     },
     clear() {
-      try {
-        fs.rmSync(path, { force: true })
-      } catch {
-        /* already gone */
+      for (const file of [path, `${path}.tmp`]) {
+        try {
+          fs.rmSync(file, { force: true })
+        } catch {
+          /* already gone */
+        }
       }
+    },
+    // Deleted only if what it holds is still what keep(saved) expects (a new
+    // session may have saved its own meanwhile).
+    clearIf(keep) {
+      let saved
+      try {
+        saved = JSON.parse(fs.readFileSync(path, 'utf8'))
+      } catch {
+        saved = null
+      }
+      if (!saved || keep(saved)) this.clear()
     }
   }
 }

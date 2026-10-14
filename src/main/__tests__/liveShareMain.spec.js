@@ -11,8 +11,9 @@ import { createShareHost } from '../liveShare/shareHost'
 import { newSecret, encodeInvite, decodeInvite } from '../liveShare/shareCrypto'
 
 // The tunnel to the share server is the server itself here (no cloudflared);
-// its PID 4242 runs while `tunnel.alive`.
-const tunnel = vi.hoisted(() => ({ alive: true, startError: null, gate: null }))
+// its PID 4242 runs while `tunnel.alive`; `tunnel.state` is what Windows
+// says of it (ours / other / gone / unknown).
+const tunnel = vi.hoisted(() => ({ alive: true, state: null, startError: null, gate: null }))
 vi.mock('../liveShare/shareTunnel.js', () => ({
   ensureCloudflared: vi.fn(async () => 'cloudflared.exe'),
   startTunnel: vi.fn(async ({ port }) => {
@@ -21,11 +22,14 @@ vi.mock('../liveShare/shareTunnel.js', () => ({
   }),
   waitReachable: vi.fn(async () => true),
   endLeftoverTunnel: vi.fn(async () => false),
-  tunnelAlive: vi.fn(async (pid) => {
+  tunnelState: vi.fn(async (pid) => {
     if (tunnel.gate) await tunnel.gate
-    return pid === 4242 && tunnel.alive
+    if (tunnel.state) return tunnel.state
+    return pid === 4242 && tunnel.alive ? 'ours' : 'gone'
   }),
-  stopTunnelPid: vi.fn(async () => true)
+  stopTunnelPid: vi.fn(async () => true),
+  processPath: vi.fn(async () => null),
+  cloudflaredPath: vi.fn(() => 'C:/fixture/bin/cloudflared.exe')
 }))
 
 // Each Tessel's data folder (its saved share and session).
@@ -38,6 +42,7 @@ const newDataDir = () => {
 afterEach(() => {
   for (const dir of dataDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
   tunnel.alive = true
+  tunnel.state = null
   tunnel.startError = null
   tunnel.gate = null
 })
@@ -203,8 +208,8 @@ function fakeMain({ snapshot = (id) => `screen of ${id}`, dataDir = newDataDir()
     queueData: (id, data) => m.data.push([id, data]),
     sendExit: (id, exitCode) => m.exits.push([id, exitCode]),
     log: { info: () => {} },
-    listNames: async () => [],
     kill: vi.fn(),
+    pidRunning: () => tunnel.alive,
     resume
   })
   m.dataDir = dataDir
@@ -673,7 +678,7 @@ describe('registerLiveShare: taking a share back, carefully', () => {
     expect(await taking).toEqual([false, false])
     expect((await next.handle['liveShare:state']()).host.state).toBe('off')
     const { stopTunnelPid } = await import('../liveShare/shareTunnel.js')
-    expect(stopTunnelPid).toHaveBeenCalledWith(host.dataDir, 4242, expect.objectContaining({ listNames: expect.any(Function) }))
+    expect(stopTunnelPid).toHaveBeenCalledWith(host.dataDir, 4242, expect.objectContaining({ queryPath: expect.any(Function) }))
     // Nothing left to take back.
     const third = fakeMain({ dataDir: host.dataDir, resume: true })
     mains.push(third)
@@ -713,5 +718,61 @@ describe('registerLiveShare: taking a share back, carefully', () => {
     await until(() => next.last('liveShare:guest')?.state === 'ended')
     expect(next.last('liveShare:guest').reason).toBe('rejoin-refused')
     expect(host.events('liveShare:ask')).toHaveLength(1)
+  })
+
+  it('Windows not saying what the PID is: taken back while it runs, never killed on a guess', async () => {
+    const host = await shared()
+    tunnel.state = 'unknown'
+    const next = fakeMain({ dataDir: host.dataDir })
+    mains.push(next)
+    expect(await next.api.resume()).toEqual([true, false])
+    // Its PID running and Windows still not saying: the share goes on.
+    expect((await next.handle['liveShare:state']()).host.state).toBe('sharing')
+  }, 15000)
+
+  it('a PID that is now another program: not taken back, not killed', async () => {
+    const host = await shared()
+    tunnel.state = 'other'
+    const next = fakeMain({ dataDir: host.dataDir })
+    mains.push(next)
+    expect(await next.api.resume()).toEqual([false, false])
+    expect(next.api).toBeTruthy()
+  })
+
+  it('an update starting while a share is being taken back: it lets go and keeps the saved share', async () => {
+    const host = await shared()
+    let release
+    tunnel.gate = new Promise((r) => (release = r))
+    const next = fakeMain({ dataDir: host.dataDir })
+    mains.push(next)
+    const taking = next.api.resume()
+    next.api.suspend()
+    release()
+    expect(await taking).toEqual([false, false])
+    expect(fs.existsSync(join(host.dataDir, 'liveshare-host.json'))).toBe(true)
+    // The next Tessel takes it back.
+    const third = fakeMain({ dataDir: host.dataDir, resume: true })
+    mains.push(third)
+    expect(await third.api.resumed).toEqual([true, false])
+  })
+
+  it('quitting before a session is joined again: it never is, and nothing is left to take back', async () => {
+    const host = fakeMain()
+    const guest = fakeMain()
+    mains.push(host, guest)
+    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-1-ps'), activeId: 'pane-1-ps' })
+    const started = await host.handle['liveShare:start'](null, { name: 'Ada' })
+    await guest.handle['liveShare:join'](null, { invite: started.invite, name: 'Alex' })
+    const ask = await until(() => host.last('liveShare:ask'))
+    await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true })
+    await until(() => guest.last('liveShare:guest')?.state === 'joined')
+    guest.api.suspend()
+    const next = fakeMain({ dataDir: guest.dataDir })
+    mains.push(next)
+    const taking = next.api.resume()
+    next.api.stopAll()
+    expect(await taking).toEqual([false, false])
+    expect(fs.existsSync(join(guest.dataDir, 'liveshare-guest.json'))).toBe(false)
+    expect(next.events('liveShare:guest').some((x) => x.state === 'connecting')).toBe(false)
   })
 })

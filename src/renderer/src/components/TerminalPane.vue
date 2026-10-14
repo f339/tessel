@@ -1477,12 +1477,14 @@ function fitLiveShareFont({ cols, rows }) {
     term.options.fontSize = size
   }
   // A pane too small even at 6 px: the terminal is drawn smaller still
-  // (scaled down), never cut.
+  // (scaled down), never cut. Its mouse is off meanwhile (xterm would put a
+  // click on the wrong cell); a click on the pane still lets you type.
   const left = room()
   const shrink = left != null && left < 1 ? left : 1
   if (term.element) {
     term.element.style.transformOrigin = shrink < 1 ? '0 0' : ''
     term.element.style.transform = shrink < 1 ? `scale(${shrink})` : '' // i18n-ignore
+    term.element.style.pointerEvents = shrink < 1 ? 'none' : ''
   }
 }
 

@@ -8,20 +8,24 @@
 // or no; once in, the guest gets what the host lets it do (onRights), the
 // host's panes (onPanes), each pane's screen (onSnapshot) and its output.
 // The guest's reconnect key (signingKey, made on this computer): its public
-// half goes with the first join; coming back (back), the guest signs this
-// connection's binding with it instead of asking again.
+// half goes with the first join, with a signature of the connection (it
+// holds it); coming back (back), the guest signs the new connection with it
+// instead of asking again. The host signs every welcome with its own key:
+// the guest keeps the one of its first welcome (onHostKey; the code it
+// compared with the host vouches for it) and, coming back, checks the
+// host's signature with it (hostKey) before anything else.
 // A connection that hears nothing from the host (not even its pings, every
 // 25 s) for 70 s is over.
 //
 // Tessel itself is reached only through the callbacks, so this file runs
 // (and is tested) without Electron.
 import WebSocket from 'ws'
-import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitment, signBinding, NONCE_BYTES, KX_BYTES } from './shareCrypto.js'
+import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitment, signBinding, bindingSigned, NONCE_BYTES, KX_BYTES } from './shareCrypto.js'
 
 const CONNECT_TIMEOUT_MS = 20000
 const SILENCE_MS = 70000
 const MAX_FRAME = 64 * 1024 * 1024 // a snapshot of a screen
-const PROTOCOL = 2
+const PROTOCOL = 3
 
 // The host closed before the handshake: why (shareHost.js CLOSE_*).
 const CLOSE_REASONS = { 4001: 'expired', 4002: 'busy', 1013: 'busy', 4003: 'outdated' }
@@ -31,9 +35,11 @@ const CLOSE_REASONS = { 4001: 'expired', 4002: 'busy', 1013: 'busy', 4003: 'outd
 // onSnapshot(id, data, cols, rows), onData(id, data), onExit(id, exitCode),
 // onRestart(id) (the pane restarted on the host: a new screen follows),
 // onRights(rights), onNotice(code), onClosed(reason) (once, at the end).
+// onHostKey(raw) (the host's key, from the first welcome).
 // signingKey: { privateKey, publicRaw } (shareCrypto.js newSigningKey);
-// back: coming back with it (shareHost.js rejoin), no question.
-export function createShareGuest({ url, secret, name, signingKey, back = false, callbacks }) {
+// back: coming back with it (shareHost.js rejoin), no question; hostKey:
+// the host's key kept from the first welcome (a Buffer).
+export function createShareGuest({ url, secret, name, signingKey, back = false, hostKey = null, callbacks }) {
   let socket = null
   let channel = null
   let code = null
@@ -41,6 +47,7 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
   let timer = null
   let silence = null
   let mine = null // { nonce, keys } until the host's keys came
+  let binding = null // this connection's, as both sides see it
 
   function finish(reason) {
     if (closed) return
@@ -73,13 +80,21 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
       case 'waiting':
         callbacks.onState?.('waiting', { code })
         return
-      case 'welcome':
+      case 'welcome': {
         clearTimeout(timer)
+        // The host signed this connection: with the key kept from the first
+        // welcome when coming back (someone else posing as the host is not
+        // trusted with anything typed here).
+        const key = Buffer.from(String(msg.hostKey || ''), 'base64')
+        const sig = Buffer.from(String(msg.hostSig || ''), 'base64')
+        if (back ? !(hostKey && key.equals(hostKey) && bindingSigned(hostKey, binding, sig)) : !bindingSigned(key, binding, sig)) return finish('host-unverified')
+        if (!back) callbacks.onHostKey?.(key)
         // What it may do first: the window takes it as the starting point.
         if (msg.rights) callbacks.onRights?.(rightsOf(msg.rights))
         callbacks.onState?.('joined', { host: String(msg.host || '') })
         callbacks.onPanes?.(Array.isArray(msg.panes) ? msg.panes : [], msg.layout || null)
         return
+      }
       case 'panes':
         callbacks.onPanes?.(Array.isArray(msg.panes) ? msg.panes : [], msg.layout || null)
         return
@@ -140,9 +155,11 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
     mine = null
     channel = createChannel(session)
     code = session.code
+    binding = session.binding
     const key = signingKey.publicRaw.toString('base64')
-    if (back) send({ t: 'join', name, rejoin: { key, sig: signBinding(signingKey, session.binding).toString('base64') } })
-    else send({ t: 'join', name, key })
+    const sig = signBinding(signingKey, binding).toString('base64')
+    if (back) send({ t: 'join', name, rejoin: { key, sig } })
+    else send({ t: 'join', name, key, sig })
   }
 
   return {

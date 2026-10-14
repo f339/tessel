@@ -44,6 +44,8 @@ const REASONS = {
   lost: () => t('liveShare.reason.lost', 'The connection to the host was lost and did not come back.'),
   'rejoin-refused': () => t('liveShare.reason.rejoinRefused', 'The host no longer knows this Tessel: join again with an invite code.'),
   outdated: () => t('liveShare.reason.outdated', 'Your Tessel is too old for the host’s Live Share: update Tessel and join again.'),
+  protocol: () => t('liveShare.reason.protocol', 'The two Tessels do not speak the same Live Share: update both and join again.'),
+  'host-unverified': () => t('liveShare.reason.hostUnverified', 'The host could not prove it is the same Tessel as before: join again with an invite code, and check the code with the host.'),
   'outdated-host': () => t('liveShare.reason.outdatedHost', 'The host’s Tessel is too old for this Live Share: the host needs to update Tessel.')
 }
 export const endReason = (reason) => (REASONS[reason] ? REASONS[reason]() : t('liveShare.reason.ended', 'The session ended.'))
@@ -325,6 +327,11 @@ export function createLiveShareWindow(deps) {
     } finally {
       attaching.delete(p.id)
     }
+    // The host's pane started again while it was being attached: once more,
+    // with its new screen.
+    const leaf = guestLeaves.get(p.id)
+    const now = state.guest.panes.find((x) => x.id === p.id)
+    if (leaf && now && (now.gen || 0) !== (leaf.gen || 0) && state.guest.session === session) reattachGuestPane(now, leaf, session)
   }
 
   function syncGuest(s) {

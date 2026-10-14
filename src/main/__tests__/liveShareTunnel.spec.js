@@ -3,9 +3,8 @@ import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
 import { EventEmitter } from 'events'
-import { parseTunnelAddress, ensureCloudflared, startTunnel, tunnelEnv, endLeftoverTunnel, tunnelAlive, stopTunnelPid, readTunnelPid, CLOUDFLARED_VERSION } from '../liveShare/shareTunnel'
+import { parseTunnelAddress, ensureCloudflared, startTunnel, tunnelEnv, endLeftoverTunnel, tunnelState, stopTunnelPid, readTunnelPid, cloudflaredPath } from '../liveShare/shareTunnel'
 
-const NAME = `cloudflared-${CLOUDFLARED_VERSION}.exe`
 const boxLine = (url) => JSON.stringify({ level: 'info', message: `|  ${url}                                |` })
 
 // A cloudflared that writes its log file (its --logfile argument).
@@ -81,38 +80,55 @@ describe('Live Share tunnel', () => {
   it('ends a cloudflared no share uses any more, and only that one', async () => {
     tmp()
     fs.mkdirSync(join(dir, 'bin'), { recursive: true })
+    const exe = cloudflaredPath(dir)
     const killed = []
     const kill = (pid) => killed.push(pid)
+    const write = (pid) => fs.writeFileSync(join(dir, 'bin', 'cloudflared.pid'), String(pid))
     // No PID written: nothing to do.
-    expect(await endLeftoverTunnel(dir, { listNames: async () => [], kill })).toBe(false)
-    // The PID is now another program: left alone.
-    fs.writeFileSync(join(dir, 'bin', 'cloudflared.pid'), '700')
-    expect(await endLeftoverTunnel(dir, { listNames: async () => [{ pid: 700, name: 'chrome.exe' }], kill })).toBe(false)
-    expect(fs.existsSync(join(dir, 'bin', 'cloudflared.pid'))).toBe(false)
-    // Still our cloudflared: ended.
-    fs.writeFileSync(join(dir, 'bin', 'cloudflared.pid'), '701')
-    expect(await endLeftoverTunnel(dir, { listNames: async () => [{ pid: 701, name: NAME.toUpperCase() }], kill })).toBe(true)
-    // A listing that fails: left alone.
-    fs.writeFileSync(join(dir, 'bin', 'cloudflared.pid'), '702')
-    expect(await endLeftoverTunnel(dir, { listNames: async () => null, kill })).toBe(false)
+    expect(await endLeftoverTunnel(dir, { queryPath: async () => '', kill })).toBe(false)
+    // The PID is now another program: left alone, forgotten.
+    write(700)
+    expect(await endLeftoverTunnel(dir, { queryPath: async () => 'C:\\Windows\\notepad.exe', kill })).toBe(false)
+    expect(readTunnelPid(dir)).toBe(0)
+    // Windows could not say: left alone, kept for the next try.
+    write(702)
+    expect(await endLeftoverTunnel(dir, { queryPath: async () => null, kill })).toBe(false)
+    expect(readTunnelPid(dir)).toBe(702)
+    // Still this exact cloudflared: ended.
+    write(701)
+    expect(await endLeftoverTunnel(dir, { queryPath: async () => exe.toUpperCase(), kill })).toBe(true)
     expect(killed).toEqual([701])
   })
 
-  it('tells whether a PID is still its cloudflared, and stops one by its PID', async () => {
+  it('tells what a saved PID is now: ours, another program, gone, or unknown', async () => {
     tmp()
-    expect(await tunnelAlive(9, { listNames: async () => [{ pid: 9, name: NAME }] })).toBe(true)
-    expect(await tunnelAlive(9, { listNames: async () => [{ pid: 9, name: 'node.exe' }] })).toBe(false)
-    expect(await tunnelAlive(0, { listNames: async () => [] })).toBe(false)
+    const exe = cloudflaredPath(dir)
+    expect(await tunnelState(9, { exe, queryPath: async () => exe })).toBe('ours')
+    // The same file name elsewhere (another Tessel's data folder): not ours.
+    expect(await tunnelState(9, { exe, queryPath: async () => 'C:\\other\\bin\\cloudflared-2026.9.3.exe' })).toBe('other')
+    expect(await tunnelState(9, { exe, queryPath: async () => '?' })).toBe('other')
+    expect(await tunnelState(9, { exe, queryPath: async () => '' })).toBe('gone')
+    expect(await tunnelState(9, { exe, queryPath: async () => null })).toBe('unknown')
+    expect(await tunnelState(9, { exe, queryPath: async () => Promise.reject(new Error('x')) })).toBe('unknown')
+    expect(await tunnelState(0, { exe })).toBe('gone')
+  })
+
+  it('stops a tunnel by its PID only while it is still this cloudflared', async () => {
+    tmp()
     fs.mkdirSync(join(dir, 'bin'), { recursive: true })
+    const exe = cloudflaredPath(dir)
     fs.writeFileSync(join(dir, 'bin', 'cloudflared.pid'), '9')
     const killed = []
     const kill = (pid) => killed.push(pid)
-    // A PID Windows gave to another program since: left alone.
-    expect(await stopTunnelPid(dir, 9, { listNames: async () => [{ pid: 9, name: 'notepad.exe' }], kill })).toBe(false)
+    // Windows could not say: nothing done, nothing forgotten.
+    expect(await stopTunnelPid(dir, 9, { queryPath: async () => null, kill })).toBe(false)
+    expect(readTunnelPid(dir)).toBe(9)
+    // Another program now: left alone.
+    expect(await stopTunnelPid(dir, 9, { queryPath: async () => 'C:\\Windows\\notepad.exe', kill })).toBe(false)
     expect(killed).toEqual([])
     expect(readTunnelPid(dir)).toBe(0)
-    // Still our cloudflared: stopped.
-    expect(await stopTunnelPid(dir, 9, { listNames: async () => [{ pid: 9, name: NAME }], kill })).toBe(true)
+    // Ours: stopped.
+    expect(await stopTunnelPid(dir, 9, { queryPath: async () => exe, kill })).toBe(true)
     expect(killed).toEqual([9])
   })
 })

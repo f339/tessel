@@ -159,6 +159,7 @@ export function exportSigningKey(key) {
 export function importSigningKey(text) {
   try {
     const privateKey = crypto.createPrivateKey({ key: Buffer.from(String(text), 'base64'), format: 'der', type: 'pkcs8' })
+    if (privateKey.asymmetricKeyType !== 'ed25519') return null
     const der = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'der' })
     return { privateKey, publicRaw: Buffer.from(der.subarray(der.length - KX_BYTES)) }
   } catch {
@@ -168,8 +169,25 @@ export function importSigningKey(text) {
 export function signBinding(key, binding) {
   return crypto.sign(null, binding, key.privateKey)
 }
+// Ed25519 public keys of small order (libsodium's list, the sign bit aside):
+// with one of them, a forged signature can hold for any message. Never
+// taken as a guest's or a host's key.
+const SMALL_ORDER = [
+  '0000000000000000000000000000000000000000000000000000000000000000',
+  '0100000000000000000000000000000000000000000000000000000000000000',
+  '26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05',
+  'c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a',
+  'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+  'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+  'eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f'
+].map((h) => Buffer.from(h, 'hex'))
+export function isWeakSigningKey(publicRaw) {
+  if (!Buffer.isBuffer(publicRaw) || publicRaw.length !== KX_BYTES) return true
+  return SMALL_ORDER.some((k) => k.subarray(0, 31).equals(publicRaw.subarray(0, 31)) && k[31] === (publicRaw[31] & 0x7f))
+}
+
 export function bindingSigned(publicRaw, binding, signature) {
-  if (!Buffer.isBuffer(publicRaw) || publicRaw.length !== KX_BYTES || !Buffer.isBuffer(signature) || signature.length !== 64) return false
+  if (!Buffer.isBuffer(publicRaw) || publicRaw.length !== KX_BYTES || isWeakSigningKey(publicRaw) || !Buffer.isBuffer(signature) || signature.length !== 64) return false
   try {
     const publicKey = crypto.createPublicKey({ key: Buffer.concat([ED25519_SPKI, publicRaw]), format: 'der', type: 'spki' })
     return crypto.verify(null, binding, publicKey, signature)

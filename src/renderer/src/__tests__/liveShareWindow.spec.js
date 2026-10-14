@@ -405,6 +405,26 @@ describe('Live Share in the window: what the review found', () => {
     expect(window.shellApi.attachPty.mock.calls.filter(([id]) => id === 'pane-ls1-a')).toHaveLength(2)
   })
 
+  it('a pane restarted on the host while it is first attached here: its new screen still comes', async () => {
+    let release
+    const firstAttach = new Promise((r) => (release = r))
+    window.shellApi.attachPty.mockImplementationOnce(async () => {
+      await firstAttach
+      return { ok: true, buffer: 'OLD-SCREEN', shell: { id: 'liveshare', name: 'Ada' }, backend: 'liveshare' }
+    })
+    t.listeners.onGuest(twoPanes())
+    await flush()
+    // The host restarts pane a before its first attach answered.
+    t.listeners.onGuest(twoPanes({ panes: [pane('pane-ls1-a', { gen: 1 }), pane('pane-ls1-b')] }))
+    window.shellApi.attachPty.mockImplementation(async (id) => ({ ok: true, buffer: `new screen ${id}`, shell: { id: 'liveshare', name: 'Ada' }, backend: 'liveshare' }))
+    release()
+    await flush()
+    await flush()
+    const leafA = t.workspaces.value[0].tree.children.find((l) => l.id === 'pane-ls1-a')
+    expect(leafA.gen).toBe(1)
+    expect(t.seeded['pane-ls1-a']).toBe('new screen pane-ls1-a')
+  })
+
   it('a lost connection keeps the project, view only, until it comes back', async () => {
     t.listeners.onGuest(twoPanes())
     await flush()
