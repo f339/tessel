@@ -14,9 +14,11 @@
 // - It only goes to http(s) pages (a link, a redirect); a new window opens in
 //   the same pane instead (the window is told); nothing is downloaded (the
 //   window offers the system browser instead); no permission is granted but
-//   writing to the clipboard (camera, microphone, location, notifications,
-//   screen sharing: refused, the window says so; full screen: refused
-//   silently, it would put all of Tessel's window in full screen).
+//   writing to the clipboard and full screen (camera, microphone, location,
+//   notifications, screen sharing: refused, the window says so). A page's
+//   full screen (a video's button) covers Tessel's window, not the screen:
+//   only right after the user's click in the page (Chromium's rule), and
+//   Escape always ends it (the page cannot keep it).
 // - A new window only right after the user clicked or typed in the page (an
 //   ad frame opening one on its own is refused).
 // - Design Mode (pick an element, a screenshot) runs a script in the page
@@ -47,11 +49,11 @@ const MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024
 const CAPTURE_TIMEOUT_MS = 4000
 // Waiting for a click on the page.
 const PICK_TIMEOUT_MS = 10 * 60 * 1000
-// The only permission a page gets: writing to the clipboard (a "Copy"
-// button). Not full screen: it put the whole of Tessel's window in full screen.
-const GRANTED_PERMISSIONS = new Set(['clipboard-sanitized-write'])
-// Refused without telling the window: every video player asks for it.
-const SILENT_DENIALS = new Set(['fullscreen'])
+// The only permissions a page gets: writing to the clipboard (a "Copy"
+// button) and full screen (a video's button: the page covers Tessel's
+// window; the window itself stays as it is, disableHtmlFullscreenWindowResize
+// on both the page and the window).
+const GRANTED_PERMISSIONS = new Set(['clipboard-sanitized-write', 'fullscreen'])
 // A new window counts only this soon after the user's own click or key in
 // the page (a popup blocker's rule); later, or with none, it is refused.
 const POPUP_GESTURE_MS = 1500
@@ -204,7 +206,7 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
     ourSessions.set(partition, ses)
     ses.setPermissionRequestHandler((wc, permission, callback, details) => {
       const ok = GRANTED_PERMISSIONS.has(permission)
-      if (!ok && !SILENT_DENIALS.has(permission) && shouldTellDenied(wc, permission)) {
+      if (!ok && shouldTellDenied(wc, permission)) {
         send('browser:permissionDenied', {
           webContentsId: wc && !wc.isDestroyed() ? wc.id : null,
           permission: String(permission).slice(0, 60),
@@ -367,20 +369,33 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
       send('browser:audio', { webContentsId: guest.id, audible: !!(event && event.audible) })
     })
 
-    // Full screen is refused (the permission); a page that gets there anyway
-    // is taken out, and Tessel's window put back as it was.
+    // A page in full screen covers Tessel's window; the window never goes
+    // full screen for it (put back if it does anyway, unless the user had
+    // put it there).
+    let pageFull = false
     const undoFullScreen = () => {
       const win = getWindow()
       if (!win || win.isDestroyed() || typeof win.isFullScreen !== 'function') return
       if (windowWasFull !== true && win.isFullScreen()) win.setFullScreen(false)
     }
     guest.on('enter-html-full-screen', () => {
-      warn('a page went full screen: taken out of it')
-      if (!guest.isDestroyed()) guest.executeJavaScript('document.exitFullscreen && document.exitFullscreen()', false).catch(() => {})
+      pageFull = true
       undoFullScreen()
       // The window may only get there a moment later.
       setTimeout(undoFullScreen, 250)
     })
+    guest.on('leave-html-full-screen', () => {
+      pageFull = false
+      undoFullScreen()
+    })
+    // Escape ends it, whatever the page does with its keys: from a world the
+    // page cannot reach (its own document.exitFullscreen may be replaced).
+    const exitPageFullScreen = () => {
+      if (guest.isDestroyed()) return
+      const code = 'document.fullscreenElement && document.exitFullscreen()'
+      if (canWatch()) guest.executeJavaScriptInIsolatedWorld(ESC_WORLD, [{ code }]).catch(() => {})
+      else guest.executeJavaScript(code, false).catch(() => {})
+    }
     const guard = (event, url) => {
       if (!allowedBrowserUrl(url)) {
         event.preventDefault()
@@ -426,8 +441,15 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
     }
     guest.on('before-input-event', (event, input) => {
       if (input) noteGesture(input.type)
+      const escape = input && input.type === 'keyDown' && input.key === 'Escape'
+      // A page in full screen: Escape only takes it out (as in a browser).
+      if (escape && pageFull) {
+        event.preventDefault()
+        setImmediate(exitPageFullScreen)
+        return
+      }
       // Escape stops a page still loading; the page gets its Escape too.
-      if (input && input.type === 'keyDown' && input.key === 'Escape' && !input.control && !input.alt && !input.meta) {
+      if (escape && !input.control && !input.alt && !input.meta) {
         // After the event, like the refused pages below (Electron 42 crashes
         // on some page changes made from inside an event).
         if (typeof guest.isLoading === 'function' && guest.isLoading()) {

@@ -281,6 +281,42 @@ describe('BrowserPane.vue', () => {
     expect(node.audible).toBe(false)
   })
 
+  it("a page in full screen: a notice says Esc leaves it; another tab coming up takes it out", async () => {
+    const tabsState = ref({ leaves: [], shown: 'b1' })
+    ctx.paneTabs = vi.fn(() => tabsState.value)
+    await mountPane('https://video.test/')
+    await ready()
+    const notice = wrapper.find('[data-test="browser-fullscreen-notice"]')
+    expect(notice.text()).toBe('Press Esc to exit full screen')
+    const el = notice.element
+    let open = false
+    el.showPopover = vi.fn(() => (open = true))
+    el.hidePopover = vi.fn(() => (open = false))
+    el.matches = vi.fn((sel) => (sel === ':popover-open' ? open : false))
+    let fullEl = null
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => fullEl })
+    document.exitFullscreen = vi.fn(async () => {
+      fullEl = null
+      document.dispatchEvent(new Event('fullscreenchange'))
+    })
+    try {
+      fullEl = webview()
+      document.dispatchEvent(new Event('fullscreenchange'))
+      expect(el.showPopover).toHaveBeenCalled()
+      expect(open).toBe(true)
+      // Another tab comes up: the page leaves full screen, the notice goes.
+      tabsState.value = { leaves: [], shown: 'terminal' }
+      await nextTick()
+      await nextTick()
+      expect(document.exitFullscreen).toHaveBeenCalled()
+      await flushPromises()
+      expect(open).toBe(false)
+    } finally {
+      delete document.fullscreenElement
+      delete document.exitFullscreen
+    }
+  })
+
   it('Clear browsing data: asks first, clears the session, says so', async () => {
     api.clearData = vi.fn(async () => ({ ok: true }))
     await mountPane('http://localhost:3000/')

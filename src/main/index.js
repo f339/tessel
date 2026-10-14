@@ -4198,6 +4198,9 @@ function createWindow() {
       // The built-in browser's pages (<webview>): each one is checked and
       // locked down when it attaches (browserGuest.js).
       webviewTag: true,
+      // A page's full screen (a video's) covers this window; the window
+      // itself stays as it is (Electron would put it in full screen too).
+      disableHtmlFullscreenWindowResize: true,
       // Tessel works while minimized or behind other windows: agents message
       // each other, get reminders, the board and the team map stay current.
       // Chromium's background throttling slowed its timers to about once a

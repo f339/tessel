@@ -114,6 +114,9 @@
       "stopHint": "Empêcher les agents de piloter cette page",
       "stopped": "Les agents ne peuvent plus piloter cette page. Fermez-la et ouvrez-en une nouvelle pour le leur permettre à nouveau."
     },
+    "fullscreen": {
+      "exitHint": "Appuyez sur Échap pour quitter le plein écran"
+    },
     "audio": {
       "playing": "Cette page joue du son : cliquez pour le couper",
       "muted": "Son coupé : cliquez pour le réactiver",
