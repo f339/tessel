@@ -99,6 +99,14 @@ describe('grid -> side panel -> grid', () => {
     expect(page).toEqual({ id: 'web-abc', url: 'https://example.com/a?b=1', title: 'Example A', zoom: 1.5 })
   })
 
+  it('a muted page stays muted both ways', () => {
+    const pane = leaf('pane-9', 'browser', { url: 'https://video.test/', title: 'V', zoom: null, muted: true })
+    const page = sidePageFromLeaf(pane, 'web-m', { blankUrl: 'about:blank', defaultTitle: 'Browser' })
+    expect(page.muted).toBe(true)
+    expect(leafFromSidePage(page, (url) => makeBrowserLeaf(url)).muted).toBe(true)
+    expect(sidePageFromLeaf({ ...pane, muted: false }, 'web-n', { blankUrl: 'about:blank' })).not.toHaveProperty('muted')
+  })
+
   it('a blank pane and its default name: a blank page with no title; an odd zoom clamped', () => {
     const pane = leaf('pane-8', 'browser', { url: 'about:blank', title: 'Browser', zoom: 42 })
     expect(sidePageFromLeaf(pane, 'web-x', { blankUrl: 'about:blank', defaultTitle: 'Browser' })).toEqual({ id: 'web-x', url: '', title: '', zoom: 5 })

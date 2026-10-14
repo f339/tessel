@@ -398,6 +398,10 @@ function makeBrowserLeaf(id = null, url = BLANK_URL) {
     zoom: null,
     // Bumped to put the keyboard in its address bar.
     focusAddress: 0,
+    // The page makes sound now (BrowserPane: the main process says so); the
+    // user muted it (its speaker clicked). Neither is saved.
+    audible: false,
+    muted: false,
     broadcast: false
   })
 }

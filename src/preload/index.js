@@ -472,6 +472,8 @@ const api = {
     onAppCommand: (cb) => subscribe('browser:appCommand', cb),
     onPermissionDenied: (cb) => subscribe('browser:permissionDenied', cb),
     onDownloadBlocked: (cb) => subscribe('browser:downloadBlocked', cb),
+    // A page starts or stops making sound ({ webContentsId, audible }).
+    onAudio: (cb) => subscribe('browser:audio', cb),
     // Agents driving pages (src/main/agentBrowser.js): the setting, the
     // badge's Stop, and when an agent starts or stops driving a page.
     agentSettings: (opts) => ipcRenderer.invoke('browser:agentSettings', opts),

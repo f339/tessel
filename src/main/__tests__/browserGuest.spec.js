@@ -211,6 +211,16 @@ describe('will-attach-webview', () => {
 })
 
 describe('a page attached', () => {
+  it('starts or stops making sound: told to the window', () => {
+    const g = t.attach()
+    g.emit('audio-state-changed', { audible: true })
+    g.emit('audio-state-changed', { audible: false })
+    expect(t.sent).toEqual([
+      ['browser:audio', { webContentsId: 7, audible: true }],
+      ['browser:audio', { webContentsId: 7, audible: false }]
+    ])
+  })
+
   it('opens no window: an http(s) popup right after a click is told to the window', () => {
     const g = t.attach()
     t.click(g)
@@ -405,16 +415,17 @@ describe('the browser session', () => {
     expect(t.sent[0][1]).toEqual({ webContentsId: 9, permission: 'media', origin: 'https://page.test' })
   })
 
-  it('refuses full screen without telling the window', () => {
+  it("grants full screen (a video's button: the page covers Tessel's window)", () => {
     const cb = vi.fn()
     t.ses.request({ id: 7, isDestroyed: () => false, getURL: () => 'https://video.test/' }, 'fullscreen', cb, {})
-    expect(cb).toHaveBeenCalledWith(false)
+    expect(cb).toHaveBeenCalledWith(true)
     expect(t.sent).toEqual([])
   })
 
   it('checks agree with requests', () => {
     expect(t.ses.check(null, 'clipboard-sanitized-write')).toBe(true)
-    for (const p of ['media', 'geolocation', 'clipboard-read', 'hid', 'serial', 'usb', 'notifications', 'fullscreen']) {
+    expect(t.ses.check(null, 'fullscreen')).toBe(true)
+    for (const p of ['media', 'geolocation', 'clipboard-read', 'hid', 'serial', 'usb', 'notifications']) {
       expect(t.ses.check(null, p)).toBe(false)
     }
   })
@@ -692,15 +703,35 @@ describe('copyImage', () => {
   })
 })
 
-describe('a page in full screen anyway', () => {
-  it("is taken out of it, and Tessel\'s window put back", async () => {
+describe('a page in full screen', () => {
+  it("stays so, over Tessel's window; the window itself is put back if it went full screen", async () => {
     const g = t.attach()
     t.click(g) // the page's click, with the window not in full screen
     t.win.full = true // what the page's full screen did to the window
     g.emit('enter-html-full-screen')
-    expect(g.executeJavaScript).toHaveBeenCalledWith('document.exitFullscreen && document.exitFullscreen()', false)
+    expect(g.executeJavaScript).not.toHaveBeenCalled()
     expect(t.win.setFullScreen).toHaveBeenCalledWith(false)
     expect(t.win.full).toBe(false)
+  })
+
+  it('Escape only takes the page out of it, from a world the page cannot reach; then Escape is the page\'s again', async () => {
+    const g = t.attach()
+    g.isLoading = vi.fn(() => false)
+    g.executeJavaScriptInIsolatedWorld = vi.fn(async () => null)
+    t.click(g)
+    g.emit('enter-html-full-screen')
+    const e = ev()
+    g.emit('before-input-event', e, { type: 'keyDown', key: 'Escape' })
+    expect(e.preventDefault).toHaveBeenCalled()
+    await new Promise((r) => setImmediate(r))
+    const [world, [{ code }]] = g.executeJavaScriptInIsolatedWorld.mock.calls.at(-1)
+    expect(world).not.toBe(0)
+    expect(code).toBe('document.fullscreenElement && document.exitFullscreen()')
+    expect(t.sent).toEqual([])
+    g.emit('leave-html-full-screen')
+    const after = ev()
+    g.emit('before-input-event', after, { type: 'keyDown', key: 'Escape' })
+    expect(after.preventDefault).not.toHaveBeenCalled()
   })
 
   it('the window going full screen a moment later is put back too', async () => {
@@ -718,12 +749,12 @@ describe('a page in full screen anyway', () => {
     }
   })
 
-  it('a window the user had put in full screen stays so', async () => {
+  it('a window the user had put in full screen stays so, the page leaving too', async () => {
     const g = t.attach()
     t.win.full = true
     t.click(g)
     g.emit('enter-html-full-screen')
-    expect(g.executeJavaScript).toHaveBeenCalled()
+    g.emit('leave-html-full-screen')
     expect(t.win.setFullScreen).not.toHaveBeenCalled()
   })
 })

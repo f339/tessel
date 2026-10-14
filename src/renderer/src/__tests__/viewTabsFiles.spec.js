@@ -3,6 +3,7 @@
 // double-click), then each browser.
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { reactive } from 'vue'
 import ViewTabs from '../components/ViewTabs.vue'
 import { docs } from '../editor/documents'
 import { pathKey } from '../editor/editorTabs'
@@ -82,6 +83,22 @@ describe('the line of tabs', () => {
     // The line's free space: the pane it sits in.
     await w.find('[data-test="view-tabs"]').trigger('pointerdown')
     expect(w.emitted('drag').at(-1)[0]).toBeNull()
+  })
+
+  it("a browser making sound: a speaker on its tab mutes it, without showing or moving the tab", async () => {
+    const page = reactive({ ...browser, audible: false, muted: false })
+    const w = mount(ViewTabs, { props: { leaves: [page], shown: 'terminal' } })
+    expect(w.find('[data-test="page-audio"]').exists()).toBe(false)
+    page.audible = true
+    await w.vm.$nextTick()
+    const speaker = w.find('[data-test="view-tab"][data-tab="br1"] [data-test="page-audio"]')
+    expect(speaker.exists()).toBe(true)
+    await speaker.trigger('pointerdown')
+    await speaker.trigger('click')
+    expect(page.muted).toBe(true)
+    expect(w.emitted('select')).toBeUndefined()
+    expect(w.emitted('drag')).toBeUndefined()
+    expect(w.find('[data-test="page-audio"]').attributes('aria-pressed')).toBe('true')
   })
 
   it('an editor with no file: one Editor tab', () => {

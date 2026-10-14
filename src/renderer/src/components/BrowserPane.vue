@@ -58,6 +58,7 @@ import { registerNavigationOwner, focusNavigationOwner, isNavigationOwner, relea
 import { claimPage, releasePage, placePage, createWebview, MAIN_PARTITION, AGENT_PARTITION } from '../browser/pageHost'
 import DesignModePanel from './DesignModePanel.vue'
 import ViewTabs from './ViewTabs.vue'
+import PageAudioButton from './PageAudioButton.vue'
 import { t } from '../i18n'
 import { settings } from '../settings'
 
@@ -213,6 +214,7 @@ function onDomReady() {
     page.guestId = guestId.value
   }
   call('setZoomLevel', pageZoom())
+  applyMuted()
   syncHistory()
   if (first && pendingUrl) {
     const url = pendingUrl
@@ -262,7 +264,54 @@ function onFailLoad(e) {
 function onGone() {
   failure.value = { kind: 'crash', url: currentUrl.value }
   loading.value = false
+  props.node.audible = false
 }
+// The page in full screen (a video's button): it covers Tessel's window
+// (Electron puts the <webview> in the window's top layer). A notice says how
+// to leave, a moment, above it (a popover: the top layer too, shown after).
+const pageFullscreen = ref(false)
+const fullscreenNotice = ref(null)
+let noticeTimer = null
+const NOTICE_MS = 3500
+function setNotice(open) {
+  const el = fullscreenNotice.value
+  clearTimeout(noticeTimer)
+  noticeTimer = null
+  if (!el || typeof el.showPopover !== 'function') return
+  try {
+    if (open) {
+      if (el.matches(':popover-open')) el.hidePopover()
+      el.showPopover()
+      noticeTimer = setTimeout(() => setNotice(false), NOTICE_MS)
+    } else if (el.matches(':popover-open')) el.hidePopover()
+  } catch {
+    // An old Chromium without popovers: no notice.
+  }
+}
+// The window's full screen element is this page's <webview> (or no longer).
+function onFullscreenChange() {
+  const full = !!wv() && document.fullscreenElement === wv()
+  if (full === pageFullscreen.value) return
+  pageFullscreen.value = full
+  // Shown once the page is up, so above it.
+  setNotice(full)
+}
+// The page's pane no longer on screen (another tab, a pane maximized over
+// it): out of full screen.
+function leaveFullScreenIfHidden(hidden) {
+  if (hidden && pageFullscreen.value && document.fullscreenElement && typeof document.exitFullscreen === 'function') {
+    Promise.resolve(document.exitFullscreen()).catch(() => {})
+  }
+}
+// Sound: the speaker on its tab mutes the page (node.muted), as in a browser;
+// Chromium keeps it muted from page to page.
+function applyMuted() {
+  if (ready) call('setAudioMuted', !!props.node.muted)
+}
+watch(
+  () => props.node.muted,
+  () => applyMuted()
+)
 // A click in the page: the pane becomes the active one, menus close.
 function onPageFocus() {
   closeMenus()
@@ -753,6 +802,9 @@ function subscribe(api) {
   on('onPermissionDenied', (ev) => {
     if (ctx.toast) ctx.toast(permissionNotice(ev), { timeout: 6000 })
   })
+  on('onAudio', (ev) => {
+    props.node.audible = !!ev.audible
+  })
   on('onDownloadBlocked', (ev) => {
     if (!ctx.toast) return
     const url = allowedBrowserUrl(ev.url)
@@ -802,6 +854,10 @@ function placeSoon() {
   })
 }
 watch([coveredByMaximized, isMaximized, tabHidden], () => nextTick(place))
+watch(
+  () => tabHidden.value || coveredByMaximized.value,
+  (hidden) => leaveFullScreenIfHidden(hidden)
+)
 let resizeObserver = null
 // A click on the page's overlays (the failure page, Design Mode) activates the pane.
 function onBoxMouseDown() {
@@ -813,6 +869,8 @@ function adoptLivePage() {
   ready = page.ready
   if (page.guestId != null) guestId.value = page.guestId
   loading.value = !!call('isLoading')
+  props.node.audible = !!call('isCurrentlyAudible')
+  applyMuted()
   syncHistory()
   const url = allowedBrowserUrl(call('getURL'))
   if (url && url !== BLANK_URL) {
@@ -850,6 +908,8 @@ function mountPage() {
 let unregisterWebview = null
 onMounted(() => {
   registerNavigationOwner(pageOwner, () => isActive.value)
+  // A new page is silent until it says otherwise (a page taken back: asked).
+  props.node.audible = false
   mountPage()
   const el = wv()
   if (el) for (const [name, fn] of Object.entries(WEBVIEW_EVENTS)) el.addEventListener(name, fn)
@@ -857,9 +917,12 @@ onMounted(() => {
   const api = window.shellApi && window.shellApi.browser
   if (api) subscribe(api)
   document.addEventListener('mousedown', onDocMouseDown, true)
+  document.addEventListener('fullscreenchange', onFullscreenChange)
 })
 
 onBeforeUnmount(() => {
+  clearTimeout(noticeTimer)
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
   releaseNavigationOwner(pageOwner)
   const el = wv()
   if (el) for (const [name, fn] of Object.entries(WEBVIEW_EVENTS)) el.removeEventListener(name, fn)
@@ -907,6 +970,9 @@ defineExpose({ navigate, focusAddress })
     @focusin="onPaneMouseDown"
     @keydown="onKeydown"
   >
+    <div ref="fullscreenNotice" popover="manual" class="bp-fullscreen-notice" role="status" data-test="browser-fullscreen-notice">
+      {{ t('browser.fullscreen.exitHint', 'Press Esc to exit full screen') }}
+    </div>
     <div
       v-if="!inSidePanel"
       class="pane-nav"
@@ -936,6 +1002,7 @@ defineExpose({ navigate, focusAddress })
             :title="t('browser.pane.titleHint', '{{url}}\nDrag the header to move the pane', { url: displayUrl(currentUrl) || headerTitle })"
             >{{ headerTitle }}</span
           >
+          <PageAudioButton :leaf="node" />
         </template>
       </div>
       <div class="pane-nav-actions" @mousedown.stop>
@@ -1298,6 +1365,21 @@ defineExpose({ navigate, focusAddress })
 </template>
 
 <style scoped>
+/* "Press Esc to exit full screen": at the top, over the page in full screen. */
+.bp-fullscreen-notice {
+  position: fixed;
+  inset: 24px auto auto 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(20, 22, 26, 0.88);
+  color: #fff;
+  font-size: 14px;
+  pointer-events: none;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+}
 .browser-pane {
   outline: none;
 }
