@@ -28,6 +28,7 @@ vi.mock('../liveShare/shareTunnel.js', () => ({
     return pid === 4242 && tunnel.alive ? 'ours' : 'gone'
   }),
   stopTunnelPid: vi.fn(async () => true),
+  stopTunnelLater: vi.fn(),
   processPath: vi.fn(async () => null),
   cloudflaredPath: vi.fn(() => 'C:/fixture/bin/cloudflared.exe')
 }))
@@ -674,6 +675,8 @@ describe('registerLiveShare: taking a share back, carefully', () => {
     mains.push(next)
     const taking = next.api.resume()
     next.api.stopAll()
+    // Forgotten at once (Tessel may be gone before the check ends).
+    expect(fs.existsSync(join(host.dataDir, 'liveshare-host.json'))).toBe(false)
     release()
     expect(await taking).toEqual([false, false])
     expect((await next.handle['liveShare:state']()).host.state).toBe('off')
@@ -774,5 +777,50 @@ describe('registerLiveShare: taking a share back, carefully', () => {
     expect(await taking).toEqual([false, false])
     expect(fs.existsSync(join(guest.dataDir, 'liveshare-guest.json'))).toBe(false)
     expect(next.events('liveShare:guest').some((x) => x.state === 'connecting')).toBe(false)
+  })
+})
+
+describe('registerLiveShare: round 5', () => {
+  const mains = []
+  afterEach(() => {
+    for (const m of mains.splice(0)) m.api.stopAll()
+  })
+
+  async function joinedPair(tree = leaf('pane-1-ps')) {
+    const host = fakeMain()
+    const guest = fakeMain()
+    mains.push(host, guest)
+    host.on['liveShare:layout'](null, { project: 'site', tree, activeId: 'pane-1-ps' })
+    const started = await host.handle['liveShare:start'](null, { name: 'Ada' })
+    await guest.handle['liveShare:join'](null, { invite: started.invite, name: 'Alex' })
+    const ask = await until(() => host.last('liveShare:ask'))
+    await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true })
+    await until(() => guest.last('liveShare:guest')?.state === 'joined' && guest.last('liveShare:guest').panes.length)
+    return { host, guest }
+  }
+
+  it('an update starting before the session is joined again: the saved session is kept for the next Tessel', async () => {
+    const { guest } = await joinedPair()
+    guest.api.suspend()
+    const next = fakeMain({ dataDir: guest.dataDir })
+    mains.push(next)
+    const taking = next.api.resume()
+    next.api.suspend()
+    expect(await taking).toEqual([false, false])
+    expect(fs.existsSync(join(guest.dataDir, 'liveshare-guest.json'))).toBe(true)
+    const third = fakeMain({ dataDir: guest.dataDir, resume: true })
+    mains.push(third)
+    expect(await third.api.resumed).toEqual([false, true])
+  })
+
+  it('a pane the host stops showing and shows again is a new terminal in the guest window (its gen goes on)', async () => {
+    const { host, guest } = await joinedPair({ type: 'split', dir: 'row', sizes: [50, 50], children: [leaf('pane-1-ps'), leaf('pane-2-ps')] })
+    const gens = () => Object.fromEntries((guest.last('liveShare:guest').panes || []).map((p) => [p.title, p.gen]))
+    expect(gens()).toEqual({ 'pane-1-ps': 0, 'pane-2-ps': 0 })
+    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-2-ps'), activeId: 'pane-2-ps' })
+    await until(() => guest.last('liveShare:guest').panes.length === 1)
+    host.on['liveShare:layout'](null, { project: 'site', tree: { type: 'split', dir: 'row', sizes: [50, 50], children: [leaf('pane-1-ps'), leaf('pane-2-ps')] }, activeId: 'pane-1-ps' })
+    await until(() => guest.last('liveShare:guest').panes.length === 2)
+    expect(gens()).toEqual({ 'pane-1-ps': 1, 'pane-2-ps': 0 })
   })
 })

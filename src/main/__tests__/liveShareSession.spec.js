@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import WebSocket, { WebSocketServer } from 'ws'
-import { createShareHost, cleanName, stripTerminalReplies, INVITE_TTL_MS } from '../liveShare/shareHost'
+import { createShareHost, cleanName, stripTerminalReplies, INVITE_TTL_MS, addressKey } from '../liveShare/shareHost'
 import { createShareGuest as makeGuest } from '../liveShare/shareGuest'
-import { newSecret, newNonce, newKeyPair, commitment, newSigningKey } from '../liveShare/shareCrypto'
+import { newSecret, newNonce, newKeyPair, commitment, newSigningKey, sharedSecret, createChannel, sessionKeys } from '../liveShare/shareCrypto'
 
 // A guest connection: its reconnect key made here unless given.
 const createShareGuest = (opts) => makeGuest({ signingKey: newSigningKey(), ...opts })
@@ -775,5 +775,129 @@ describe('Live Share session', () => {
     expect(cleanName('  Al\u0000ex  ')).toBe('Alex')
     expect(cleanName('')).toBe('')
     expect(cleanName('x'.repeat(100)).length).toBe(40)
+  })
+})
+
+describe('Live Share session: round 5', () => {
+  const servers = []
+  afterEach(() => {
+    for (const s of servers.splice(0)) s.stop?.() ?? s.close?.()
+  })
+  const hostFor = (opts) => {
+    const h = createShareHost(opts)
+    servers.push(h)
+    return h
+  }
+
+  it('groups IPv6 addresses by network (/64)', () => {
+    expect(addressKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd')).toBe('2001:db8:1:2::/64')
+    expect(addressKey('2001:db8:1:2::9')).toBe('2001:db8:1:2::/64')
+    expect(addressKey('::ffff:10.0.0.5')).toBe('10.0.0.5')
+    expect(addressKey('203.0.113.7')).toBe('203.0.113.7')
+  })
+
+  it('connections that say nothing hold no guest place, and are limited per address', async () => {
+    const t = fakeTessel()
+    const host = hostFor({ secret: newSecret(), hostName: 'Cedric', callbacks: t.callbacks })
+    const port = await host.start()
+    const open = (ip) =>
+      new Promise((resolve) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/`, { headers: { 'cf-connecting-ip': ip } })
+        servers.push(ws)
+        ws.on('message', () => resolve({ ws, code: null }))
+        ws.on('close', (code) => resolve({ ws, code }))
+      })
+    // Three silent connections from one address: a fourth is turned away.
+    for (let i = 0; i < 3; i++) expect((await open('198.51.100.1')).code).toBe(null)
+    expect((await open('198.51.100.1')).code).toBe(4002)
+    // Another address: still welcome, and a real guest still gets in.
+    expect((await open('198.51.100.2')).code).toBe(null)
+  })
+
+  it('a returning guest acts on nothing the host sends before its signed welcome', async () => {
+    const secret = newSecret()
+    // Someone posing as the host: it has the invite secret, not the host key,
+    // and sends a screen before any welcome.
+    const fake = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+    servers.push(fake)
+    await new Promise((res) => fake.once('listening', res))
+    fake.on('connection', (ws) => {
+      const hostNonce = newNonce()
+      const pair = newKeyPair()
+      let commit = null
+      let channel = null
+      ws.send(JSON.stringify({ t: 'hello', app: 'tessel-liveshare', v: 3 }))
+      ws.on('message', (data, isBinary) => {
+        if (!commit) {
+          commit = JSON.parse(data.toString())
+          ws.send(JSON.stringify({ t: 'keys', n: hostNonce.toString('base64'), kx: pair.publicRaw.toString('base64') }))
+          return
+        }
+        if (!channel) {
+          const reveal = JSON.parse(data.toString())
+          const guestKey = Buffer.from(reveal.kx, 'base64')
+          const dh = sharedSecret(pair.privateKey, guestKey)
+          channel = createChannel(sessionKeys(secret, hostNonce, Buffer.from(reveal.n, 'base64'), 'host', { dh, hostKey: pair.publicRaw, guestKey }))
+          return
+        }
+        if (isBinary) ws.send(channel.seal({ t: 'snapshot', id: 'p1', data: 'FAKE: enter your password', cols: 80, rows: 24 }))
+      })
+    })
+    const r = guestRecorder()
+    createShareGuest({ url: `ws://127.0.0.1:${fake.address().port}/`, secret, name: 'Alex', back: true, hostKey: newSigningKey().publicRaw, callbacks: r.callbacks }).connect()
+    await until(() => r.closed)
+    expect(r.closed).toBe('protocol')
+    expect(r.screens).toEqual({})
+  })
+
+  it('a guest connected when this Tessel stops suddenly is not forgotten by the next one', async () => {
+    let clock = 1000
+    const t = fakeTessel()
+    const secret = newSecret()
+    const hostKey = newSigningKey()
+    const host = hostFor({ secret, hostName: 'Cedric', callbacks: t.callbacks, hostKey, now: () => clock })
+    const port = await host.start()
+    const r = guestRecorder()
+    const key = newSigningKey()
+    createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', signingKey: key, callbacks: r.callbacks }).connect()
+    await until(() => r.states.includes('joined'))
+    // Connected for an hour: its saved entry says seen now.
+    clock += 60 * 60 * 1000
+    const known = host.knownGuests()
+    expect(known[0].lastSeen).toBe(clock)
+    // The next Tessel, another hour later (a crash; nothing ran meanwhile).
+    clock += 60 * 60 * 1000
+    const next = hostFor({ secret, hostName: 'Cedric', callbacks: fakeTessel().callbacks, known, hostKey, now: () => clock })
+    expect(next.offlineGuests().map((g) => g.name)).toEqual(['Alex'])
+  })
+
+  it('what a guest opened this minute survives a restart', async () => {
+    const t = fakeTessel()
+    const secret = newSecret()
+    const hostKey = newSigningKey()
+    const host = hostFor({ secret, hostName: 'Cedric', callbacks: t.callbacks, hostKey })
+    const port = await host.start()
+    const r = guestRecorder()
+    const key = newSigningKey()
+    const g = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', signingKey: key, callbacks: r.callbacks })
+    g.connect()
+    await until(() => r.states.includes('joined'))
+    host.setRights(host.guests()[0].id, { type: false, open: true, close: false })
+    await until(() => r.rights.length === 2)
+    for (let i = 0; i < 3; i++) g.open({ kind: 'terminal' })
+    await until(() => t.opened.length === 3)
+    const known = host.knownGuests()
+    expect(known[0].opens).toHaveLength(3)
+    host.stop('restarting')
+    const t2 = fakeTessel()
+    const next = hostFor({ secret, hostName: 'Cedric', callbacks: t2.callbacks, known, hostKey })
+    const port2 = await next.start()
+    const conn = guestRecorder()
+    const back = createShareGuest({ url: `ws://127.0.0.1:${port2}/`, secret, name: 'Alex', signingKey: key, back: true, hostKey: r.hostKey, callbacks: conn.callbacks })
+    back.connect()
+    await until(() => conn.states.includes('joined'))
+    back.open({ kind: 'terminal' })
+    await until(() => conn.notices.length)
+    expect(t2.opened).toEqual([])
   })
 })

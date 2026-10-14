@@ -169,30 +169,51 @@ export function tunnelEnv(env = process.env) {
 
 const pidFile = (dataDir) => join(dataDir, 'bin', 'cloudflared.pid')
 const logFile = (dataDir) => join(dataDir, 'bin', 'cloudflared.log')
-export function readTunnelPid(dataDir) {
+// The PIDs of the cloudflared this Tessel started and has not seen end, one
+// a line (a new tunnel is added, never written over an old one Windows could
+// not tell about yet).
+export function readTunnelPids(dataDir) {
   try {
-    const pid = Number(fs.readFileSync(pidFile(dataDir), 'utf8').trim())
-    return Number.isInteger(pid) && pid > 0 ? pid : 0
+    return [...new Set(fs.readFileSync(pidFile(dataDir), 'utf8').split(/\s+/).map(Number).filter((pid) => Number.isInteger(pid) && pid > 0))]
   } catch {
-    return 0
+    return []
   }
+}
+function writeTunnelPids(dataDir, pids) {
+  try {
+    if (pids.length) fs.writeFileSync(pidFile(dataDir), pids.join('\n'))
+    else fs.rmSync(pidFile(dataDir), { force: true })
+  } catch {
+    /* only cleaning up after a restart is lost */
+  }
+}
+const forgetTunnelPid = (dataDir, pid) => writeTunnelPids(dataDir, readTunnelPids(dataDir).filter((x) => x !== pid))
+// The newest one.
+export function readTunnelPid(dataDir) {
+  const pids = readTunnelPids(dataDir)
+  return pids.length ? pids[pids.length - 1] : 0
 }
 
 // The program a PID runs: its full path; '' when there is no such process;
-// '?' when there is one whose path Windows does not give; null when Windows
-// could not say (PowerShell failed or took too long).
+// null when Windows could not say (PowerShell failed or took too long, the
+// query failed, or the process's path is not given). Written out in UTF-8 (a
+// user folder with accents would come back garbled otherwise), any error an
+// error.
 export function processPath(pid, { execFileImpl = execFile } = {}) {
   return new Promise((resolve) => {
     if (!Number.isInteger(pid) || pid <= 0) return resolve('')
-    const script = `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { if ($p.ExecutablePath) { $p.ExecutablePath } else { '?' } } else { '' }`
-    execFileImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 8000 }, (err, stdout) => resolve(err ? null : String(stdout).trim()))
+    const script = `$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { if ($p.ExecutablePath) { $p.ExecutablePath } else { '?' } } else { '' }`
+    execFileImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 8000, encoding: 'utf8' }, (err, stdout) => {
+      const out = err ? null : String(stdout).trim()
+      resolve(out === '?' ? null : out)
+    })
   })
 }
 
 // What a saved PID is now: 'ours' (this exact cloudflared program: the one
 // this Tessel's data folder holds), 'other' (another program has that PID
-// now), 'gone', or 'unknown' (Windows could not say). Only 'ours' is ever
-// stopped.
+// now), 'gone', or 'unknown' (Windows could not say, or would not give the
+// process's path). Only 'ours' is ever stopped.
 export async function tunnelState(pid, { exe, queryPath = processPath }) {
   if (!pid) return 'gone'
   const path = await Promise.resolve()
@@ -203,26 +224,40 @@ export async function tunnelState(pid, { exe, queryPath = processPath }) {
   return String(path).toLowerCase() === String(exe).toLowerCase() ? 'ours' : 'other'
 }
 
-// A cloudflared this Tessel started and that no share uses (Tessel quit
-// without stopping it, and the share was not taken back): ended. Only the PID
-// it wrote down, and only while that PID is still this exact cloudflared.
-export async function endLeftoverTunnel(dataDir, { queryPath, kill }) {
-  const pid = readTunnelPid(dataDir)
-  if (!pid) return false
-  const state = await tunnelState(pid, { exe: cloudflaredPath(dataDir), queryPath })
-  // Windows could not say: kept for the next try.
-  if (state === 'unknown') return false
-  try {
-    fs.rmSync(pidFile(dataDir), { force: true })
-  } catch {
-    /* written again at the next start */
+// The cloudflared this Tessel started and that no share uses (Tessel quit
+// without stopping them, and the share was not taken back): ended. Only the
+// PIDs it wrote down, and only while each is still this exact cloudflared;
+// one Windows could not tell about stays written down for the next try.
+export async function endLeftoverTunnel(dataDir, { queryPath, kill, keep = 0 }) {
+  let ended = false
+  for (const pid of readTunnelPids(dataDir)) {
+    if (pid === keep) continue
+    const state = await tunnelState(pid, { exe: cloudflaredPath(dataDir), queryPath })
+    if (state === 'unknown') continue
+    forgetTunnelPid(dataDir, pid)
+    if (state !== 'ours') continue
+    try {
+      kill(pid)
+      ended = true
+    } catch {
+      /* gone meanwhile */
+    }
   }
-  if (state !== 'ours') return false
+  return ended
+}
+
+// Quitting Tessel with a tunnel taken back after a restart (nothing can be
+// waited for): Windows' own taskkill ends it after Tessel is gone, only if
+// that PID still runs this cloudflared program (its name: its path was
+// checked when it was taken back).
+export function stopTunnelLater(dataDir, pid, { spawnImpl = spawn } = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return
   try {
-    kill(pid)
-    return true
+    const child = spawnImpl('taskkill.exe', ['/F', '/PID', String(pid), '/FI', `IMAGENAME eq cloudflared-${CLOUDFLARED_VERSION}.exe`], { windowsHide: true, detached: true, stdio: 'ignore' })
+    child.on?.('error', () => {})
+    child.unref?.()
   } catch {
-    return false
+    /* the next Tessel ends it (endLeftoverTunnel) */
   }
 }
 
@@ -239,13 +274,7 @@ export async function stopTunnelPid(dataDir, pid, { queryPath, kill = (p) => pro
       /* already stopped */
     }
   }
-  if (state !== 'unknown') {
-    try {
-      if (readTunnelPid(dataDir) === pid) fs.rmSync(pidFile(dataDir), { force: true })
-    } catch {
-      /* not written */
-    }
-  }
+  if (state !== 'unknown') forgetTunnelPid(dataDir, pid)
   return stopped
 }
 
@@ -274,18 +303,11 @@ export function startTunnel({ exe, port, dataDir, spawnImpl = spawn, onExit, tim
       return
     }
     child.unref?.()
-    // Its PID, for the next Tessel (to take the tunnel back, or end it).
-    try {
-      if (child.pid) fs.writeFileSync(pidFile(dataDir), String(child.pid))
-    } catch {
-      /* only taking it back after a restart is lost */
-    }
+    // Its PID, for the next Tessel (to take the tunnel back, or end it),
+    // added to the ones not yet seen ending.
+    if (child.pid) writeTunnelPids(dataDir, [...readTunnelPids(dataDir).filter((x) => x !== child.pid), child.pid])
     const forgetPid = () => {
-      try {
-        if (child.pid && readTunnelPid(dataDir) === child.pid) fs.rmSync(pidFile(dataDir), { force: true })
-      } catch {
-        /* not written */
-      }
+      if (child.pid) forgetTunnelPid(dataDir, child.pid)
     }
     let settled = false
     let poll = null

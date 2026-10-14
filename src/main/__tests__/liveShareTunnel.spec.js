@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
 import { EventEmitter } from 'events'
-import { parseTunnelAddress, ensureCloudflared, startTunnel, tunnelEnv, endLeftoverTunnel, tunnelState, stopTunnelPid, readTunnelPid, cloudflaredPath } from '../liveShare/shareTunnel'
+import { parseTunnelAddress, ensureCloudflared, startTunnel, tunnelEnv, endLeftoverTunnel, tunnelState, stopTunnelPid, stopTunnelLater, processPath, readTunnelPid, readTunnelPids, cloudflaredPath } from '../liveShare/shareTunnel'
 
 const boxLine = (url) => JSON.stringify({ level: 'info', message: `|  ${url}                                |` })
 
@@ -130,5 +130,64 @@ describe('Live Share tunnel', () => {
     // Ours: stopped.
     expect(await stopTunnelPid(dir, 9, { queryPath: async () => exe, kill })).toBe(true)
     expect(killed).toEqual([9])
+  })
+})
+
+describe('Live Share tunnel: round 5', () => {
+  let dir
+  afterEach(() => dir && fs.rmSync(dir, { recursive: true, force: true }))
+  const tmp = () => (dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-tunnel-')))
+
+  it('asks Windows in UTF-8 with errors as errors, and an inaccessible path is unknown', async () => {
+    const calls = []
+    const fake = (out, err = null) => (cmd, args, opts, cb) => {
+      calls.push({ cmd, script: args[args.length - 1], opts })
+      cb(err, out)
+    }
+    expect(await processPath(42, { execFileImpl: fake('C:\\Users\\Frédéric\\x.exe\r\n') })).toBe('C:\\Users\\Frédéric\\x.exe')
+    expect(calls[0].script).toContain("$ErrorActionPreference = 'Stop'")
+    expect(calls[0].script).toContain('[Console]::OutputEncoding = [System.Text.Encoding]::UTF8')
+    expect(calls[0].script).toContain('ProcessId=42')
+    expect(calls[0].opts).toMatchObject({ encoding: 'utf8', windowsHide: true })
+    expect(await processPath(42, { execFileImpl: fake('?') })).toBe(null)
+    expect(await processPath(42, { execFileImpl: fake('', new Error('WMI')) })).toBe(null)
+    expect(await processPath(42, { execFileImpl: fake('') })).toBe('')
+    expect(await processPath(-1, { execFileImpl: fake('x') })).toBe('')
+  })
+
+  it('keeps every tunnel it started written down, and ends each one it can check', async () => {
+    tmp()
+    let next = 500
+    const spawnImpl = (exe, args) => {
+      const child = new EventEmitter()
+      child.pid = next++
+      child.unref = () => {}
+      child.kill = () => {}
+      const log = args[args.indexOf('--logfile') + 1]
+      setTimeout(() => fs.appendFileSync(log, boxLine('https://a-b-c.trycloudflare.com') + '\\n'), 5)
+      return child
+    }
+    await startTunnel({ exe: 'cf.exe', port: 1, dataDir: dir, spawnImpl })
+    await startTunnel({ exe: 'cf.exe', port: 2, dataDir: dir, spawnImpl })
+    expect(readTunnelPids(dir)).toEqual([500, 501])
+    const exe = cloudflaredPath(dir)
+    const killed = []
+    // 500 can't be told about yet: kept; 501 is ours: ended.
+    await endLeftoverTunnel(dir, { queryPath: async (pid) => (pid === 500 ? null : exe), kill: (pid) => killed.push(pid) })
+    expect(killed).toEqual([501])
+    expect(readTunnelPids(dir)).toEqual([500])
+  })
+
+  it('leaves a taken-back tunnel to Windows taskkill when quitting (only that PID, only cloudflared)', () => {
+    const spawned = []
+    stopTunnelLater('C:/x', 4242, { spawnImpl: (cmd, args, opts) => {
+      spawned.push({ cmd, args, opts })
+      const child = new EventEmitter()
+      child.unref = () => {}
+      return child
+    } })
+    expect(spawned[0].cmd).toBe('taskkill.exe')
+    expect(spawned[0].args).toEqual(['/F', '/PID', '4242', '/FI', expect.stringMatching(/^IMAGENAME eq cloudflared-.+\.exe$/)])
+    expect(spawned[0].opts).toMatchObject({ detached: true, windowsHide: true })
   })
 })

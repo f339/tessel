@@ -48,6 +48,7 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
   let silence = null
   let mine = null // { nonce, keys } until the host's keys came
   let binding = null // this connection's, as both sides see it
+  let welcomed = false // the host's welcome came, its signature checked
 
   function finish(reason) {
     if (closed) return
@@ -75,7 +76,12 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
 
   const rightsOf = (r) => (r && typeof r === 'object' ? { type: !!r.type, open: !!r.open, close: !!r.close } : null)
 
+  // Before the host's checked welcome, only its welcome, its "wait for my
+  // answer" (a new guest only) and its goodbye count: anything else is
+  // someone posing as it.
+  const BEFORE_WELCOME = new Set(['welcome', 'bye'])
   function onMessage(msg) {
+    if (!welcomed && !(BEFORE_WELCOME.has(msg.t) || (msg.t === 'waiting' && !back))) return finish('protocol')
     switch (msg.t) {
       case 'waiting':
         callbacks.onState?.('waiting', { code })
@@ -89,6 +95,7 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
         const sig = Buffer.from(String(msg.hostSig || ''), 'base64')
         if (back ? !(hostKey && key.equals(hostKey) && bindingSigned(hostKey, binding, sig)) : !bindingSigned(key, binding, sig)) return finish('host-unverified')
         if (!back) callbacks.onHostKey?.(key)
+        welcomed = true
         // What it may do first: the window takes it as the starting point.
         if (msg.rights) callbacks.onRights?.(rightsOf(msg.rights))
         callbacks.onState?.('joined', { host: String(msg.host || '') })
@@ -182,7 +189,7 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
         if (!channel) return onHandshake(parse(data, isBinary))
         const msg = isBinary ? channel.open(data) : null
         if (!msg) return finish('refused')
-        if (msg.t === 'waiting') clearTimeout(timer)
+        if (msg.t === 'waiting' && !back) clearTimeout(timer)
         onMessage(msg)
       })
       socket.on('close', (closeCode) => finish(CLOSE_REASONS[closeCode] || 'closed'))
