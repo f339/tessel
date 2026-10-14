@@ -4610,6 +4610,12 @@ body.pane-dragging * {
   font-weight: 600;
 }
 
+.tb-left .brand-version {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 .tb-left .brand-dev {
   margin-left: 0;
   padding: 1px 5px;

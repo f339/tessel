@@ -11777,6 +11777,8 @@ onBeforeUnmount(() => {
             <rect x="16.5" y="16" width="5.5" height="5.5" rx="1.2" fill="#e6e6e6" />
           </svg>
           <span class="brand-name">Tessel</span>
+          <!-- The version running (the updater's status: app.getVersion()). -->
+          <span v-if="updateStatus.current" class="brand-version" :title="t('app.toolbar.version', 'Tessel version {{version}}', { version: updateStatus.current })" data-test="brand-version">{{ updateStatus.current }}</span>
           <span v-if="isDev" class="brand-dev" :title="t('app.toolbar.devBuild', 'Development build (npm run dev)')">{{ t('app.toolbar.dev', 'dev') }}</span>
         </div>
       </div>
