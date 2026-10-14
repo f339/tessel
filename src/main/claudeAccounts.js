@@ -480,8 +480,14 @@ function addedMemory(contents) {
   while (lines.length && !lines.at(-1).trim()) lines.pop()
   return lines
 }
-// The system's memory already holds these lines, one after the other.
-const memoryHolds = (system, lines) => system.replace(/\r\n/g, '\n').includes(lines.join('\n'))
+// The system's memory already holds these lines, whole and one after the
+// other (never as part of a longer line).
+function memoryHolds(system, lines) {
+  if (!lines.length) return true
+  const all = system.split(/\r?\n/)
+  for (let i = 0; i + lines.length <= all.length; i++) if (lines.every((line, j) => all[i + j] === line)) return true
+  return false
+}
 // Lines without those already moved (each once).
 function withoutLines(lines, moved) {
   const rest = [...lines]
@@ -933,7 +939,10 @@ export function createClaudeAccounts({
         return {
           files: value.files,
           config: object(value.config) ? value.config : null,
-          memory: Array.isArray(value.memory) && value.memory.every((line) => typeof line === 'string') ? value.memory : null
+          memory:
+            Array.isArray(value.memory) && value.memory.every((batch) => Array.isArray(batch) && batch.every((line) => typeof line === 'string'))
+              ? value.memory
+              : null
         }
     } catch {
       /* none */
@@ -1035,21 +1044,28 @@ export function createClaudeAccounts({
     return true
   }
   // A copy is not the file: a session an older pane still runs may write to
-  // the original meanwhile. Removed only when it did not change during the
-  // copy; otherwise the copy goes, and it is tried again at a later launch.
+  // the original meanwhile. Copied first under a name of its own next to
+  // `target`; put in place (a hard link, never over a file there) only when
+  // the original did not change during the copy, then the original goes.
+  // Once in place it is never removed (another session may write to it).
+  // Otherwise the copy goes, and it is tried again at a later launch.
   async function copyThenRemove(source, target) {
     const before = await fs.stat(source)
+    const temporary = join(dirname(target), `.tessel-move-${randomUUID()}.tmp`)
     try {
-      await fs.copyFile(source, target, fs.constants.COPYFILE_EXCL)
-    } catch (error) {
-      if (error.code === 'EEXIST') return false
-      throw error
-    }
-    const after = await fs.stat(source)
-    const copy = await fs.stat(target)
-    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || copy.size !== after.size) {
-      await fs.unlink(target).catch(() => {})
-      return false
+      await fs.copyFile(source, temporary, fs.constants.COPYFILE_EXCL)
+      const after = await fs.stat(source)
+      const copy = await fs.stat(temporary)
+      if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || copy.size !== after.size) return false
+      try {
+        await fs.link(temporary, target)
+      } catch (error) {
+        // There already, or no hard links on that drive: it stays.
+        if (['EEXIST', 'EPERM', 'EXDEV', 'ENOTSUP', 'EOPNOTSUPP'].includes(error.code)) return false
+        throw error
+      }
+    } finally {
+      await fs.unlink(temporary).catch(() => {})
     }
     await fs.unlink(source)
     return true
@@ -1257,9 +1273,13 @@ export function createClaudeAccounts({
     let system = await readSystemFile(systemPath)
     const own = await readText(accountPath)
     let added = addedMemory(own)
-    if (sync.memory && system !== null && memoryHolds(system, sync.memory)) added = withoutLines(added, sync.memory)
+    // Each batch moved before whose account file was never put back: its
+    // lines already in the system's are not added again (one not there, its
+    // write failed, goes with the new lines).
+    const moved = (sync.memory || []).filter((batch) => system !== null && memoryHolds(system, batch))
+    for (const batch of moved) added = withoutLines(added, batch)
     if (added.length) {
-      await writeSync(folder, { ...sync, memory: added })
+      await writeSync(folder, { ...sync, memory: [...moved, added] })
       const eol = system?.includes('\r\n') ? '\r\n' : '\n'
       const next = `${system ?? ''}${system && !system.endsWith('\n') ? eol : ''}${added.join(eol)}${eol}`
       await writeSystemFile(systemPath, next, system)

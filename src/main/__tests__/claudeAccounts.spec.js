@@ -58,6 +58,15 @@ function filesUnder(dir, out = []) {
   }
   return out
 }
+// Another volume: no hard link from the account folder to the system one;
+// within the system folder (a copy put in place), they work.
+const otherVolume = () => {
+  const link = fsp.link.bind(fsp)
+  return vi.spyOn(fsp, 'link').mockImplementation(async (from, to) => {
+    if (!String(from).includes('.tessel-move-')) throw Object.assign(new Error('other volume'), { code: 'EXDEV' })
+    return link(from, to)
+  })
+}
 function create(extra = {}) {
   return createClaudeAccounts({
     userData,
@@ -618,10 +627,11 @@ describe('the account folder before a launch', () => {
     put(join(authPath(id), 'projects', 'C--p', 'race.jsonl'), 'account copy\n')
     put(join(authPath(id), 'projects', 'C--p', 'own.jsonl'), 'own\n')
     const target = join(systemDir(), 'projects', 'C--p', 'race.jsonl')
-    vi.spyOn(fsp, 'link').mockRejectedValue(Object.assign(new Error('other volume'), { code: 'EXDEV' }))
+    otherVolume()
     const copy = fsp.copyFile.bind(fsp)
     vi.spyOn(fsp, 'copyFile').mockImplementation(async (from, to, mode) => {
-      if (to === target) put(target, 'system session\n')
+      // A system session writes that file while it is copied.
+      if (String(from).endsWith('race.jsonl')) put(target, 'system session\n')
       return copy(from, to, mode)
     })
     await service.launchEnv(id)
@@ -998,7 +1008,7 @@ describe('settings changed in a session on an added account', () => {
     await service.launchEnv(id)
     fs.rmdirSync(join(authPath(id), 'projects'))
     put(join(authPath(id), 'projects', 'C--probe', 'active.jsonl'), 'old line\n')
-    vi.spyOn(fsp, 'link').mockRejectedValue(Object.assign(new Error('other volume'), { code: 'EXDEV' }))
+    otherVolume()
     const copy = fsp.copyFile.bind(fsp)
     const copying = vi.spyOn(fsp, 'copyFile').mockImplementation(async (from, to, mode) => {
       await copy(from, to, mode)
@@ -1014,6 +1024,56 @@ describe('settings changed in a session on an added account', () => {
     await service.launchEnv(id)
     expect(fs.readFileSync(shared, 'utf8')).toBe('old line\nnew live line\n')
     expect(fs.existsSync(join(authPath(id), 'projects.merge'))).toBe(false)
+  })
+  it('never removes a file it put in place on another volume, even one a session writes to at once', async () => {
+    seedSystem()
+    const id = await add()
+    await service.launchEnv(id)
+    fs.rmdirSync(join(authPath(id), 'projects'))
+    put(join(authPath(id), 'projects', 'C--probe', 'live.jsonl'), 'old line\n')
+    const shared = join(systemDir(), 'projects', 'C--probe', 'live.jsonl')
+    const link = fsp.link.bind(fsp)
+    vi.spyOn(fsp, 'link').mockImplementation(async (from, to) => {
+      if (!String(from).includes('.tessel-move-')) throw Object.assign(new Error('other volume'), { code: 'EXDEV' })
+      await link(from, to)
+      // In place: a system session writes to it right away.
+      fs.appendFileSync(to, 'new line\n')
+    })
+    await service.launchEnv(id)
+    expect(fs.readFileSync(shared, 'utf8')).toBe('old line\nnew line\n')
+    expect(fs.existsSync(join(authPath(id), 'projects.merge'))).toBe(false)
+    expect(fs.readdirSync(join(systemDir(), 'projects', 'C--probe')).filter((n) => n.includes('.tessel-move-'))).toEqual([])
+  })
+  it('a note that is part of a longer system line is still moved (whole lines only)', async () => {
+    seedSystem()
+    put(join(systemDir(), 'CLAUDE.md'), 'Never deploy without approval\n')
+    const id = await add()
+    await service.launchEnv(id)
+    const file = account(id, 'CLAUDE.md')
+    fs.appendFileSync(file, 'deploy without approval\n')
+    // Its first move to the system file is refused.
+    const held = refuse('rename', (from, to) => to === join(systemDir(), 'CLAUDE.md'))
+    await service.launchEnv(id)
+    held.mockRestore()
+    await service.launchEnv(id)
+    expect(fs.readFileSync(join(systemDir(), 'CLAUDE.md'), 'utf8')).toBe('Never deploy without approval\ndeploy without approval\n')
+    expect(fs.readFileSync(file, 'utf8')).toBe('@~/.claude/CLAUDE.md\n')
+  })
+  it('notes moved while the account file could not be put back, twice: each goes once', async () => {
+    seedSystem()
+    put(join(systemDir(), 'CLAUDE.md'), 'System memory\n')
+    const id = await add()
+    await service.launchEnv(id)
+    const file = account(id, 'CLAUDE.md')
+    const held = refuse('rename', (from, to) => to === file)
+    fs.appendFileSync(file, '- A\n')
+    await service.launchEnv(id)
+    fs.appendFileSync(file, '- B\n')
+    await service.launchEnv(id)
+    held.mockRestore()
+    await service.launchEnv(id)
+    expect(fs.readFileSync(join(systemDir(), 'CLAUDE.md'), 'utf8')).toBe('System memory\n- A\n- B\n')
+    expect(fs.readFileSync(file, 'utf8')).toBe('@~/.claude/CLAUDE.md\n')
   })
   it('adds a memory note to the system once, even when the account file could not be put back', async () => {
     seedSystem()
