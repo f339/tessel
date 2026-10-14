@@ -3349,7 +3349,9 @@ liveShare = registerLiveShare({
     flushData()
     send('pty:exit', { id, exitCode, signal: 0, pid: null })
   },
-  log
+  log,
+  // Taken back once this is the only Tessel running (below).
+  resume: false
 })
 // A quit that skipped before-quit still ends the tunnel (cloudflared).
 app.on('will-quit', () => liveShare?.stopAll())
@@ -4506,6 +4508,9 @@ Promise.all([acquireInstanceLock(), app.whenReady()]).then(([gotInstanceLock]) =
     app.quit()
     return
   }
+  // The share or Live Share session a restart left: taken back now that
+  // this copy holds the lock (a second copy never touches them).
+  liveShare?.resume()
   app.on('second-instance', () => {
     if (!mainWindow) return
     if (mainWindow.isMinimized()) mainWindow.restore()

@@ -12,7 +12,7 @@ import { newSecret, encodeInvite, decodeInvite } from '../liveShare/shareCrypto'
 
 // The tunnel to the share server is the server itself here (no cloudflared);
 // its PID 4242 runs while `tunnel.alive`.
-const tunnel = vi.hoisted(() => ({ alive: true, startError: null }))
+const tunnel = vi.hoisted(() => ({ alive: true, startError: null, gate: null }))
 vi.mock('../liveShare/shareTunnel.js', () => ({
   ensureCloudflared: vi.fn(async () => 'cloudflared.exe'),
   startTunnel: vi.fn(async ({ port }) => {
@@ -21,8 +21,11 @@ vi.mock('../liveShare/shareTunnel.js', () => ({
   }),
   waitReachable: vi.fn(async () => true),
   endLeftoverTunnel: vi.fn(async () => false),
-  tunnelAlive: vi.fn(async (pid) => pid === 4242 && tunnel.alive),
-  stopTunnelPid: vi.fn()
+  tunnelAlive: vi.fn(async (pid) => {
+    if (tunnel.gate) await tunnel.gate
+    return pid === 4242 && tunnel.alive
+  }),
+  stopTunnelPid: vi.fn(async () => true)
 }))
 
 // Each Tessel's data folder (its saved share and session).
@@ -36,6 +39,7 @@ afterEach(() => {
   for (const dir of dataDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
   tunnel.alive = true
   tunnel.startError = null
+  tunnel.gate = null
 })
 
 const ALL = { type: true, open: true, close: true }
@@ -201,7 +205,6 @@ function fakeMain({ snapshot = (id) => `screen of ${id}`, dataDir = newDataDir()
     log: { info: () => {} },
     listNames: async () => [],
     kill: vi.fn(),
-    pidRunning: () => tunnel.alive,
     resume
   })
   m.dataDir = dataDir
@@ -590,7 +593,7 @@ describe('registerLiveShare: invite codes', () => {
 
     await late.handle['liveShare:join'](null, { invite: started.invite, name: 'Late' })
     await until(() => late.last('liveShare:guest')?.state === 'ended')
-    expect(late.last('liveShare:guest').reason).toBe('refused')
+    expect(late.last('liveShare:guest').reason).toBe('expired')
 
     await fresh.handle['liveShare:join'](null, { invite: renewed.invite, name: 'Fresh' })
     await until(() => host.events('liveShare:ask').some((q) => q.name === 'Fresh'))
@@ -630,5 +633,85 @@ describe('visibleScreen', () => {
   it('is nothing for nothing', async () => {
     expect(await visibleScreen('', 80, 24)).toBe('')
     expect(await visibleScreen(null, 80, 24)).toBe('')
+  })
+})
+
+describe('registerLiveShare: taking a share back, carefully', () => {
+  const mains = []
+  afterEach(() => {
+    for (const m of mains.splice(0)) m.api.stopAll()
+  })
+
+  async function shared() {
+    const host = fakeMain()
+    mains.push(host)
+    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-1-ps'), activeId: 'pane-1-ps' })
+    await host.handle['liveShare:start'](null, { name: 'Ada' })
+    host.api.suspend()
+    return host
+  }
+
+  it('waits to be asked (Tessel asks once it is the only copy running)', async () => {
+    const host = await shared()
+    const next = fakeMain({ dataDir: host.dataDir })
+    mains.push(next)
+    expect(await next.api.resumed).toEqual([false, false])
+    expect((await next.handle['liveShare:state']()).host.state).toBe('off')
+    expect(await next.api.resume()).toEqual([true, false])
+    expect((await next.handle['liveShare:state']()).host.state).toBe('sharing')
+  })
+
+  it('Stop or quitting while it is being taken back: it stays stopped, and its tunnel ends', async () => {
+    const host = await shared()
+    let release
+    tunnel.gate = new Promise((r) => (release = r))
+    const next = fakeMain({ dataDir: host.dataDir })
+    mains.push(next)
+    const taking = next.api.resume()
+    next.api.stopAll()
+    release()
+    expect(await taking).toEqual([false, false])
+    expect((await next.handle['liveShare:state']()).host.state).toBe('off')
+    const { stopTunnelPid } = await import('../liveShare/shareTunnel.js')
+    expect(stopTunnelPid).toHaveBeenCalledWith(host.dataDir, 4242, expect.objectContaining({ listNames: expect.any(Function) }))
+    // Nothing left to take back.
+    const third = fakeMain({ dataDir: host.dataDir, resume: true })
+    mains.push(third)
+    expect(await third.api.resumed).toEqual([false, false])
+  })
+
+  it('a saved share too old to take back is deleted (with the secrets it holds)', async () => {
+    const dir = newDataDir()
+    const file = join(dir, 'liveshare-host.json')
+    fs.writeFileSync(file, JSON.stringify({ v: 1, savedAt: Date.now() - 60 * 60 * 1000, secret: 'x', url: 'ws://127.0.0.1:1/', port: 1, pid: 4242 }))
+    const next = fakeMain({ dataDir: dir, resume: true })
+    mains.push(next)
+    expect(await next.api.resumed).toEqual([false, false])
+    expect(fs.existsSync(file)).toBe(false)
+  })
+
+  it('lists guests let in who are offline, and Remove keeps one out for good', async () => {
+    const host = fakeMain()
+    const guest = fakeMain()
+    mains.push(host, guest)
+    host.on['liveShare:layout'](null, { project: 'site', tree: leaf('pane-1-ps'), activeId: 'pane-1-ps' })
+    const started = await host.handle['liveShare:start'](null, { name: 'Ada' })
+    await guest.handle['liveShare:join'](null, { invite: started.invite, name: 'Alex' })
+    const ask = await until(() => host.last('liveShare:ask'))
+    await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true })
+    await until(() => guest.last('liveShare:guest')?.state === 'joined')
+    // Its Tessel restarts: offline on the host's side.
+    guest.api.suspend()
+    const offline = await until(() => host.last('liveShare:host').offline?.find((g) => g.name === 'Alex'))
+    expect(offline.id).toMatch(/^k-[0-9a-f]{24}$/)
+    expect(await host.handle['liveShare:removeKnown'](null, { id: offline.id })).toEqual({ ok: true })
+    expect(host.last('liveShare:host').offline).toEqual([])
+    // It comes back: turned away, no question.
+    const next = fakeMain({ dataDir: guest.dataDir, resume: true })
+    mains.push(next)
+    await next.api.resumed
+    await until(() => next.last('liveShare:guest')?.state === 'ended')
+    expect(next.last('liveShare:guest').reason).toBe('rejoin-refused')
+    expect(host.events('liveShare:ask')).toHaveLength(1)
   })
 })

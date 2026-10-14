@@ -11,16 +11,19 @@ export const RESUME_MS = 10 * 60 * 1000
 
 export function createSessionFile(path, { now = Date.now } = {}) {
   return {
-    // The saved session, or null (none, unreadable, or too old).
+    // The saved session, or null (none, unreadable, or too old: then the
+    // file goes, with the secrets it holds).
     read() {
+      let saved
       try {
-        const saved = JSON.parse(fs.readFileSync(path, 'utf8'))
-        if (!saved || saved.v !== 1 || !Number.isFinite(saved.savedAt)) return null
-        const age = now() - saved.savedAt
-        return age >= 0 && age < RESUME_MS ? saved : null
+        saved = JSON.parse(fs.readFileSync(path, 'utf8'))
       } catch {
-        return null
+        saved = null
       }
+      const age = saved && saved.v === 1 && Number.isFinite(saved.savedAt) ? now() - saved.savedAt : -1
+      if (age >= 0 && age < RESUME_MS) return saved
+      this.clear()
+      return null
     },
     write(data) {
       try {

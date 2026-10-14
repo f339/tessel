@@ -10,7 +10,12 @@ import {
   sharedSecret,
   verificationCode,
   commitment,
-  commitmentMatches
+  commitmentMatches,
+  newSigningKey,
+  signBinding,
+  bindingSigned,
+  exportSigningKey,
+  importSigningKey
 } from '../liveShare/shareCrypto'
 
 // Both sides of one connection: nonces, X25519 keys, the keys each derives.
@@ -143,5 +148,38 @@ describe('Live Share key exchange, commitment and verification code', () => {
   it('writes the code as two groups of three digits', () => {
     expect(verificationCode(Buffer.from([0, 0, 0, 7]))).toBe('000 007')
     expect(verificationCode(Buffer.from([255, 255, 255, 255]))).toMatch(/^\d{3} \d{3}$/)
+  })
+})
+
+describe('Live Share reconnect key', () => {
+  it('a guest signs its connection binding; the host checks it with the public key', () => {
+    const { host, guest } = handshake()
+    expect(host.binding.equals(guest.binding)).toBe(true)
+    const key = newSigningKey()
+    const sig = signBinding(key, guest.binding)
+    expect(bindingSigned(key.publicRaw, host.binding, sig)).toBe(true)
+    // Another key, or another connection: no.
+    expect(bindingSigned(newSigningKey().publicRaw, host.binding, sig)).toBe(false)
+    expect(bindingSigned(key.publicRaw, handshake().host.binding, sig)).toBe(false)
+    expect(bindingSigned(key.publicRaw, host.binding, Buffer.alloc(64))).toBe(false)
+    expect(bindingSigned(Buffer.alloc(3), host.binding, sig)).toBe(false)
+  })
+
+  it('someone in the middle has a different binding with each side', () => {
+    const secret = newSecret()
+    const towardGuest = handshake(secret)
+    const towardHost = handshake(secret)
+    expect(towardGuest.guest.binding.equals(towardHost.host.binding)).toBe(false)
+    const key = newSigningKey()
+    expect(bindingSigned(key.publicRaw, towardHost.host.binding, signBinding(key, towardGuest.guest.binding))).toBe(false)
+  })
+
+  it('is kept across a restart (its private half, on the guest computer)', () => {
+    const key = newSigningKey()
+    const back = importSigningKey(exportSigningKey(key))
+    expect(back.publicRaw.equals(key.publicRaw)).toBe(true)
+    const { host, guest } = handshake()
+    expect(bindingSigned(key.publicRaw, host.binding, signBinding(back, guest.binding))).toBe(true)
+    expect(importSigningKey('not a key')).toBe(null)
   })
 })

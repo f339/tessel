@@ -390,14 +390,19 @@ describe('Live Share in the window: what the review found', () => {
     expect(t.maximizedId.value).toBe(null)
   })
 
-  it('a pane the host restarted gets a new terminal here (gen)', async () => {
+  it('a pane the host restarted gets a new terminal here, with its new screen (attached again)', async () => {
     t.listeners.onGuest(twoPanes())
     await flush()
     const leafA = t.workspaces.value[0].tree.children[0]
     expect(leafA.gen).toBe(0)
+    expect(t.seeded['pane-ls1-a']).toBe('screen pane-ls1-a')
+    window.shellApi.attachPty.mockImplementation(async (id) => ({ ok: true, buffer: `new screen ${id}`, shell: { id: 'liveshare', name: 'Ada' }, backend: 'liveshare' }))
     t.listeners.onGuest(twoPanes({ panes: [pane('pane-ls1-a', { gen: 1 }), pane('pane-ls1-b')] }))
     await flush()
+    // The new screen is there before the new terminal opens on it.
+    expect(t.seeded['pane-ls1-a']).toBe('new screen pane-ls1-a')
     expect(leafA.gen).toBe(1)
+    expect(window.shellApi.attachPty.mock.calls.filter(([id]) => id === 'pane-ls1-a')).toHaveLength(2)
   })
 
   it('a lost connection keeps the project, view only, until it comes back', async () => {

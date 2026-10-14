@@ -299,6 +299,17 @@ describe('LiveShareDialog: what the review found', () => {
     wrapper.unmount()
   })
 
+  it('lists guests let in who are offline, with Remove', async () => {
+    api.removeKnown = vi.fn().mockResolvedValue({ ok: true })
+    const wrapper = await open(PROJECTS)
+    await host({ state: 'sharing', invite: 'TS1.x', expiresAt: Date.now() + 3600000, guests: [], offline: [{ id: 'k-abc', name: 'Alex', rights: { type: true, open: false, close: false } }] })
+    expect(wrapper.find('[data-test="ls-offline-k-abc"]').text()).toContain('Offline: comes back by itself')
+    expect(wrapper.text()).not.toContain('No one has joined yet.')
+    await wrapper.find('[data-test="ls-remove-known-k-abc"]').trigger('click')
+    expect(api.removeKnown).toHaveBeenCalledWith({ id: 'k-abc' })
+    wrapper.unmount()
+  })
+
   it('says it is reconnecting, and Leave still works', async () => {
     const wrapper = await open({ initialTab: 'join' })
     await guest({ state: 'reconnecting', host: 'Ada' })

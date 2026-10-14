@@ -45,6 +45,7 @@
       "guestJoined": "Connecté",
       "guestWaiting": "Attend votre réponse",
       "guestWaitingCode": "Attend votre réponse (code {{code}})",
+      "offline": "Hors ligne : reviendra automatiquement",
       "rightsLabel": "Ce que {{name}} peut faire",
       "rightType": "Taper",
       "rightTypeTitle": "Taper dans vos terminaux et vos agents (cette personne peut lancer n'importe quelle commande en votre nom)",

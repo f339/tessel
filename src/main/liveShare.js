@@ -18,18 +18,19 @@
 // terminals of this computer: pty:attach/write/kill of their ids come here
 // (isGuestPane), their output goes through the window's usual pty:data and
 // pty:exit, and they are never saved with the layout. A connection that drops
-// is taken up again with the reconnect key the host gave (no new question),
-// and a restart of this Tessel joins the session again (resumeGuest).
+// is taken up again with this guest's reconnect key (shareGuest.js: it
+// signs the new connection; no new question), and a restart of this Tessel
+// joins the session again (resumeGuest).
 import os from 'os'
 import { join } from 'path'
 import { Terminal as HeadlessTerminal } from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { createShareHost, cleanRights } from './liveShare/shareHost.js'
 import { createShareGuest } from './liveShare/shareGuest.js'
-import { newSecret, encodeInvite, decodeInvite } from './liveShare/shareCrypto.js'
+import { newSecret, encodeInvite, decodeInvite, newSigningKey, exportSigningKey, importSigningKey } from './liveShare/shareCrypto.js'
 import { ensureCloudflared, startTunnel, waitReachable, endLeftoverTunnel, tunnelAlive, stopTunnelPid } from './liveShare/shareTunnel.js'
 import { createSessionFile } from './liveShare/sharePersist.js'
-import { listProcessNames, pidRunning as pidAlive } from './processTree.js'
+import { listProcessNames } from './processTree.js'
 import { trimBuffer, HOST_BUFFER_BYTES } from './ptyProtocol.js'
 import { t } from './i18n'
 
@@ -184,9 +185,11 @@ const KEEP_FRESH_MS = 60000
 // deps: ipcMain, send(channel, payload) to the window, host (the terminal
 // host client), dataDir (cloudflared goes in its bin folder, the sessions
 // kept across a restart in its files), queueData(id, data) and sendExit(id,
-// exitCode) (the window's own pty:data / pty:exit), log. listNames, kill,
-// pidRunning: the process helpers (tests give their own).
-export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sendExit, log, listNames = listProcessNames, kill = (pid) => process.kill(pid), pidRunning = pidAlive, resume = true }) {
+// exitCode) (the window's own pty:data / pty:exit), log. listNames, kill:
+// the process helpers (tests give their own). resume: take back a share or
+// a session at once (Tessel calls resume() itself, once it is the only copy
+// running: a second copy starting must not take them).
+export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sendExit, log, listNames = listProcessNames, kill = (pid) => process.kill(pid), resume = true }) {
   const info = (msg) => log?.info?.('liveshare', msg)
   const hostFile = createSessionFile(join(dataDir, 'liveshare-host.json'))
   const guestFile = createSessionFile(join(dataDir, 'liveshare-guest.json'))
@@ -211,10 +214,13 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
           inviteBlocked: !!(sharing.server && sharing.server.inviteBlocked && sharing.server.inviteBlocked()),
           projectId: sharedProjectId,
           guests: sharing.guests,
+          // Guests let in who are not connected now (they come back by
+          // themselves; Remove keeps them out).
+          offline: sharing.server && sharing.server.offlineGuests ? sharing.server.offlineGuests() : [],
           progress: sharing.progress ?? null,
           error: sharing.error || null
         }
-      : { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectId: null, guests: [], progress: null, error: null }
+      : { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectId: null, guests: [], offline: [], progress: null, error: null }
   const pushHost = () => send('liveShare:host', hostStatus())
 
   const sharedPanes = () =>
@@ -256,7 +262,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       hostName: s.hostName,
       expiresAt: s.server.inviteExpires(),
       projectId: sharedProjectId,
-      known: s.server.knownGuests()
+      known: s.server.knownGuests(),
+      secrets: s.server.earlierSecrets().map((x) => Buffer.from(x).toString('base64'))
     })
   }
 
@@ -288,12 +295,17 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
           info('invite code blocked: too many connections stopped after the handshake')
           pushHost()
         },
-        onKnownChanged: saveHost
+        onKnownChanged: () => {
+          saveHost()
+          pushHost()
+        }
       }
     })
   }
 
   function stopSharing(reason = 'stopped', error = null) {
+    // A share being taken back after a restart: not any more.
+    resumeRun++
     const s = sharing
     if (!s) return
     s.cancelled = true
@@ -320,13 +332,13 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   }
 
   // While sharing: the saved share kept fresh; a tunnel taken back after a
-  // restart (not this Tessel's child) watched by its PID.
+  // restart (not this Tessel's child) watched by its PID and file name.
   function watchHost(s) {
     clearInterval(hostTimer)
-    hostTimer = setInterval(() => {
+    hostTimer = setInterval(async () => {
       if (sharing !== s) return
-      if (s.adopted && !pidRunning(s.tunnel.pid)) {
-        stopSharing('tunnel', t('main.liveShare.tunnelGone', 'The Cloudflare tunnel stopped. Sharing ended.'))
+      if (s.adopted && !(await tunnelAlive(s.tunnel.pid, { listNames }).catch(() => true))) {
+        if (sharing === s) stopSharing('tunnel', t('main.liveShare.tunnelGone', 'The Cloudflare tunnel stopped. Sharing ended.'))
         return
       }
       saveHost()
@@ -391,25 +403,30 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   }
 
   // After a restart: the share the last Tessel left (its tunnel still runs,
-  // with the same address), taken back with the same invite code and the
-  // guests' reconnect keys. Guests reconnect by themselves. Anything missing
-  // (too old, the tunnel gone, its port taken): no share, and a tunnel left
-  // running is ended.
+  // with the same address), taken back with the same invite code, its earlier
+  // secrets and the guests it let in. Guests reconnect by themselves.
+  // Anything missing (too old, the tunnel gone, its port taken): no share,
+  // and a tunnel left running is ended (only if it is still cloudflared).
+  // Stop sharing or quitting meanwhile (resumeRun) ends it too.
+  let resumeRun = 0
   async function resumeSharing() {
+    const run = ++resumeRun
+    const live = () => run === resumeRun && !suspended && !sharing
     const saved = hostFile.read()
     if (!saved) {
       await endLeftoverTunnel(dataDir, { listNames, kill }).catch(() => false)
       return false
     }
     const pid = Number(saved.pid) || 0
-    const fail = (why) => {
+    const fail = async (why) => {
       info(`share not taken back: ${why}`)
-      if (pid) stopTunnelPid(dataDir, pid, kill)
+      if (pid) await stopTunnelPid(dataDir, pid, { listNames, kill }).catch(() => false)
       hostFile.clear()
       return false
     }
-    if (sharing) return false
+    if (!live()) return false
     if (!pid || !(await tunnelAlive(pid, { listNames }).catch(() => false))) return fail('its tunnel stopped')
+    if (!live()) return run === resumeRun && !suspended ? false : fail('stopped meanwhile')
     let secret
     try {
       secret = Buffer.from(String(saved.secret), 'base64')
@@ -417,20 +434,35 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       return fail('unreadable')
     }
     if (secret.length !== 32 || !/^wss?:\/\//.test(String(saved.url)) || !(saved.port > 0)) return fail('unreadable')
+    const earlier = (Array.isArray(saved.secrets) ? saved.secrets : []).map((x) => Buffer.from(String(x), 'base64')).filter((x) => x.length === 32)
     const s = { state: 'starting', guests: [], progress: null, cancelled: false, hostName: str(saved.hostName, 40) || defaultShareName(), secret, adopted: true }
-    sharing = s
-    s.server = makeServer(s, secret, { known: saved.known, inviteExpires: Number(saved.expiresAt) || undefined })
-    try {
-      s.port = await s.server.start(saved.port)
-    } catch {
-      sharing = null
-      return fail(`port ${saved.port} taken`)
+    const server = makeServer(s, secret, { known: saved.known, secrets: earlier, inviteExpires: Number(saved.expiresAt) || undefined })
+    s.server = server
+    // Its port: the last Tessel may take a moment to let it go.
+    let port = 0
+    for (let i = 0; i < 6 && !port; i++) {
+      try {
+        port = await server.start(saved.port)
+      } catch {
+        if (!live()) break
+        await new Promise((r) => setTimeout(r, 500))
+      }
     }
-    if (sharing !== s) return false
-    s.tunnel = { url: String(saved.url), pid, stop: () => stopTunnelPid(dataDir, pid, kill) }
+    if (!live()) {
+      try {
+        server.stop('stopped')
+      } catch {
+        /* not started */
+      }
+      return run === resumeRun && !suspended ? false : fail('stopped meanwhile')
+    }
+    if (!port) return fail(`port ${saved.port} taken`)
+    s.port = port
+    s.tunnel = { url: String(saved.url), pid, stop: () => stopTunnelPid(dataDir, pid, { listNames, kill }).catch(() => false) }
     s.invite = encodeInvite({ url: s.tunnel.url, secret })
     sharedProjectId = typeof saved.projectId === 'string' ? saved.projectId.slice(0, 80) : null
     s.state = 'sharing'
+    sharing = s
     info(`sharing taken back after a restart (${s.tunnel.url})`)
     saveHost()
     watchHost(s)
@@ -454,8 +486,9 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
 
   // --- Guest -------------------------------------------------------------
   // joined: { client, session, host, state, panes: Map(remoteId -> pane),
-  // byLocal, layout, rights, code, url, secret, invite, name, token,
-  // admitted, leaving, retry: { timer, since, tries } }
+  // byLocal, layout, rights, code, url, secret, invite, name, signingKey
+  // (this guest's reconnect key), admitted, leaving, retry: { timer, since,
+  // tries } }
   let joined = null
   let sessions = 0
   let guestTimer = null
@@ -485,8 +518,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   const pushGuest = () => send('liveShare:guest', guestStatus())
 
   function saveGuest(g) {
-    if (joined !== g || !g.token) return
-    guestFile.write({ invite: g.invite, name: g.name, token: g.token })
+    if (joined !== g || !g.admitted) return
+    guestFile.write({ invite: g.invite, name: g.name, key: exportSigningKey(g.signingKey) })
   }
 
   // A pane whose terminal starts again here (the host restarted it, or the
@@ -565,7 +598,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       url: g.url,
       secret: g.secret,
       name: g.name,
-      token: g.token,
+      signingKey: g.signingKey,
+      back: g.admitted,
       callbacks: {
         onState: (state, extra) => {
           if (joined !== g || g.client !== client) return
@@ -577,16 +611,12 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
             g.admitted = true
             g.retry = null
             g.reason = null
+            saveGuest(g)
           }
           // While reconnecting, the handshake's steps are not shown.
           if (g.state === 'reconnecting' && state !== 'joined') return
           g.state = state
           pushGuest()
-        },
-        onToken: (token) => {
-          if (joined !== g || g.client !== client) return
-          g.token = str(token, 100)
-          saveGuest(g)
         },
         onRights: (rights) => {
           if (joined !== g || g.client !== client || !rights) return
@@ -632,7 +662,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         },
         onClosed: (reason) => {
           if (joined !== g || g.client !== client) return
-          if (!g.leaving && g.admitted && g.token && RECONNECT_REASONS.has(reason)) {
+          if (!g.leaving && g.admitted && RECONNECT_REASONS.has(reason)) {
             if (g.state !== 'reconnecting') info(`connection to ${g.host || '?'} lost (${reason}): reconnecting`)
             g.state = 'reconnecting'
             g.reason = reason
@@ -648,7 +678,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     client.connect()
   }
 
-  function joinSession({ invite, name, token = null } = {}) {
+  function joinSession({ invite, name, signingKey = null } = {}) {
     const code = decodeInvite(invite)
     if (!code) return { ok: false, error: t('main.liveShare.badInvite', 'This is not a Tessel Live Share invite code.') }
     if (joined) leaveSession('replaced')
@@ -667,9 +697,10 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       secret: code.secret,
       invite: String(invite).trim(),
       name: str(name, 40) || defaultShareName(),
-      token: typeof token === 'string' && token ? token.slice(0, 100) : null,
-      // Coming back with a key: as good as admitted (a refused key ends it).
-      admitted: !!token,
+      // This guest's reconnect key: made now, or the one of a session taken
+      // back after a restart (as good as admitted: a refused key ends it).
+      signingKey: signingKey || newSigningKey(),
+      admitted: !!signingKey,
       leaving: false,
       retry: null
     }
@@ -696,12 +727,13 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   // its reconnect key (no new question for the host).
   function resumeGuest() {
     const saved = guestFile.read()
-    if (!saved || typeof saved.invite !== 'string' || typeof saved.token !== 'string') {
-      guestFile.clear()
+    const signingKey = saved && typeof saved.invite === 'string' ? importSigningKey(saved.key) : null
+    if (!signingKey || suspended || joined) {
+      if (!joined) guestFile.clear()
       return false
     }
     info('joining again the session left by a restart')
-    return joinSession({ invite: saved.invite, name: saved.name, token: saved.token }).ok
+    return joinSession({ invite: saved.invite, name: saved.name, signingKey }).ok
   }
 
   // --- The window's pty calls for a guest pane ----------------------------
@@ -801,6 +833,12 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     sharing?.server?.removeGuest(guestId)
     return { ok: true }
   })
+  // A guest let in who is offline: it can't come back.
+  ipcMain.handle('liveShare:removeKnown', (_evt, { id } = {}) => {
+    const ok = !!sharing?.server?.removeKnown(String(id || ''))
+    if (ok) pushHost()
+    return { ok }
+  })
   ipcMain.handle('liveShare:join', (_evt, opts) => joinSession({ invite: opts && opts.invite, name: opts && opts.name }))
   ipcMain.handle('liveShare:leave', () => {
     leaveSession('left')
@@ -814,11 +852,16 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   })
 
   // A share or a session the last Tessel left (a restart, an update, a
-  // crash): taken back.
-  const resumed = resume ? Promise.all([resumeSharing().catch(() => false), Promise.resolve().then(resumeGuest).catch(() => false)]) : Promise.resolve([false, false])
+  // crash): taken back, once.
+  let resumed = null
+  const takeBack = () => (resumed = resumed || Promise.all([resumeSharing().catch(() => false), Promise.resolve().then(resumeGuest).catch(() => false)]))
+  if (resume) takeBack()
 
   return {
-    resumed,
+    get resumed() {
+      return resumed || Promise.resolve([false, false])
+    },
+    resume: takeBack,
     // Host: every terminal's output, exit and size, as Tessel gets them.
     onPtyData: (id, data) => sharing?.server?.sendData(id, data),
     onPtyExit: (id, exitCode) => sharing?.server?.sendExit(id, exitCode),
@@ -857,7 +900,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         info('sharing kept for the next Tessel')
       } else stopSharing('stopped')
       const g = joined
-      if (g && g.token) {
+      if (g && g.admitted) {
         saveGuest(g)
         clearTimeout(g.retry && g.retry.timer)
         clearInterval(guestTimer)
@@ -877,6 +920,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     // Quitting Tessel: the share and the session end.
     stopAll() {
       if (suspended) return
+      resumeRun++
       stopSharing('stopped')
       leaveSession('left')
     }

@@ -265,6 +265,27 @@ export function createLiveShareWindow(deps) {
     }
   }
 
+  // The host's pane started again (restarted, or the connection came back):
+  // its new screen is taken (attachPty waits for it) and given to a new
+  // terminal here (gen, SplitNode's key), never the old screen.
+  async function reattachGuestPane(p, leaf, session) {
+    const gen = p.gen || 0
+    attaching.add(p.id)
+    try {
+      const a = await window.shellApi.attachPty(p.id).catch(() => null)
+      if (!a || !a.ok || state.guest.session !== session || guestLeaves.get(p.id) !== leaf) return
+      deps.dropBuffer(p.id)
+      deps.seedBuffer(p.id, a.buffer)
+      leaf.exitedAtStart = !!a.exited
+      leaf.gen = gen
+    } finally {
+      attaching.delete(p.id)
+    }
+    // Restarted again meanwhile: once more.
+    const now = state.guest.panes.find((x) => x.id === p.id)
+    if (now && (now.gen || 0) !== (leaf.gen || 0) && state.guest.session === session && guestLeaves.get(p.id) === leaf) reattachGuestPane(now, leaf, session)
+  }
+
   async function attachGuestPane(p, session) {
     attaching.add(p.id)
     try {
@@ -331,7 +352,7 @@ export function createLiveShareWindow(deps) {
           leaf.liveShare.rows = p.rows
         }
         leaf.liveShare.canType = may('type')
-        if ((p.gen || 0) !== (leaf.gen || 0)) leaf.gen = p.gen || 0
+        if ((p.gen || 0) !== (leaf.gen || 0) && !attaching.has(p.id)) reattachGuestPane(p, leaf, s.session)
       } else if (!attaching.has(p.id)) attachGuestPane(p, s.session)
     }
     applyLayout(ws)

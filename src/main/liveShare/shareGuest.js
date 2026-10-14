@@ -7,13 +7,16 @@
 // secret. The host sees the guest's name and verification code and says yes
 // or no; once in, the guest gets what the host lets it do (onRights), the
 // host's panes (onPanes), each pane's screen (onSnapshot) and its output.
+// The guest's reconnect key (signingKey, made on this computer): its public
+// half goes with the first join; coming back (back), the guest signs this
+// connection's binding with it instead of asking again.
 // A connection that hears nothing from the host (not even its pings, every
 // 25 s) for 70 s is over.
 //
 // Tessel itself is reached only through the callbacks, so this file runs
 // (and is tested) without Electron.
 import WebSocket from 'ws'
-import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitment, NONCE_BYTES, KX_BYTES } from './shareCrypto.js'
+import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitment, signBinding, NONCE_BYTES, KX_BYTES } from './shareCrypto.js'
 
 const CONNECT_TIMEOUT_MS = 20000
 const SILENCE_MS = 70000
@@ -27,10 +30,10 @@ const CLOSE_REASONS = { 4001: 'expired', 4002: 'busy', 1013: 'busy', 4003: 'outd
 // { code }) | 'joined' (info: { host }), onPanes(panes, layout),
 // onSnapshot(id, data, cols, rows), onData(id, data), onExit(id, exitCode),
 // onRestart(id) (the pane restarted on the host: a new screen follows),
-// onRights(rights), onToken(token) (the reconnect key the host gave),
-// onNotice(code), onClosed(reason) (once, at the end).
-// token: the reconnect key of a guest coming back (shareHost.js rejoin).
-export function createShareGuest({ url, secret, name, token = null, callbacks }) {
+// onRights(rights), onNotice(code), onClosed(reason) (once, at the end).
+// signingKey: { privateKey, publicRaw } (shareCrypto.js newSigningKey);
+// back: coming back with it (shareHost.js rejoin), no question.
+export function createShareGuest({ url, secret, name, signingKey, back = false, callbacks }) {
   let socket = null
   let channel = null
   let code = null
@@ -72,7 +75,6 @@ export function createShareGuest({ url, secret, name, token = null, callbacks })
         return
       case 'welcome':
         clearTimeout(timer)
-        if (typeof msg.token === 'string' && msg.token) callbacks.onToken?.(msg.token)
         // What it may do first: the window takes it as the starting point.
         if (msg.rights) callbacks.onRights?.(rightsOf(msg.rights))
         callbacks.onState?.('joined', { host: String(msg.host || '') })
@@ -120,7 +122,9 @@ export function createShareGuest({ url, secret, name, token = null, callbacks })
   function onHandshake(msg) {
     if (!mine) {
       if (!msg || msg.t !== 'hello' || msg.app !== 'tessel-liveshare') return finish('not-tessel')
-      // A host with the first protocol (its nonce in the hello) or older.
+      // A host with a newer protocol than this Tessel, or an older one (the
+      // first had its nonce in the hello).
+      if (Number(msg.v) > PROTOCOL) return finish('outdated')
       if (msg.v !== PROTOCOL || msg.n != null) return finish('outdated-host')
       mine = { nonce: newNonce(), keys: newKeyPair() }
       socket.send(JSON.stringify({ t: 'commit', c: commitment(mine.nonce, mine.keys.publicRaw).toString('base64') }))
@@ -136,7 +140,9 @@ export function createShareGuest({ url, secret, name, token = null, callbacks })
     mine = null
     channel = createChannel(session)
     code = session.code
-    send({ t: 'join', name, ...(token ? { token } : {}) })
+    const key = signingKey.publicRaw.toString('base64')
+    if (back) send({ t: 'join', name, rejoin: { key, sig: signBinding(signingKey, session.binding).toString('base64') } })
+    else send({ t: 'join', name, key })
   }
 
   return {

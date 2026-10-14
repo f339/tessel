@@ -108,6 +108,11 @@ const progressText = computed(() => {
   return ''
 })
 const guests = computed(() => (Array.isArray(host.value.guests) ? host.value.guests : []))
+// Guests let in who are offline now (they come back by themselves).
+const offline = computed(() => (Array.isArray(host.value.offline) ? host.value.offline : []))
+function removeKnown(g) {
+  if (api && api.removeKnown) api.removeKnown({ id: g.id })
+}
 const expired = computed(() => !!host.value.expiresAt && host.value.expiresAt <= now.value)
 const expiryText = computed(() => {
   const at = host.value.expiresAt
@@ -307,8 +312,8 @@ function trapTab(event) {
 
           <div class="ls-guests">
             <div class="ls-label">{{ t('liveShare.share.guests', 'Guests') }}</div>
-            <p v-if="!guests.length" class="ls-empty">{{ t('liveShare.share.noGuests', 'No one has joined yet.') }}</p>
-            <ul v-else class="ls-guest-list">
+            <p v-if="!guests.length && !offline.length" class="ls-empty">{{ t('liveShare.share.noGuests', 'No one has joined yet.') }}</p>
+            <ul v-if="guests.length || offline.length" class="ls-guest-list">
               <li v-for="g in guests" :key="g.id" class="ls-guest" :data-test="'ls-guest-' + g.id">
                 <span class="ls-guest-name">{{ g.name || t('liveShare.guest', 'A guest') }}</span>
                 <span v-if="g.state !== 'joined'" class="ls-guest-state">{{ guestStateText(g) }}</span>
@@ -328,6 +333,13 @@ function trapTab(event) {
                   </button>
                 </span>
                 <button class="confirm-btn ls-small" :data-test="'ls-remove-' + g.id" @click="removeGuest(g)">
+                  <UserX :size="13" aria-hidden="true" /> {{ t('liveShare.share.remove', 'Remove') }}
+                </button>
+              </li>
+              <li v-for="g in offline" :key="g.id" class="ls-guest ls-guest-offline" :data-test="'ls-offline-' + g.id">
+                <span class="ls-guest-name">{{ g.name || t('liveShare.guest', 'A guest') }}</span>
+                <span class="ls-guest-state">{{ t('liveShare.share.offline', 'Offline: comes back by itself') }}</span>
+                <button class="confirm-btn ls-small" :data-test="'ls-remove-known-' + g.id" @click="removeKnown(g)">
                   <UserX :size="13" aria-hidden="true" /> {{ t('liveShare.share.remove', 'Remove') }}
                 </button>
               </li>
@@ -588,6 +600,9 @@ function trapTab(event) {
 }
 .ls-guest:hover {
   background: var(--surface-3);
+}
+.ls-guest-offline .ls-guest-name {
+  color: var(--text-dim);
 }
 .ls-guest-name {
   flex: 1;

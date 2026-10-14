@@ -1476,6 +1476,14 @@ function fitLiveShareFont({ cols, rows }) {
     size = Math.max(6, size - 0.5)
     term.options.fontSize = size
   }
+  // A pane too small even at 6 px: the terminal is drawn smaller still
+  // (scaled down), never cut.
+  const left = room()
+  const shrink = left != null && left < 1 ? left : 1
+  if (term.element) {
+    term.element.style.transformOrigin = shrink < 1 ? '0 0' : ''
+    term.element.style.transform = shrink < 1 ? `scale(${shrink})` : ''
+  }
 }
 
 function doFit() {

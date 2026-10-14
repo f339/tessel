@@ -106,8 +106,13 @@ describe('Live Share tunnel', () => {
     fs.mkdirSync(join(dir, 'bin'), { recursive: true })
     fs.writeFileSync(join(dir, 'bin', 'cloudflared.pid'), '9')
     const killed = []
-    stopTunnelPid(dir, 9, (pid) => killed.push(pid))
-    expect(killed).toEqual([9])
+    const kill = (pid) => killed.push(pid)
+    // A PID Windows gave to another program since: left alone.
+    expect(await stopTunnelPid(dir, 9, { listNames: async () => [{ pid: 9, name: 'notepad.exe' }], kill })).toBe(false)
+    expect(killed).toEqual([])
     expect(readTunnelPid(dir)).toBe(0)
+    // Still our cloudflared: stopped.
+    expect(await stopTunnelPid(dir, 9, { listNames: async () => [{ pid: 9, name: NAME }], kill })).toBe(true)
+    expect(killed).toEqual([9])
   })
 })

@@ -678,6 +678,7 @@ const api = {
     setRights: ({ guestId, rights } = {}) => ipcRenderer.invoke('liveShare:rights', { guestId, rights }),
     newInvite: () => ipcRenderer.invoke('liveShare:newInvite'),
     removeGuest: ({ guestId } = {}) => ipcRenderer.invoke('liveShare:removeGuest', { guestId }),
+    removeKnown: ({ id } = {}) => ipcRenderer.invoke('liveShare:removeKnown', { id }),
     join: ({ invite, name } = {}) => ipcRenderer.invoke('liveShare:join', { invite, name }),
     leave: () => ipcRenderer.invoke('liveShare:leave'),
     open: ({ kind, agent } = {}) => ipcRenderer.invoke('liveShare:open', { kind, agent }),

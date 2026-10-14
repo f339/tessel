@@ -212,19 +212,25 @@ export async function endLeftoverTunnel(dataDir, { listNames, kill }) {
   }
 }
 
-// Stops a tunnel by its PID (one this Tessel adopted after a restart), and
-// forgets it.
-export function stopTunnelPid(dataDir, pid, kill = (p) => process.kill(p)) {
-  try {
-    kill(pid)
-  } catch {
-    /* already stopped */
+// Stops a tunnel by its PID (one this Tessel took back after a restart),
+// only while that PID is still this cloudflared (a PID Windows gave to
+// another program since is left alone), and forgets it.
+export async function stopTunnelPid(dataDir, pid, { listNames, kill = (p) => process.kill(p) }) {
+  let stopped = false
+  if (pid && (await tunnelAlive(pid, { listNames }))) {
+    try {
+      kill(pid)
+      stopped = true
+    } catch {
+      /* already stopped */
+    }
   }
   try {
     if (readTunnelPid(dataDir) === pid) fs.rmSync(pidFile(dataDir), { force: true })
   } catch {
     /* not written */
   }
+  return stopped
 }
 
 // Starts a quick tunnel to 127.0.0.1:port. Resolves { url, stop, pid } once

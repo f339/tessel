@@ -18,6 +18,11 @@
 // the connection, so a guest without the invite code can't get past its
 // first message.
 //
+// A guest let in reconnects with a key of its own (Ed25519, made on its
+// computer, never sent): it signs the new connection's binding (a value
+// derived from that connection's whole handshake), so someone in the middle,
+// who has a different connection with each side, can't reuse it.
+//
 // Both sides show a six-digit verification code derived from the same keys.
 // Someone in the middle with the invite code could only make the two codes
 // match by luck, one try per connection to the host (the guest committed
@@ -135,7 +140,42 @@ export function sessionKeys(secret, hostNonce, guestNonce, side, kx) {
   const toGuest = key('host-to-guest')
   const toHost = key('guest-to-host')
   const code = verificationCode(key('verify-code', 4))
-  return side === 'host' ? { send: toGuest, recv: toHost, code } : { send: toHost, recv: toGuest, code }
+  // What a returning guest signs: this connection, both sides' view of it.
+  const binding = key('rejoin-binding')
+  return side === 'host' ? { send: toGuest, recv: toHost, code, binding } : { send: toHost, recv: toGuest, code, binding }
+}
+
+// A guest's reconnect key: { privateKey, publicRaw } (Ed25519).
+const ED25519_SPKI = Buffer.from('302a300506032b6570032100', 'hex')
+export function newSigningKey() {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519')
+  const der = publicKey.export({ type: 'spki', format: 'der' })
+  return { privateKey, publicRaw: Buffer.from(der.subarray(der.length - KX_BYTES)) }
+}
+// Kept on the guest's disk across a restart (PKCS8, base64), and back.
+export function exportSigningKey(key) {
+  return key.privateKey.export({ type: 'pkcs8', format: 'der' }).toString('base64')
+}
+export function importSigningKey(text) {
+  try {
+    const privateKey = crypto.createPrivateKey({ key: Buffer.from(String(text), 'base64'), format: 'der', type: 'pkcs8' })
+    const der = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'der' })
+    return { privateKey, publicRaw: Buffer.from(der.subarray(der.length - KX_BYTES)) }
+  } catch {
+    return null
+  }
+}
+export function signBinding(key, binding) {
+  return crypto.sign(null, binding, key.privateKey)
+}
+export function bindingSigned(publicRaw, binding, signature) {
+  if (!Buffer.isBuffer(publicRaw) || publicRaw.length !== KX_BYTES || !Buffer.isBuffer(signature) || signature.length !== 64) return false
+  try {
+    const publicKey = crypto.createPublicKey({ key: Buffer.concat([ED25519_SPKI, publicRaw]), format: 'der', type: 'spki' })
+    return crypto.verify(null, binding, publicKey, signature)
+  } catch {
+    return false
+  }
 }
 
 // Seals and opens the messages of one connection, in order.

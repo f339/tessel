@@ -25,7 +25,8 @@ vi.mock('@xterm/xterm', () => ({
     }
     open(host) {
       this.textarea = document.createElement('textarea')
-      host.append(this.textarea)
+      this.element = document.createElement('div')
+      host.append(this.textarea, this.element)
     }
     resize(cols, rows) {
       this.cols = cols
@@ -131,6 +132,16 @@ describe('a Live Share pane on a guest screen', () => {
     // It fits, and a half point more would not.
     expect(Math.floor(1000 / (size * 0.6))).toBeGreaterThanOrEqual(120)
     expect(Math.floor(1000 / ((size + 0.5) * 0.6))).toBeLessThan(120)
+  })
+
+  it('a pane too small even at 6 px: drawn smaller still, never cut', async () => {
+    const term = await show(360, 240)
+    expect(term.options.fontSize).toBe(6)
+    const scale = Number(/scale\(([\d.]+)\)/.exec(term.element.style.transform)[1])
+    expect(scale).toBeLessThan(1)
+    // 120 columns of 3.6 px, scaled, fit in 360 px.
+    expect(120 * 3.6 * scale).toBeLessThanOrEqual(360)
+    expect(term.element.style.transformOrigin).toBe('0 0')
   })
 
   it('a larger pane: larger text, no empty band (up to twice the usual size)', async () => {
