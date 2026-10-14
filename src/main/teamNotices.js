@@ -9,6 +9,7 @@ import { join, resolve, isAbsolute } from 'path'
 import { ensureTeamChannel } from './teamChannel'
 import { readJson } from './fileRead'
 import { writeFileAtomic } from './safeJson'
+import { removeTreeSync } from './removeTree'
 
 const writeAtomic = (file, data) => writeFileAtomic(file, JSON.stringify(data, null, 2))
 
@@ -152,10 +153,11 @@ export function retireOldTeams({ dir, liveTeamIds, owner } = {}) {
     if (!ID_RE.test(t) || live.has(t) || theirs.has(t) || !fs.existsSync(join(b, t, 'state.json'))) continue
     if (owner && !mine.has(t) && others.length) continue // unknown origin, another window runs
     if (!hasActive(b, t)) {
-      // Retired long ago and used by nobody: its folder goes.
+      // Retired long ago and used by nobody: its folder goes (never through a
+      // link in it: agents write there too).
       try {
         if (Date.now() - fs.statSync(join(b, t, 'state.json')).mtimeMs > RETIRED_FOLDER_KEPT_MS)
-          fs.rmSync(join(b, t), { recursive: true, force: true })
+          removeTreeSync(join(b, t))
       } catch {
         // tried again next time
       }

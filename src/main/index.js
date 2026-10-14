@@ -13,6 +13,7 @@ import { createRemoteModelReader, remoteAgentModel } from './remoteAgentModel'
 import { createCodexAccounts } from './codexAccounts'
 import { createClaudeAccounts } from './claudeAccounts'
 import { createProviderLogin } from './providerLogin'
+import { removeTreeSync } from './removeTree'
 import { createProviderAccounts } from './providerAccounts'
 import { createAccountUsage } from './providerAccountUsage'
 import { registerProviderUsage } from './providerUsageIpc'
@@ -2120,7 +2121,8 @@ function validateCodexConfig(text) {
       { windowsHide: true, timeout: 60000, env: cleanEnv(process.env) },
       (err, _out, stderr) => {
         try {
-          fs.rmSync(home, { recursive: true, force: true })
+          // Codex ran in it: removed without going through a link it made.
+          removeTreeSync(home)
         } catch {
           // a temp folder
         }
@@ -3997,11 +3999,13 @@ app.on('session-end', () => {
 
 async function shutdownTerminals({ keepShare = false } = {}) {
   quitting = true
+  // Terminal output first: ending the sharing can wait on PowerShell (up to
+  // 3 s, for a tunnel taken back after a restart).
+  await saveScrollback()
   // Ends the sharing (guests told, cloudflared killed) or the joined session;
   // an update's restart keeps them for the next Tessel (liveShare.js).
   if (keepShare) liveShare?.suspend()
   else liveShare?.stopAll()
-  await saveScrollback()
   // Only a host that runs is asked to stop (asking would start a new one).
   if (!(await host.connectIfRunning())) return
   try {

@@ -5,6 +5,7 @@ import os from 'os'
 import { dirname, join, resolve, sep, delimiter } from 'path'
 import { execFile } from 'child_process'
 import { writeFileAtomic } from './safeJson'
+import { removeTreeSync } from './removeTree'
 import { extraToolDirs, withToolDirs } from './toolDirs'
 import { cleanEnv } from './cleanEnv'
 import { t } from './i18n'
@@ -144,11 +145,12 @@ export function validateKimiConfig(text, executable = 'kimi') {
         // The validator may include settings/secrets in its output: don't return it.
         try {
           const target = resolve(home)
+          // Kimi ran in it: removed without going through a link it made.
           if (
             target.startsWith(resolve(os.tmpdir()) + sep) &&
             target.includes('tessel-kimi-check-')
           )
-            fs.rmSync(target, { recursive: true, force: true })
+            removeTreeSync(target)
         } catch {
           /* disposable validation directory */
         }

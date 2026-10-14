@@ -166,7 +166,11 @@ export function createProviderLogin({
   runStatus = statusCommand,
   kill = terminate,
   timeoutMs = 10 * 60 * 1000,
-  teardownMs = 10000
+  teardownMs = 10000,
+  // Where the CLI runs: never in its sign-in folder (a browser it opens keeps
+  // that working folder, which then can't be removed), nor in the user's home
+  // (a CLI may take ~/.claude or ~/.codex there for a project's settings).
+  workDir = os.tmpdir()
 } = {}) {
   return async ({ provider, home, signal, onProgress = () => {}, onSpawn = () => {} }) => {
     if (signal?.aborted) return { ok: false, error: t('main.login.cancelled', 'Sign-in cancelled.') }
@@ -177,7 +181,7 @@ export function createProviderLogin({
       child = await spawnPty(
         command.file,
         [...command.pre, ...(provider === 'claude' ? ['auth', 'login', '--claudeai'] : ['login'])],
-        { cwd: home, env: childEnv, name: 'xterm-256color', cols: 4096, rows: 30 }
+        { cwd: workDir, env: childEnv, name: 'xterm-256color', cols: 4096, rows: 30 }
       )
     } catch {
       return {
@@ -185,13 +189,7 @@ export function createProviderLogin({
         error: t('main.login.startFailed', 'Could not start {{provider}} sign-in. Check that its CLI is installed.', { provider })
       }
     }
-    // Its PID, for whoever later decides its folder can go (Tessel may stop
-    // before this sign-in does).
-    try {
-      await onSpawn(child.pid)
-    } catch {
-      /* the caller keeps the folder without it */
-    }
+    let recorded = Promise.resolve()
     const loggedIn = await new Promise((resolve) => {
       let output = '',
         lastUrl = null,
@@ -252,15 +250,25 @@ export function createProviderLogin({
       })
       timer = setTimeout(() => stop(true), timeoutMs)
       signal?.addEventListener('abort', onAbort, { once: true })
+      // Its PID, for whoever later decides its folder can go (Tessel may stop
+      // before this sign-in does). Written while its output, its end and a
+      // cancel are already listened to: none is missed during the write.
+      try {
+        recorded = Promise.resolve(onSpawn(child.pid)).catch(() => {})
+      } catch {
+        /* the caller keeps the folder without it */
+      }
       if (signal?.aborted) stop(false)
     })
+    // The caller's cleanup relies on that record: finished before any result.
+    await recorded
     if (!loggedIn.ok || provider !== 'claude') return loggedIn
     if (signal?.aborted) return { ok: false, error: t('main.login.cancelled', 'Sign-in cancelled.') }
     // Status is used privately to prove which account was authenticated.
     // Neither stdout nor tokens are ever sent to the renderer or the log.
     try {
       const result = await runStatus(command.file, [...command.pre, 'auth', 'status', '--json'], {
-        cwd: home,
+        cwd: workDir,
         env: childEnv,
         signal
       })

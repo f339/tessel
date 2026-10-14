@@ -746,12 +746,14 @@ describe('two Tessel windows in one project', () => {
       fs.readFileSync(join(__dirname, '..', 'teamChannel.js'), 'utf8').replace("'./safeJson'", JSON.stringify(safeJson)).replace("'../shared/agentNames'", JSON.stringify(agentNames)).replace("'../shared/senderIdentity'", JSON.stringify(senderIdentity))
     )
     const fileRead = url(fs.readFileSync(join(__dirname, '..', 'fileRead.js'), 'utf8'))
+    const removeTree = url(fs.readFileSync(join(__dirname, '..', 'removeTree.js'), 'utf8'))
     const notices = url(
       fs
         .readFileSync(join(__dirname, '..', 'teamNotices.js'), 'utf8')
         .replace("'./teamChannel'", JSON.stringify(channel))
         .replace("'./fileRead'", JSON.stringify(fileRead))
         .replace("'./safeJson'", JSON.stringify(safeJson))
+        .replace("'./removeTree'", JSON.stringify(removeTree))
     )
     const child = (owner) =>
       new Promise((resolve) => {

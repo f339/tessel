@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'events'
+import os from 'os'
 import {
   accountLoginUrl,
   loginEnvironment,
@@ -144,6 +145,62 @@ describe('private browser login lifecycle', () => {
     expect((await result).status.email).toBe('fixture@test.invalid')
     expect(f.runStatus.mock.calls[0][1]).toEqual(['script.js', 'auth', 'status', '--json'])
     expect(f.runStatus.mock.calls[0][2].env.CLAUDE_CONFIG_DIR).toBe(home)
+  })
+  it('runs the CLI and its status check outside the sign-in folder (a browser it opens keeps that working folder)', async () => {
+    const f = fixture({ workDir: 'C:\\neutral' }),
+      result = f.login({ provider: 'claude', home })
+    await settle()
+    f.events.emit('exit', { exitCode: 0 })
+    await result
+    expect(f.spawnPty.mock.calls[0][2].cwd).toBe('C:\\neutral')
+    expect(f.runStatus.mock.calls[0][2].cwd).toBe('C:\\neutral')
+    // By default: the temp folder, not the user's home either.
+    const g = fixture(),
+      other = g.login({ provider: 'codex', home })
+    await settle()
+    expect(g.spawnPty.mock.calls[0][2].cwd).toBe(os.tmpdir())
+    g.events.emit('exit', { exitCode: 0 })
+    await other
+  })
+  it('listens from the start: a link and an end that come while its PID is being written are kept, and the result waits for that write', async () => {
+    const f = fixture(),
+      progress = vi.fn(),
+      done = vi.fn()
+    let written
+    const onSpawn = vi.fn(() => new Promise((resolve) => (written = resolve)))
+    const result = f.login({ provider: 'codex', home, onProgress: progress, onSpawn }).then(done)
+    await settle()
+    expect(onSpawn).toHaveBeenCalledWith(12345)
+    f.events.emit('data', 'https://auth.openai.com/oauth/authorize?state=early\r\n')
+    f.events.emit('exit', { exitCode: 0 })
+    expect(progress).toHaveBeenCalledWith({ url: 'https://auth.openai.com/oauth/authorize?state=early' })
+    await settle()
+    // The caller removes the folder from its result: not before its PID is written.
+    expect(done).not.toHaveBeenCalled()
+    written()
+    await result
+    expect(done).toHaveBeenCalledWith({ ok: true })
+    expect(f.kill).not.toHaveBeenCalled()
+    expect(f.events.listenerCount('data') + f.events.listenerCount('exit')).toBe(0)
+  })
+  it('a cancel while its PID is being written stops the sign-in at once', async () => {
+    const controller = new AbortController(),
+      kill = vi.fn(async () => {}),
+      done = vi.fn()
+    const f = fixture({ kill })
+    let written
+    const onSpawn = () => new Promise((resolve) => (written = resolve))
+    const result = f.login({ provider: 'codex', home, signal: controller.signal, onSpawn }).then(done)
+    await settle()
+    controller.abort()
+    await settle()
+    expect(kill).toHaveBeenCalledOnce()
+    f.events.emit('exit', { exitCode: 1 })
+    await settle()
+    expect(done).not.toHaveBeenCalled()
+    written()
+    await result
+    expect(done).toHaveBeenCalledWith({ ok: false, error: 'Sign-in cancelled.' })
   })
   it("gives the sign-in's PID as soon as it starts, and a failed record never stops it", async () => {
     const f = fixture()
