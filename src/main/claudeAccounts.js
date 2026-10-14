@@ -480,6 +480,25 @@ function addedMemory(contents) {
   while (lines.length && !lines.at(-1).trim()) lines.pop()
   return lines
 }
+// The system's memory already holds these lines, one after the other.
+const memoryHolds = (system, lines) => system.replace(/\r\n/g, '\n').includes(lines.join('\n'))
+// Lines without those already moved (each once).
+function withoutLines(lines, moved) {
+  const rest = [...lines]
+  for (const line of moved) {
+    const at = rest.indexOf(line)
+    if (at !== -1) rest.splice(at, 1)
+  }
+  return addedMemory(rest.join('\n'))
+}
+const AUTH_NAMES = new RegExp(`\\b(${[...AUTH_SETTINGS, ...ACCOUNT_AUTH_ENV.claude].join('|')})\\b`, 'i')
+// A settings file holding a sign-in setting. Not valid JSON: any mention of
+// one counts (it can't be removed safely).
+function holdsAuth(contents) {
+  const value = parseJson(contents)
+  if (value === undefined) return AUTH_NAMES.test(contents)
+  return object(value) && !equal(withoutAuth(value), value)
+}
 
 export function createClaudeAccounts({
   userData,
@@ -899,7 +918,9 @@ export function createClaudeAccounts({
     }
   }
   // What the last sync left on both sides (fingerprints): of the copied files
-  // and of .claude.json's shared keys. None or unreadable: synced as a first time.
+  // and of .claude.json's shared keys; and `memory`, the memory lines being
+  // moved to the system's (see syncMemory). None or unreadable: synced as a
+  // first time.
   async function readSync(folder) {
     try {
       const raw = await readText(join(folder, SYNC_STATE))
@@ -909,14 +930,21 @@ export function createClaudeAccounts({
         object(value.files) &&
         Object.values(value.files).every((v) => v === null || typeof v === 'string')
       )
-        return { files: value.files, config: object(value.config) ? value.config : null }
+        return {
+          files: value.files,
+          config: object(value.config) ? value.config : null,
+          memory: Array.isArray(value.memory) && value.memory.every((line) => typeof line === 'string') ? value.memory : null
+        }
     } catch {
       /* none */
     }
-    return { files: {}, config: null }
+    return { files: {}, config: null, memory: null }
   }
   const writeSync = (folder, state) =>
-    writeText(join(folder, SYNC_STATE), encode({ version: 1, files: state.files, config: state.config }))
+    writeText(
+      join(folder, SYNC_STATE),
+      encode({ version: 1, files: state.files, config: state.config, ...(state.memory ? { memory: state.memory } : {}) })
+    )
   // The account's version of what changed on both sides, kept next to its
   // file (<name>.conflict-<time>) while the system's wins.
   async function keepAside(folder, name, contents) {
@@ -954,11 +982,21 @@ export function createClaudeAccounts({
         return
       }
       const sync = await readSync(folder)
-      const next = accountState(own, system, oauth, sync.config, { writeBack: writeBack && system !== null, signedIn })
-      if (raw === null || !equal(next.account, own)) await writeText(file, encode(next.account), raw)
-      if (next.system) await writeText(configPath, encode(next.system), systemRaw)
+      let next = accountState(own, system, oauth, sync.config, { writeBack: writeBack && system !== null, signedIn })
+      // The account's values a system change replaces are kept aside before
+      // anything is written: if they can't be, nothing is replaced.
       if (some(next.lost)) await keepAside(folder, '.claude.json', encode(next.lost))
-      if (system !== null) await writeSync(folder, { ...sync, config: next.base })
+      // The system's first: refused, the account's changes stay in its file
+      // (written back at a later launch) and it only takes the system's.
+      if (next.system)
+        try {
+          await writeText(configPath, encode(next.system), systemRaw)
+        } catch {
+          warn('Claude account: the system Claude settings could not be written; its changes are kept for a later launch') // i18n-ignore log
+          next = accountState(own, system, oauth, sync.config, { writeBack: false, signedIn })
+        }
+      if (raw === null || !equal(next.account, own)) await writeText(file, encode(next.account), raw)
+      if (system !== null) await writeSync(folder, { ...(await readSync(folder)), config: next.base })
     }
     try {
       let held = false
@@ -983,19 +1021,35 @@ export function createClaudeAccounts({
   }
   // Moves one file to `target`, never over one there: a hard link fails when
   // `target` exists (where links cannot be made, an exclusive copy does).
-  // -> false when `target` exists.
+  // -> false when it stays (`target` exists, or it changed while copied).
   async function moveFile(source, target) {
     try {
       await fs.link(source, target)
     } catch (error) {
       if (error.code === 'EEXIST') return false
       if (!['EXDEV', 'EPERM', 'ENOTSUP', 'EOPNOTSUPP'].includes(error.code)) throw error
-      try {
-        await fs.copyFile(source, target, fs.constants.COPYFILE_EXCL)
-      } catch (copyError) {
-        if (copyError.code === 'EEXIST') return false
-        throw copyError
-      }
+      return copyThenRemove(source, target)
+    }
+    // A session still writing it writes the same file under its new name.
+    await fs.unlink(source)
+    return true
+  }
+  // A copy is not the file: a session an older pane still runs may write to
+  // the original meanwhile. Removed only when it did not change during the
+  // copy; otherwise the copy goes, and it is tried again at a later launch.
+  async function copyThenRemove(source, target) {
+    const before = await fs.stat(source)
+    try {
+      await fs.copyFile(source, target, fs.constants.COPYFILE_EXCL)
+    } catch (error) {
+      if (error.code === 'EEXIST') return false
+      throw error
+    }
+    const after = await fs.stat(source)
+    const copy = await fs.stat(target)
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || copy.size !== after.size) {
+      await fs.unlink(target).catch(() => {})
+      return false
     }
     await fs.unlink(source)
     return true
@@ -1125,7 +1179,9 @@ export function createClaudeAccounts({
     }
   }
   // Writes a system file atomically, through the user's own link if it is one
-  // (never replacing the link), unless it changed since it was read.
+  // (never replacing the link), unless it changed since it was read: checked
+  // before each try, so a session's write while it waits is never replaced
+  // (this write is given up, and worked out again at a later launch).
   async function writeSystemFile(path, contents, expected) {
     const entry = await lstatOrNull(path)
     const target = entry?.isSymbolicLink() ? await fs.realpath(path) : path
@@ -1137,11 +1193,11 @@ export function createClaudeAccounts({
       await file.sync()
       await file.close()
       file = null
-      if ((await readSystemFile(path)) !== expected)
-        throw authError(
-          t('main.claudeAccount.changedRetry', 'Claude account files changed during the operation. Retry after other logins finish.')
-        )
       for (let i = 0; ; i++) {
+        if ((await readSystemFile(path)) !== expected)
+          throw authError(
+            t('main.claudeAccount.changedRetry', 'Claude account files changed during the operation. Retry after other logins finish.')
+          )
         try {
           await fs.rename(temporary, target)
           break
@@ -1190,14 +1246,20 @@ export function createClaudeAccounts({
   // ~/.claude/CLAUDE.md is also read as a parent folder's for projects in the
   // home folder: the account's is an import of it, never a second copy. What
   // its sessions added there (a # note, /memory) goes at the end of the
-  // system's, then it is the import alone again.
+  // system's, then it is the import alone again. The lines being moved are
+  // recorded first: if the account's file could not be put back (or Tessel
+  // stopped), the next sync finds them in the system's and never adds them
+  // twice; lines added since still go.
   async function syncMemory(folder) {
     const systemPath = join(configDir, 'CLAUDE.md')
     const accountPath = join(folder, 'CLAUDE.md')
+    const sync = await readSync(folder)
     let system = await readSystemFile(systemPath)
     const own = await readText(accountPath)
-    const added = addedMemory(own)
+    let added = addedMemory(own)
+    if (sync.memory && system !== null && memoryHolds(system, sync.memory)) added = withoutLines(added, sync.memory)
     if (added.length) {
+      await writeSync(folder, { ...sync, memory: added })
       const eol = system?.includes('\r\n') ? '\r\n' : '\n'
       const next = `${system ?? ''}${system && !system.endsWith('\n') ? eol : ''}${added.join(eol)}${eol}`
       await writeSystemFile(systemPath, next, system)
@@ -1205,10 +1267,12 @@ export function createClaudeAccounts({
     }
     // Gone from the system folder: gone from the account's too.
     await writeText(accountPath, system === null ? null : `${MEMORY_IMPORT}\n`, own)
+    if (sync.memory || added.length) await writeSync(folder, { ...(await readSync(folder)), memory: null })
   }
   // Before each launch on a managed account: its folder shares the system
   // one's conversations, plugins, skills and settings (each item best effort).
-  // -> 'switched' when its folder is signed in to another account.
+  // -> 'switched' when its folder is signed in to another account,
+  // 'foreignAuth' when its settings still hold another sign-in setting.
   async function prepare(id, auth) {
     const folder = authPath(id)
     if (!(await ownedDirectory(accountsRoot, folder, MARKER, id))) throw authError()
@@ -1237,11 +1301,41 @@ export function createClaudeAccounts({
       }
     }
     try {
-      await writeSync(folder, { ...sync, files })
+      await writeSync(folder, { ...(await readSync(folder)), files })
     } catch {
       warn('Claude account: its sync state could not be saved') // i18n-ignore log
     }
+    // Not best effort: a session must never sign in with another credential.
+    if (!(await withoutForeignAuth(folder))) return 'foreignAuth'
     return writeOwnState(id, auth.oauth)
+  }
+  // The account's settings files never keep a sign-in setting (an older copy
+  // of the system's could hold an API key, a token or apiKeyHelper): removed,
+  // then checked on what is in the file. -> false when one is still there or
+  // the file can't be read (tried twice: a session may be writing it).
+  async function withoutForeignAuth(folder) {
+    for (const name of SETTINGS_FILES) {
+      const path = join(folder, name)
+      let clean = false
+      for (let attempt = 0; attempt < 2 && !clean; attempt++) {
+        try {
+          if (attempt) await sleep(100)
+          const raw = await readText(path)
+          if (raw !== null && holdsAuth(raw)) {
+            await writeText(path, accountCopy(name, raw), raw)
+            const written = await readText(path)
+            clean = written === null || !holdsAuth(written)
+          } else clean = true
+        } catch {
+          /* tried again, then refused */
+        }
+      }
+      if (!clean) {
+        warn(`Claude account: its ${name} still holds a sign-in setting that could not be removed; launch refused`) // i18n-ignore log
+        return false
+      }
+    }
+    return true
   }
   async function login(id, { signal, onProgress } = {}) {
     await recover()
@@ -1565,7 +1659,16 @@ export function createClaudeAccounts({
             ok: false,
             error: t('main.claudeAccount.signInAgain', 'This Claude account needs to sign in again (Settings > AI provider accounts).')
           }
-        if ((await prepare(id, auth)) === 'switched') return { ok: false, error: otherAccount() }
+        const prepared = await prepare(id, auth)
+        if (prepared === 'switched') return { ok: false, error: otherAccount() }
+        if (prepared === 'foreignAuth')
+          return {
+            ok: false,
+            error: t(
+              'main.claudeAccount.foreignAuth',
+              "This Claude account's settings still hold another sign-in setting (an API key, a token or apiKeyHelper) that Tessel could not remove, so the session would not use this account. Close its other sessions and try again."
+            )
+          }
         return { ok: true, env: { CLAUDE_CONFIG_DIR: authPath(id) }, accountId: id }
       })
   }

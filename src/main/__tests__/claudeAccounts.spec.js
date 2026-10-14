@@ -916,6 +916,125 @@ describe('settings changed in a session on an added account', () => {
     expect(aside).toHaveLength(1)
     expect(read(account(id, aside[0]))).toEqual({ theme: 'light' })
   })
+  const refuse = (method, matches, code = 'EACCES') => {
+    const real = fsp[method].bind(fsp)
+    return vi.spyOn(fsp, method).mockImplementation(async (path, ...rest) => {
+      if (matches(path, ...rest)) throw Object.assign(new Error('refused'), { code })
+      return real(path, ...rest)
+    })
+  }
+  it('never replaces a system edit made while its write-back waits for the file', async () => {
+    seedSystem()
+    const target = join(systemDir(), 'settings.json')
+    put(target, { model: 'opus' })
+    const id = await add()
+    await service.launchEnv(id)
+    put(account(id, 'settings.json'), { model: 'sonnet' })
+    const rename = fsp.rename.bind(fsp)
+    let tries = 0
+    const busy = vi.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+      if (to === target && tries++ === 0) {
+        // The file is held for a moment, and a system session saves its settings meanwhile.
+        put(target, { model: 'haiku', userAdded: true })
+        throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+      }
+      return rename(from, to)
+    })
+    expect(await service.launchEnv(id)).toMatchObject({ ok: true })
+    expect(read(target)).toEqual({ model: 'haiku', userAdded: true })
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'sonnet' })
+    busy.mockRestore()
+    // Worked out again at the next launch: both changed, the system's wins, the account's aside.
+    await service.launchEnv(id)
+    expect(read(target)).toEqual({ model: 'haiku', userAdded: true })
+    expect(read(account(id, 'settings.json'))).toEqual({ model: 'haiku', userAdded: true })
+    const aside = fs.readdirSync(authPath(id)).filter((name) => name.startsWith('settings.json.conflict-'))
+    expect(aside.map((name) => read(account(id, name)))).toEqual([{ model: 'sonnet' }])
+  })
+  it.each(['written', 'read'])('refuses the launch when a sign-in setting left in its settings cannot be removed (cannot be %s)', async (mode) => {
+    seedSystem()
+    put(join(systemDir(), 'settings.json'), { model: 'opus' })
+    const id = await add()
+    await service.launchEnv(id)
+    // An older copy kept the system's key.
+    const file = account(id, 'settings.json')
+    put(file, { model: 'opus', env: { ANTHROPIC_API_KEY: 'fixture-secret-key' } })
+    const held =
+      mode === 'written'
+        ? refuse('rename', (from, to) => to === file)
+        : refuse('open', (path, flags) => path === file && flags === 'r')
+    expect(await service.launchEnv(id)).toMatchObject({ ok: false, error: expect.stringContaining('another sign-in setting') })
+    held.mockRestore()
+    expect(read(file).env).toEqual({ ANTHROPIC_API_KEY: 'fixture-secret-key' })
+    expect(await service.launchEnv(id)).toMatchObject({ ok: true, accountId: id })
+    expect(read(file)).toEqual({ model: 'opus' })
+  })
+  it("keeps the account's conflicting value aside before anything else, even when the system file can't be written", async () => {
+    seedSystem()
+    const id = await add()
+    await service.launchEnv(id)
+    put(account(id, '.claude.json'), { ...read(account(id, '.claude.json')), theme: 'account-theme', editorMode: 'vim' })
+    put(configPath(), { ...read(configPath()), theme: 'new-system-theme' })
+    const refused = refuse('rename', (from, to) => to === configPath())
+    expect(await service.launchEnv(id)).toMatchObject({ ok: true })
+    const aside = fs.readdirSync(authPath(id)).filter((name) => name.startsWith('.claude.json.conflict-'))
+    expect(aside.map((name) => read(account(id, name)))).toEqual([{ theme: 'account-theme' }])
+    expect(read(account(id, '.claude.json'))).toMatchObject({ theme: 'new-system-theme', editorMode: 'vim' })
+    expect(read(configPath()).editorMode).toBeUndefined()
+    refused.mockRestore()
+    await service.launchEnv(id)
+    expect(read(configPath())).toMatchObject({ theme: 'new-system-theme', editorMode: 'vim' })
+    // Its value can't be kept aside: nothing is replaced.
+    put(account(id, '.claude.json'), { ...read(account(id, '.claude.json')), theme: 'mine-again' })
+    put(configPath(), { ...read(configPath()), theme: 'system-again' })
+    const before = fs.readFileSync(account(id, '.claude.json'), 'utf8')
+    refuse('rename', (from, to) => String(to).includes('.claude.json.conflict-'))
+    await service.launchEnv(id)
+    expect(fs.readFileSync(account(id, '.claude.json'), 'utf8')).toBe(before)
+  })
+  it('keeps in <name>.merge a file a session wrote to while it was copied to another volume', async () => {
+    seedSystem()
+    const id = await add()
+    await service.launchEnv(id)
+    fs.rmdirSync(join(authPath(id), 'projects'))
+    put(join(authPath(id), 'projects', 'C--probe', 'active.jsonl'), 'old line\n')
+    vi.spyOn(fsp, 'link').mockRejectedValue(Object.assign(new Error('other volume'), { code: 'EXDEV' }))
+    const copy = fsp.copyFile.bind(fsp)
+    const copying = vi.spyOn(fsp, 'copyFile').mockImplementation(async (from, to, mode) => {
+      await copy(from, to, mode)
+      // An older pane's session still has it open and writes a line.
+      fs.appendFileSync(from, 'new live line\n')
+    })
+    await service.launchEnv(id)
+    const shared = join(systemDir(), 'projects', 'C--probe', 'active.jsonl')
+    expect(fs.readFileSync(join(authPath(id), 'projects.merge', 'C--probe', 'active.jsonl'), 'utf8')).toBe('old line\nnew live line\n')
+    expect(fs.existsSync(shared)).toBe(false)
+    // Once nothing writes to it any more: moved whole at a later launch.
+    copying.mockRestore()
+    await service.launchEnv(id)
+    expect(fs.readFileSync(shared, 'utf8')).toBe('old line\nnew live line\n')
+    expect(fs.existsSync(join(authPath(id), 'projects.merge'))).toBe(false)
+  })
+  it('adds a memory note to the system once, even when the account file could not be put back', async () => {
+    seedSystem()
+    put(join(systemDir(), 'CLAUDE.md'), 'System memory\n')
+    const id = await add()
+    await service.launchEnv(id)
+    const file = account(id, 'CLAUDE.md')
+    fs.appendFileSync(file, '- My note\n')
+    const held = refuse('rename', (from, to) => to === file)
+    await service.launchEnv(id)
+    expect(fs.readFileSync(join(systemDir(), 'CLAUDE.md'), 'utf8')).toBe('System memory\n- My note\n')
+    expect(fs.readFileSync(file, 'utf8')).toBe('@~/.claude/CLAUDE.md\n- My note\n')
+    held.mockRestore()
+    // A note added since still goes; the first one is not added again.
+    fs.appendFileSync(file, '- Second note\n')
+    await service.launchEnv(id)
+    expect(fs.readFileSync(join(systemDir(), 'CLAUDE.md'), 'utf8')).toBe('System memory\n- My note\n- Second note\n')
+    expect(fs.readFileSync(file, 'utf8')).toBe('@~/.claude/CLAUDE.md\n')
+    await service.launchEnv(id)
+    expect(fs.readFileSync(join(systemDir(), 'CLAUDE.md'), 'utf8')).toBe('System memory\n- My note\n- Second note\n')
+  })
 })
 
 describe('the older account switch, undone once', () => {
