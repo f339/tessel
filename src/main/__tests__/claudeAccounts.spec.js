@@ -972,6 +972,29 @@ describe('the older account switch, undone once', () => {
       expect((await later.list()).switchPending).toBeUndefined()
     }
   )
+  it('a sign-in made while it runs (after its check) is never overwritten: it stops, and keeps it next time', async () => {
+    seedSystem()
+    const id = await add()
+    legacySwitch(id)
+    const real = fsp.open.bind(fsp)
+    let reads = 0
+    // The snapshot is read again after the check: another account signs in then.
+    vi.spyOn(fsp, 'open').mockImplementation(async (path, ...rest) => {
+      if (String(path) === runtimePath('system-default-auth.json') && ++reads === 2) {
+        put(credentialPath(), token('other'))
+        put(configPath(), { ...read(configPath()), oauthAccount: who('other') })
+      }
+      return real(path, ...rest)
+    })
+    const later = create()
+    await expect(later.migrate()).rejects.toThrow('changed during the operation')
+    expect(read(credentialPath())).toEqual(token('other'))
+    vi.mocked(fsp.open).mockRestore()
+    await later.migrate()
+    expect(read(credentialPath())).toEqual(token('other'))
+    expect(read(configPath()).oauthAccount).toEqual(who('other'))
+    expect(fs.existsSync(runtimePath('system-default-auth.json'))).toBe(false)
+  })
   it('waits while Claude sessions an older version started still run; a sign-in still works', async () => {
     seedSystem()
     const id = await add()

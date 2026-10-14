@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, ipcMain, clipboard, nativeImage, dialog, Notification, shell, powerSaveBlocker, powerMonitor, safeStorage, webContents, session, utilityProcess } from 'electron'
 import { holdClaudeDefaultModel } from './claudeDefaultModel'
-import { join, isAbsolute, dirname, basename } from 'path'
+import { join, isAbsolute, dirname, basename, resolve as resolvePath, sep } from 'path'
 import os from 'os'
 import fs from 'fs'
 import { spawn, execFile } from 'child_process'
@@ -268,6 +268,15 @@ function migrateUserData() {
   }
 }
 migrateUserData()
+// A CLAUDE_CONFIG_DIR inherited from a session on an added account (Tessel
+// started from its terminal) is that account's folder: never taken for the
+// system's, by usage, history or new sessions.
+{
+  const inherited = process.env.CLAUDE_CONFIG_DIR
+  const own = (p) => (process.platform === 'win32' ? p.toLowerCase() : p)
+  const accountsDir = join(app.getPath('userData'), 'claude-accounts')
+  if (inherited && isAbsolute(inherited) && (own(resolvePath(inherited)) + sep).startsWith(own(resolvePath(accountsDir)) + sep)) delete process.env.CLAUDE_CONFIG_DIR
+}
 
 let mainWindow = null
 

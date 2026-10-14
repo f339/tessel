@@ -836,9 +836,10 @@ export function createClaudeAccounts({
     if (legacy(state, raw)) {
       if (!(await canMigrate())) throw switchPending()
       const old = state.accounts.find((a) => a.id === state.selectedId)
+      const runtime = await systemAuth()
       // Put back while the system files still hold that account's sign-in
       // (or its record is gone: only the switch left it there).
-      if (!old || holds(old, await systemAuth())) {
+      if (!old || holds(old, runtime)) {
         let auth = old ? await managed(old.id) : null
         if (auth?.status === 'unknown')
           throw authError(
@@ -850,9 +851,11 @@ export function createClaudeAccounts({
           changes.push(...accountChanges(old.id, auth))
         }
         const original = await snapshot()
+        // Only over what was just checked: a sign-in made meanwhile stops it
+        // (tried again later, and then kept).
         changes.push(
-          { kind: 'credentials', after: original.credentials },
-          { kind: 'oauth', after: original.oauth },
+          { kind: 'credentials', after: original.credentials, expected: runtime.credentials },
+          { kind: 'oauth', after: original.oauth, expected: runtime.oauth },
           { kind: 'index', after: encode({ ...state, selectedId: old ? old.id : null, perSession: true }) }
         )
         await transaction(changes)
