@@ -73,7 +73,7 @@ const keptZoom = (zoom) => (Number.isFinite(zoom) ? clampZoom(zoom) : null)
 // page stays blank (the panel's + pages start with '').
 export function sidePageFromLeaf(leaf, id, { blankUrl = 'about:blank', defaultTitle = '' } = {}) {
   const url = typeof leaf.url === 'string' && leaf.url !== blankUrl ? leaf.url : ''
-  return { id, url, title: keptTitle(leaf.title, defaultTitle), zoom: keptZoom(leaf.zoom) }
+  return { id, url, title: keptTitle(leaf.title, defaultTitle), zoom: keptZoom(leaf.zoom), ...(leaf.muted ? { muted: true } : {}) }
 }
 
 // A side panel page -> a browser pane: makeLeaf(url) builds it
@@ -83,6 +83,7 @@ export function leafFromSidePage(page, makeLeaf) {
   const title = keptTitle(page.title, '')
   if (title) leaf.title = title
   leaf.zoom = keptZoom(page.zoom)
+  if (page.muted) leaf.muted = true
   // Stays out of the agents' count of the pages they opened.
   delete leaf.openedBy
   return leaf

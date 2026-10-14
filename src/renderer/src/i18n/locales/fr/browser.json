@@ -114,6 +114,12 @@
       "stopHint": "Empêcher les agents de piloter cette page",
       "stopped": "Les agents ne peuvent plus piloter cette page. Fermez-la et ouvrez-en une nouvelle pour le leur permettre à nouveau."
     },
+    "audio": {
+      "playing": "Cette page joue du son : cliquez pour le couper",
+      "muted": "Son coupé : cliquez pour le réactiver",
+      "mute": "Couper le son de cette page",
+      "unmute": "Réactiver le son de cette page"
+    },
     "cookieImport": {
       "title": "Importer les cookies d'un autre navigateur",
       "intro": "Copiez vos connexions depuis un autre navigateur pour rester connecté à vos sites dans le navigateur de Tessel.",

@@ -12,6 +12,7 @@ import { docPathOf, samePath, pathKey } from '../editor/editorTabs'
 import { docs } from '../editor/documents'
 import { tabLabel } from '../editor/tabLabels'
 import { BLANK_URL, displayUrl, hostOf } from '../../../shared/browserUrl'
+import PageAudioButton from './PageAudioButton.vue'
 
 const props = defineProps({
   // The view's editor and browser panes, in the order of its tree.
@@ -54,7 +55,7 @@ function editorTabs(leaf) {
 function browserTab(leaf) {
   const url = leaf.url && leaf.url !== BLANK_URL ? leaf.url : ''
   const label = leaf.title || (url && hostOf(url)) || t('app.viewTabs.browser', 'Browser')
-  return { key: leaf.id, id: leaf.id, path: null, kind: 'browser', label, hint: url ? displayUrl(url) : label }
+  return { key: leaf.id, id: leaf.id, path: null, kind: 'browser', label, hint: url ? displayUrl(url) : label, leaf }
 }
 const tabs = computed(() => [
   { key: 'terminal', id: 'terminal', path: null, kind: 'terminal', label: t('app.viewTabs.terminal', 'Terminal'), hint: t('app.viewTabs.terminalHint', 'The terminals and agents of this project') },
@@ -113,6 +114,7 @@ function onAuxClick(e, tab) {
       </svg>
       <Globe v-else class="view-tab-icon" :size="14" aria-hidden="true" />
       <span class="view-tab-label">{{ tab.label }}</span>
+      <PageAudioButton v-if="tab.leaf" :leaf="tab.leaf" />
       <span v-if="tab.dirty" class="view-tab-dirty" :title="t('app.viewTabs.unsaved', 'Unsaved changes')" aria-hidden="true"></span>
       <button
         v-if="tab.kind !== 'terminal'"

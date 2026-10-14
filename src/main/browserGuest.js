@@ -361,6 +361,12 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
     // A right-click: a browser's menu (Electron shows none).
     guest.on('context-menu', (_event, params) => showContextMenu(guest, params || {}))
 
+    // The page starts or stops making sound: the window shows a speaker on
+    // its tab (a click mutes it, as in a browser).
+    guest.on('audio-state-changed', (event) => {
+      send('browser:audio', { webContentsId: guest.id, audible: !!(event && event.audible) })
+    })
+
     // Full screen is refused (the permission); a page that gets there anyway
     // is taken out, and Tessel's window put back as it was.
     const undoFullScreen = () => {

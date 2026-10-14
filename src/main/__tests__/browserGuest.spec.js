@@ -211,6 +211,16 @@ describe('will-attach-webview', () => {
 })
 
 describe('a page attached', () => {
+  it('starts or stops making sound: told to the window', () => {
+    const g = t.attach()
+    g.emit('audio-state-changed', { audible: true })
+    g.emit('audio-state-changed', { audible: false })
+    expect(t.sent).toEqual([
+      ['browser:audio', { webContentsId: 7, audible: true }],
+      ['browser:audio', { webContentsId: 7, audible: false }]
+    ])
+  })
+
   it('opens no window: an http(s) popup right after a click is told to the window', () => {
     const g = t.attach()
     t.click(g)

@@ -20,6 +20,7 @@ import SessionHistoryPanel from './SessionHistoryPanel.vue'
 import ConversationsPanel from './ConversationsPanel.vue'
 import AgentDashboard from './AgentDashboard.vue'
 import SideBrowser from './SideBrowser.vue'
+import PageAudioButton from './PageAudioButton.vue'
 import AgentSessionHistoryIcon from './AgentSessionHistoryIcon.vue'
 import RemoteBadge from './project/RemoteBadge.vue'
 import { remoteHostsState } from '../remoteHosts'
@@ -294,7 +295,8 @@ onBeforeUnmount(() => {
           @pointerdown="onBrowserTabPointerDown($event, b.id)"
           @auxclick="onBrowserTabAux($event, b.id)"
         >
-          <Globe :size="16" aria-hidden="true" />
+          <PageAudioButton v-if="b.audible || b.muted" :leaf="b" :size="15" />
+          <Globe v-else :size="16" aria-hidden="true" />
           <button
             type="button"
             class="side-web-close"

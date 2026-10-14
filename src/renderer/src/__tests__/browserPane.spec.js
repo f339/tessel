@@ -141,6 +141,8 @@ describe('BrowserPane.vue', () => {
     el.getTitle = vi.fn(() => '')
     el.getWebContentsId = vi.fn(() => 42)
     el.setZoomLevel = vi.fn()
+    el.setAudioMuted = vi.fn()
+    el.isCurrentlyAudible = vi.fn(() => false)
     el.isLoading = vi.fn(() => false)
     el.focus = vi.fn()
     el.findInPage = vi.fn()
@@ -192,6 +194,7 @@ describe('BrowserPane.vue', () => {
       onShortcut: sub('shortcut'),
       onPermissionDenied: sub('permission'),
       onDownloadBlocked: sub('download'),
+      onAudio: sub('audio'),
       openDevTools: vi.fn(() => Promise.resolve({ ok: true }))
     }
     prevApi = window.shellApi
@@ -234,6 +237,48 @@ describe('BrowserPane.vue', () => {
     expect(wv.attributes('webpreferences')).toContain('contextIsolation=yes')
     expect(wrapper.find('.bp-address-input').element.value).toBe('http://localhost:3000/')
     expect(wrapper.find('[data-test="browser-back"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('a page making sound: a speaker in the header; a click mutes it, another gives its sound back', async () => {
+    await mountPane('https://video.test/', { muted: false })
+    await ready()
+    expect(webview().setAudioMuted).toHaveBeenLastCalledWith(false)
+    expect(wrapper.find('[data-test="page-audio"]').exists()).toBe(false)
+    // Another page's sound counts for nothing here.
+    handlers.audio({ webContentsId: 7, audible: true })
+    await nextTick()
+    expect(node.audible).toBe(false)
+    handlers.audio({ webContentsId: 42, audible: true })
+    await nextTick()
+    const speaker = wrapper.find('.pane-nav [data-test="page-audio"]')
+    expect(speaker.exists()).toBe(true)
+    expect(speaker.attributes('aria-label')).toBe('Mute this page')
+    await speaker.trigger('click')
+    expect(node.muted).toBe(true)
+    expect(webview().setAudioMuted).toHaveBeenLastCalledWith(true)
+    expect(ctx.setActive).not.toHaveBeenCalled()
+    // Silent but muted: still shown, to give the page its sound back.
+    handlers.audio({ webContentsId: 42, audible: false })
+    await nextTick()
+    const muted = wrapper.find('[data-test="page-audio"]')
+    expect(muted.attributes('aria-label')).toBe('Unmute this page')
+    await muted.trigger('click')
+    expect(node.muted).toBe(false)
+    expect(webview().setAudioMuted).toHaveBeenLastCalledWith(false)
+    await nextTick()
+    expect(wrapper.find('[data-test="page-audio"]').exists()).toBe(false)
+  })
+
+  it('a muted pane opened again stays muted; a crashed page makes no sound', async () => {
+    await mountPane('https://video.test/', { muted: true, audible: true })
+    // A new page is silent until it says otherwise.
+    expect(node.audible).toBe(false)
+    await ready()
+    expect(webview().setAudioMuted).toHaveBeenCalledWith(true)
+    handlers.audio({ webContentsId: 42, audible: true })
+    fire('render-process-gone')
+    await nextTick()
+    expect(node.audible).toBe(false)
   })
 
   it('Clear browsing data: asks first, clears the session, says so', async () => {
@@ -434,7 +479,7 @@ describe('BrowserPane.vue', () => {
 
     wrapper.unmount()
     wrapper = null
-    expect(offs).toHaveLength(4)
+    expect(offs).toHaveLength(5)
     for (const off of offs) expect(off).toHaveBeenCalled()
   })
 
