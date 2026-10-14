@@ -4,7 +4,8 @@
 // shown alone in the whole room. A click shows one; an editor's or a
 // browser's × (or a middle-click) closes it. Drawn above the grid on the
 // Terminal tab, and in the header of the editor or browser on screen, so it
-// is always the one line at the top.
+// is always the one line at the top. With no editor or no browser open yet,
+// a dimmer Editor or Browser tab opens one (offer).
 import { computed } from 'vue'
 import { Globe, SquareTerminal, X } from 'lucide-vue-next'
 import { t } from '../i18n'
@@ -15,9 +16,11 @@ const props = defineProps({
   // The view's editor and browser panes, in the order of its tree.
   leaves: { type: Array, default: () => [] },
   // The tab on screen: 'terminal' or a pane's id.
-  shown: { type: String, default: 'terminal' }
+  shown: { type: String, default: 'terminal' },
+  // What a click can open when there is none yet: 'editor', 'browser'.
+  offer: { type: Array, default: () => [] }
 })
-const emit = defineEmits(['select', 'close'])
+const emit = defineEmits(['select', 'close', 'open'])
 
 // An editor: the name of the file it shows (its path on hover). A browser:
 // its page's title, else its host.
@@ -36,6 +39,13 @@ const tabs = computed(() => [
   { id: 'terminal', kind: 'terminal', label: t('app.viewTabs.terminal', 'Terminal'), hint: t('app.viewTabs.terminalHint', 'The terminals and agents of this project') },
   ...props.leaves.map((leaf) => (leaf.kind === 'editor' ? editorTab(leaf) : browserTab(leaf)))
 ])
+const offered = computed(() =>
+  props.offer.map((kind) =>
+    kind === 'editor'
+      ? { kind, label: t('app.viewTabs.editor', 'Editor'), hint: t('app.viewTabs.openEditor', 'Open the editor') }
+      : { kind, label: t('app.viewTabs.browser', 'Browser'), hint: t('app.viewTabs.openBrowser', 'Open a browser') }
+  )
+)
 
 function onAuxClick(e, tab) {
   if (e.button === 1 && tab.kind !== 'terminal') emit('close', tab.id)
@@ -88,10 +98,39 @@ function onAuxClick(e, tab) {
         <X :size="12" aria-hidden="true" />
       </button>
     </div>
+    <div
+      v-for="tab in offered"
+      :key="'open-' + tab.kind"
+      class="view-tab offer"
+      :class="tab.kind"
+      role="tab"
+      tabindex="0"
+      data-test="view-tab-offer"
+      :data-offer="tab.kind"
+      aria-selected="false"
+      :title="tab.hint"
+      @click="emit('open', tab.kind)"
+      @keydown.enter.prevent="emit('open', tab.kind)"
+      @keydown.space.prevent="emit('open', tab.kind)"
+    >
+      <svg v-if="tab.kind === 'editor'" class="view-tab-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+      <Globe v-else class="view-tab-icon" :size="14" aria-hidden="true" />
+      <span class="view-tab-label">{{ tab.label }}</span>
+    </div>
   </div>
 </template>
 
 <style scoped>
+/* A tab that opens an editor or a browser (none open yet): dimmer. */
+.view-tab.offer {
+  opacity: 0.7;
+  padding-right: 12px;
+}
+.view-tab.offer:hover {
+  opacity: 1;
+}
 .view-tabs {
   display: flex;
   align-items: stretch;
