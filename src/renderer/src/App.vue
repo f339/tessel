@@ -20,6 +20,7 @@ import { workspaceViews, viewKey, leafViewPath } from './paneViews'
 import { createPortScanner, browserUrlForPort, addressForPort } from './portScanner'
 import { allowedBrowserUrl, BLANK_URL, displayUrl } from '../../shared/browserUrl'
 import LaunchMenu from './components/LaunchMenu.vue'
+import { accountChoices, refreshAccountChoices, setOpenPanesSource } from './accountChoices'
 import SettingsDialog from './components/SettingsDialog.vue'
 import UpdateDialog from './components/UpdateDialog.vue'
 import UpdateCard from './components/UpdateCard.vue'
@@ -500,7 +501,7 @@ function chatPaneState(leaf) {
   return 'stopped'
 }
 // A new chat agent next to the active pane (split to the right).
-function openChatAgent({ ws = currentWs.value, agent = 'claude' } = {}) {
+function openChatAgent({ ws = currentWs.value, agent = 'claude', accountId } = {}) {
   if (!ws) return null
   const active = ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
   // A project on an SSH host: the agent runs there, in the project's folder
@@ -518,6 +519,8 @@ function openChatAgent({ ws = currentWs.value, agent = 'claude' } = {}) {
     return null
   }
   const leaf = makeChatLeaf({ agentId: agent, cwd, projectDir: hostRoot || ws.cwd || null })
+  // The account chosen in the + menu (else the default one, when it opens).
+  if (!hostRoot && (accountId === null || typeof accountId === 'string')) leaf.accountId = accountId
   if (copy) leaf.worktree = { path: copy.path, branch: copy.branch || '' }
   const split = (orig) => reactive({ type: 'split', id: newId('split'), dir: 'row', sizes: [50, 50], children: [orig, leaf] })
   if (active) ws.tree = replaceNode(ws.tree, active.id, split)
@@ -2295,6 +2298,16 @@ function openLiveShare() {
   liveShareOpen.value = true
 }
 onMounted(() => liveShare.init())
+// The accounts a session can start on (launchers, pane headers), and the panes
+// on each one (Settings warns before removing an account they use).
+setOpenPanesSource(() => {
+  const out = []
+  forEachWsLeaf((l) => {
+    if (l.kind === 'agent' || l.kind === 'chat') out.push({ agentId: l.agentId, accountId: l.accountId })
+  })
+  return out
+})
+onMounted(() => refreshAccountChoices())
 onBeforeUnmount(() => liveShare.dispose())
 
 function toggleMaximize(id) {
@@ -2929,6 +2942,12 @@ function buildCommands() {
   }
   for (const a of launchableAgents.value.filter((x) => x.available)) {
     add(t('app.cmd.group.new', 'New'), t('app.cmd.newNamed', 'New {{name}}', { name: a.name }), () => launch({ kind: 'agent', id: a.id }), { hint: t('app.cmd.aiAgent', 'AI agent') })
+    // More than one account signed in (a project on this computer): one per account.
+    if (!(currentWs.value && currentWs.value.remote))
+      for (const c of accountChoices(a.id))
+        add(t('app.cmd.group.new', 'New'), t('app.cmd.newOnAccount', 'New {{name}} on {{account}}', { name: a.name, account: c.name }), () => launch({ kind: 'agent', id: a.id, accountId: c.id }), {
+          hint: c.title
+        })
   }
   add(t('app.cmd.group.new', 'New'), t('app.cmd.newWorkspace', 'New workspace'), createWorkspace, { shortcut: 'Ctrl+Shift+N' })
   add(t('app.cmd.group.new', 'New'), t('project.cmd.addProject', 'Add a project…'), openAddProject)
@@ -3121,7 +3140,9 @@ function agentById(id) {
 
 // Open a terminal (kind 'shell') or an agent next to `targetId`, per the
 // chosen placement. Agents run inside the default shell.
-async function launch({ kind, id, sessionOptions = null }, targetId = activeId.value, where = placement.value) {
+async function launch({ kind, id, sessionOptions = null, accountId }, targetId = activeId.value, where = placement.value) {
+  // The account it starts on, chosen in the + menu (else the default one).
+  const account = accountId === null || typeof accountId === 'string' ? { accountId } : {}
   closeMenus()
   // In a Live Share project: a terminal or an agent opens on the host's
   // computer (its own install and settings), and shows here from there.
@@ -3138,7 +3159,7 @@ async function launch({ kind, id, sessionOptions = null }, targetId = activeId.v
   }
   if (kind === 'chat') {
     const baseWs = (targetId && wsOfLeaf(targetId)) || currentWs.value
-    openChatAgent({ ws: baseWs, agent: CHAT_AGENTS.includes(id) ? id : 'claude' })
+    openChatAgent({ ws: baseWs, agent: CHAT_AGENTS.includes(id) ? id : 'claude', ...account })
     return
   }
   const agent = kind === 'agent' ? agentById(id) : null
@@ -3181,7 +3202,7 @@ async function launch({ kind, id, sessionOptions = null }, targetId = activeId.v
     ws.remote = launchRemote
     workspaces.value.push(ws)
     if (currentWs.value && currentWs.value.id === launchViewId) selectWorkspace(ws.id)
-    const leaf = await createLeaf(shellId, agent, ws.cwd, worktree, wsLeafOpts(ws, { sessionOptions }))
+    const leaf = await createLeaf(shellId, agent, ws.cwd, worktree, wsLeafOpts(ws, { sessionOptions, ...account }))
     if (leaf) {
       ws.tree = leaf
       showActive(ws, leaf.id)
@@ -3191,11 +3212,11 @@ async function launch({ kind, id, sessionOptions = null }, targetId = activeId.v
 
   const ws = (targetId && wsOfLeaf(targetId)) || currentWs.value
   if (targetId && ws && ws.tree) {
-    await splitLeaf(targetId, where === 'down' ? 'col' : 'row', agent, shellId, worktree, { before: where === 'left', sessionOptions, inheritView: true })
+    await splitLeaf(targetId, where === 'down' ? 'col' : 'row', agent, shellId, worktree, { before: where === 'left', sessionOptions, inheritView: true, ...account })
     return
   }
   if (!ws) return
-  const leaf = await createLeaf(shellId, agent, ws.cwd, worktree, wsLeafOpts(ws, { sessionOptions }))
+  const leaf = await createLeaf(shellId, agent, ws.cwd, worktree, wsLeafOpts(ws, { sessionOptions, ...account }))
   if (leaf) {
     ws.tree = leaf
     showActive(ws, leaf.id)
@@ -3755,6 +3776,11 @@ const launchMenuAgents = computed(() => {
   const ws = (launcher.targetId && wsOfLeaf(launcher.targetId)) || currentWs.value
   const remote = !!(ws && ws.remote)
   return hostMenuAgents(launchableAgents.value, { remote, status: remote ? remoteAgentTools[ws.remote.hostId] || null : null })
+})
+// Its account choice: for a project on this computer (a host has its own sign-in).
+const launchMenuLocal = computed(() => {
+  const ws = (launcher.targetId && wsOfLeaf(launcher.targetId)) || currentWs.value
+  return !(ws && ws.remote) && !liveShare.isGuestWs(ws)
 })
 
 const launcherTargetTitle = computed(() => {
@@ -4701,7 +4727,9 @@ async function startInEmptyWorkspace(ws, choice) {
   const agent = choice.kind === 'agent' ? agentById(choice.id) : null
   if (choice.kind === 'agent' && !agent) return null
   const shellId = choice.kind === 'terminal' && choice.shellId && shells.value.some((s) => s.id === choice.shellId) ? choice.shellId : selectedShell.value
-  const leaf = await createLeaf(shellId, agent, ws.cwd, null, wsLeafOpts(ws))
+  // The account chosen in the launcher (else the default one).
+  const account = agent && !ws.remote && (choice.accountId === null || typeof choice.accountId === 'string') ? { accountId: choice.accountId } : {}
+  const leaf = await createLeaf(shellId, agent, ws.cwd, null, wsLeafOpts(ws, account))
   if (!leaf) return null
   if (!workspaces.value.includes(ws)) {
     window.shellApi.killPty(leaf.id)
@@ -12219,6 +12247,7 @@ onBeforeUnmount(() => {
       :target-title="launcherTargetTitle"
       :worktree="worktreeState"
       :use-worktree="useWorktree"
+      :account-choice="launchMenuLocal"
       @worktree="(v) => (useWorktree = v)"
       @tools="openTools"
       :x="launcher.x"

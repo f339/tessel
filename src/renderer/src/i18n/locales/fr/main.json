@@ -612,7 +612,8 @@
       "minimaxCookieExpired": "Le cookie de session MiniMax a expiré. Remplacez-le dans les Paramètres.",
       "minimaxKeyExpired": "La clé API MiniMax a expiré. Remplacez-la dans les Paramètres.",
       "minimaxNoModel": "Les données d'usage MiniMax du modèle configuré sont introuvables.",
-      "openCodeNoWorkspace": "Aucun espace de travail trouvé pour ce cookie. Ajoutez une clé API OpenCode Go (ou lancez /connect dans OpenCode), ou indiquez un identifiant d'espace de travail."
+      "openCodeNoWorkspace": "Aucun espace de travail trouvé pour ce cookie. Ajoutez une clé API OpenCode Go (ou lancez /connect dans OpenCode), ou indiquez un identifiant d'espace de travail.",
+      "claudeExpired": "Cette connexion Claude a expiré. Lancez Claude avec ce compte pour la renouveler."
     },
     "reset": {
       "notSaved": "Le résultat de la réinitialisation n'a pas pu être enregistré dans l'historique local.",
@@ -647,16 +648,16 @@
       "loginIncomplete": "La connexion Claude n'a pas abouti. Le compte précédent a été conservé.",
       "noCredentials": "La connexion Claude n'a produit aucun identifiant.",
       "identityUnverified": "L'identité de la connexion Claude n'a pas pu être vérifiée pour ce compte.",
-      "selectSaved": "Sélectionnez le compte Claude enregistré de ce panneau dans les comptes des fournisseurs d'IA avant de le redémarrer.",
       "removeUnsafe": "L'authentification Claude gérée ne peut pas être supprimée en toute sécurité.",
       "removedNotCleaned": "Compte supprimé ; ses fichiers gérés n'ont pas pu être nettoyés en toute sécurité.",
       "changedUnavailable": "Le compte Claude sélectionné a changé ou n'est pas disponible.",
       "savedMissing": "Le compte Claude enregistré est manquant ou illisible.",
       "selectedAuthUnreadable": "L'authentification Claude sélectionnée est illisible ; le lancement a été refusé.",
-      "missingRestored": "Le compte Claude sélectionné est manquant. « Valeur par défaut du système » a été restaurée ; choisissez un compte avant de lancer.",
       "systemAuthUnreadable": "L'authentification Claude du système est illisible ; le lancement a été refusé.",
       "storageInvalid": "Le stockage des comptes Claude est indisponible ou non valide.",
-      "awaitingRecovery": "Une opération sur un compte Claude attend une récupération."
+      "awaitingRecovery": "Une opération sur un compte Claude attend une récupération.",
+      "removedAccount": "Ce compte Claude n'est plus dans Tessel. Démarrez la session avec un autre compte.",
+      "signInAgain": "Ce compte Claude doit se reconnecter (Paramètres > Comptes de fournisseurs d'IA)."
     },
     "codexAccount": {
       "storageLink": "Le stockage des comptes Codex contient un lien ou un dossier non valide. Restaurez son emplacement d'origine et réessayez.",

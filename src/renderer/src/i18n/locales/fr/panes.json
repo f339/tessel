@@ -447,7 +447,8 @@
       "installPageHint": "Pas d'installation automatique sous Windows : ouvrir la page d'installation de {{name}} dans votre navigateur ({{url}})",
       "installOnHost": "Installer {{name}}…",
       "installOnHostHint": "{{name}} n’est pas installé sur cet hôte : l’installer là-bas",
-      "notOnHost": "Absent de l’hôte"
+      "notOnHost": "Absent de l’hôte",
+      "accountFor": "Compte de {{name}}"
     },
     "model": {
       "fromSession": "d'après sa dernière réponse",
@@ -758,6 +759,9 @@
       "using": "{{agent}} utilise ce terminal",
       "read": "a lu ce terminal",
       "yolo": "Yolo, sans demander"
+    },
+    "account": {
+      "chip": "Compte : {{account}}"
     }
   },
   "floating": {

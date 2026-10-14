@@ -729,6 +729,17 @@ body.popup-open .toolbar {
   }
 }
 
+/* The account a pane runs on (more than one for its agent): hidden first. */
+.pane-account-chip {
+  max-width: 120px;
+}
+
+@container (max-width: 460px) {
+  .pane-account-chip {
+    display: none;
+  }
+}
+
 /* Working / unknown: the dot on the logo shows it; the words stay for screen readers. */
 .pane-working.pane-badge-sr {
   position: absolute;
@@ -3131,6 +3142,27 @@ body.pane-dragging * {
   gap: 2px;
   color: var(--text);
   font-size: 12px;
+}
+
+/* The account a Claude Code or Codex session starts on (LaunchMenu). */
+.launch-account {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 2px 4px 4px;
+}
+.launch-account-name {
+  padding: 0 2px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.launch-account .launch-seg-btn {
+  min-width: 0;
+  padding: 0 6px;
+}
+.launch-account-choice {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pane-branch {

@@ -41,6 +41,7 @@ import {
 import { promptShowsPlaceholder } from '../promptCheck'
 import { detectTaskDone } from '../agentLimit'
 import { modelLabel } from '../../../shared/modelLabel'
+import { paneAccount } from '../accountChoices'
 import { modelFromScreen, modelFromSwitchLine } from '../../../shared/screenModel'
 import { findFileRefs } from '../../../shared/fileLinks'
 import { osc52Text } from '../../../shared/osc52'
@@ -105,6 +106,10 @@ const isActive = computed(() => ctx.activeId.value === props.node.id)
 const isMember = computed(() => ctx.broadcast.value && props.node.broadcast)
 const isMaximized = computed(() => ctx.maximizedId.value === props.node.id)
 const isAgent = computed(() => props.node.kind === 'agent')
+// The account a Claude Code or Codex pane runs on, when that agent has more
+// than one (on an SSH host it is the host's own sign-in: not shown).
+const accountInfo = computed(() => (isAgent.value && !props.node.remoteHostId ? paneAccount(props.node.agentId, props.node.accountId) : null))
+const accountChipLabel = computed(() => (accountInfo.value ? t('pane.account.chip', 'Account: {{account}}', { account: accountInfo.value.title }) : ''))
 // An agent pane asks for its model list (missing or a day old) once it
 // opens: its pickers (header, chat view, Settings) all list from it, not
 // only the pane menu's.
@@ -1360,6 +1365,7 @@ const hoverInfo = computed(() => {
     iconKind: agent ? n.agentId : n.shellId,
     accent: agent ? n.accent : null,
     model: agent ? modelText.value : '',
+    account: accountInfo.value ? accountInfo.value.title : '',
     conversation: autoTitle.value,
     branch: n.worktree ? n.worktree.branch : '',
     state: headerState.value,
@@ -3062,6 +3068,14 @@ const paneMenuBindings = computed(() => ({
           data-test="pane-model-chip"
           :aria-label="t('pane.sessionOptions.chipStatic', 'Model: {{model}}', { model: headerModelText })"
           >{{ headerModelText }}</span
+        >
+        <span
+          v-if="accountInfo"
+          class="pane-model-chip static pane-account-chip"
+          data-test="pane-account-chip"
+          :title="accountChipLabel"
+          :aria-label="accountChipLabel"
+          >{{ accountInfo.name }}</span
         >
         <!-- One badge: the most urgent state (all of them are in the … menu). -->
         <span v-if="badge === 'asleep'" class="exit-tag" data-test="pane-badge" :title="t('pane.badge.asleepHint', 'Asleep: open the pane to wake it')">{{ t('pane.badge.asleep', 'asleep') }}</span>

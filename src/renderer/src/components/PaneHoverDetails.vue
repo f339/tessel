@@ -6,7 +6,7 @@
 // state with the dot, its team and a muted hint. It
 // replaces the header title's native tooltip.
 import { computed } from 'vue'
-import { Users, SquareTerminal, Cpu, MessageSquareText, GitBranch, Coins } from 'lucide-vue-next'
+import { Users, SquareTerminal, Cpu, MessageSquareText, GitBranch, Coins, UserRound } from 'lucide-vue-next'
 import BrandIcon from './BrandIcon.vue'
 import AgentStateDot from './sidebar/AgentStateDot.vue'
 import { t, currentLocale } from '../i18n'
@@ -20,6 +20,8 @@ const props = defineProps({
 })
 
 const modelLine = computed(() => (props.info.model ? t('pane.model.title', 'Model: {{model}}', { model: props.info.model }) : ''))
+// The account it runs on (when its agent has more than one).
+const accountLine = computed(() => (props.info.account ? t('pane.account.chip', 'Account: {{account}}', { account: props.info.account }) : ''))
 const branchLine = computed(() =>
   props.info.branch ? t('pane.title.branch', 'Branch: {{branch}} (separate copy)', { branch: props.info.branch }) : ''
 )
@@ -47,6 +49,10 @@ const sessionLine = computed(() => (props.info.session ? t('pane.status.session'
       <div v-if="modelLine" class="hc-agent hc-model" data-hover-model="">
         <Cpu :size="12" aria-hidden="true" />
         <span v-text="modelLine"></span>
+      </div>
+      <div v-if="accountLine" class="hc-agent" data-hover-account="">
+        <UserRound :size="12" aria-hidden="true" />
+        <span v-text="accountLine"></span>
       </div>
       <div v-if="info.conversation" class="hc-agent" data-hover-conversation="">
         <MessageSquareText :size="12" aria-hidden="true" />

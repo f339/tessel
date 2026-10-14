@@ -275,6 +275,17 @@ describe('transcriptHomeFor', () => {
     expect(transcriptHomeFor('claude', { CLAUDE_CONFIG_DIR: systemClaude.toUpperCase() }, opts)).toBe(process.platform === 'win32' ? systemClaude : null)
     expect(transcriptHomeFor('other', {}, opts)).toBeNull()
   })
+
+  it.runIf(process.platform === 'win32')('Claude: a managed account folder reads the system folder (its conversations are shared there)', () => {
+    const claudeAccountsBase = 'C:\\Users\\u\\AppData\\Roaming\\Tessel\\claude-accounts'
+    const id = '11111111-2222-4333-8444-555555555555'
+    const withBase = { ...opts, claudeAccountsBase }
+    expect(transcriptHomeFor('claude', { CLAUDE_CONFIG_DIR: `${claudeAccountsBase}\\${id}\\auth` }, withBase)).toBe(systemClaude)
+    expect(transcriptHomeFor('claude', { CLAUDE_CONFIG_DIR: `${claudeAccountsBase}\\${id}\\auth` }, opts)).toBeNull()
+    expect(transcriptHomeFor('claude', { CLAUDE_CONFIG_DIR: `${claudeAccountsBase}\\${id}` }, withBase)).toBeNull()
+    expect(transcriptHomeFor('claude', { CLAUDE_CONFIG_DIR: `${claudeAccountsBase}\\not-an-id\\auth` }, withBase)).toBeNull()
+    expect(transcriptHomeFor('claude', { CLAUDE_CONFIG_DIR: `${claudeAccountsBase}\\..\\${id}\\auth` }, withBase)).toBeNull()
+  })
 })
 
 describe('OpenCode messages (GET /session/:id/message, recorded from 1.18.33)', () => {

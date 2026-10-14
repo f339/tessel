@@ -417,7 +417,11 @@ export function createCodexAccounts({
     let system = { id: null, label: 'System default', status: 'unknown' }
     try {
       const raw = readSmall(join(systemHome, 'auth.json'), { missing: true })
-      if (raw !== null) system = { ...system, status: authDetails(raw).status }
+      if (raw !== null) {
+        // Display fields only (from its identity token's claims), as an added account shows them.
+        const found = authDetails(raw)
+        system = { ...system, status: found.status, email: found.email || null, organization: found.organization || null, plan: found.plan || null }
+      }
       // Missing file cannot distinguish a keyring login from no login.
     } catch {}
     return {

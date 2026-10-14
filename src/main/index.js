@@ -1278,13 +1278,15 @@ const chatSessions = createChatSessions({
   // chat would ignore the project's .codex settings (agentFolderTrust.js).
   preTrust: (q) => agentFolderTrust.apply(q),
   // Where a resumed conversation's earlier history is read (its agent's own
-  // transcript): the system Claude folder, the system Codex home or a managed
-  // Codex account's, never another folder.
+  // transcript): the system Claude folder (a managed Claude account's
+  // conversations are there too), the system Codex home or a managed Codex
+  // account's, never another folder.
   transcriptHome: (agent, env) =>
     transcriptHomeFor(agent, env, {
       systemClaude: process.env.CLAUDE_CONFIG_DIR || join(os.homedir(), '.claude'),
       systemCodex: process.env.CODEX_HOME || join(os.homedir(), '.codex'),
-      codexAccountsBase: join(app.getPath('userData'), 'codex-accounts')
+      codexAccountsBase: join(app.getPath('userData'), 'codex-accounts'),
+      claudeAccountsBase: join(app.getPath('userData'), 'claude-accounts')
     }),
   // Chats in a project on an SSH host: the agent runs there (remoteSpawn,
   // chat/remoteProcess.js), found where a terminal agent is (__t_agents);
@@ -1905,10 +1907,15 @@ const remoteArg = (q) => (q && typeof q === 'object' ? isRemotePath(q.root) || i
 // Add a project (addProject.js): clone from a URL, create a new one, find the
 // repositories in a folder.
 registerAddProject({ ipcMain, service: createAddProject({ send: (channel, payload) => send(channel, payload) }) })
+// Each Claude session runs on its own account's folder (claudeAccounts.js).
+const claudeAccounts = createClaudeAccounts({ ...accountOptions, log })
 const accounts = createProviderAccounts({
-  claude: createClaudeAccounts(accountOptions),
+  claude: claudeAccounts,
   codex: createCodexAccounts(accountOptions)
 })
+// An older version's account switch put an account's sign-in into the
+// system Claude files: the system's own is put back once, at startup.
+claudeAccounts.migrate().catch((err) => log.warn('accounts', `Claude account migration: ${err && err.message}`)) // i18n-ignore log
 ipcMain.handle('accounts:list', safe(() => accounts.list()))
 // Usage refresh: at startup, every 2 min (Settings) while the window is in use,
 // on focus when older than 5 min, and from the chats' own rate-limit reports

@@ -147,12 +147,13 @@ export async function ownedDirectory(root, path, marker, identity) {
 }
 
 // Validate the entire owned tree first; never recurse through a link or junction
-// (one found inside is removed itself, never what it points to).
-export async function removeOwnedDirectory(root, path, marker, identity) {
+// (one found inside is removed itself, never what it points to). A Claude
+// account's folder, used by its sessions, can hold more than a sign-in's.
+export async function removeOwnedDirectory(root, path, marker, identity, { depth: maxDepth = 12, count = 4096 } = {}) {
   if (!(await ownedDirectory(root, path, marker, identity))) return
   const entries = []
   async function walk(directory, depth) {
-    if (depth > 12 || entries.length > 4096) throw authError()
+    if (depth > maxDepth || entries.length > count) throw authError()
     await inspect(directory, true)
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       const child = join(directory, entry.name)

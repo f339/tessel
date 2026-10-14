@@ -6,13 +6,14 @@
 // 1-9 or the arrows and Enter pick; Esc leaves it as it is. Nothing here
 // connects to an SSH host: a host's conversations are listed only while it
 // is connected (sessions:listRemote never signs in).
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Globe, History, SquareTerminal } from 'lucide-vue-next'
 import BrandIcon from './BrandIcon.vue'
 import ThemedSelect from './ui/ThemedSelect.vue'
 import { recentProjectSessions } from '../projectLauncher'
 import { agentLabel, timeAgo } from '../sessionHistory'
 import { t } from '../i18n'
+import { accountChoices, defaultAccountChoice, refreshAccountChoices } from '../accountChoices'
 
 const props = defineProps({
   name: { type: String, default: '' },
@@ -109,6 +110,21 @@ const numberOf = (item) => {
   return i >= 0 && i < 9 ? String(i + 1) : ''
 }
 
+// The account Claude Code or Codex starts on, when it has more than one
+// signed in (on this computer only: a host has its own sign-in). The select
+// keeps 'system' for the system's sign-in.
+const chosenAccount = reactive({})
+const accountsOf = (a) => (props.remote || a.missing ? [] : accountChoices(a.id))
+const accountKey = (id) => (id === null ? 'system' : id)
+function accountValue(a) {
+  const choices = accountsOf(a)
+  const key = chosenAccount[a.id]
+  if (choices.some((c) => accountKey(c.id) === key)) return key
+  const fallback = defaultAccountChoice(a.id)
+  return accountKey(fallback === undefined ? null : fallback)
+}
+const accountLabelOf = (a) => t('launcher.accountFor', '{{name}} account', { name: a.name })
+
 // A missing agent reads as its install (the name has mustaches: built here).
 const agentLabelOf = (a) => (a.missing ? t('launcher.installAgent', 'Install {{name}}…', { name: a.name }) : a.name)
 
@@ -116,7 +132,11 @@ function pick(item) {
   if (!item) return
   // Missing on the host: its install (asked first), never started as if ready.
   if (item.kind === 'agent' && item.agent.missing) emit('pick', { kind: 'install', id: item.agent.id }, { remember: false })
-  else if (item.kind === 'agent') emit('pick', { kind: 'agent', id: item.agent.id }, { remember: remember.value })
+  else if (item.kind === 'agent') {
+    const key = accountsOf(item.agent).length ? accountValue(item.agent) : undefined
+    const account = key === undefined ? {} : { accountId: key === 'system' ? null : key }
+    emit('pick', { kind: 'agent', id: item.agent.id, ...account }, { remember: remember.value })
+  }
   else if (item.kind === 'terminal') emit('pick', { kind: 'terminal', shellId: props.remote ? null : shellId.value }, { remember: remember.value })
   else if (item.kind === 'browser') emit('pick', { kind: 'browser' }, { remember: false })
   else if (item.kind === 'session') emit('pick', { kind: 'session', session: item.session }, { remember: false })
@@ -165,6 +185,7 @@ function focusSoon() {
 }
 onMounted(() => {
   loadSessions()
+  refreshAccountChoices()
   focusSoon()
 })
 onBeforeUnmount(() => {
@@ -192,23 +213,47 @@ const terminalHint = computed(() =>
 
       <section v-if="agents.length" class="pl-section">
         <h3 class="pl-section-title">{{ remote ? t('launcher.agentsOnHost', 'Agents on the host') : t('launcher.agents', 'Agents') }}</h3>
-        <button
-          v-for="item in items.filter((i) => i.kind === 'agent')"
-          :key="item.key"
-          type="button"
-          class="pl-row"
-          :class="{ selected: indexOf(item) === selected }"
-          :data-index="indexOf(item)"
-          :data-test="`launcher-agent-${item.agent.id}`"
-          @mouseenter="selected = indexOf(item)"
-          @click="pick(item)"
-        >
-          <span class="pl-num">{{ numberOf(item) }}</span>
-          <BrandIcon :kind="item.agent.id" :accent="item.agent.accent" :label="item.agent.name" :size="16" />
-          <span class="pl-label">{{ agentLabelOf(item.agent) }}</span>
-          <span v-if="item.agent.missing" class="pl-hint" :data-test="`launcher-missing-${item.agent.id}`">{{ t('launcher.agentMissing', 'Not installed on the host') }}</span>
-          <span v-else-if="item.agent.unchecked" class="pl-hint">{{ t('launcher.agentUnchecked', 'Not checked on the host yet') }}</span>
-        </button>
+        <template v-for="item in items.filter((i) => i.kind === 'agent')" :key="item.key">
+          <!-- More than one account signed in: which one it starts on, beside it. -->
+          <div
+            v-if="accountsOf(item.agent).length"
+            class="pl-row pl-row-terminal"
+            :class="{ selected: indexOf(item) === selected }"
+            :data-index="indexOf(item)"
+            @mouseenter="selected = indexOf(item)"
+          >
+            <button type="button" class="pl-row-main" :data-test="`launcher-agent-${item.agent.id}`" @click="pick(item)">
+              <span class="pl-num">{{ numberOf(item) }}</span>
+              <BrandIcon :kind="item.agent.id" :accent="item.agent.accent" :label="item.agent.name" :size="16" />
+              <span class="pl-label">{{ agentLabelOf(item.agent) }}</span>
+            </button>
+            <ThemedSelect
+              :model-value="accountValue(item.agent)"
+              class="pl-shell"
+              :data-test="`launcher-account-${item.agent.id}`"
+              :aria-label="accountLabelOf(item.agent)"
+              @update:model-value="(v) => (chosenAccount[item.agent.id] = v)"
+            >
+              <option v-for="c in accountsOf(item.agent)" :key="accountKey(c.id)" :value="accountKey(c.id)">{{ c.name }}</option>
+            </ThemedSelect>
+          </div>
+          <button
+            v-else
+            type="button"
+            class="pl-row"
+            :class="{ selected: indexOf(item) === selected }"
+            :data-index="indexOf(item)"
+            :data-test="`launcher-agent-${item.agent.id}`"
+            @mouseenter="selected = indexOf(item)"
+            @click="pick(item)"
+          >
+            <span class="pl-num">{{ numberOf(item) }}</span>
+            <BrandIcon :kind="item.agent.id" :accent="item.agent.accent" :label="item.agent.name" :size="16" />
+            <span class="pl-label">{{ agentLabelOf(item.agent) }}</span>
+            <span v-if="item.agent.missing" class="pl-hint" :data-test="`launcher-missing-${item.agent.id}`">{{ t('launcher.agentMissing', 'Not installed on the host') }}</span>
+            <span v-else-if="item.agent.unchecked" class="pl-hint">{{ t('launcher.agentUnchecked', 'Not checked on the host yet') }}</span>
+          </button>
+        </template>
       </section>
       <p v-else class="pl-empty">
         {{ remote ? t('launcher.noAgentsOnHost', 'No agent was found on this host.') : t('launcher.noAgents', 'No agent is installed. Settings > Agents shows how to install one.') }}

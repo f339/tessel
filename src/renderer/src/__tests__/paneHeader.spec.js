@@ -7,6 +7,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick, reactive, ref } from 'vue'
 import { setApproval, clearAgentStatus, applyAgentStates } from '../agentStatus'
 import { resetSettings, settings } from '../settings'
+import { refreshAccountChoices } from '../accountChoices'
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
@@ -118,6 +119,26 @@ describe('terminal pane header', () => {
 
   const header = () => wrapper.get('[data-test="pane-header"]')
   const menu = () => document.body.querySelector(':scope > .ctx-menu')
+
+  it('names the account the pane runs on when its agent has more than one', async () => {
+    const list = vi.fn(async () => ({
+      ok: true,
+      providers: [{ provider: 'claude', selectedId: null, system: { status: 'ready', email: 'me@home.test' }, accounts: [{ id: 'acc-1', email: 'work.person@corp.test', status: 'ready' }] }]
+    }))
+    window.shellApi.accounts = { list }
+    await refreshAccountChoices()
+    wrapper.unmount()
+    wrapper = mount(TerminalPane, { props: { node: { ...node(), accountId: 'acc-1' } }, attachTo: host, global: { provide: { panelCtx: ctx } } })
+    await flushPromises()
+    const chip = header().get('[data-test="pane-account-chip"]')
+    expect(chip.text()).toBe('work.person')
+    expect(chip.attributes('title')).toBe('Account: work.person@corp.test')
+    // A single account: nothing to tell apart.
+    list.mockResolvedValue({ ok: true, providers: [{ provider: 'claude', selectedId: null, system: { status: 'ready' }, accounts: [] }] })
+    await refreshAccountChoices()
+    await nextTick()
+    expect(header().find('[data-test="pane-account-chip"]').exists()).toBe(false)
+  })
 
   it('terminal and chat header menus have the same sections and action order', async () => {
     ctx.unsent = {}

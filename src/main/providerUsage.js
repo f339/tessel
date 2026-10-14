@@ -419,6 +419,10 @@ export function createProviderUsage({
         'auth',
         t('main.usage.noToken', 'The selected account has no usable OAuth token. Sign in again with the provider CLI.')
       )
+    // Tessel never refreshes a token: Claude Code does, in the account's own folder.
+    const expiresAt = snapshot.provider === 'claude' ? Number(parsed.claudeAiOauth?.expiresAt) : NaN
+    if (Number.isFinite(expiresAt) && expiresAt > 0 && expiresAt <= clock())
+      fail('auth', t('main.usage.claudeExpired', 'This Claude sign-in has expired. Start Claude on this account to refresh it.'))
     let who = null
     if (snapshot.provider === 'claude' && snapshot.accountId !== null) {
       const expected = identity(snapshot.expectedIdentity)

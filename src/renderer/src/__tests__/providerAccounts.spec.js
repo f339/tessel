@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ProviderAccounts from '../components/ProviderAccounts.vue'
+import { setOpenPanesSource } from '../accountChoices'
 
 const provider = (id = 'codex') => ({
   provider: id,
@@ -75,9 +76,52 @@ describe('provider account management', () => {
     expect(row().text()).toContain('Pro')
     expect(row().text()).toContain('Last signed in')
     expect(section().text()).toContain('New Codex terminals use the selected account')
-    expect(section('claude').text()).toContain('system Claude sign-in')
-    expect(section('claude').text()).toContain('restart Claude terminals')
+    expect(section('claude').text()).toContain('Each Claude session keeps the account it started with')
+    expect(section('claude').text()).toContain('shared between accounts')
+    expect(section('claude').text()).not.toContain('restart Claude terminals')
     expect(row('system').find('[data-test="account-remove"]').exists()).toBe(false)
+  })
+
+  it('shows the system sign-in with the same details as an added account', async () => {
+    state.providers[1].system = { id: null, label: 'System default', status: 'ready', email: 'me@example.test', organization: 'Home org', plan: 'max' }
+    await render()
+    const system = row('system', 'claude')
+    expect(system.text()).toContain('System default')
+    expect(system.text()).toContain('me@example.test')
+    expect(system.text()).toContain('Home org')
+    expect(system.text()).toContain('max')
+    expect(system.text()).toContain('Signed in')
+    expect(system.text()).not.toContain('Last signed in')
+    expect(system.text()).toContain('New sessions')
+  })
+
+  it('says a Claude default changes only new sessions', async () => {
+    await render()
+    await row('saved-1', 'claude').get('.account-select').trigger('click')
+    await flushPromises()
+    expect(api.select).toHaveBeenCalledWith('claude', 'saved-1')
+    expect(wrapper.text()).toContain('New Claude sessions will use this account; open ones keep theirs.')
+    expect(wrapper.text()).not.toContain('Restart your Claude terminals')
+  })
+
+  it('warns before removing an account open panes run on', async () => {
+    setOpenPanesSource(() => [
+      { agentId: 'claude', accountId: 'saved-1' },
+      { agentId: 'claude', accountId: 'saved-1' },
+      { agentId: 'claude', accountId: null },
+      { agentId: 'codex', accountId: 'saved-1' }
+    ])
+    try {
+      await render()
+      await row('saved-1', 'claude').get('[data-test="account-remove"]').trigger('click')
+      expect(section('claude').get('[data-test="account-remove-in-use"]').text()).toContain('2 open panes run on this account')
+      await section('claude').get('[data-test="account-remove-cancel"]').trigger('click')
+      setOpenPanesSource(() => [{ agentId: 'claude', accountId: null }])
+      await row('saved-1', 'claude').get('[data-test="account-remove"]').trigger('click')
+      expect(section('claude').find('[data-test="account-remove-in-use"]').exists()).toBe(false)
+    } finally {
+      setOpenPanesSource(null)
+    }
   })
 
   it('says that added accounts keep their sign-in unencrypted, only when there are some', async () => {
@@ -91,7 +135,7 @@ describe('provider account management', () => {
   it('shows one row per provider with the account in use; its accounts stay folded until Details', async () => {
     await render()
     const details = () => section().get('[data-test="provider-details"]')
-    expect(section().get('[data-test="provider-status"]').text()).toBe('Using System default · Signed in')
+    expect(section().get('[data-test="provider-status"]').text()).toBe('New sessions: System default · Signed in')
     expect(section().get('[data-test="provider-status"]').classes()).toContain('ok')
     expect(details().attributes('style')).toContain('display: none')
     const toggle = section().get('[data-test="provider-details-toggle"]')
@@ -107,7 +151,7 @@ describe('provider account management', () => {
     state.providers[0].selectedId = 'saved-1'
     state.providers[0].accounts[0].status = 'missing'
     await render()
-    expect(section().get('[data-test="provider-status"]').text()).toBe('Using Work · Sign-in needed')
+    expect(section().get('[data-test="provider-status"]').text()).toBe('New sessions: Work · Sign-in needed')
     expect(section().get('[data-test="provider-status"]').classes()).toContain('warn')
     expect(section().get('[data-test="provider-details-toggle"]').attributes('aria-expanded')).toBe('true')
     expect(section('claude').get('[data-test="provider-details-toggle"]').attributes('aria-expanded')).toBe('false')

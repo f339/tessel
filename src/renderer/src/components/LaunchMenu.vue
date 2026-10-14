@@ -2,10 +2,11 @@
 // One place to open anything: pick a terminal or an agent, and where it goes.
 // Used from the toolbar's "New" button and from a pane's own menu (then the
 // new pane opens next to that pane). App owns what actually happens.
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 import { settings } from '../settings'
 import { t } from '../i18n'
+import { ACCOUNT_AGENTS, accountChoices, defaultAccountChoice, refreshAccountChoices } from '../accountChoices'
 
 const props = defineProps({
   shells: { type: Array, default: () => [] },
@@ -17,6 +18,9 @@ const props = defineProps({
   // { available: bool, reason: string|null, checking: bool }
   worktree: { type: Object, default: () => ({ available: false, reason: null, checking: false }) },
   useWorktree: { type: Boolean, default: false },
+  // A project on this computer: Claude Code and Codex may start on another
+  // of their accounts (on an SSH host, they use the host's sign-in).
+  accountChoice: { type: Boolean, default: true },
   x: { type: Number, default: 0 },
   y: { type: Number, default: 0 }
 })
@@ -73,9 +77,32 @@ const whereText = computed(() => {
   return t('pane.launch.opensRightOf', 'Opens to the right of {{name}}', { name })
 })
 
+// The account each of Claude Code and Codex starts on from this menu, its
+// sessions in a terminal and in a chat: the default one first.
+const chosenAccount = reactive({})
+const accountRows = computed(() =>
+  props.accountChoice
+    ? ACCOUNT_AGENTS.map((id) => ({ id, agent: installedAgents.value.find((a) => a.id === id), choices: accountChoices(id) }))
+        .filter((row) => row.agent && row.choices.length > 1)
+        .map((row) => ({ ...row, label: t('pane.launch.accountFor', '{{name}} account', { name: row.agent.name }) }))
+    : []
+)
+watch(
+  accountRows,
+  (rows) => {
+    for (const row of rows)
+      if (!row.choices.some((c) => c.id === chosenAccount[row.id])) chosenAccount[row.id] = defaultAccountChoice(row.id) ?? null
+  },
+  { immediate: true }
+)
+const accountOf = (id) => (accountRows.value.some((row) => row.id === id) ? { accountId: chosenAccount[id] } : {})
+
 function launch(kind, item) {
   if (kind === 'agent' && !item.available) return
-  emit('launch', { kind, id: item.id })
+  emit('launch', { kind, id: item.id, ...(kind === 'agent' ? accountOf(item.id) : {}) })
+}
+function launchChat(id) {
+  emit('launch', { kind: 'chat', id, ...accountOf(id) })
 }
 
 // Arrow keys move between items; Enter activates; Esc closes.
@@ -96,6 +123,7 @@ function onKeydown(e) {
 }
 
 onMounted(async () => {
+  refreshAccountChoices()
   await nextTick()
   const el = rootEl.value
   if (!el) return
@@ -192,6 +220,25 @@ onMounted(async () => {
         }}</span>
       </span>
     </label>
+    <!-- The account a Claude Code or Codex session starts on (more than one signed in). -->
+    <div v-for="row in accountRows" :key="`account-${row.id}`" class="launch-account" :data-test="`launch-account-${row.id}`">
+      <span class="launch-account-name">{{ row.label }}</span>
+      <div class="launch-seg" role="radiogroup" :aria-label="row.label">
+        <button
+          v-for="c in row.choices"
+          :key="c.id || 'system'"
+          class="launch-seg-btn"
+          :class="{ on: chosenAccount[row.id] === c.id }"
+          role="radio"
+          :aria-checked="chosenAccount[row.id] === c.id"
+          :title="c.title"
+          :data-test="`launch-account-${row.id}-${c.id || 'system'}`"
+          @click="chosenAccount[row.id] = c.id"
+        >
+          <span class="launch-account-choice">{{ c.name }}</span>
+        </button>
+      </div>
+    </div>
     <template v-for="agent in installedAgents" :key="agent.id">
       <div class="launch-row">
         <button
@@ -225,7 +272,7 @@ onMounted(async () => {
         role="menuitem"
         data-test="launch-chat"
         :title="t('pane.launch.chatHint', 'Claude in a chat pane: no terminal; team messages reach it as turns of their own')"
-        @click="emit('launch', { kind: 'chat', id: 'claude' })"
+        @click="launchChat('claude')"
       >
         <BrandIcon kind="claude" :label="t('pane.launch.chat', 'Claude Code (chat)')" :size="16" />
         <span class="launch-name">{{ t('pane.launch.chat', 'Claude Code (chat)') }}</span>
@@ -237,7 +284,7 @@ onMounted(async () => {
         role="menuitem"
         data-test="launch-chat-codex"
         :title="t('pane.launch.chatCodexHint', 'Codex in a chat pane: no terminal; team messages reach it as turns of their own')"
-        @click="emit('launch', { kind: 'chat', id: 'codex' })"
+        @click="launchChat('codex')"
       >
         <BrandIcon kind="codex" :label="t('pane.launch.chatCodex', 'Codex (chat)')" :size="16" />
         <span class="launch-name">{{ t('pane.launch.chatCodex', 'Codex (chat)') }}</span>

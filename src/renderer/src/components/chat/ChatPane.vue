@@ -34,6 +34,8 @@ import { modelLabel } from '../../../../shared/modelLabel'
 import { modelsFor } from '../../agentModels'
 import { nativeChatSessionChoiceLabel } from '../../chat/orca/native-chat-session-option-labels.js'
 import { t } from '../../i18n'
+import { paneAccount } from '../../accountChoices'
+import { isRemotePath } from '../../../../shared/remotePath'
 import HoverCardContent from '../hover/HoverCardContent.vue'
 import { useHoverCard } from '../hover/useHoverCard'
 import PaneHoverDetails from '../PaneHoverDetails.vue'
@@ -152,6 +154,8 @@ const hoverInfo = computed(() => ({
   iconKind: agentId.value,
   accent: props.node.accent || null,
   model: modelText.value,
+  // The account it runs on, when its agent has more than one (none on a host).
+  account: (!isRemotePath(props.node.cwd) && paneAccount(agentId.value, props.node.accountId)?.title) || '',
   conversation: props.node.autoTitle || '',
   branch: props.node.worktree ? props.node.worktree.branch : '',
   state: hoverState.value,

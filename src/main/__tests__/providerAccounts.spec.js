@@ -169,6 +169,24 @@ describe('account IPC coordinator', () => {
       error: 'Account home unreadable.'
     })
   })
+  it('starts sessions side by side: one launch never refuses another or a settings change', async () => {
+    const f = fixture()
+    let release
+    f.claude.launchEnv.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ ok: true, env: { CLAUDE_CONFIG_DIR: 'managed' }, accountId: 'id' })
+        })
+    )
+    const first = f.accounts.launchEnv('claude', 'id')
+    await tick()
+    expect(await f.accounts.launchEnv('claude', null)).toMatchObject({ ok: true, unsetEnv: [] })
+    expect((await f.accounts.select('claude', null)).ok).toBe(true)
+    release()
+    const result = await first
+    expect(result).toMatchObject({ ok: true, env: { CLAUDE_CONFIG_DIR: 'managed' }, accountId: 'id' })
+    expect(result.unsetEnv).toContain('ANTHROPIC_API_KEY')
+  })
   it('rejects unknown providers and missing jobs without executing a backend', async () => {
     const f = fixture()
     expect(f.accounts.startLogin('__proto__').ok).toBe(false)

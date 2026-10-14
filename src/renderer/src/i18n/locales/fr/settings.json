@@ -570,7 +570,6 @@
         "unverified": "Non vérifié"
       },
       "account": "Compte",
-      "updatedClaude": "Compte mis à jour. Redémarrez vos terminaux Claude quand vous êtes prêt à utiliser cette connexion.",
       "updatedCodex": "Compte mis à jour. Les nouveaux terminaux Codex utiliseront cette sélection.",
       "readFailed": "Impossible de lire vos comptes.",
       "removedClaude": "Compte supprimé. Redémarrez vos terminaux Claude quand vous êtes prêt à utiliser la connexion restaurée.",
@@ -586,7 +585,6 @@
       "add": "Ajouter un compte",
       "providerReadFailed": "Impossible de lire les comptes : {{error}}",
       "useFor": "Utiliser {{account}} pour {{provider}}",
-      "current": "Actuel",
       "lastSignedIn": "Dernière connexion le {{date}}",
       "reauthLabel": "Se reconnecter à {{account}}",
       "reauth": "Se reconnecter",
@@ -596,7 +594,6 @@
       "removePrefix": "Supprimer",
       "removeCodexSuffix": "et son historique Codex local de Tessel ? Votre compte OpenAI est conservé.",
       "removeClaudeSuffix": "de Tessel ? Votre compte Claude et l'historique de vos conversations sont conservés.",
-      "removeSelected": "Ce compte est sélectionné. Le supprimer rétablit la valeur par défaut du système pour ce fournisseur.",
       "keep": "Garder le compte",
       "removeAccount": "Supprimer le compte",
       "waiting": "En attente de la connexion à {{name}}…",
@@ -727,22 +724,27 @@
         "details": "Détails",
         "readFailed": "Impossible de lire les comptes",
         "none": "Aucun compte pour le moment",
-        "using": "Utilise {{account}} · {{status}}",
         "expired": "Connexion expirée",
         "signedInAs": "Connecté en tant que {{name}}",
         "keyAndCookie": "Clé API et cookie de session enregistrés",
         "keySaved": "Clé API enregistrée",
         "cookieSaved": "Cookie de session enregistré",
         "notSetUp": "Non configuré",
-        "used": "{{pct}} % utilisé"
+        "used": "{{pct}} % utilisé",
+        "newSessions": "Nouvelles sessions : {{account}} · {{status}}"
       },
       "finishInBrowserShort": "Terminez dans votre navigateur ; vous pouvez fermer les Paramètres.",
-      "scopeClaudeShort": "Changer de compte modifie votre connexion Claude du système ; redémarrez les terminaux Claude pour l'utiliser.",
       "scopeCodexShort": "Les nouveaux terminaux Codex utilisent le compte sélectionné ; ceux déjà ouverts gardent le leur.",
       "notInstalled": "Non installés :",
       "showProvider": "Afficher {{name}}",
       "unsealed": "Vos clés et cookies enregistrés sont stockés sans chiffrement : quiconque peut lire votre disque ou une sauvegarde peut les lire. Enregistrez-les de nouveau pour les chiffrer.",
-      "unsealedSignIns": "Les connexions des comptes ajoutés ici sont stockées sans chiffrement, dans des fichiers de votre dossier utilisateur Windows (comme {{name}} conserve la sienne) : quiconque peut lire votre disque ou une sauvegarde peut les utiliser."
+      "unsealedSignIns": "Les connexions des comptes ajoutés ici sont stockées sans chiffrement, dans des fichiers de votre dossier utilisateur Windows (comme {{name}} conserve la sienne) : quiconque peut lire votre disque ou une sauvegarde peut les utiliser.",
+      "updatedClaudeSessions": "Les nouvelles sessions Claude utiliseront ce compte ; celles déjà ouvertes gardent le leur.",
+      "scopeClaudeSessions": "Chaque session Claude garde le compte avec lequel elle a démarré. Le compte coché sert aux nouvelles sessions ; vous pouvez en choisir un autre en démarrant une session. Les conversations, les réglages, les serveurs MCP et les skills sont partagés entre les comptes.",
+      "forNewSessions": "Nouvelles sessions",
+      "removeDefault": "Les nouvelles sessions utilisent ce compte. Une fois qu’il est supprimé, elles utilisent la connexion du système.",
+      "removeInUseOne": "Un panneau ouvert utilise ce compte : il cessera de fonctionner une fois le compte supprimé. Fermez-le d'abord, ou laissez-le terminer.",
+      "removeInUse": "{{count}} panneaux ouverts utilisent ce compte : ils cesseront de fonctionner une fois le compte supprimé. Fermez-les d'abord, ou laissez-les terminer."
     },
     "usageVisibility": {
       "showInUsage": "Afficher dans Utilisation",
@@ -838,6 +840,14 @@
       "logsHint": "Les fichiers journaux de Tessel, pour examiner un problème.",
       "noProject": "Ouvrez d'abord un projet.",
       "cleanupNeedsProject": "Ouvrez d'abord un projet sur cet ordinateur : les worktrees se nettoient un projet à la fois."
+    }
+  },
+  "accounts": {
+    "choice": {
+      "system": "Connexion du système",
+      "account": "Compte",
+      "systemTitle": "La connexion du système : {{email}}",
+      "systemHint": "La connexion du système"
     }
   }
 }

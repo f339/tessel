@@ -182,17 +182,21 @@ export function createProviderAccounts({ claude, codex, now = Date.now, uuid = r
           : result
       })
     },
+    // Launches run side by side (each account has its own folder; the backend
+    // orders its own file work); only a sign-in in progress holds them.
     async launchEnv(provider, accountId = undefined) {
       if (!Object.hasOwn(providers, provider))
         return { ok: true, env: {}, accountId: null, unsetEnv: [] }
-      if (busy.has(provider))
+      if ([...jobs.values()].some((job) => job.provider === provider && job.state === 'running'))
         return { ok: false, error: t('main.accounts.finishBeforeStart', 'Finish or cancel sign-in before starting this agent.') }
-      return mutate(provider, async (service) => {
-        const result = await service.launchEnv(accountId)
+      try {
+        const result = await providers[provider].launchEnv(accountId)
         return result?.ok
           ? { ...result, unsetEnv: result.accountId ? [...ACCOUNT_AUTH_ENV[provider]] : [] }
           : result
-      })
+      } catch (error) {
+        return failure(error, t('main.accounts.updateFailed', 'Could not update the account.'))
+      }
     },
     async usageEnv() {
       try {

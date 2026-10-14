@@ -25,7 +25,7 @@
 // Codex: only the thread's own lines (a line naming another thread, such as a
 // sub-agent's, is skipped; sub-agents are reported by their own events).
 import fs from 'fs'
-import { isAbsolute, join, resolve } from 'path'
+import { isAbsolute, join, relative, resolve, sep } from 'path'
 import { claudeTranscriptIn, codexRolloutIn } from '../agentModel.js'
 import { realInside } from '../agentChildren.js'
 import { allowedCodexHome } from '../codexTurnEnd.js'
@@ -577,7 +577,10 @@ export function opencodeHistoryEvents(messages, limits = HISTORY_LIMITS) {
   return b.finish()
 }
 
-export function transcriptHomeFor(agent, env, { systemClaude, systemCodex, codexAccountsBase } = {}) {
+// claudeAccountsBase: a managed Claude account's folder there (<base>/<id>/auth)
+// keeps its conversations in the system folder (its projects folder is linked
+// there): read in the system folder.
+export function transcriptHomeFor(agent, env, { systemClaude, systemCodex, codexAccountsBase, claudeAccountsBase } = {}) {
   const get = (name) => {
     const hit = Object.entries(env || {}).find(([k]) => k.toUpperCase() === name)
     return hit && typeof hit[1] === 'string' && hit[1] ? hit[1] : null
@@ -590,8 +593,11 @@ export function transcriptHomeFor(agent, env, { systemClaude, systemCodex, codex
   if (agent !== 'claude' || !systemClaude || !isAbsolute(systemClaude)) return null
   const dir = get('CLAUDE_CONFIG_DIR') || systemClaude
   if (!isAbsolute(dir)) return null
-  const same = process.platform === 'win32' ? resolve(dir).toLowerCase() === resolve(systemClaude).toLowerCase() : resolve(dir) === resolve(systemClaude)
-  return same ? systemClaude : null
+  const key = (p) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p))
+  if (key(dir) === key(systemClaude)) return systemClaude
+  if (typeof claudeAccountsBase !== 'string' || !isAbsolute(claudeAccountsBase)) return null
+  const rel = relative(key(claudeAccountsBase), key(dir)).split(sep)
+  return rel.length === 2 && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(rel[0]) && rel[1] === 'auth' ? systemClaude : null
 }
 
 // -> { ok: true, events, truncated, file } | { ok: false, code: 'invalid' | 'missing' | 'empty' }

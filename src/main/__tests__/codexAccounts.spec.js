@@ -47,13 +47,16 @@ const denied = () => Object.assign(new Error('FAKE-SECRET-ERROR'), { code: 'EACC
 describe('managed Codex accounts', () => {
   it('lists a read-only system default without creating storage or exposing auth', async () => {
     put(join(system, 'auth.json'), auth())
-    expect(await service().list()).toEqual({
+    const listing = await service().list()
+    expect(listing).toEqual({
       provider: 'codex',
       selectedId: null,
-      system: { id: null, label: 'System default', status: 'ready' },
+      // Shown like an added account: email, workspace and plan, never a token.
+      system: { id: null, label: 'System default', status: 'ready', email: 'one@example.test', organization: 'Test team', plan: 'pro' },
       accounts: [],
       restartRequired: false
     })
+    expect(JSON.stringify(listing)).not.toMatch(/FAKE-SECRET|header\./)
     expect(fs.existsSync(userData)).toBe(false)
     expect(await service().launchEnv()).toEqual({ ok: true, env: {}, accountId: null })
   })

@@ -4,6 +4,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import ProviderAccountRow from './ProviderAccountRow.vue'
 import { t, intlLocale } from '../i18n'
+import { applyAccountList, panesOnAccount } from '../accountChoices'
 
 const emit = defineEmits(['changed'])
 const providers = ref([])
@@ -58,7 +59,7 @@ function rows(provider) {
 function selected(provider, account) {
   return provider.selectedId === account.id
 }
-// The row's one status line: the account in use and whether it is signed in.
+// The row's one status line: the account new sessions use and whether it is signed in.
 function current(provider) {
   const list = rows(provider)
   return list.find((account) => selected(provider, account)) || list[0] || null
@@ -67,7 +68,7 @@ function rowStatus(provider) {
   if (provider.error) return t('settings.accounts.row.readFailed', 'Accounts could not be read')
   const account = current(provider)
   if (!account) return t('settings.accounts.row.none', 'No account yet')
-  return t('settings.accounts.row.using', 'Using {{account}} · {{status}}', {
+  return t('settings.accounts.row.newSessions', 'New sessions: {{account}} · {{status}}', {
     account: accountName(account),
     status: statusLabel(account.status)
   })
@@ -109,8 +110,8 @@ function isBusy(provider) {
 }
 function switchNotice(provider, result) {
   notice.value =
-    provider === 'claude' || result.restartRequired
-      ? t('settings.accounts.updatedClaude', 'Account updated. Restart your Claude terminals when you are ready to use this sign-in.')
+    provider === 'claude'
+      ? t('settings.accounts.updatedClaudeSessions', 'New Claude sessions will use this account; open ones keep theirs.')
       : t('settings.accounts.updatedCodex', 'Account updated. New Codex terminals will use this selection.')
   if (result.warning) notice.value += ` ${result.warning}`
 }
@@ -129,6 +130,8 @@ async function load() {
   const request = ++loadRequest
   try {
     const result = requireOK(await api().list())
+    // The launchers' account choices follow what is shown here.
+    applyAccountList(result)
     if (!alive || request !== loadRequest) return
     providers.value = (Array.isArray(result.providers) ? result.providers : []).map((provider) => {
       const previous = providers.value.find((entry) => entry.provider === provider.provider)
@@ -161,6 +164,15 @@ async function changeAccount(provider, account) {
     if (alive) busy.value[provider.provider] = false
   }
 }
+// Open panes on the account being removed: their session loses its sign-in.
+const removeInUse = computed(() => {
+  const target = removeTarget.value
+  const count = target ? panesOnAccount(target.provider, target.account.id) : 0
+  if (!count) return ''
+  return count === 1
+    ? t('settings.accounts.removeInUseOne', 'An open pane runs on this account: it stops working once the account is removed. Close it first, or let it finish.')
+    : t('settings.accounts.removeInUse', '{{count}} open panes run on this account: they stop working once it is removed. Close them first, or let them finish.', { count })
+})
 async function removeAccount() {
   const target = removeTarget.value
   if (!target || isBusy(target.provider)) return
@@ -415,7 +427,10 @@ onBeforeUnmount(() => {
       <p class="account-scope">
         {{
           provider.provider === 'claude'
-            ? t('settings.accounts.scopeClaudeShort', 'Switching changes your system Claude sign-in; restart Claude terminals to use it.')
+            ? t(
+                'settings.accounts.scopeClaudeSessions',
+                'Each Claude session keeps the account it started with. The checked one is used for new sessions; you can pick another when you start one. Conversations, settings, MCP servers and skills are shared between accounts.'
+              )
             : t('settings.accounts.scopeCodexShort', 'New Codex terminals use the selected account; open ones keep theirs.')
         }}
       </p>
@@ -439,7 +454,7 @@ onBeforeUnmount(() => {
             <span class="account-info">
               <span class="account-title"
                 ><span>{{ accountName(account) }}</span
-                ><span v-if="selected(provider, account)" class="account-badge">{{ t('settings.accounts.current', 'Current') }}</span></span
+                ><span v-if="selected(provider, account)" class="account-badge">{{ t('settings.accounts.forNewSessions', 'New sessions') }}</span></span
               >
               <span class="account-meta"
                 ><span v-if="account.email && account.email !== accountName(account)">{{ account.email }}</span
@@ -508,8 +523,9 @@ onBeforeUnmount(() => {
           }}
         </p>
         <p v-if="provider.selectedId === removeTarget.account.id" class="account-scope">
-          {{ t('settings.accounts.removeSelected', 'This account is selected. Removing it restores the system default for this provider.') }}
+          {{ t('settings.accounts.removeDefault', 'New sessions use this account. Once it is removed, they use the system’s sign-in.') }}
         </p>
+        <p v-if="removeInUse" class="account-scope account-in-use" data-test="account-remove-in-use">{{ removeInUse }}</p>
         <div class="account-confirm-actions">
           <button
             type="button"
@@ -717,7 +733,8 @@ onBeforeUnmount(() => {
 .account-confirm-actions {
   justify-content: flex-end;
 }
-.account-unsealed {
+.account-unsealed,
+.account-confirm .account-in-use {
   color: var(--warn);
 }
 .accounts-error {
