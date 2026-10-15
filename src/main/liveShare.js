@@ -33,7 +33,7 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import { createShareHost, cleanRights, cleanProjectIds, isProjectId, MAX_PROJECTS } from './liveShare/shareHost.js'
 import { createShareGuest } from './liveShare/shareGuest.js'
 import { newSecret, encodeInvite, decodeInvite, newSigningKey, exportSigningKey, importSigningKey } from './liveShare/shareCrypto.js'
-import { ensureCloudflared, startTunnel, waitReachable, endLeftoverTunnel, tunnelState, stopTunnelPid, stopTunnelLater, processState } from './liveShare/shareTunnel.js'
+import { ensureCloudflared, startTunnel, waitReachable, waitRegistered, tunnelLogTail, endLeftoverTunnel, tunnelState, stopTunnelPid, stopTunnelLater, processState } from './liveShare/shareTunnel.js'
 import { createSessionFile } from './liveShare/sharePersist.js'
 import { pidRunning as pidAlive } from './processTree.js'
 import { trimBuffer, HOST_BUFFER_BYTES } from './ptyProtocol.js'
@@ -199,6 +199,7 @@ const KEEP_FRESH_MS = 60000
 // running: a second copy starting must not take them).
 export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sendExit, log, queryState = processState, kill = (pid) => process.kill(pid), pidRunning = pidAlive, resume = true }) {
   const info = (msg) => log?.info?.('liveshare', msg)
+  const warn = (msg) => (log?.warn ? log.warn('liveshare', msg) : info(msg))
   const hostFile = createSessionFile(join(dataDir, 'liveshare-host.json'))
   const guestFile = createSessionFile(join(dataDir, 'liveshare-guest.json'))
   let suspended = false
@@ -436,9 +437,25 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       }
       s.state = 'checking'
       pushHost()
-      if (!(await waitReachable(s.tunnel.url, { cancelled: () => s.cancelled }))) {
+      // Its address goes nowhere until cloudflared connected to Cloudflare
+      // (a network that blocks it: it never does).
+      if (!(await waitRegistered(dataDir, { cancelled: () => s.cancelled }))) {
         if (s.cancelled) return { ok: false }
-        throw new Error(t('main.liveShare.unreachable', 'The tunnel address could not be reached. Check your internet connection and try again.'))
+        throw new Error(
+          t('main.liveShare.notConnected', 'The Cloudflare tunnel could not connect ({{detail}}). Check your internet connection, or whether a firewall or an antivirus blocks Cloudflare.', {
+            detail: tunnelLogTail(dataDir, 2) || 'no answer'
+          })
+        )
+      }
+      // Why the address did not answer, each time (the most frequent is said).
+      const fails = new Map()
+      const onFail = (reason) => fails.set(reason, (fails.get(reason) || 0) + 1)
+      if (!(await waitReachable(s.tunnel.url, { cancelled: () => s.cancelled, onFail }))) {
+        if (s.cancelled) return { ok: false }
+        const why = [...fails].sort((a, b) => b[1] - a[1]).map(([r, n]) => (n > 1 ? `${r} ×${n}` : r)).join(', ') || 'no answer'
+        throw new Error(
+          t('main.liveShare.unreachableWhy', 'The tunnel address could not be reached ({{detail}}). Check your internet connection, or whether a firewall, an antivirus or a DNS filter blocks trycloudflare.com.', { detail: why })
+        )
       }
       if (s.cancelled) return { ok: false }
       s.invite = encodeInvite({ url: s.tunnel.url, secret: s.secret })
@@ -450,6 +467,12 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       return { ok: true, ...hostStatus() }
     } catch (err) {
       const message = tunnelErrorText(err)
+      // Said in the log too (the window's message goes with the dialog).
+      warn(`sharing failed: ${message}`)
+      if (s.tunnel) {
+        const tail = tunnelLogTail(dataDir, 8)
+        if (tail) warn(`cloudflared: ${tail}`)
+      }
       if (sharing === s) stopSharing('error', message)
       return { ok: false, error: message }
     }

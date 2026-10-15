@@ -16,6 +16,7 @@ import { join } from 'path'
 import { spawn, spawnSync, execFile } from 'child_process'
 import crypto from 'crypto'
 import WebSocket from 'ws'
+import { fallbackLookup } from './shareDns.js'
 
 export const CLOUDFLARED_VERSION = '2026.9.3'
 const CLOUDFLARED_URL = `https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-windows-amd64.exe`
@@ -84,13 +85,61 @@ export function parseTunnelAddress(text) {
   return m ? m[1].replace(/^https:/i, 'wss:') + '/' : null
 }
 
+// cloudflared's last words in its log (its lines are JSON: their messages),
+// without the connectivity pre-check's table and progress lines (but its
+// failures and summary kept).
+export function tunnelLogTail(dataDir, n = 6) {
+  try {
+    const message = (line) => {
+      try {
+        return String(JSON.parse(line).message || line)
+      } catch {
+        return line
+      }
+    }
+    return fs
+      .readFileSync(logFile(dataDir), 'utf8')
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => message(line).replace(/\s+/g, ' ').trim())
+      .filter((m) => m && ((!/^precheck( complete)?$/.test(m) && !/^[|+]/.test(m)) || /\b(FAIL|WARN|SUMMARY)\b/.test(m)))
+      .slice(-n)
+      .join(' | ')
+      .slice(0, 600)
+  } catch {
+    return ''
+  }
+}
+
+// The tunnel connected to Cloudflare (its address goes nowhere before):
+// cloudflared says so in its log, started anew with each tunnel.
+export function tunnelRegistered(dataDir) {
+  try {
+    return fs.readFileSync(logFile(dataDir), 'utf8').includes('Registered tunnel connection')
+  } catch {
+    return false
+  }
+}
+export async function waitRegistered(dataDir, { timeoutMs = 60000, everyMs = 500, cancelled = () => false } = {}) {
+  const end = Date.now() + timeoutMs
+  while (!cancelled()) {
+    if (tunnelRegistered(dataDir)) return true
+    if (Date.now() >= end) return false
+    await new Promise((r) => setTimeout(r, everyMs))
+  }
+  return false
+}
+
 // A new tunnel's address takes a few seconds to resolve everywhere: try it
 // (the share server's first message proves it is ours) before the invite
-// code is shown, so a guest does not join too early. cancelled(): stop now.
-export async function waitReachable(url, { WebSocketImpl = WebSocket, timeoutMs = 60000, everyMs = 2000, cancelled = () => false } = {}) {
+// code is shown, so a guest does not join too early. cancelled(): stop now;
+// onFail(reason): each try that failed, and why (a DNS error, an HTTP status,
+// a timeout).
+export async function waitReachable(url, { WebSocketImpl = WebSocket, timeoutMs = 60000, everyMs = 2000, cancelled = () => false, onFail = () => {}, lookup = fallbackLookup() } = {}) {
   const WS = WebSocketImpl
   const end = Date.now() + timeoutMs
   while (Date.now() < end && !cancelled()) {
+    let reason = ''
     const ok = await new Promise((resolve) => {
       let socket
       const done = (v) => {
@@ -102,24 +151,44 @@ export async function waitReachable(url, { WebSocketImpl = WebSocket, timeoutMs 
         }
         resolve(v)
       }
-      const timer = setTimeout(() => done(false), 8000)
+      const timer = setTimeout(() => {
+        reason = reason || 'timeout'
+        done(false)
+      }, 8000)
       try {
-        socket = new WS(url, { handshakeTimeout: 8000 })
-      } catch {
+        socket = new WS(url, { handshakeTimeout: 8000, lookup })
+      } catch (err) {
+        reason = (err && (err.code || err.message)) || 'error'
         done(false)
         return
       }
       socket.on('message', (data) => {
+        let mine = false
         try {
-          done(JSON.parse(data.toString()).app === 'tessel-liveshare')
+          mine = JSON.parse(data.toString()).app === 'tessel-liveshare'
         } catch {
-          done(false)
+          mine = false
         }
+        if (!mine) reason = 'not this share'
+        done(mine)
       })
-      socket.on('error', () => done(false))
-      socket.on('close', () => done(false))
+      // Cloudflare answering without the share (a 530 / 1033 while the
+      // tunnel is not connected, a 404...).
+      socket.on('unexpected-response', (_req, res) => {
+        reason = `HTTP ${res && res.statusCode}`
+        done(false)
+      })
+      socket.on('error', (err) => {
+        reason = reason || (err && (err.code || err.message)) || 'error'
+        done(false)
+      })
+      socket.on('close', () => {
+        reason = reason || 'closed'
+        done(false)
+      })
     })
     if (ok) return true
+    onFail(String(reason || 'error').slice(0, 120))
     if (cancelled()) return false
     await new Promise((r) => setTimeout(r, everyMs))
   }

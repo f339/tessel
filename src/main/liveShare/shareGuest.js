@@ -21,6 +21,7 @@
 // Tessel itself is reached only through the callbacks, so this file runs
 // (and is tested) without Electron.
 import WebSocket from 'ws'
+import { fallbackLookup } from './shareDns.js'
 import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitment, signBinding, bindingSigned, NONCE_BYTES, KX_BYTES } from './shareCrypto.js'
 
 const CONNECT_TIMEOUT_MS = 20000
@@ -179,7 +180,8 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
     connect() {
       callbacks.onState?.('connecting')
       try {
-        socket = new WebSocket(url, { maxPayload: MAX_FRAME, perMessageDeflate: false, handshakeTimeout: CONNECT_TIMEOUT_MS })
+        // The host's address found through public DNS when this PC's cannot.
+        socket = new WebSocket(url, { maxPayload: MAX_FRAME, perMessageDeflate: false, handshakeTimeout: CONNECT_TIMEOUT_MS, lookup: fallbackLookup() })
       } catch {
         finish('error')
         return

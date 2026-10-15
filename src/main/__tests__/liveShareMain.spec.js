@@ -21,6 +21,8 @@ vi.mock('../liveShare/shareTunnel.js', () => ({
     return { url: `ws://127.0.0.1:${port}/`, stop: vi.fn(), pid: 4242 }
   }),
   waitReachable: vi.fn(async () => true),
+  waitRegistered: vi.fn(async () => true),
+  tunnelLogTail: vi.fn(() => ''),
   endLeftoverTunnel: vi.fn(async () => false),
   tunnelState: vi.fn(async (pid) => {
     if (tunnel.gate) await tunnel.gate
@@ -501,6 +503,30 @@ describe('registerLiveShare: one Tessel shares, another joins', () => {
     await until(() => a.last('liveShare:guest')?.state === 'ended')
     expect(a.last('liveShare:guest').reason).toBe('busy')
     expect(host.events('liveShare:ask').map((q) => q.name)).toEqual(['Bea'])
+  })
+
+  it('a tunnel that never connects, an address that never answers: says why (and logs it)', async () => {
+    const st = await import('../liveShare/shareTunnel.js')
+    const host = fakeMain()
+    mains.push(host)
+    st.waitRegistered.mockResolvedValueOnce(false)
+    st.tunnelLogTail.mockReturnValueOnce('Failed to dial a quic connection')
+    let r = await host.handle['liveShare:start'](null, { projects: ['ws-1'] })
+    expect(r.ok).toBe(false)
+    expect(r.error).toBe(
+      'The Cloudflare tunnel could not connect (Failed to dial a quic connection). Check your internet connection, or whether a firewall or an antivirus blocks Cloudflare.'
+    )
+    st.waitReachable.mockImplementationOnce(async (_url, { onFail }) => {
+      onFail('ENOTFOUND')
+      onFail('HTTP 530')
+      onFail('ENOTFOUND')
+      return false
+    })
+    r = await host.handle['liveShare:start'](null, { projects: ['ws-1'] })
+    expect(r.error).toBe(
+      'The tunnel address could not be reached (ENOTFOUND ×2, HTTP 530). Check your internet connection, or whether a firewall, an antivirus or a DNS filter blocks trycloudflare.com.'
+    )
+    expect(host.last('liveShare:host')).toMatchObject({ state: 'error' })
   })
 
   it('says why a share could not start, in the user’s language', async () => {
