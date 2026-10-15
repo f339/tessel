@@ -26,7 +26,9 @@ const mcp = require(server)
 delete process.env.TESSEL_AGENT_PROVIDER
 let home
 const script = 'C:\\Tessel data\\tessel-team-mcp.cjs'
-// The absolute node the hook command runs (never "node" by name).
+// The absolute node the hook command runs (never "node" by name). Given to
+// hooksStatus too: the node on PATH is elsewhere on other machines (GitHub's
+// runner: C:\hostedtoolcache\...), and a hook for another node is not ours.
 const NODE = 'C:\\Program Files\\nodejs\\node.exe'
 const accepted = async () => ({ ok: true })
 const file = () => kimiConfigFile(home, '')
@@ -164,14 +166,14 @@ describe('Kimi TOML installation and diagnostics', () => {
     vi.stubEnv('KIMI_CODE_HOME', join(home, 'custom-kimi'))
     expect(await installKimiHooks(script, home, { validate: accepted, node: NODE })).toEqual({ changed: true })
     expect(fs.existsSync(file())).toBe(false)
-    const agent = hooksStatus({ home, scriptPath: script }).agents.find((a) => a.id === 'kimi')
+    const agent = hooksStatus({ home, scriptPath: script, node: NODE }).agents.find((a) => a.id === 'kimi')
     expect(agent).toMatchObject({ hooks: 'installed', approval: null, inbox: false })
     expect(fs.existsSync(kimiConfigFile(home))).toBe(true)
   })
 
   it('reports missing, partial and malformed managed hooks without exposing settings', async () => {
     const status = () =>
-      hooksStatus({ home, scriptPath: script }).agents.find((a) => a.id === 'kimi')
+      hooksStatus({ home, scriptPath: script, node: NODE }).agents.find((a) => a.id === 'kimi')
     expect(status().hooks).toBe('missing')
     await install()
     put(fs.readFileSync(file(), 'utf8').replace('event = "Stop"', 'event = "Notification"'))

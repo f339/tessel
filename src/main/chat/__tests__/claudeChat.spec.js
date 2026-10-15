@@ -181,7 +181,9 @@ describe('claudeChat: command line', () => {
     const { chat, sent } = setup({ sessionId: undefined, resume: sid })
     await chat.start()
     await chat.send({ uuid: randomUUID(), text: 'hello' })
-    expect(sent().find((m) => m.type === 'user').session_id).toBe(sid)
+    // send() resolves once the frame is in the pipe; the fake logs it when it reads it.
+    const frame = await waitFor(() => sent().find((m) => m.type === 'user'), 5000, 'user frame')
+    expect(frame.session_id).toBe(sid)
     expect(chat.sessionId).toBe(sid)
   })
 })
