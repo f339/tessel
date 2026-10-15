@@ -544,6 +544,11 @@ const api = {
     setHistoryDays: (days) => ipcRenderer.invoke('sessionSearch:setHistoryDays', days),
     search: (query) => ipcRenderer.invoke('sessionSearch:search', query)
   },
+  // What you and each terminal agent said in its terminal, for the
+  // Conversations tab (src/main/chat/terminalConversations.js).
+  conversations: {
+    terminal: (q) => ipcRenderer.invoke('conversations:terminal', q)
+  },
   // Read-only conversation views of terminal agents (src/main/chat/transcriptView.js).
   transcriptView: {
     open: (opts) => ipcRenderer.invoke('transcriptView:open', opts),

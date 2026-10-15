@@ -5772,6 +5772,8 @@ const sidebarProjects = computed(() =>
         isActive: leaf.id === w.activeId,
         focused: w.id === currentWsId.value && leaf.id === activeId.value,
         sessionId: leaf.sessionId || null,
+        // An agent on an SSH host (its conversation file is there).
+        remoteHostId: leaf.remoteHostId || null,
         ...(leaf.accountId !== undefined ? { accountId: leaf.accountId } : {})
       })
     })

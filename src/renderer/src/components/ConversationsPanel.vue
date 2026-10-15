@@ -3,18 +3,24 @@
 // agents of a team said to each other through the team channel, and what
 // you and an agent said to each other through Tessel (its native chat, the
 // notes, a review, a decision on a card, its reports), as threads built from
-// the activity log (src/shared/conversations.js). One thread per team and
-// one per agent you talked with, latest first; a thread's lines are chat
-// rows (who, to whom, when, the text, its delivery status). A scope switch
-// (this workspace / all), a period, an agent filter, a search box, and a
-// switch to show Tessel's own notices. A thread can be copied as text, and
-// an agent's name goes to its pane while it is open.
+// the activity log (src/shared/conversations.js); and what you and each
+// terminal agent said in its terminal (your prompts, its answers), read from
+// its own conversation file by the main process
+// (src/main/chat/terminalConversations.js), merged in time into your thread
+// with it, a small terminal mark on each. One thread per team and one per
+// agent you talked with, latest first; a thread's lines are chat rows (who,
+// to whom, when, the text, its delivery status, the model it was said with
+// at its bottom right). A scope switch (this workspace / all), a period, an
+// agent filter, a search box, and a switch to show Tessel's own notices. A
+// thread can be copied as text, and an agent's name goes to its pane while
+// it is open.
 import { senderDetails } from '../senderIdentity'
-import { computed, reactive, ref, shallowRef } from 'vue'
-import { Check, ChevronRight, Copy, LocateFixed, MessagesSquare, Search, Users, X } from 'lucide-vue-next'
+import { computed, reactive, ref, shallowRef, watch } from 'vue'
+import { Check, ChevronRight, Copy, LocateFixed, MessagesSquare, Search, SquareTerminal, Users, X } from 'lucide-vue-next'
 import BrandIcon from './BrandIcon.vue'
 import ThemedSelect from './ui/ThemedSelect.vue'
-import { buildThreads, filterThreads, lineCount, participantsOf, recipients, replyText, statusText, threadText } from '../../../shared/conversations'
+import { buildThreads, filterThreads, lineCount, modelOf, participantsOf, recipients, replyText, statusText, threadText } from '../../../shared/conversations'
+import { nativeChatSessionChoiceLabel } from '../chat/orca/native-chat-session-option-labels'
 import { formatWhen } from '../timeFormat'
 import { agentLabel } from '../sessionHistory'
 import { t, intlLocale } from '../i18n'
@@ -53,6 +59,76 @@ const panes = computed(() => {
 })
 const paneAlive = (id) => !!id && !!panes.value[id]
 
+// --- What was said in the agents' terminals ---------------------------------------------
+// The agent panes in scope (a terminal agent in a conversation; a chat
+// agent's messages already go through Tessel): each one's prompts and
+// answers, from its conversation file, asked while the tab is shown, when
+// it is shown, when the scope, the period or the panes change, and with the
+// clock's tick (every 20 s); the main process answers only what changed
+// since (by the key it gave).
+const terminal = shallowRef({}) // paneId -> { key, wsId, items, sessionId, host, hostLabel }
+function terminalPanes() {
+  const out = []
+  for (const p of props.projects || []) {
+    if (scope.value === 'workspace' && p.id !== props.workspaceId) continue
+    for (const pane of p.panes || []) {
+      if (!pane || !pane.id || pane.kind !== 'agent' || !pane.agentId || typeof pane.sessionId !== 'string' || !pane.sessionId) continue
+      out.push({ pane, wsId: p.id, hostLabel: p.remote && p.remote.host ? p.remote.host : '' })
+    }
+  }
+  return out
+}
+let asking = false
+let askAgain = false
+async function askTerminal() {
+  const api = window.shellApi && window.shellApi.conversations
+  if (!props.active || !api || typeof api.terminal !== 'function') return
+  if (asking) {
+    askAgain = true
+    return
+  }
+  asking = true
+  try {
+    do {
+      askAgain = false
+      const list = terminalPanes()
+      const had = terminal.value
+      const known = {}
+      for (const { pane } of list) if (had[pane.id] && had[pane.id].sessionId === pane.sessionId) known[pane.id] = had[pane.id].key
+      const res = await api.terminal({
+        from: from.value,
+        known,
+        panes: list.map(({ pane }) => ({
+          paneId: pane.id,
+          agent: pane.agentId,
+          sessionId: pane.sessionId,
+          ...(pane.accountId !== undefined ? { accountId: pane.accountId } : {}),
+          ...(pane.remoteHostId ? { hostId: pane.remoteHostId } : {})
+        }))
+      })
+      if (!res || !res.ok || !res.panes || typeof res.panes !== 'object') continue
+      const next = {}
+      for (const { pane, wsId, hostLabel } of list) {
+        const r = res.panes[pane.id]
+        if (!r || typeof r.key !== 'string') continue
+        const host = pane.remoteHostId ? 'ssh' : 'local'
+        if (r.same && had[pane.id]) next[pane.id] = { ...had[pane.id], wsId, host, hostLabel }
+        else if (Array.isArray(r.items)) next[pane.id] = { key: r.key, wsId, items: r.items, sessionId: pane.sessionId, host, hostLabel }
+      }
+      terminal.value = next
+    } while (askAgain && props.active)
+  } catch {
+    // asked again with the next tick
+  } finally {
+    asking = false
+  }
+}
+const terminalSignature = computed(() =>
+  terminalPanes()
+    .map(({ pane }) => `${pane.id}:${pane.sessionId}:${pane.remoteHostId || ''}`)
+    .join('|')
+)
+
 // --- The threads --------------------------------------------------------------------------
 // Built again as the log grows, but only while the tab is shown: hidden, the
 // last threads are kept (props.events is not read, so a new event does not
@@ -61,6 +137,15 @@ const cache = shallowRef([])
 // The period's start moves with the clock only to the minute: a tick of the
 // clock does not rebuild the threads.
 const from = computed(() => Math.floor((props.now - PERIODS[period.value]) / 60000) * 60000)
+watch([() => props.active, scope, from, () => props.now, terminalSignature], () => askTerminal(), { immediate: true })
+// An effort in the app's language, as a pane's header says it ("Élevé").
+const effortLabel = (effort) => nativeChatSessionChoiceLabel({ value: effort, label: effort })
+const terminalEntries = computed(() =>
+  Object.entries(terminal.value).map(([paneId, e]) => {
+    const pane = panes.value[paneId] || {}
+    return { paneId, wsId: e.wsId, title: pane.title, agentId: pane.agentId, agentName: pane.agentId ? agentLabel(pane.agentId) : '', sessionId: e.sessionId, host: e.host, hostLabel: e.hostLabel, items: e.items }
+  })
+)
 const threads = computed(() => {
   if (!props.active) return cache.value
   cache.value = buildThreads(props.events, {
@@ -69,7 +154,9 @@ const threads = computed(() => {
     panes: panes.value,
     wsId: scope.value === 'workspace' ? props.workspaceId : null,
     from: from.value,
-    notices: notices.value
+    notices: notices.value,
+    terminal: terminalEntries.value,
+    effortLabel
   })
   return cache.value
 })
@@ -177,10 +264,14 @@ async function copyThread(thread) {
   }
 }
 
-// The model a message was sent with (the sender Tessel recorded): "Opus 5.5 · High".
-function modelOf(sender) {
-  return sender && typeof sender === 'object' ? sender.model || sender.modelId || '' : ''
+// The model a line was said with ("Opus 5.5 · High"), at the bottom right of
+// its bubble; every detail Tessel recorded about its sender on hover.
+function modelTitle(line) {
+  const s = line.sender || (line.run ? { model: line.run.model, modelId: line.run.modelId, effort: line.run.effort } : null)
+  return s ? senderDetails(s) : ''
 }
+// A line said in the agent's terminal (read from its conversation file).
+const terminalHint = (line) => (line.from.kind === 'you' ? t('conversations.terminal.typed', 'Typed in its terminal') : t('conversations.terminal.answered', 'Answered in its terminal'))
 </script>
 
 <template>
@@ -258,7 +349,7 @@ function modelOf(sender) {
           {{
             t(
               'conversations.empty',
-              'Nothing said yet. Messages between the agents of a team, and those you exchange with an agent through Tessel (its chat, the notes, decisions on a card), show up here.'
+              'Nothing said yet. Messages between the agents of a team, those you exchange with an agent through Tessel (its chat, the notes, decisions on a card), and what you and an agent say in its terminal (your prompts, its answers) show up here.'
             )
           }}
         </p>
@@ -337,8 +428,6 @@ function modelOf(sender) {
                     <span v-if="programOf(row.line.from)" class="cv-program" data-test="cv-program">· {{ programOf(row.line.from) }}</span>
                     <LocateFixed v-if="paneAlive(row.line.from.paneId)" :size="10" class="cv-locate" aria-hidden="true" />
                   </component>
-                  <!-- The model it sent this with, as Tessel recorded it (every detail on hover). -->
-                  <span v-if="modelOf(row.line.sender)" class="cv-model" :title="senderDetails(row.line.sender)" data-test="cv-model">{{ modelOf(row.line.sender) }}</span>
                   <template v-if="thread.kind === 'team'">
                     <span class="cv-arrow" aria-hidden="true">→</span>
                     <template v-for="(to, ti) in recipients(row.line)" :key="ti">
@@ -360,14 +449,16 @@ function modelOf(sender) {
                   </template>
                 </div>
                 <div class="cv-bubble" :style="row.line.from.kind === 'agent' ? tint(row.line.from) : null" :title="when(row.line.t)">
-                  <div class="cv-text" :class="{ clamp4: isLong(row.line) && !expanded[row.line.key] }" data-test="cv-text" @click="toggleLine(row.line)">{{ row.line.text }}</div>
+                  <div class="cv-text" :class="{ clamp4: isLong(row.line) && !expanded[row.line.key] }" data-test="cv-text" @click="toggleLine(row.line)">{{ row.line.text }}<span v-if="row.line.via === 'terminal'" class="cv-via" :title="terminalHint(row.line)" :aria-label="terminalHint(row.line)" data-test="cv-via"><SquareTerminal :size="11" aria-hidden="true" /></span></div>
                   <button v-if="isLong(row.line)" type="button" class="cv-more" @click="toggleLine(row.line)">
                     {{ expanded[row.line.key] ? t('conversations.showLess', 'Show less') : t('conversations.showMore', 'Show all') }}
                   </button>
                 </div>
-                <div class="cv-caption" :class="{ shown: !!noteOf(row.line) }">
+                <div class="cv-caption" :class="{ shown: !!noteOf(row.line) || !!modelOf(row.line) }">
                   <span class="cv-when">{{ when(row.line.t) }}</span>
                   <span v-if="noteOf(row.line)" class="cv-note" data-test="cv-note">{{ noteOf(row.line) }}</span>
+                  <!-- The model it was said with (every detail on hover), at the bottom right. -->
+                  <span v-if="modelOf(row.line)" class="cv-model" :title="modelTitle(row.line)" data-test="cv-model">{{ modelOf(row.line) }}</span>
                 </div>
               </div>
             </template>
@@ -574,17 +665,11 @@ function modelOf(sender) {
   color: var(--text-dim);
   font-weight: 500;
 }
-.cv-model {
-  margin-left: 6px;
-  color: var(--text-dim);
-  font-size: 0.9em;
-  white-space: nowrap;
-}
 .cv-locate {
   opacity: 0.6;
 }
 .cv-who.link:hover {
-  text-decoration: underline;
+  opacity: 0.8;
 }
 .cv-arrow,
 .cv-comma {
@@ -670,6 +755,7 @@ function modelOf(sender) {
 .cv-caption {
   display: flex;
   flex-wrap: wrap;
+  align-self: stretch;
   gap: 6px;
   max-height: 0;
   margin: 0 10px;
@@ -702,6 +788,18 @@ function modelOf(sender) {
 }
 .cv-note {
   font-style: italic;
+}
+/* The model, at the bottom right of the bubble, small and dim. */
+.cv-model {
+  margin-left: auto;
+  white-space: nowrap;
+}
+/* Said in the agent's terminal: a small mark after the text. */
+.cv-via {
+  display: inline-flex;
+  margin-left: 6px;
+  vertical-align: -1px;
+  opacity: 0.55;
 }
 
 .cv-system {
