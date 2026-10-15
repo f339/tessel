@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto'
 import { t } from './i18n'
 import { retryAfterMs } from './usagePoller'
 import { createAntigravityCliUsage } from './antigravityCliUsage'
+import { createAntigravityPlan } from './antigravityPlan'
 
 // The console's server-function id for its workspaces list (stable, from Orca).
 const OPENCODE_WORKSPACES_ID = 'def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f'
@@ -65,7 +66,9 @@ export function createExtraProviderUsage({
   timeoutMs = 10000,
   // The variables a provider's CLI runs with (index.js: Tessel's fresh PATH).
   cliEnv = null,
-  antigravityCli = createAntigravityCliUsage(cliEnv ? { env: cliEnv } : {})
+  antigravityCli = createAntigravityCliUsage(cliEnv ? { env: cliEnv } : {}),
+  // Its plan, which agy's answer leaves out (antigravityPlan.js).
+  antigravityPlan = createAntigravityPlan()
 } = {}) {
   const sequences = new Map()
   // The providers to read: installed ones, and the ones a key saved in
@@ -210,7 +213,8 @@ export function createExtraProviderUsage({
         secrets = [] // the login's key or cookie, never in an error
       const redact = (text) =>
         secrets.reduce((out, secret) => out.split(secret).join('[redacted]'), String(text))
-      // Antigravity: its CLI's own /usage answer, nothing else.
+      // Antigravity: its CLI's own /usage answer, and the plan the
+      // Antigravity app keeps for the same account.
       const antigravity = async () => {
         const cli = await antigravityCli.read()
         if (sequences.get(provider) !== sequence)
@@ -222,13 +226,20 @@ export function createExtraProviderUsage({
             'unavailable',
             t('main.usage.antigravityNeedsCli', "Antigravity's usage needs the Antigravity CLI (agy), installed and signed in.")
           )
+        let plan = null
+        try {
+          plan = antigravityPlan?.read?.() || null
+        } catch {
+          plan = null
+        }
         return {
           ok: true,
           provider,
           accountId: null,
           source: 'live',
           observedAt: Number.isFinite(cli.observedAt) ? cli.observedAt : clock(),
-          windows: cli.windows
+          windows: cli.windows,
+          ...(typeof plan === 'string' ? { plan } : {})
         }
       }
       const work = async () => {
