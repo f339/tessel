@@ -1,17 +1,34 @@
 import { describe, it, expect } from 'vitest'
-import { chainCommands, describeSteps, installChain, MARK_OK, MARK_FAILED } from '../shellChain'
+import { chainCommands, describeSteps, installChain, nodeStep, MARK_OK, MARK_FAILED } from '../shellChain'
 
 describe('installChain', () => {
   it('Windows PowerShell and pwsh: a marker for success, one for each failure', () => {
-    const line = installChain(['npm i -g a', 'setup-a'], 'a', 'powershell')
+    const line = installChain(['pip i a', 'setup-a'], 'a', 'powershell')
     expect(line).toBe(
-      "npm i -g a; if ($?) { setup-a; if ($?) { Write-Host ('TESSEL-INSTALL' + '-OK'); a } else { Write-Host ('TESSEL-INSTALL' + '-FAILED') } } else { Write-Host ('TESSEL-INSTALL' + '-FAILED') }"
+      "pip i a; if ($?) { setup-a; if ($?) { Write-Host ('TESSEL-INSTALL' + '-OK'); a } else { Write-Host ('TESSEL-INSTALL' + '-FAILED') } } else { Write-Host ('TESSEL-INSTALL' + '-FAILED') }"
     )
     expect(installChain(['x'], null, 'pwsh')).toBe("x; if ($?) { Write-Host ('TESSEL-INSTALL' + '-OK') } else { Write-Host ('TESSEL-INSTALL' + '-FAILED') }")
   })
   it('cmd, bash, wsl: && then || for the failure', () => {
-    expect(installChain(['npm i -g a'], 'a', 'cmd')).toBe('npm i -g a && echo TESSEL-INSTALL^-OK && a || echo TESSEL-INSTALL^-FAILED')
+    expect(installChain(['pip i a'], 'a', 'cmd')).toBe('pip i a && echo TESSEL-INSTALL^-OK && a || echo TESSEL-INSTALL^-FAILED')
     expect(installChain(['npm i -g a'], '', 'gitbash')).toBe('npm i -g a && echo TESSEL-INSTALL"-OK" || echo TESSEL-INSTALL"-FAILED"')
+  })
+  it('an npm install on a PC without Node.js: Node.js first, with winget, then npm found on the same line', () => {
+    const ps = installChain(['npm install -g @anthropic-ai/claude-code'], 'claude', 'powershell')
+    expect(ps.startsWith(nodeStep('powershell') + '; if ($?) { npm install -g @anthropic-ai/claude-code; if ($?) {')).toBe(true)
+    expect(nodeStep('powershell')).toContain('Get-Command npm -ErrorAction SilentlyContinue')
+    expect(nodeStep('powershell')).toContain('winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements')
+    expect(nodeStep('powershell')).toContain("[Environment]::GetEnvironmentVariable('Path','Machine')")
+    // Node.js still missing after winget: the step fails, so the install says so.
+    expect(nodeStep('powershell')).toMatch(/Write-Error 'Node\.js \(npm\) could not be installed\. Install it from https:\/\/nodejs\.org and try again\.' \}$/)
+    expect(nodeStep('pwsh')).toBe(nodeStep('powershell'))
+    const cmd = installChain(['npm install -g @openai/codex'], 'codex', 'cmd')
+    expect(cmd).toBe(`${nodeStep('cmd')} && npm install -g @openai/codex && echo TESSEL-INSTALL^-OK && codex || echo TESSEL-INSTALL^-FAILED`)
+    expect(nodeStep('cmd')).toMatch(/^\(where npm >nul 2>nul \|\| \(echo [^()]*&& winget install .* && set "PATH=%ProgramFiles%\\nodejs;%APPDATA%\\npm;%PATH%"\)\)$/)
+    // Not for other installs, nor where winget is not Windows' (bash, WSL).
+    expect(installChain(['winget install x'], null, 'powershell')).not.toContain('Get-Command npm')
+    expect(nodeStep('gitbash')).toBe(null)
+    expect(nodeStep('wsl')).toBe(null)
   })
   it('the typed line never contains a marker (only running it prints one)', () => {
     for (const shell of ['powershell', 'pwsh', 'cmd', 'gitbash', 'wsl']) {

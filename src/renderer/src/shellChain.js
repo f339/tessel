@@ -20,10 +20,31 @@ export function chainCommands(steps, shellId) {
 // only running it prints it.
 export const MARK_OK = 'TESSEL-INSTALL-OK'
 export const MARK_FAILED = 'TESSEL-INSTALL-FAILED'
+
+// An npm install on a PC without Node.js ("npm is not recognized"): Node.js
+// LTS is installed first with winget (Windows' own package manager), and the
+// pane's PATH read again from Windows, so npm is found right after. Nothing
+// happens when npm is there. PowerShell and the Command Prompt (Git Bash and
+// WSL have their own Node.js, or not: left as they are).
+const WINGET_NODE = 'winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements'
+const NODE_MISSING = 'Node.js is not installed: installing it with winget...' // i18n-ignore
+const NODE_FAILED = 'Node.js (npm) could not be installed. Install it from https://nodejs.org and try again.' // i18n-ignore
+export function nodeStep(shellId) {
+  if (shellId === 'powershell' || shellId === 'pwsh') {
+    const refresh = "$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')"
+    return `if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Write-Host '${NODE_MISSING}'; ${WINGET_NODE}; ${refresh} }; if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Write-Error '${NODE_FAILED}' }` // i18n-ignore
+  }
+  // No parenthesis in the message: it would close the block.
+  if (shellId === 'cmd') return `(where npm >nul 2>nul || (echo ${NODE_MISSING} && ${WINGET_NODE} && set "PATH=%ProgramFiles%\\nodejs;%APPDATA%\\npm;%PATH%"))` // i18n-ignore
+  return null
+}
+
 export function installChain(steps, start, shellId) {
-  const list = (Array.isArray(steps) ? steps : [steps])
+  const given = (Array.isArray(steps) ? steps : [steps])
     .map((s) => String(s || '').trim())
     .filter(Boolean)
+  const node = given.some((s) => /^npm\s/i.test(s)) ? nodeStep(shellId) : null
+  const list = node ? [node, ...given] : given
   const then = String(start || '').trim()
   if (shellId === 'powershell' || shellId === 'pwsh') {
     const ok = "Write-Host ('TESSEL-INSTALL' + '-OK')"
