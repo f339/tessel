@@ -245,6 +245,17 @@ body.popup-open .toolbar {
   color: var(--text-strong);
 }
 
+/* No white box (Chromium's focus ring) around a toolbar icon, e.g. when a
+   menu it opened gives the focus back: reached with the keyboard, it lights
+   up as on hover instead. */
+.tb-icon:focus {
+  outline: none;
+}
+.tb-icon:focus-visible {
+  background: var(--surface-3);
+  color: var(--text-strong);
+}
+
 .tb-icon.danger:hover {
   background: color-mix(in srgb, var(--danger) 22%, transparent);
   color: #ffb4b6;
