@@ -438,6 +438,8 @@ const api = {
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
   clipboardHasImage: () => ipcRenderer.invoke('clipboard:hasImage'),
   saveClipboardImage: () => ipcRenderer.invoke('clipboard:saveImage'),
+  // The clipboard's image sent to an SSH host, for an agent there. -> { ok, path } | { ok: false, error }
+  sendClipboardImageToHost: (hostId) => ipcRenderer.invoke('clipboard:sendImageToHost', hostId),
   writeClipboard: (text) => ipcRenderer.send('clipboard:write', text),
 
   // Workspace layout persistence.

@@ -516,7 +516,9 @@
     },
     "image": {
       "title": "Image n° {{n}}",
-      "notFound": "Image n° {{n}} introuvable (seules les images collées dans ce panneau ou envoyées dans sa conversation peuvent être ouvertes)."
+      "notFound": "Image n° {{n}} introuvable (seules les images collées dans ce panneau ou envoyées dans sa conversation peuvent être ouvertes).",
+      "hostFailed": "L'image n'a pas pu être envoyée sur l'hôte : {{error}}",
+      "hostUnknown": "erreur inconnue"
     },
     "file": {
       "openFailedWhy": "Impossible d'ouvrir {{path}} : {{error}}",

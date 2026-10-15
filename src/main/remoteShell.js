@@ -146,6 +146,10 @@ export const FUNCTIONS = new Set([
   // The agents installed on this host (remoteAgent/remoteAgentSetup.js
   // parseAgentTools): their paths only.
   '__t_agents',
+  // An image pasted for an agent in a terminal on this host: written in
+  // ~/.tessel-server/paste (kept a day), its path printed (remoteFs.js
+  // pasteImage).
+  '__t_paste',
   // The agent sessions on this host (the shim's `sessions`): ids, folders,
   // titles, never their contents.
   '__t_rsess',
@@ -549,6 +553,23 @@ __t_ragent() {
     printf '%s\\n' "$1" >"$__s/bin/VERSION"
   fi
   "$__nd" "$__s/bin/tessel-shim.cjs" install --node "$__nd"
+}
+__t_paste() {
+  case $1 in ''|*[!0-9a-z-]*) return 90 ;; esac
+  __s="$HOME/.tessel-server"
+  [ -L "$__s" ] && return 98
+  if [ -e "$__s" ]; then [ -d "$__s" ] && [ -O "$__s" ] || return 98; fi
+  ( umask 077; mkdir -p "$__s/paste" ) || return 98
+  for __x in "$__s" "$__s/paste"; do
+    [ -L "$__x" ] && return 98
+    [ -d "$__x" ] && [ -O "$__x" ] || return 98
+    chmod 700 "$__x" || return 98
+  done
+  find "$__s/paste" -type f -name 'image-*.png' -mmin +1440 -exec rm -f {} + 2>/dev/null
+  __f="$__s/paste/image-$1.png"
+  [ -e "$__f" ] || [ -L "$__f" ] && return 98
+  ( umask 077; __t_b64d <"$__T_D/u" >"$__f" ) || { rm -f "$__f"; return 98; }
+  printf '%s\\n' "$__f"
 }
 __t_agents() {
   for __a in claude codex; do

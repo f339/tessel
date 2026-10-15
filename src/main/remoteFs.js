@@ -22,6 +22,7 @@
 // - Delete goes to the host user's trash (the freedesktop.org Trash folder,
 //   ~/.local/share/Trash, with its .trashinfo so a file manager or
 //   `gio trash --restore` can put it back), never rm.
+import crypto from 'crypto'
 import { createRemoteSession, sessionArgs, remotePathArg, rawArg, RC } from './remoteShell'
 import { createScm } from './sourceControl'
 import { looksBinary, MAX_EDIT_BYTES, MAX_HEAD_BYTES } from './editorFiles'
@@ -1554,6 +1555,24 @@ ${root}`, () => gitWorktreesNow(root))
   // The agents installed on this host (__t_agents): their paths, never run.
   // Only through a session the host allows (a terminal opened on it).
   // -> { claude, codex, vscodeClaude } (null when missing) | { error }
+  // An image pasted for an agent in a terminal on this host (its own
+  // program would read the host's clipboard, which a server has not): written
+  // in ~/.tessel-server/paste there (kept a day), its path given back to be
+  // pasted. -> { ok, path } | { ok: false, error }
+  const MAX_PASTE_BYTES = 20 * 1024 * 1024
+  async function pasteImage(hostId, png) {
+    if (!hostIdOk(hostId)) return { ok: false, error: t('main.remote.notFound', 'This remote host is no longer saved in Tessel.') }
+    if (!Buffer.isBuffer(png) || !png.length) return { ok: false, error: t('main.remoteFs.noImage', 'The clipboard has no image.') }
+    if (png.length > MAX_PASTE_BYTES) return { ok: false, error: t('main.remoteFs.imageTooBig', 'The image is too large to send (over 20 MB).') }
+    allow(hostId)
+    const name = `${Date.now()}-${crypto.randomBytes(3).toString('hex')}`
+    const res = await call(hostId, '__t_paste', [name], { cap: 4096, upload: png, timeoutMs: 30000 + Math.ceil(png.length / (512 * 1024)) * 1000, op: 'save' })
+    if (!res || res.error) return { ok: false, error: (res && res.error) || t('main.remoteFs.pasteFailed', 'The image could not be written on the host.') }
+    const path = res.rc === 0 ? res.out.toString('utf8').trim() : ''
+    if (!/^\/[^\n\0]*\/\.tessel-server\/paste\/image-[0-9a-z-]+\.png$/.test(path)) return { ok: false, error: t('main.remoteFs.pasteFailed', 'The image could not be written on the host.') }
+    return { ok: true, path }
+  }
+
   async function agentTools(hostId) {
     if (!hostIdOk(hostId)) return { error: t('main.remote.notFound', 'This remote host is no longer saved in Tessel.') }
     const res = await call(hostId, '__t_agents', [], { cap: 16 * 1024, timeoutMs: 30_000, op: 'agents', background: true })
@@ -1795,6 +1814,7 @@ ${q && q.root}`, () => scm.scmStatus(q)), scmDiscard: (q) => scm.scmDiscard(q) }
     githubContext,
     connect,
     installAgentShim,
+    pasteImage,
     agentTools,
     connectedQuietly,
     listAgentSessions,

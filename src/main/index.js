@@ -3069,6 +3069,15 @@ ipcMain.handle('clipboard:saveImage', () => {
   fs.writeFileSync(file, img.toPNG())
   return file
 })
+// The clipboard's image for an agent in a terminal on an SSH host: sent
+// there (remoteFs.js pasteImage), its path on the host given back to be
+// pasted. -> { ok, path } | { ok: false, error }
+ipcMain.handle('clipboard:sendImageToHost', async (event, hostId) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return { ok: false, error: 'not allowed' } // i18n-ignore internal
+  const img = clipboard.readImage()
+  if (img.isEmpty()) return { ok: false, error: t('main.remoteFs.noImage', 'The clipboard has no image.') }
+  return remoteFs.pasteImage(typeof hostId === 'string' ? hostId : '', img.toPNG())
+})
 // [Image #N] clicked in a Claude Code pane: the image Tessel pasted, or the
 // one in the pane's conversation, for Tessel's own viewer. -> { ok, file, src }
 const IMAGE_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }

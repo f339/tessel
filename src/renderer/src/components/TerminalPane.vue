@@ -1776,8 +1776,32 @@ async function pasteClipboard(how = 'menu') {
 // whose file path is pasted, so we save the clipboard image and paste its
 // path: instant, where Claude's own Alt+V takes seconds on Windows (it starts
 // PowerShell to read the clipboard). Other programs read the clipboard
-// themselves on Ctrl+V (Codex does it quickly).
+// themselves on Ctrl+V (Codex does it quickly). An agent on an SSH host would
+// read the server's clipboard (a server has none: "X11 ... unreachable"):
+// the image is sent to the host and its path there pasted (Claude Code and
+// Codex attach a pasted image path).
 async function pasteImage(how = 'Ctrl+V') {
+  if (props.node.remoteHostId && isAgent.value && window.shellApi.sendClipboardImageToHost) {
+    let res = null
+    try {
+      res = await window.shellApi.sendClipboardImageToHost(props.node.remoteHostId)
+    } catch {
+      res = null
+    }
+    if (res && res.ok && term) {
+      term.paste(res.path)
+      logPaste(`${how}: image sent to the host, its path pasted`) // i18n-ignore
+    } else {
+      logPaste(`${how}: image not sent to the host`) // i18n-ignore
+      if (ctx.toast)
+        ctx.toast(t('pane.image.hostFailed', 'The image could not be sent to the host: {{error}}', { error: (res && res.error) || t('pane.image.hostUnknown', 'unknown error') }), {
+          kind: 'error',
+          timeout: 8000
+        })
+    }
+    if (term) termFocus()
+    return
+  }
   if (props.node.agentId === 'claude') {
     let file = null
     try {

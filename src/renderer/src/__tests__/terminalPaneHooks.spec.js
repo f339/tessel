@@ -285,6 +285,40 @@ describe('TerminalPane status integration', () => {
     expect(window.shellApi.writePty).not.toHaveBeenCalledWith('test-pane', '\x16')
   })
 
+  // An agent on an SSH host would read the server's clipboard (a server has
+  // none): the image is sent to the host and its path there pasted.
+  it('an image pasted in a Codex pane on an SSH host: sent to the host, its path there pasted', async () => {
+    wrapper.unmount()
+    window.shellApi.log = vi.fn()
+    window.shellApi.readClipboard = vi.fn(async () => '')
+    window.shellApi.clipboardHasImage = vi.fn(async () => true)
+    window.shellApi.saveClipboardImage = vi.fn(async () => 'C:\\Temp\\tessel-paste\\image-3.png')
+    window.shellApi.sendClipboardImageToHost = vi.fn(async () => ({ ok: true, path: '/home/deploy/.tessel-server/paste/image-1-abc123.png' }))
+    window.shellApi.writePty = vi.fn()
+    wrapper = mount(TerminalPane, {
+      props: { node: { id: 'test-pane', kind: 'agent', type: 'leaf', title: 'Codex', agentId: 'codex', remoteHostId: 'ssh-1', agentLaunchToken: 'launch' } },
+      global: { provide: { panelCtx: ctx } },
+      attachTo: document.body
+    })
+    await nextTick()
+    const term = fixture.terminals.at(-1)
+    const key = new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, cancelable: true })
+    expect(term.keyHandler(key)).toBe(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(window.shellApi.sendClipboardImageToHost).toHaveBeenCalledWith('ssh-1')
+    expect(term.pasted).toEqual(['/home/deploy/.tessel-server/paste/image-1-abc123.png'])
+    expect(window.shellApi.saveClipboardImage).not.toHaveBeenCalled()
+    expect(window.shellApi.writePty).not.toHaveBeenCalledWith('test-pane', '\x16')
+    expect(window.shellApi.log.mock.calls.map((c) => c[1]).at(-1)).toBe('paste in test-pane: Ctrl+V: image sent to the host, its path pasted')
+    // Not sent: said, nothing pasted.
+    window.shellApi.sendClipboardImageToHost = vi.fn(async () => ({ ok: false, error: 'The image is too large to send (over 20 MB).' }))
+    ctx.toast = vi.fn()
+    term.keyHandler(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, cancelable: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(term.pasted).toHaveLength(1)
+    expect(ctx.toast).toHaveBeenCalledWith('The image could not be sent to the host: The image is too large to send (over 20 MB).', expect.objectContaining({ kind: 'error' }))
+  })
+
   // The suggestion is read again 3 s after a turn ends; a new turn started
   // meanwhile cancels that read (else it reads the screen mid-turn).
   it("a turn started within 3 s of the last one's end cancels the suggestion's late read", async () => {
