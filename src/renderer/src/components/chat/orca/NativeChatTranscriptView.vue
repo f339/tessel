@@ -337,7 +337,9 @@ async function loadEarlier() {
 function closeView() {
   stopRetry()
   const a = api()
-  if (a && viewId) a.close({ viewId })
+  // A conversation from elsewhere is let go even when it never opened (its
+  // first read failed): it is watched from the moment it is asked for.
+  if (a && (viewId || props.source)) a.close({ viewId })
   viewId = null
   viewOpen.value = false
   forgetImages()
@@ -435,6 +437,8 @@ const session = computed(() => ({
   readPhase: 'ready'
 }))
 const fileLinkContext = computed(() => {
+  // A conversation from elsewhere names another computer's files.
+  if (props.source) return null
   const n = props.node
   // On an SSH host: the host's files, opened over the remote file system.
   const hostRoot = n && n.remoteHostId ? remoteRoot(n.remoteHostId, n.remotePath || '~') : null
@@ -472,6 +476,9 @@ const fontScale = useNativeChatFontScale(
   () => ({ target: rootRef.value, storageKey: props.paneId ? `tessel.chat.fontScale.${props.paneId}` : undefined }) // i18n-ignore
 )
 provide('nativeChatFileLinkContext', fileLinkContext)
+// Whether the files it names are this computer's (no "Show in Folder" or
+// opening for a conversation from elsewhere).
+provide('nativeChatLocalFiles', computed(() => !props.source))
 
 // ---- Interactive (the pane's chat view) ---------------------------------------
 

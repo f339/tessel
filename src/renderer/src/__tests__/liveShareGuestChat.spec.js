@@ -59,6 +59,8 @@ vi.mock('@xterm/addon-search', () => ({ SearchAddon: class { onDidChangeResults(
 vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: class {} }))
 import TerminalPane from '../components/TerminalPane.vue'
 import LiveShareChatPane from '../components/LiveShareChatPane.vue'
+import LiveShareReaders from '../components/LiveShareReaders.vue'
+import NativeChatFileChip from '../components/chat/orca/NativeChatFileChip.vue'
 
 const ChatViewStub = { name: 'NativeChatTranscriptView', props: ['source', 'readOnlyNote', 'backLabel', 'agent'], emits: ['close'], template: '<div data-test="chat-view-stub">{{ readOnlyNote }}</div>' }
 
@@ -228,5 +230,42 @@ describe('Live Share guest: the chat button of a host’s agent pane', () => {
     await show(guestLeaf({ chat: null, kind: 'shell', agentId: null }))
     expect(wrapper.find('.pane-icon').classes()).not.toContain('agent')
     expect(wrapper.find('.pane-icon').attributes('data-agent')).toBeUndefined()
+  })
+})
+
+describe('Live Share host: who reads a pane’s conversation', () => {
+  it('the pane header shows the guests reading it now (their count, their names in its tooltip)', async () => {
+    const readers = ref(['Alex'])
+    const ctx = { liveShareReaders: vi.fn((id) => (id === 'pane-1' ? readers.value : [])) }
+    const w = mount(LiveShareReaders, { props: { paneId: 'pane-1' }, global: { provide: { panelCtx: ctx } } })
+    const badge = w.find('[data-test="pane-liveshare-readers"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toBe('1')
+    expect(badge.attributes('title')).toBe('Reading this conversation in Live Share: Alex')
+    readers.value = ['Alex', 'Bea']
+    await nextTick()
+    expect(w.find('[data-test="pane-liveshare-readers"]').text()).toBe('2')
+    readers.value = []
+    await nextTick()
+    expect(w.find('[data-test="pane-liveshare-readers"]').exists()).toBe(false)
+    w.unmount()
+  })
+})
+
+describe('a conversation from another computer: its files never open here', () => {
+  it('a file chip opens only for this computer’s conversations', () => {
+    const prev = window.shellApi
+    window.shellApi = { openFile: vi.fn() }
+    try {
+      const block = { path: 'C:/Users/ada/notes.txt', name: 'notes.txt' }
+      const mine = mount(NativeChatFileChip, { props: { block } })
+      expect(mine.find('button').exists()).toBe(true)
+      mine.unmount()
+      const theirs = mount(NativeChatFileChip, { props: { block }, global: { provide: { nativeChatLocalFiles: false } } })
+      expect(theirs.find('button').exists()).toBe(false)
+      theirs.unmount()
+    } finally {
+      window.shellApi = prev
+    }
   })
 })

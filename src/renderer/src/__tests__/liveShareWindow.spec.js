@@ -863,3 +863,33 @@ describe('Live Share, as a guest: your own view of a host’s agent pane', () =>
     expect(reachedHost()).toBe(false)
   })
 })
+
+describe('Live Share, as the host: who reads which conversation', () => {
+  let t
+  beforeEach(async () => {
+    t = setup()
+    await t.ls.init()
+  })
+  afterEach(() => t.ls.dispose())
+
+  it('names the guests reading a pane’s conversation now, only while sharing', () => {
+    expect(t.ls.readersOf('pane-1')).toEqual([])
+    t.listeners.onHost({
+      state: 'sharing',
+      invite: 'x',
+      projectIds: ['ws-1'],
+      guests: [
+        { id: 'g1', name: 'Alex', state: 'joined' },
+        { id: 'g2', name: '', state: 'joined' },
+        { id: 'g3', name: 'Cy', state: 'waiting' }
+      ],
+      reading: [{ id: 'pane-1', guests: ['g1', 'g2', 'g3'] }]
+    })
+    expect(t.ls.readersOf('pane-1')).toEqual(['Alex', 'A guest'])
+    expect(t.ls.readersOf('pane-2')).toEqual([])
+    t.listeners.onHost({ state: 'sharing', invite: 'x', projectIds: ['ws-1'], guests: [{ id: 'g1', name: 'Alex', state: 'joined' }] })
+    expect(t.ls.readersOf('pane-1')).toEqual([])
+    t.listeners.onHost({ state: 'off', guests: [], reading: [{ id: 'pane-1', guests: ['g1'] }] })
+    expect(t.ls.readersOf('pane-1')).toEqual([])
+  })
+})

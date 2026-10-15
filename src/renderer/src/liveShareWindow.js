@@ -95,7 +95,7 @@ export const guestWsName = (project, host) => t('liveShare.wsName2', '{{project}
 export function createLiveShareWindow(deps) {
   const api = () => (window.shellApi && window.shellApi.liveShare) || null
   const state = reactive({
-    host: { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectIds: [], guests: [], progress: null, error: null },
+    host: { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectIds: [], guests: [], reading: [], progress: null, error: null },
     guest: { state: 'off', host: null, session: null, panes: [], projects: [], reason: null, rights: null, code: null, chat: false, chats: [] },
     defaultName: '',
     // The projects you pick to share (their ids), before you start. While
@@ -210,7 +210,7 @@ export function createLiveShareWindow(deps) {
     const wasOn = hostSharing() || hostStarting()
     const lastShared = sharedIds()
     if (s.state === 'sharing' && state.host.state !== 'sharing') generation++
-    Object.assign(state.host, { projectIds: [] }, s)
+    Object.assign(state.host, { projectIds: [], reading: [] }, s)
     // Sharing ended: the projects it shared are the ones picked next time.
     if (wasOn && !hostSharing() && !hostStarting()) {
       seen.clear()
@@ -231,6 +231,15 @@ export function createLiveShareWindow(deps) {
       const a = state.asks[i]
       if (a.kind === 'join' ? !waiting.has(a.guestId) : !closeStands(a)) state.asks.splice(i, 1)
     }
+  }
+
+  // The guests reading a pane's conversation now (their names), shown on
+  // the pane: sharing it is on by default, never unseen.
+  function readersOf(paneId) {
+    if (!hostSharing() || !paneId) return []
+    const entry = (state.host.reading || []).find((r) => r && r.id === paneId)
+    if (!entry || !Array.isArray(entry.guests)) return []
+    return entry.guests.map((id) => (state.host.guests || []).find((g) => g.id === id && g.state === 'joined')).filter(Boolean).map(nameOf)
   }
 
   // The guest is in, with this right, in this sharing.
@@ -799,6 +808,7 @@ export function createLiveShareWindow(deps) {
     leave,
     setGuestView,
     chatSource,
+    readersOf,
     answerAsk,
     setRights,
     setGuestProjects,

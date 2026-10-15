@@ -6,7 +6,7 @@
  * Slot: the code (e.g. <code>{{ text }}</code>); its text is what Copy copies.
  * Used by ChatMarkdown as its renderCodeBlock, and by the approval card.
  */
-import { Comment, Fragment, Text, defineComponent, h, inject, isVNode } from 'vue'
+import { Comment, Fragment, Text, defineComponent, h, inject, isVNode, unref } from 'vue'
 import { Code2, File, FolderOpen } from 'lucide-vue-next'
 import { t } from '../../../i18n'
 import { getCodeBlockLanguageLabel } from './rich-markdown-code-block-languages.js'
@@ -62,12 +62,15 @@ export default defineComponent({
     // Where a path Tessel cannot show is said (the pane's toasts).
     const panel = inject('panelCtx', null)
     const toast = (text, opts) => panel && typeof panel.toast === 'function' && panel.toast(text, opts)
+    // A conversation from another computer (Live Share): its paths are not
+    // this computer's, never shown in a folder here.
+    const localFiles = inject('nativeChatLocalFiles', true)
     return () => {
       const children = slots.default?.() ?? []
       const code = extractCodeText(children)
       const language = props.language
       const copyLabel = t('chat.orca.copyCode', 'Copy code')
-      const reveal = revealButton(codeBlockPath(code), toast)
+      const reveal = unref(localFiles) === false ? null : revealButton(codeBlockPath(code), toast)
       // A path: a header like a language's, its buttons always in view at the
       // top right (never over the path itself).
       const header = language || reveal

@@ -7,7 +7,7 @@
  * transcript is only shown (nothing is written).
  * Props: block (file-ref: { name, mediaType?, size?, path? }).
  */
-import { computed, ref } from 'vue'
+import { computed, inject, ref, unref } from 'vue'
 import { File, FileArchive, FileCode, FileImage, FileSpreadsheet, FileText } from 'lucide-vue-next'
 import { t } from '../../../i18n'
 import { fileSizeLabel } from '../../../chat/orca/native-chat-images.js'
@@ -27,7 +27,9 @@ const icon = computed(() => {
   return File
 })
 const size = computed(() => fileSizeLabel(props.block.size))
-const canOpen = computed(() => typeof props.block.path === 'string' && props.block.path.length > 0 && !!window.shellApi?.openFile)
+// A conversation from another computer (Live Share): never opened here.
+const localFiles = inject('nativeChatLocalFiles', true)
+const canOpen = computed(() => unref(localFiles) !== false && typeof props.block.path === 'string' && props.block.path.length > 0 && !!window.shellApi?.openFile)
 const title = computed(() => {
   const parts = [props.block.name, size.value].filter(Boolean).join(' · ')
   return failed.value ? `${parts}\n${failed.value}` : parts

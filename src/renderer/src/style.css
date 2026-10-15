@@ -969,6 +969,22 @@ body.popup-open .toolbar {
   background: var(--term);
 }
 
+/* Live Share host: guests reading a pane's conversation now (an eye and
+   their count; their names in its tooltip). */
+.pane-ls-readers {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #ff8a8a;
+  background: color-mix(in srgb, #e5484d 16%, transparent);
+  white-space: nowrap;
+}
+
 /* Live Share guest: what shows instead of a host's conversation or terminal
    that can't show here (LiveShareChatPane, TerminalPane's chat view). */
 .ls-guest-note {

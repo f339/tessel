@@ -8,17 +8,23 @@
 // only what the conversation says (your messages, the agent's answers, each
 // tool it ran by name with a short label, how each turn ended). Never what
 // the tools read or printed (file contents, command output), the agent's
-// thinking, images or attached files. Paths outside the pane's project
-// folders are hidden ("…"), paths inside are written from the project's
-// folder, and what looks like a key, a token or a password is masked. Bounded:
-// the latest CHAT_LIMITS.events events, each text cut, CHAT_LIMITS.bytes in
-// all. The guest checks what comes again (cleanChatMessage): the same kinds,
-// fields and limits.
+// thinking, images or attached files, nor the harness's own turns (a
+// background task's report, shell output, reminders, other sessions' and
+// teammates' messages, Tessel's own notes: src/shared/harnessInjectedTurns.js).
+// Paths outside the pane's project folders are hidden ("…"), paths inside are
+// written from the project's folder, and what looks like a key, a token or a
+// password is masked (best effort: patterns). Bounded: the latest
+// CHAT_LIMITS.events events, each text cut, CHAT_LIMITS.bytes in all. Each
+// guest gets what changed since what it has (from: the events it keeps;
+// shareHost.js), and checks what comes again (cleanChatMessage,
+// mergeChatEvents): the same kinds, fields and limits.
 //
 // Both sides say what they speak beyond the protocol version in the sealed
 // join and welcome (SHARE_FEATURES): an older Tessel sends none and ignores
 // them, so a host and a guest of different versions still work together
 // (only without the conversation).
+
+import { isKnownHarnessInjectedUserTurnText, KNOWN_HARNESS_TAG_NAMES } from '../../shared/harnessInjectedTurns.js'
 
 export const SHARE_FEATURES = Object.freeze(['chat'])
 export const cleanFeatures = (list) => (Array.isArray(list) ? [...new Set(list.filter((f) => typeof f === 'string' && SHARE_FEATURES.includes(f)))] : [])
@@ -52,44 +58,83 @@ const idOf = (v) => (typeof v === 'string' && ID.test(v) ? v : null)
 const timeOf = (v) => (Number.isFinite(v) ? v : undefined)
 
 // --- Secrets ------------------------------------------------------------------
-/* eslint-disable no-control-regex */
+const VALUE = `("[^"\\r\\n]{1,200}"|'[^'\\r\\n]{1,200}'|[^\\s"',;&]{3,200})`
+const SECRET_NAME = '[A-Za-z0-9_.-]{0,40}(?:token|secret|passw(?:or)?d|passwd|pwd|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|credential|session[_-]?key|connection[_-]?string)[A-Za-z0-9_.-]{0,40}'
 const SECRETS = [
   [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, MASK],
   [/\b([a-z][a-z0-9+.-]{1,20}:\/\/)[^\s/@:]{1,200}:[^\s/@]{1,200}@/gi, `$1${MASK}@`],
-  [/\b(?:sk|pk|rk)-(?:ant-|proj-|live-|test-|or-)?[A-Za-z0-9_-]{16,}/g, MASK],
+  [/\b(?:sk|pk|rk)[-_](?:ant-|proj-|live[-_]|test[-_]|or-)?[A-Za-z0-9_-]{16,}/g, MASK],
   [/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/g, MASK],
   [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, MASK],
-  [/\bglpat-[A-Za-z0-9_-]{16,}/g, MASK],
-  [/\bxox[abposr]-[A-Za-z0-9-]{10,}/g, MASK],
-  [/\bAKIA[0-9A-Z]{16}\b/g, MASK],
-  [/\bAIza[0-9A-Za-z_-]{35}/g, MASK],
-  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, MASK],
+  [/\bglpat-[A-Za-z0-9_-]{10,}/g, MASK],
+  [/\bnpm_[A-Za-z0-9]{20,}/g, MASK],
+  [/\bhf_[A-Za-z0-9]{20,}/g, MASK],
+  [/\bya29\.[A-Za-z0-9_-]{10,}/g, MASK],
+  [/\bxox[a-z]-[A-Za-z0-9-]{6,}/g, MASK],
+  [/\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[0-9A-Z]{12,}/g, MASK],
+  [/\bAIza[0-9A-Za-z_-]{20,}/g, MASK],
+  [/\beyJ[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]{2,}){1,2}/g, MASK],
+  [/\b(AccountKey|SharedAccessKey|SharedAccessSignature|sig)=[^;&\s"']+/gi, `$1=${MASK}`],
   [/\b(Bearer|Basic|bearer)\s+(?=[A-Za-z0-9._~+/=-]{0,200}[0-9=])[A-Za-z0-9._~+/=-]{12,}/g, `$1 ${MASK}`],
   // NAME=value, name: value, "name": "value" where the name says it is a
-  // secret and the value looks like one (a digit in it, no spaces).
-  [/\b([A-Za-z0-9_.-]{0,40}(?:token|secret|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|credential)[A-Za-z0-9_.-]{0,40})(["']?[ \t]{0,4}[:=][ \t]{0,4})(["']?)(?=[^\s"']{0,200}\d)[^\s"']{6,}\3/gi, `$1$2$3${MASK}$3`]
+  // secret (whatever the value looks like).
+  [new RegExp(`\\b(${SECRET_NAME})(["']?[ \\t]{0,4}[:=][ \\t]{0,4})${VALUE}`, 'gi'), (all, name, sep, value) => `${name}${sep}${/^["']/.test(value) ? `${value[0]}${MASK}${value[0]}` : MASK}`],
+  // A long run of letters (both cases) and digits outside a path: a key.
+  [/(?<![\w/\\.-])(?=[A-Za-z0-9+/_=-]{0,200}\d)(?=[A-Za-z0-9+/_=-]{0,200}[a-z])(?=[A-Za-z0-9+/_=-]{0,200}[A-Z])[A-Za-z0-9+/_=-]{40,}/g, MASK]
 ]
-/* eslint-enable no-control-regex */
 export function maskSecrets(text) {
   let out = str(text)
   for (const [re, to] of SECRETS) out = out.replace(re, to)
   return out
 }
 
+// Before anything is looked for: no terminal codes (one before a path or a
+// key would hide it from the patterns), %-encoded characters decoded
+// (C%3A%5CUsers...), and Windows' long-path prefixes (\\?\C:\..., \\?\UNC\...)
+// written plainly.
+/* eslint-disable no-control-regex */
+const ANSI = /\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[@-Z\\-_])|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g
+/* eslint-enable no-control-regex */
+export function plainText(text) {
+  return str(text)
+    .replace(ANSI, '')
+    .replace(/%([0-9A-Fa-f]{2})/g, (all, hex) => {
+      const c = parseInt(hex, 16)
+      return c >= 0x20 && c < 0x7f ? String.fromCharCode(c) : all
+    })
+    .replace(/\\\\[?.]\\UNC\\/gi, '\\\\')
+    .replace(/\\\\[?.]\\(?=[A-Za-z]:)/g, '')
+}
+
 // --- Paths --------------------------------------------------------------------
-// A project folder, as compared: forward slashes, no trailing one; Windows
-// paths (a drive, a share) without case.
+// A path as compared: forward slashes, its . and .. resolved (never above
+// its drive or share), no trailing slash; Windows paths (a drive, a share:
+// \\server or //server) without case. -> { path, win } | null
+function normalizedPath(p) {
+  const s0 = str(p).trim()
+  if (!s0 || s0.length > 4096) return null
+  const unc = /^(?:\\\\|\/\/)(?![\\/])/.test(s0)
+  const drive = /^[A-Za-z]:[\\/]/.test(s0)
+  if (!unc && !drive && !s0.startsWith('/')) return null
+  const parts = s0.replace(/[\\/]+/g, '/').split('/').filter((x) => x !== '' && x !== '.')
+  const floor = drive ? 1 : unc ? 2 : 0
+  const out = []
+  for (const part of parts) {
+    if (part !== '..') out.push(part)
+    else if (out.length > floor) out.pop()
+  }
+  const path = unc ? `//${out.join('/')}` : drive ? out.join('/') : `/${out.join('/')}`
+  const win = unc || drive
+  return { path: win ? path.toLowerCase() : path, raw: path, win }
+}
+// A project folder (a whole drive or / is none).
 function normalizedRoot(p) {
-  const s = str(p).trim()
-  if (!s || s.length > 1024 || /[\u0000-\u001f]/.test(s)) return null
-  const win = /^[A-Za-z]:[\\/]/.test(s) || /^\\\\[^\\]/.test(s)
-  if (!win && !s.startsWith('/')) return null
-  const unc = /^\\\\/.test(s)
-  let n = s.replace(/[\\/]+/g, '/')
-  if (unc) n = `/${n}`
-  n = n.replace(/\/+$/, '')
-  if (!n || n === '/' || /^[A-Za-z]:$/.test(n)) return null // a whole drive is no project
-  return { path: win ? n.toLowerCase() : n, win }
+  const s0 = str(p)
+  // eslint-disable-next-line no-control-regex -- control characters are what it refuses
+  if (/[\u0000-\u001f]/.test(s0) || s0.length > 1024) return null
+  const n = normalizedPath(s0)
+  if (!n || n.path === '/' || /^[a-z]:$/i.test(n.path) || /^\/\/[^/]*$/.test(n.path)) return null
+  return { path: n.path, win: n.win }
 }
 export function cleanRoots(list) {
   const out = []
@@ -100,49 +145,59 @@ export function cleanRoots(list) {
   return out
 }
 // One path found in the text: from the project's folder when it is inside
-// one, else hidden.
+// one (after its .. are resolved), else hidden.
 function rewritePath(raw, roots) {
-  const unc = /^\\\\/.test(raw)
-  let n = raw.replace(/[\\/]+/g, '/')
-  if (unc) n = `/${n}`
+  const n = normalizedPath(raw)
+  if (!n) return HIDDEN
   for (const root of roots) {
-    const cmp = root.win ? n.toLowerCase() : n
-    if (cmp === root.path || cmp === `${root.path}/`) return '.'
-    if (cmp.startsWith(`${root.path}/`)) return n.slice(root.path.length + 1) || '.'
+    if (root.win !== n.win) continue
+    if (n.path === root.path) return '.'
+    if (n.path.startsWith(`${root.path}/`)) return n.raw.slice(root.path.length + 1)
   }
   return HIDDEN
 }
 const TRAILING = /[.,;:!?)\]}'"`]+$/
+// What a path is made of, and a space inside one (followed by more of it: a
+// word with a folder separator before the next space).
+const PC = `[^\\s"'\`<>|*?]`
+const PSP = `[ \\t](?=${PC}*[\\\\/])`
+const PATH_BODY = `(?:${PC}|${PSP})*`
+// Where a path may start: not inside a word or another path, or right after
+// a flag (-I/usr/include, --prefix=/opt/x).
+const START = `(?:(?<![\\w\\\\/:.~-])|(?<=(?:^|[^\\w-])-{1,2}[A-Za-z][\\w-]{0,30}=?))`
 const PATHS = [
+  // ssh://host/..., smb://..., ftp://...: the host's paths, all hidden.
+  [/\b(?:ssh|sftp|scp|smb|ftps?):\/\/[^\s"'`<>]+/gi, 'hide'],
   // file:// links
-  /\bfile:\/\/\/?[^\s"'`<>)\]]+/gi,
+  [/\bfile:\/\/\/?[^\s"'`<>)\]]+/gi, 'file'],
+  // A quoted path, spaces and all.
+  [/(["'`])((?:[A-Za-z]:[\\/]|\\\\|\/\/(?!\/)|~[\\/]|\/[^/"'`\r\n]+\/)[^"'`\r\n]{0,1024}?)\1/g, 'quoted'],
   // C:\... or C:/...
-  /(?<![\w\\/:.~-])[A-Za-z]:[\\/][^\s"'`<>|*?]*/g,
-  // \\server\share\...
-  /(?<![\w\\/])\\\\[^\s"'`<>|*?\\]+(?:\\[^\s"'`<>|*?\\]*)*/g,
-  // ~/...
-  /(?<![\w\\/~.-])~[\\/][^\s"'`<>|*?]*/g,
-  // /two/segments... (one segment, like /compact, is a command, not a path)
-  /(?<![\w\\/:.~-])\/(?:[^\s"'`<>|/\\]+\/)+[^\s"'`<>|/\\]*/g
+  [new RegExp(`${START}[A-Za-z]:[\\\\/]${PATH_BODY}`, 'g'), 'path'],
+  // \\server\share\... and //server/share/...
+  [new RegExp(`(?<![\\w\\\\/:])(?:\\\\\\\\[^\\s\\\\/]+\\\\|//[^\\s\\\\/]+/)${PATH_BODY}`, 'g'), 'path'],
+  // ~/... and ~user/...: a home folder, hidden.
+  [new RegExp(`(?<![\\w\\\\/~.-])~[\\w.-]{0,32}[\\\\/]${PATH_BODY}`, 'g'), 'hide'],
+  // ../...: above the folder it was written from, hidden.
+  [new RegExp(`(?<![\\w.\\\\/-])\\.\\.[\\\\/]${PATH_BODY}`, 'g'), 'hide'],
+  // /two/segments... (one segment, like /compact, is a command, not a path),
+  // also after a host (user@host:/home/...) or a flag.
+  [new RegExp(`(?:${START}|(?<=[\\w.-]:))/(?!/)(?:[^\\s"'\`<>|/\\\\]+/)+${PATH_BODY}`, 'g'), 'path']
 ]
 export function hidePaths(text, roots) {
   let out = str(text)
   if (!roots) return out
-  for (const re of PATHS) {
-    out = out.replace(re, (match) => {
+  for (const [re, kind] of PATHS) {
+    out = out.replace(re, (match, quote, inner) => {
+      if (kind === 'quoted') return `${quote}${rewritePath(inner, roots)}${quote}`
       const tail = (match.match(TRAILING) || [''])[0]
       let p = tail ? match.slice(0, -tail.length) : match
       if (!p) return match
-      if (/^file:/i.test(p)) {
+      if (kind === 'hide') return HIDDEN + tail
+      if (kind === 'file') {
         p = p.replace(/^file:\/\/\/?/i, '')
-        try {
-          p = decodeURIComponent(p)
-        } catch {
-          /* kept as written */
-        }
         if (!/^[A-Za-z]:[\\/]/.test(p) && !p.startsWith('/')) p = `/${p}`
       }
-      if (p.startsWith('~')) return HIDDEN + tail
       return rewritePath(p, roots) + tail
     })
   }
@@ -154,7 +209,17 @@ export function hidePaths(text, roots) {
 // Cut first (a little past the end: a secret across the cut is still seen
 // whole), so no pattern ever runs over more than that.
 export function guestText(text, roots, max) {
-  return clip(hidePaths(maskSecrets(clip(text, max + 256)), roots), max)
+  return clip(hidePaths(maskSecrets(plainText(clip(text, max + 256))), roots), max)
+}
+
+// The harness's own user turns (never the conversation), and its blocks
+// inside one.
+const HARNESS_BLOCK = new RegExp(`<(${[...KNOWN_HARNESS_TAG_NAMES].join('|')})(?:\\s[^>]{0,500})?>[\\s\\S]*?(?:</\\1\\s*>|$)`, 'gi')
+export function harnessUserText(text) {
+  const s0 = plainText(str(text))
+  // Tessel's own notes ([Tessel] ...) and team messages typed in ("(message
+  // <id>) ..."): other agents' words, not this conversation's.
+  return isKnownHarnessInjectedUserTurnText(s0) || /^\s*\[Tessel\]/.test(s0) || /^\s*\(message [\w.:-]{1,120}/.test(s0)
 }
 
 // --- Events -------------------------------------------------------------------
@@ -185,9 +250,11 @@ function guestEvent(ev, roots) {
   switch (ev.type) {
     case 'user': {
       const id = idOf(ev.id)
-      if (!id) return null
+      if (!id || harnessUserText(ev.text)) return null
+      const text = str(ev.text).slice(0, 64 * 1024).replace(HARNESS_BLOCK, '').trim()
+      if (!text) return null
       const origin = ev.origin === 'team' ? 'team' : 'user'
-      return base({ type: 'user', id, text: guestText(ev.text, roots, CHAT_LIMITS.user), origin, status: 'accepted', ...(origin === 'team' && typeof ev.from === 'string' ? { from: clip(ev.from, 40) } : {}) })
+      return base({ type: 'user', id, text: guestText(text, roots, CHAT_LIMITS.user), origin, status: 'accepted', ...(origin === 'team' && typeof ev.from === 'string' ? { from: clip(ev.from, 40) } : {}) })
     }
     case 'assistant': {
       const messageId = idOf(ev.messageId)
@@ -249,12 +316,24 @@ export function guestChatPayload(read, roots) {
   return { ok: true, events, truncated: truncated || !!read.truncated }
 }
 
-// The guest's check of what came: the same kinds, fields and limits.
+// The guest's check of what came: the same kinds, fields and limits; from:
+// how many of the events it has go on (0: all of them anew).
 export function cleanChatMessage(msg) {
   if (!msg || typeof msg !== 'object') return null
   if (msg.ok !== true) return { ok: false, code: CHAT_CODES.includes(msg.code) ? msg.code : 'error' }
+  const from = Number.isSafeInteger(msg.from) && msg.from >= 0 ? msg.from : 0
   const { events, truncated } = guestChatEvents(msg.events, null)
-  return { ok: true, events, truncated: truncated || !!msg.truncated }
+  return { ok: true, from, events, truncated: truncated || !!msg.truncated }
+}
+
+// The guest's copy after an update (cleanChatMessage's): the events it had
+// up to `from`, then the new ones, within the same limits. null: it does not
+// fit what the guest has (it asks for all of it again).
+export function mergeChatEvents(prev, update) {
+  const have = Array.isArray(prev) ? prev : []
+  if (!update || update.from > have.length) return null
+  const merged = update.from === 0 ? update.events : have.slice(0, update.from).concat(update.events)
+  return guestChatEvents(merged, null).events
 }
 
 // The host's agent panes a guest can look at as a chat, as the guest gets

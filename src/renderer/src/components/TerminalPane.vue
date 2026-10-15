@@ -11,6 +11,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { getBuffer } from '../ptyStore'
 import { isFloatingToggleKey } from '../floatingTerminal'
 import BrandIcon from './BrandIcon.vue'
+import LiveShareReaders from './LiveShareReaders.vue'
 import { settings, fontStack } from '../settings'
 import { terminalTheme } from '../themes'
 
@@ -3329,6 +3330,8 @@ const paneMenuBindings = computed(() => ({
           :parent-idle-since="turnEndedAt"
           @running="onSubRunning"
         />
+        <!-- Live Share host: guests reading this conversation now -->
+        <LiveShareReaders :pane-id="node.id" />
         <!-- chat view <-> terminal (the agent keeps running: nothing restarts) -->
         <button
           v-if="chatViewAvailable || opencodeAgent"

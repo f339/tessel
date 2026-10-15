@@ -14,7 +14,8 @@ import { join } from 'path'
 import { createShareHost } from '../liveShare/shareHost'
 import { createShareGuest } from '../liveShare/shareGuest'
 import { newSecret, newSigningKey } from '../liveShare/shareCrypto'
-import { guestChatPayload, cleanChatMessage, guestText, cleanRoots, CHAT_LIMITS, SHARE_FEATURES } from '../liveShare/shareChat'
+import { guestChatPayload, cleanChatMessage, mergeChatEvents, guestText, cleanRoots, CHAT_LIMITS, SHARE_FEATURES } from '../liveShare/shareChat'
+import WebSocket from 'ws'
 import { registerLiveShare, cleanHostChats } from '../liveShare'
 
 vi.mock('../liveShare/shareTunnel.js', () => ({
@@ -101,7 +102,7 @@ describe('shareChat: what a guest gets of a conversation', () => {
 
   it('the guest checks what comes again: unknown kinds and fields dropped, codes kept to known ones', () => {
     const msg = cleanChatMessage({ ok: true, events: [{ type: 'assistant', messageId: 'm1', text: 'hi', extra: 'x' }, { type: 'approval', requestId: 'r1' }, { type: 'user', id: '../bad id', text: 'x' }], truncated: false })
-    expect(msg).toEqual({ ok: true, events: [{ type: 'assistant', messageId: 'm1', text: 'hi', imported: true }], truncated: false })
+    expect(msg).toEqual({ ok: true, from: 0, events: [{ type: 'assistant', messageId: 'm1', text: 'hi', imported: true }], truncated: false })
     expect(cleanChatMessage({ ok: false, code: 'constructor' })).toEqual({ ok: false, code: 'error' })
     expect(cleanChatMessage({ ok: false, code: 'missing' })).toEqual({ ok: false, code: 'missing' })
     expect(cleanChatMessage(null)).toBe(null)
@@ -317,7 +318,7 @@ const dataDirs = []
 afterEach(() => {
   for (const dir of dataDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
 })
-function fakeMain({ chatViews = null } = {}) {
+function fakeMain({ chatViews = null, chatRetry = {} } = {}) {
   const dataDir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-lschat-'))
   dataDirs.push(dataDir)
   const m = {
@@ -338,7 +339,7 @@ function fakeMain({ chatViews = null } = {}) {
     events: (channel) => m.sent.filter(([c]) => c === channel).map(([, p]) => p),
     last: (channel) => m.events(channel).at(-1)
   }
-  m.api = registerLiveShare({ ipcMain: m.ipcMain, send: m.send, host: m.host, dataDir, queueData: () => {}, sendExit: () => {}, log: { info: () => {} }, kill: vi.fn(), pidRunning: () => true, resume: false, chatViews })
+  m.api = registerLiveShare({ ipcMain: m.ipcMain, send: m.send, host: m.host, dataDir, queueData: () => {}, sendExit: () => {}, log: { info: () => {} }, kill: vi.fn(), pidRunning: () => true, resume: false, chatViews, chatRetry })
   return m
 }
 // The host's conversation reader (transcriptView.js createTranscriptViews).
@@ -349,6 +350,7 @@ function fakeReader() {
     return {
       openFromWindow: vi.fn(async (q) => {
         r.opened.push(q)
+        if (r.missing) return { ok: false, code: 'missing' }
         return { ok: true, viewId: `tv-${++r.next}`, ...hostRead() }
       }),
       close: vi.fn((viewId) => r.closed.push(viewId))
@@ -369,8 +371,8 @@ describe('registerLiveShare: a guest looks at a host’s agent pane as a chat', 
     { id: 'pane-2-chat', agentId: 'codex', sessionId: UUID, terminal: false, title: 'Codex chat', roots: ['C:\\work\\site'] }
   ]
 
-  async function sharedAndJoined({ reader = fakeReader(), projects = ['ws-1'] } = {}) {
-    const host = fakeMain({ chatViews: reader.factory })
+  async function sharedAndJoined({ reader = fakeReader(), projects = ['ws-1'], chatRetry = {} } = {}) {
+    const host = fakeMain({ chatViews: reader.factory, chatRetry })
     const guest = fakeMain()
     mains.push(host, guest)
     const started = await host.handle['liveShare:start'](null, { name: 'Cedric', projects: ['ws-1', 'ws-2'] })
@@ -434,6 +436,34 @@ describe('registerLiveShare: a guest looks at a host’s agent pane as a chat', 
     expect(await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: true })).toEqual({ ok: false, code: 'missing' })
   })
 
+  it('the guest’s Tessel puts the updates together; the host sees who reads which conversation', { timeout: 15000 }, async () => {
+    const { host, guest, reader, guestId } = await sharedAndJoined()
+    await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: true })
+    const first = await until(() => guest.last('liveShare:chat'))
+    const n = first.events.length
+    await until(() => host.last('liveShare:host').reading?.length)
+    expect(host.last('liveShare:host').reading).toEqual([{ id: 'pane-1-cc', guests: [guestId] }])
+    // The file grows by one answer: the window gets the whole conversation.
+    reader.send('transcriptView:event', { viewId: 'tv-1', ...hostRead(), events: [...hostRead().events, { type: 'assistant', messageId: 'm9', text: 'one more', at: 9 }] })
+    const next = await until(() => guest.events('liveShare:chat').find((m) => m.events && m.events.length === n + 1), 3000)
+    expect(next.events.at(-1).text).toBe('one more')
+    expect(next.events.slice(0, n)).toEqual(first.events)
+    await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: false })
+    await until(() => host.last('liveShare:host').reading.length === 0)
+  })
+
+  it('a conversation file not there: read again a few times, less and less often, then left alone', async () => {
+    const reader = fakeReader()
+    reader.missing = true
+    const { guest } = await sharedAndJoined({ reader, chatRetry: { firstMs: 20, maxMs: 80, tries: 3 } })
+    await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: true })
+    await until(() => reader.opened.length === 4, 2000)
+    await wait(400)
+    expect(reader.opened).toHaveLength(4)
+    // Said once, not at every try.
+    expect(guest.events('liveShare:chat')).toEqual([{ id: 'pane-ls1-1-cc', ok: false, code: 'missing' }])
+  })
+
   it('a host without conversations (an older Tessel): the guest’s window is told so', async () => {
     const host = fakeMain() // no reader: no 'chat' feature
     const guest = fakeMain()
@@ -447,5 +477,136 @@ describe('registerLiveShare: a guest looks at a host’s agent pane as a chat', 
     expect(joined.chat).toBe(false)
     expect(joined.chats).toEqual([])
     expect(await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: true })).toEqual({ ok: false, code: 'outdated-host' })
+  })
+})
+
+describe('review fixes: what never reaches a guest', () => {
+  it('the harness’s own turns: background task reports, shell input and output, reminders, other sessions, summaries, Tessel’s notes', () => {
+    const turns = [
+      '<task-notification><task-id>b1</task-id><result>FULL REPORT of a background agent</result></task-notification>',
+      '<bash-input>cat ~/.aws/credentials</bash-input>',
+      '<bash-stdout>aws_secret=AAAA</bash-stdout>',
+      '<bash-stderr>oops</bash-stderr>',
+      '  <system-reminder>REMINDER</system-reminder>',
+      '<teammate-message from="Bob">TEAM SECRET</teammate-message>',
+      '<cross-session-message>OTHER SESSION</cross-session-message>',
+      'This session is being continued from a previous conversation that ran out of context. SUMMARY',
+      'Another Claude session sent a message: X',
+      '[Tessel] Ada finished the task "x": REPORT',
+      '(message m-1, reply to m-0) WORKER WORDS'
+    ]
+    const events = turns.map((text, i) => ({ type: 'user', id: `hist-u${i}`, text }))
+    events.push({ type: 'user', id: 'hist-mine', text: 'fix it <system-reminder>HIDDEN</system-reminder> please' })
+    const out = guestChatPayload({ ok: true, events }, [])
+    expect(out.events).toEqual([expect.objectContaining({ id: 'hist-mine', text: 'fix it  please' })])
+  })
+
+  it('paths that tried to slip through: spaces, hosts, flags, terminal codes, long-path and share prefixes, %-encoding, ..', () => {
+    const roots = cleanRoots(['C:\\Proj\\app', '/home/ada/proj'])
+    const g = (x) => guestText(x, roots, 4000)
+    expect(g('C:\\Users\\jean claude\\secret\\key.pem and more')).toBe('… and more')
+    expect(g('open "C:\\Users\\jean claude\\secret\\key.pem" now')).toBe('open "…" now')
+    expect(g('scp user@host:/home/jean/.ssh/id_rsa .')).toBe('scp user@host:… .')
+    expect(g('gcc -I/home/jean/include')).toBe('gcc -I…')
+    expect(g('cl -IC:\\Users\\x\\inc')).toBe('cl -I…')
+    expect(g('configure --prefix=/opt/secret/x')).toBe('configure --prefix=…')
+    expect(g('\x1b[31m/home/jean/secret/x\x1b[0m')).toBe('…')
+    expect(g('\\\\?\\C:\\Users\\jean\\x | \\\\?\\UNC\\srv\\share\\x | //server/share/f.txt | \\\\server\\share\\f.txt')).toBe('… | … | … | …')
+    expect(g('C%3A%5CUsers%5Cjean%5Csecret.txt')).toBe('…')
+    expect(g('C:\\Proj\\app\\..\\..\\Users\\jean\\x and C:\\Proj\\app\\src\\..\\lib\\a.js')).toBe('… and lib/a.js')
+    expect(g('../../secret/x and /home/ada/proj/../other/y and ~/notes.txt and ssh://host/home/x')).toBe('… and … and … and …')
+    // What is not a path stays.
+    expect(g('// a comment, https://example.com/a/b, http://h:8080/x/y, /compact, src/a.js')).toBe('// a comment, https://example.com/a/b, http://h:8080/x/y, /compact, src/a.js')
+  })
+
+  it('keys and passwords in their usual forms are masked', () => {
+    const cases = ['npm_abcdefghijklmnopqrstuvwxyz0123', 'sk_live_abcdefghijklmnop', 'sk_test_abcdefghijklmnop', 'rk_live_abcdefghijklmnop', 'hf_abcdefghijklmnopqrstuvwxyz', 'ya29.a0AfH6SMBxyz123', 'xoxb-12345-abcdef', 'xoxp-12345-abcdef', 'glpat-abcdefghij1234', 'AKIAIOSFODNN7EXAMPLE', 'ASIAIOSFODNN7EXAMPLE', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIx']
+    for (const secret of cases) expect(guestText(`use ${secret} here`, [], 500)).toBe('use •••• here')
+    expect(guestText('DefaultEndpointsProtocol=https;AccountName=x;AccountKey=abc+def/ghi==;EndpointSuffix=y', [], 500)).toBe('DefaultEndpointsProtocol=https;AccountName=x;AccountKey=••••;EndpointSuffix=y')
+    expect(guestText(`password: hunter and secret=abc and token="hello world" and api_key: 'qwerty'`, [], 500)).toBe(`password: •••• and secret=•••• and token="••••" and api_key: '••••'`)
+    // A commit id is not a key.
+    expect(guestText('commit 3f2a9c8e1b7d6f5a4c3b2a1908f7e6d5c4b3a291', [], 500)).toBe('commit 3f2a9c8e1b7d6f5a4c3b2a1908f7e6d5c4b3a291')
+  })
+})
+
+describe('review fixes: conversation updates over the wire', () => {
+  let host
+  afterEach(() => host?.stop())
+  const ev = (i, text = `m${i}`) => ({ type: 'assistant', messageId: `m${i}`, text, imported: true })
+  async function share(t) {
+    const secret = newSecret()
+    host = createShareHost({ secret, hostName: 'Ada', callbacks: t.callbacks })
+    return { secret, port: await host.start() }
+  }
+  async function joined({ port, secret }, name) {
+    const r = recorder()
+    r.client = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name, signingKey: newSigningKey(), callbacks: r.callbacks })
+    r.client.connect()
+    await until(() => r.states.includes('joined') && r.projects)
+    return r
+  }
+
+  it('a guest gets only what changed since what it has, and nothing when nothing changed', async () => {
+    const t = fakeTessel()
+    const alex = await joined(await share(t), 'Alex')
+    alex.client.chat('a1', true)
+    await until(() => t.watching.length)
+    host.sendChat('a1', { ok: true, events: [ev(1), ev(2)] })
+    await until(() => alex.chats.length === 1)
+    expect(alex.chats[0][1]).toMatchObject({ from: 0, events: [ev(1), ev(2)] })
+    await wait(1050)
+    host.sendChat('a1', { ok: true, events: [ev(1), ev(2, 'm2 longer'), ev(3)] })
+    await until(() => alex.chats.length === 2)
+    expect(alex.chats[1][1]).toMatchObject({ from: 1, events: [ev(2, 'm2 longer'), ev(3)] })
+    await wait(1050)
+    host.sendChat('a1', { ok: true, events: [ev(1), ev(2, 'm2 longer'), ev(3)] })
+    await wait(300)
+    expect(alex.chats).toHaveLength(2)
+    const merged = mergeChatEvents(mergeChatEvents(null, cleanChatMessage(alex.chats[0][1])), cleanChatMessage(alex.chats[1][1]))
+    expect(merged.map((e) => e.text)).toEqual(['m1', 'm2 longer', 'm3'])
+    // An update that does not fit what the guest has: it asks for all again.
+    expect(mergeChatEvents(merged, { ok: true, from: 9, events: [] })).toBe(null)
+  })
+
+  it('a guest whose connection is behind gets no update until it caught up, then the latest', async () => {
+    const t = fakeTessel()
+    const alex = await joined(await share(t), 'Alex')
+    alex.client.chat('a1', true)
+    await until(() => t.watching.length)
+    const desc = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'bufferedAmount')
+    let behind = true
+    Object.defineProperty(WebSocket.prototype, 'bufferedAmount', {
+      configurable: true,
+      get() {
+        return behind ? 2 * 1024 * 1024 : desc.get.call(this)
+      }
+    })
+    try {
+      host.sendChat('a1', { ok: true, events: [ev(1, 'first')] })
+      await wait(300)
+      host.sendChat('a1', { ok: true, events: [ev(1, 'latest')] })
+      await wait(1300)
+      expect(alex.chats).toEqual([])
+      behind = false
+      await until(() => alex.chats.length === 1, 3000)
+      expect(alex.chats[0][1].events[0].text).toBe('latest')
+      expect(alex.closed).toBe(null)
+    } finally {
+      Object.defineProperty(WebSocket.prototype, 'bufferedAmount', desc)
+    }
+  })
+
+  it('every ask counts against the minute’s limit, answered or not', async () => {
+    const t = fakeTessel()
+    t.answers = { Alex: { yes: true, projects: ['ws-a'] } }
+    const alex = await joined(await share(t), 'Alex')
+    // Not its project: each answered "unavailable", up to the limit.
+    for (let i = 0; i < 40; i++) alex.client.chat('b1', true)
+    await wait(300)
+    expect(alex.chats).toHaveLength(30)
+    // Past the limit: not even watched.
+    alex.client.chat('a1', true)
+    await wait(100)
+    expect(t.watching).toEqual([])
   })
 })

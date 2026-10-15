@@ -3047,6 +3047,8 @@ provide('panelCtx', {
   // its terminal, on your screen only), and its conversation, read only.
   liveShareView: (id, view) => liveShare.setGuestView(id, view),
   liveShareChatSource: (id) => liveShare.chatSource(id),
+  // Live Share, as the host: the guests reading a pane's conversation now.
+  liveShareReaders: (id) => liveShare.readersOf(id),
   // A terminal agent's chat view (nothing restarts): what you write there,
   // and its agent's real end (back to the terminal).
   sendFromChatView: (id, text, callbacks) => sendFromChatView(id, text, callbacks),

@@ -41,6 +41,12 @@ describe('a code block that is a path', () => {
     expect(toast).toHaveBeenCalledWith(expect.stringContaining('gone.png'), { kind: 'error' })
     w.unmount()
   })
+  it('a conversation from another computer (Live Share): no Show in Folder', () => {
+    window.shellApi = { chatFiles: { reveal: vi.fn() }, writeClipboard: vi.fn() }
+    const w = mount(NativeChatCodeBlock, { slots: { default: () => h('code', 'C:/Users/me/Downloads/livery.png') }, global: { provide: { nativeChatLocalFiles: false } } })
+    expect(w.find('[data-test="code-reveal"]').exists()).toBe(false)
+    w.unmount()
+  })
   it('a command block has only Copy', () => {
     window.shellApi = { chatFiles: { reveal: vi.fn() }, writeClipboard: vi.fn() }
     const w = mount(NativeChatCodeBlock, { slots: { default: () => h('code', 'npm run build') } })

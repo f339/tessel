@@ -51,7 +51,7 @@ import { ensureCloudflared, startTunnel, waitReachable, waitRegistered, tunnelLo
 import { createSessionFile } from './liveShare/sharePersist.js'
 import { pidRunning as pidAlive } from './processTree.js'
 import { trimBuffer, HOST_BUFFER_BYTES } from './ptyProtocol.js'
-import { guestChatPayload, cleanChatPanes, cleanChatMessage } from './liveShare/shareChat.js'
+import { guestChatPayload, cleanChatPanes, cleanChatMessage, mergeChatEvents } from './liveShare/shareChat.js'
 import { TRANSCRIPT_VIEW_AGENTS, validViewId } from './chat/transcriptView.js'
 import { t } from './i18n'
 
@@ -65,9 +65,13 @@ const GUEST_PANES = 128
 // Conversations a guest's window watches at once.
 const GUEST_CHATS = 8
 // A conversation file not there (yet), or its reader given to another: read
-// again after this long, while guests watch it.
+// again after this long (doubled each time, up to a minute), while guests
+// watch it, a dozen times at most (then once the pane's conversation changes,
+// or a guest starts watching it again).
 const FEED_RETRY_MS = 5000
+const FEED_RETRY_MAX_MS = 60000
 const FEED_REOPEN_MS = 30000
+const FEED_TRIES = 12
 const ACCOUNT_ID = /^[\w.-]{1,80}$/
 
 // The host window's agent panes that have a conversation to show (its
@@ -244,8 +248,8 @@ const KEEP_FRESH_MS = 60000
 // running: a second copy starting must not take them). chatViews(send):
 // makes the reader of the conversations guests watch (src/main/chat/
 // transcriptView.js createTranscriptViews, with this send); without it, no
-// guest gets them.
-export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sendExit, log, queryState = processState, kill = (pid) => process.kill(pid), pidRunning = pidAlive, resume = true, chatViews: makeChatViews = null }) {
+// guest gets them. chatRetry: { firstMs, maxMs, tries } (tests: FEED_*).
+export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sendExit, log, queryState = processState, kill = (pid) => process.kill(pid), pidRunning = pidAlive, resume = true, chatViews: makeChatViews = null, chatRetry = {} }) {
   const info = (msg) => log?.info?.('liveshare', msg)
   const warn = (msg) => (log?.warn ? log.warn('liveshare', msg) : info(msg))
   const hostFile = createSessionFile(join(dataDir, 'liveshare-host.json'))
@@ -277,13 +281,15 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
           inviteBlocked: !!(sharing.server && sharing.server.inviteBlocked && sharing.server.inviteBlocked()),
           projectIds: [...(sharing.projects || [])],
           guests: sharing.guests,
+          // Who reads which conversation of yours: [{ id (pane), guests }].
+          reading: sharing.server && sharing.server.chatsWatched ? sharing.server.chatsWatched() : [],
           // Guests let in who are not connected now (they come back by
           // themselves; Remove keeps them out).
           offline: sharing.server && sharing.server.offlineGuests ? sharing.server.offlineGuests() : [],
           progress: sharing.progress ?? null,
           error: sharing.error || null
         }
-      : { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectIds: [], guests: [], offline: [], progress: null, error: null }
+      : { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectIds: [], guests: [], reading: [], offline: [], progress: null, error: null }
   const pushHost = () => send('liveShare:host', hostStatus())
 
   // Which project of a share each of its terminals is in, from the layouts (a
@@ -350,7 +356,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   // the last (shareHost.js chatWatch). Its file not there (yet), or its
   // reader given up for another: guests are told, and it is read again later.
   const chatReader = typeof makeChatViews === 'function' ? makeChatViews((channel, msg) => channel === 'transcriptView:event' && onFeedEvent(msg)) : null
-  const feeds = new Map() // pane id -> { s, key, viewId, retry, code }
+  const feeds = new Map() // pane id -> { s, key, viewId, retry, code, tries }
   const feedOfView = new Map() // view id -> pane id
   const sourceKey = (c) => (c ? `${c.agentId}|${c.sessionId}|${c.accountId === undefined ? '' : String(c.accountId)}` : '')
   function pushChat(s, id, read) {
@@ -361,18 +367,23 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     const src = chatSourceOf(s, id)
     s.server?.sendChat(id, guestChatPayload(read, src ? src.roots : []))
   }
+  const retry = { first: chatRetry.firstMs ?? FEED_RETRY_MS, max: chatRetry.maxMs ?? FEED_RETRY_MAX_MS, tries: chatRetry.tries ?? FEED_TRIES }
   function retryFeed(s, id, feed, ms) {
     clearTimeout(feed.retry)
-    feed.retry = setTimeout(() => {
-      if (feeds.get(id) === feed && sharing === s) openFeed(s, id)
-    }, ms)
+    if (feed.tries >= retry.tries) return
+    feed.retry = setTimeout(
+      () => {
+        if (feeds.get(id) === feed && sharing === s) openFeed(s, id, { retry: true })
+      },
+      ms || Math.min(retry.max, retry.first * 2 ** feed.tries)
+    )
     feed.retry.unref?.()
   }
-  function openFeed(s, id) {
+  function openFeed(s, id, { retry = false } = {}) {
     const before = feeds.get(id)
     closeFeed(id)
     const src = chatSourceOf(s, id)
-    const feed = { s, key: sourceKey(src), viewId: null, retry: null, code: before ? before.code : null }
+    const feed = { s, key: sourceKey(src), viewId: null, retry: null, code: before ? before.code : null, tries: retry && before ? before.tries + 1 : 0 }
     feeds.set(id, feed)
     if (!src || !chatReader) return pushChat(s, id, { ok: false, code: 'missing' })
     const q = { agent: src.agentId, sessionId: src.sessionId, paneId: id, ...(src.accountId !== undefined ? { accountId: src.accountId } : {}) }
@@ -386,9 +397,10 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         }
         if (!res || !res.ok) {
           pushChat(s, id, { ok: false, code: res && res.code === 'missing' ? 'missing' : 'error' })
-          return retryFeed(s, id, feed, FEED_RETRY_MS)
+          return retryFeed(s, id, feed)
         }
         feed.viewId = res.viewId
+        feed.tries = 0
         feedOfView.set(res.viewId, id)
         pushChat(s, id, res)
       })
@@ -416,7 +428,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     feed.viewId = null
     const given = msg.code === 'closed'
     pushChat(feed.s, id, { ok: false, code: given ? 'busy' : 'missing' })
-    retryFeed(feed.s, id, feed, given ? FEED_REOPEN_MS : FEED_RETRY_MS)
+    retryFeed(feed.s, id, feed, given ? FEED_REOPEN_MS : 0)
   }
   // The window's panes changed: a conversation that changed (a new session,
   // another account) is read anew for the guests watching it.
@@ -495,6 +507,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         projects: () => sharedProjects(s),
         paneProject: (id) => homes(s).get(id) || null,
         chatProject: (id) => chatHomes(s).get(id) || null,
+        onChatsWatched: () => sharing === s && pushHost(),
         ...(chatReader ? { chatWatch: (id, on) => (on ? openFeed(s, id) : closeFeed(id)) } : {}),
         snapshot,
         write: (id, data) => host.send('write', { id, data }),
@@ -877,7 +890,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
           const old = g.chats.get(c.id)
           // Moved to another of its projects: asked again there.
           if (old && old.project !== p.id) g.chatAsked.delete(c.id)
-          chats.set(c.id, { ...c, remoteId: c.id, localId: guestPaneId(g.session, c.id), project: p.id, last: old && old.project === p.id ? old.last : null })
+          const kept = old && old.project === p.id
+          chats.set(c.id, { ...c, remoteId: c.id, localId: guestPaneId(g.session, c.id), project: p.id, last: kept ? old.last : null, events: kept ? old.events : null })
         }
       }
       for (const x of (Array.isArray(p.panes) ? p.panes : []).slice(0, LAYOUT_PANES)) {
@@ -1004,15 +1018,31 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         onFeatures: (list) => {
           if (joined === g && g.client === client) g.features = new Set(Array.isArray(list) ? list : [])
         },
-        // A conversation the window watches, checked again (shareChat.js).
+        // A conversation the window watches, checked again (shareChat.js):
+        // what changed since what this guest has, put together here; the
+        // window gets all of it.
         onChat: (remoteId, msg) => {
           if (joined !== g || g.client !== client) return
           const entry = g.chats.get(remoteId)
           if (!entry || !g.chatWanted.has(remoteId)) return
           const payload = cleanChatMessage(msg)
           if (!payload) return
-          entry.last = payload
-          send('liveShare:chat', { id: entry.localId, ...payload })
+          if (payload.ok) {
+            const events = mergeChatEvents(entry.events, payload)
+            if (!events) {
+              // Out of step with the host: all of it again.
+              entry.events = null
+              client.chat(remoteId, false)
+              client.chat(remoteId, true)
+              return
+            }
+            entry.events = events
+            entry.last = { ok: true, events, truncated: payload.truncated }
+          } else {
+            entry.events = null
+            entry.last = payload
+          }
+          send('liveShare:chat', { id: entry.localId, ...entry.last })
         },
         onNotice: (code) => joined === g && g.client === client && send('liveShare:notice', { code: str(code, 40) }),
         onProjects: (projects) => joined === g && g.client === client && onProjects(g, projects),
