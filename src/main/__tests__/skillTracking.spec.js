@@ -1085,3 +1085,31 @@ describe('second review fixes', () => {
     expect(dropStaleSources(sources)).toBe(1) // once done, a folder really gone is dropped
   })
 })
+
+describe('every agent alike', () => {
+  it('an Antigravity CLI skill gets its origin, history and "Modified locally" like any other', async () => {
+    const src = path.join(tmp, 'src', 'agy-helper')
+    write(path.join(src, 'SKILL.md'), skillMd('agy-helper'))
+    const sources = createSkillSources(path.join(tmp, 'data', 'skill-sources.json'))
+    const history = createSkillHistory(path.join(tmp, 'data', 'skill-history'), { now })
+    const pkg = await packageFromFolder(src)
+    const res = await installSkill({ id: pkg.id, agents: ['antigravity'], scope: 'user', home, env, sources, history })
+    expect(res.ok).toBe(true)
+    const dest = path.join(home, '.gemini', 'config', 'skills', 'agy-helper')
+    write(path.join(home, '.gemini', 'config', 'skills', 'agy-own', 'SKILL.md'), skillMd('agy-own'))
+    const listed = async () => {
+      const { skills } = await listSkills({ home, env, sources: sources.all() })
+      await history.annotate(skills, { sources })
+      return Object.fromEntries(skills.map((s) => [s.name, s]))
+    }
+    let by = await listed()
+    expect(by['agy-helper']).toMatchObject({ origin: 'folder', seenBy: ['antigravity'], modified: false, dir: dest })
+    expect(by['agy-own']).toMatchObject({ origin: 'own', seenBy: ['antigravity'] })
+    expect(by['agy-own'].history.versions).toBe(1)
+    write(path.join(dest, 'SKILL.md'), skillMd('agy-helper', 'Edited for agy.'))
+    clock += 1000
+    by = await listed()
+    expect(by['agy-helper']).toMatchObject({ modified: true })
+    expect(by['agy-helper'].history.versions).toBe(2)
+  })
+})
