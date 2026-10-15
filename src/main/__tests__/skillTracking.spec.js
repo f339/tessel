@@ -946,8 +946,9 @@ describe('second review fixes', () => {
     const { trash, moved } = binOf()
     const res = await installSkill({ id: await again(), replace: leftover, home, env, sources, history, trash })
     expect(res.results[0]).toMatchObject({ ok: true, trashed: true })
-    expect(moved.map((m) => m.from)).toEqual([leftover])
+    expect(moved.map((m) => path.basename(m.from))).toEqual(['leftover']) // under its own name
     expect(filesIn(moved[0].to)).toEqual(['notes.txt'])
+    expect(fs.readdirSync(path.join(home, '.claude', 'skills')).filter((n) => n.includes('tessel'))).toEqual([])
     expect(fs.existsSync(path.join(leftover, 'SKILL.md'))).toBe(true)
 
     const other = path.join(home, '.claude', 'skills', 'other')
@@ -1072,17 +1073,86 @@ describe('second review fixes', () => {
 
   it('N5. a record is never taken for stale while its folder is being updated', async () => {
     const { sources, history, dest, again } = await installed('helper')
+    const { trash } = binOf()
     let during
-    const trash = async (p) => {
-      fs.renameSync(p, path.join(tmp, 'bin-n5'))
-      dropStaleSources(sources) // a list at that moment
-      during = sources.get(dest)
+    const realRename = fsp.rename
+    fsp.rename = async (a, b) => {
+      if (String(b) === dest && !fs.existsSync(dest)) {
+        dropStaleSources(sources) // a list while the folder is away
+        during = sources.get(dest)
+      }
+      return realRename(a, b)
     }
-    const res = await installSkill({ id: await again(), replace: dest, home, env, sources, history, trash })
+    let res
+    try {
+      res = await installSkill({ id: await again(), replace: dest, home, env, sources, history, trash })
+    } finally {
+      fsp.rename = realRename
+    }
     expect(during).not.toBe(null)
     expect(res.ok).toBe(true)
     fs.rmSync(dest, { recursive: true })
     expect(dropStaleSources(sources)).toBe(1) // once done, a folder really gone is dropped
+  })
+})
+
+describe('an Update that cannot put the new copy in place', () => {
+  it('tries the rename again while it is held, then puts the old copy back whole: the skill never loses its folder', async () => {
+    const src = path.join(tmp, 'src', 'tool')
+    write(path.join(src, 'SKILL.md'), skillMd('tool'))
+    const sources = createSkillSources(path.join(tmp, 'data', 'skill-sources.json'))
+    const history = createSkillHistory(path.join(tmp, 'data', 'skill-history'), { now })
+    await installSkill({ id: (await packageFromFolder(src)).id, agents: ['claude'], scope: 'user', home, env, sources, history })
+    const dest = path.join(home, '.claude', 'skills', 'tool')
+    const skills = path.dirname(dest)
+    write(path.join(dest, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    write(path.join(src, 'SKILL.md'), skillMd('tool', 'v2'))
+    const trashed = []
+    const trash = async (p) => {
+      trashed.push(p)
+      fs.rmSync(p, { recursive: true })
+    }
+    const realRename = fsp.rename
+    let fails = 0
+    const busyOnPlace = (times) => async (a, b) => {
+      if (String(b) === dest && path.basename(String(a)).startsWith('.tool.tessel-') && !String(a).includes('-old-') && fails < times) {
+        fails++
+        throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
+      }
+      return realRename(a, b)
+    }
+
+    // Held for a moment (antivirus on the new files): tried again, and done.
+    fsp.rename = busyOnPlace(2)
+    let res
+    try {
+      res = await installSkill({ id: (await packageFromFolder(src)).id, replace: dest, home, env, sources, history, trash })
+    } finally {
+      fsp.rename = realRename
+    }
+    expect(res.results[0]).toMatchObject({ ok: true, trashed: true })
+    expect(fails).toBe(2)
+    expect(fs.readFileSync(path.join(dest, 'SKILL.md'), 'utf8')).toContain('v2')
+    expect(trashed.map((p) => path.basename(p))).toEqual(['tool'])
+
+    // Held for good: the old copy is back as it was, nothing in the Bin, no leftovers.
+    write(path.join(dest, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    write(path.join(src, 'SKILL.md'), skillMd('tool', 'v3'))
+    fails = 0
+    trashed.length = 0
+    fsp.rename = busyOnPlace(Infinity)
+    try {
+      res = await installSkill({ id: (await packageFromFolder(src)).id, replace: dest, home, env, sources, history, trash })
+    } finally {
+      fsp.rename = realRename
+    }
+    expect(res.ok).toBe(false)
+    expect(res.results[0].error).toMatch(/EPERM/)
+    expect(trashed).toEqual([])
+    expect(fs.readFileSync(path.join(dest, 'SKILL.md'), 'utf8')).toContain('v2')
+    expect(fs.existsSync(path.join(dest, '.git', 'HEAD'))).toBe(true)
+    expect(fs.readdirSync(skills).filter((n) => n.includes('tessel'))).toEqual([])
+    expect((await listSkills({ home, env })).skills.map((x) => x.name)).toContain('tool')
   })
 })
 

@@ -656,6 +656,19 @@ async function hasSkillFile(dir) {
 // first, and the new content is noted as installed or updated. A copy that
 // cannot be kept whole (and is not exactly what was installed) is never
 // replaced; a folder without a SKILL.md is no skill copy and has no history.
+// A rename tried again while the file is held for a moment (antivirus right
+// after the files were written, on Windows).
+async function renameRetry(from, to) {
+  for (let i = 0; ; i++) {
+    try {
+      return await fs.rename(from, to)
+    } catch (err) {
+      if (i >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(err && err.code)) throw err
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  }
+}
+
 export async function installSkill({ id, agents = [], scope = 'user', cwd = null, replace = null, home = os.homedir(), env = process.env, sources = null, history = null, trash = null } = {}) {
   const pkg = getPackage(id)
   if (!pkg) throw fail(t('main.skills.expired', 'This preview has expired. Look the skill up again.'), 'SKILL_EXPIRED')
@@ -700,32 +713,48 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
       }
       await fs.mkdir(root.path, { recursive: true })
       await writeTree(tmp, pkg.files)
-      if (existing && trash) {
+      if (existing) {
+        // The old copy goes aside, the new one in its place, and only then is
+        // the old one let go: any failed step puts the old one back, so the
+        // skill never loses its folder (renames are retried while antivirus
+        // holds the new files for a moment). Aside, it keeps its own name in
+        // a hidden folder, so the Recycle Bin shows it as itself and no agent
+        // reads it as a second skill.
+        const aside = path.join(root.path, `.${path.basename(dest)}.tessel-old-${randomBytes(4).toString('hex')}`)
+        const old = path.join(aside, path.basename(dest))
+        await fs.mkdir(aside)
         try {
-          await trash(dest)
+          await renameRetry(dest, old)
         } catch (err) {
-          throw fail(
-            t('main.skills.trashFailed', 'The folder there could not be moved to the Recycle Bin ({{error}}), so it was not replaced.', { error: (err && err.message) || String(err) }),
-            'SKILL_TRASH_FAILED'
-          )
-        }
-        try {
-          await fs.rename(tmp, dest)
-        } catch (err) {
-          throw fail(t('main.skills.placeFailed', 'The new copy could not be put in place ({{error}}). The old one is in the Recycle Bin.', { error: (err && err.message) || String(err) }))
-        }
-        result.trashed = true
-      } else if (existing) {
-        const old = path.join(root.path, `.${path.basename(dest)}.tessel-old-${randomBytes(4).toString('hex')}`)
-        await fs.rename(dest, old)
-        try {
-          await fs.rename(tmp, dest)
-        } catch (err) {
-          await fs.rename(old, dest).catch(() => {})
+          await fs.rmdir(aside).catch(() => {})
           throw err
         }
-        await removeTree(old).catch(() => {})
-      } else await fs.rename(tmp, dest)
+        try {
+          await renameRetry(tmp, dest)
+        } catch (err) {
+          await renameRetry(old, dest).then(() => fs.rmdir(aside)).catch(() => {})
+          throw err
+        }
+        if (trash) {
+          try {
+            await trash(old)
+          } catch (err) {
+            // No Recycle Bin there (a network share, \\wsl$): the old copy
+            // goes back as it was and the new one is dropped. Should a rename
+            // fail even so, the new copy stays and the old one stays aside.
+            await renameRetry(dest, tmp)
+              .then(() => renameRetry(old, dest).catch((e) => renameRetry(tmp, dest).then(() => { throw e })))
+              .then(() => fs.rmdir(aside))
+              .catch(() => {})
+            throw fail(
+              t('main.skills.trashFailed', 'The folder there could not be moved to the Recycle Bin ({{error}}), so it was not replaced.', { error: (err && err.message) || String(err) }),
+              'SKILL_TRASH_FAILED'
+            )
+          }
+          result.trashed = true
+        }
+        await removeTree(aside).catch(() => {})
+      } else await renameRetry(tmp, dest)
       if (sources) sources.set(dest, { ...pkg.source, name: pkg.name, installedAt: Date.now(), hash })
       if (history) {
         const note = { kind: existing ? 'update' : 'install', from: pkg.source && pkg.source.kind, commit: (pkg.source && pkg.source.commit) || null }
