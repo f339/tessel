@@ -2,7 +2,7 @@
 // Sub-agents of a Gemini CLI conversation (chats/<session>/<agent>.jsonl), a
 // Copilot CLI one (subagent.* events), a Kimi Code one (wire records) and a
 // Cursor Agent one (child chats), read from fixtures shaped like their files.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
@@ -16,7 +16,7 @@ import {
   parseCursorMeta,
   cursorTurnEnded,
   _clearChildCachesForTest,
-  _setLogTailForTest
+  _setLogSizesForTest
 } from '../agentChildren'
 
 const sqlite = process.getBuiltinModule && process.getBuiltinModule('node:sqlite')
@@ -110,7 +110,7 @@ describe("a Copilot CLI conversation's sub-agents", () => {
   const ev = (at, type, data, agentId) => ({ id: `e${++n}`, parentId: null, timestamp: iso(at), type, data, ...(agentId ? { agentId } : {}) })
   const events = () => join(home, '.copilot', 'session-state', SID, 'events.jsonl')
 
-  it('one per task call: done, running in the background, failed; model and effort; a workflow run apart', () => {
+  it('one per task call: done, running in the background, failed; model and effort; a workflow run apart', async () => {
     write(events(), [
       ev(now - 600000, 'session.start', { sessionId: SID, version: 1 }),
       ev(now - 500000, 'tool.execution_start', { toolCallId: 'call_A', toolName: 'task', arguments: { name: 'Find the bug', description: 'Find the bug', agent_type: 'explore', prompt: 'x', mode: 'sync' } }),
@@ -125,7 +125,7 @@ describe("a Copilot CLI conversation's sub-agents", () => {
       ev(now - 100000, 'subagent.failed', { toolCallId: 'call_C', agentName: 'task', agentDisplayName: 'Run the build', error: 'boom' }, 'call_C'),
       ev(now - 50000, 'subagent.started', { toolCallId: 'call_W', agentName: 'task', agentDisplayName: 'Workflow step', workflowRunId: 'w1' }, 'call_W')
     ])
-    const list = copilotSubagents(SID, join(home, '.copilot'), now)
+    const list = await copilotSubagents(SID, join(home, '.copilot'), now)
     expect(list.map((c) => [c.id, c.type, c.title, c.state, c.background, c.model, c.effort])).toEqual([
       ['call_C', 'task', 'Run the build', 'done', false, null, null],
       ['call_B', 'general-purpose', 'Write the docs', 'running', true, 'gpt-5-mini', 'medium'],
@@ -136,20 +136,20 @@ describe("a Copilot CLI conversation's sub-agents", () => {
     expect(list[2].endedAt).toBe(now - 400000)
   })
 
-  it('reads only what was added since; a rewritten file is read again', () => {
+  it('reads only what was added since; a rewritten file is read again', async () => {
     write(events(), [ev(now - 300000, 'subagent.started', { toolCallId: 'call_B', agentName: 'general-purpose', agentDisplayName: 'Write the docs' }, 'call_B')])
-    expect(copilotSubagents(SID, join(home, '.copilot'), now).map((c) => c.state)).toEqual(['running'])
+    expect((await copilotSubagents(SID, join(home, '.copilot'), now)).map((c) => c.state)).toEqual(['running'])
     // A line still being written waits for its end.
     const done = line(ev(now - 1000, 'subagent.completed', { toolCallId: 'call_B', agentName: 'general-purpose', agentDisplayName: 'Write the docs' }, 'call_B'))
     fs.appendFileSync(events(), done.slice(0, 40))
-    expect(copilotSubagents(SID, join(home, '.copilot'), now).map((c) => c.state)).toEqual(['running'])
+    expect((await copilotSubagents(SID, join(home, '.copilot'), now)).map((c) => c.state)).toEqual(['running'])
     fs.appendFileSync(events(), done.slice(40) + '\n')
-    expect(copilotSubagents(SID, join(home, '.copilot'), now).map((c) => [c.state, c.endedAt])).toEqual([['done', now - 1000]])
+    expect((await copilotSubagents(SID, join(home, '.copilot'), now)).map((c) => [c.state, c.endedAt])).toEqual([['done', now - 1000]])
     write(events(), [ev(now, 'session.start', {})])
-    expect(copilotSubagents(SID, join(home, '.copilot'), now)).toEqual([])
+    expect(await copilotSubagents(SID, join(home, '.copilot'), now)).toEqual([])
   })
 
-  it('one started long before the end a log is read from (a large log, read cold) is still listed', () => {
+  it('one started long before the end a log is read from (a large log, read cold) is still listed', async () => {
     const filler = Array.from({ length: 20 }, (_, i) => ev(now - 400000 + i, 'assistant.message', { content: 'x'.repeat(1000) }))
     write(events(), [
       ev(now - 500000, 'tool.execution_start', { toolCallId: 'call_A', toolName: 'task', arguments: { name: 'Find the bug', agent_type: 'explore', mode: 'sync' } }),
@@ -160,27 +160,65 @@ describe("a Copilot CLI conversation's sub-agents", () => {
       ...filler,
       ev(now - 2000, 'tool.execution_start', { toolCallId: 'late', toolName: 'view', arguments: {} }, 'call_B')
     ])
-    _setLogTailForTest(4096)
+    _setLogSizesForTest(4096)
     try {
-      const list = copilotSubagents(SID, join(home, '.copilot'), now)
+      const list = await copilotSubagents(SID, join(home, '.copilot'), now)
       expect(list.map((c) => [c.id, c.title, c.state, c.background, c.model, c.effort, c.lastAt])).toEqual([
         ['call_B', 'Write the docs', 'running', true, 'gpt-5-mini', 'medium', now - 2000],
         ['call_A', 'Find the bug', 'done', false, null, null, now - 499000]
       ])
     } finally {
-      _setLogTailForTest()
+      _setLogSizesForTest()
     }
   })
 
-  it('nothing outside its session folder', () => {
-    expect(copilotSubagents('../../etc', join(home, '.copilot'), now)).toEqual([])
-    expect(copilotSubagents(SID, join(home, 'nowhere'), now)).toEqual([])
+  it('a cold read never blocks: a chunk per turn of the event loop, one read for the polls that come meanwhile', async () => {
+    const filler = Array.from({ length: 400 }, (_, i) => ev(now - 400000 + i, 'assistant.message', { content: 'x'.repeat(1000) }))
+    write(events(), [
+      ev(now - 450000, 'subagent.started', { toolCallId: 'call_B', agentName: 'general-purpose', agentDisplayName: 'Write the docs' }, 'call_B'),
+      ...filler,
+      ev(now - 2000, 'tool.execution_start', { toolCallId: 'late', toolName: 'view', arguments: {} }, 'call_B')
+    ])
+    // About 440 KB: read whole for its last 64 KB, 16 KB at a time.
+    _setLogSizesForTest(64 * 1024, 16 * 1024)
+    const opened = vi.spyOn(fs.promises, 'open')
+    let turns = 0
+    let reading = true
+    const spin = () => {
+      turns++
+      if (reading) setImmediate(spin)
+    }
+    try {
+      setImmediate(spin)
+      const first = copilotSubagents(SID, join(home, '.copilot'), now)
+      const second = copilotSubagents(SID, join(home, '.copilot'), now)
+      let settled = false
+      first.then(() => (settled = true))
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      const [a, b] = await Promise.all([first, second])
+      reading = false
+      expect(a.map((c) => [c.id, c.state, c.lastAt])).toEqual([['call_B', 'running', now - 2000]])
+      expect(b).toEqual(a)
+      // The event loop ran between its chunks; both polls shared one read.
+      expect(turns).toBeGreaterThan(5)
+      expect(opened).toHaveBeenCalledTimes(1)
+    } finally {
+      reading = false
+      opened.mockRestore()
+      _setLogSizesForTest()
+    }
+  })
+
+  it('nothing outside its session folder', async () => {
+    expect(await copilotSubagents('../../etc', join(home, '.copilot'), now)).toEqual([])
+    expect(await copilotSubagents(SID, join(home, 'nowhere'), now)).toEqual([])
     const outside = fs.mkdtempSync(join(os.tmpdir(), 'tessel-kids-outside-'))
     try {
       write(join(outside, SID, 'events.jsonl'), [ev(now, 'subagent.started', { toolCallId: 'x', agentName: 'OUTSIDE' }, 'x')])
       fs.mkdirSync(join(home, '.copilot'), { recursive: true })
       fs.symlinkSync(outside, join(home, '.copilot', 'session-state'), 'junction')
-      expect(copilotSubagents(SID, join(home, '.copilot'), now)).toEqual([])
+      expect(await copilotSubagents(SID, join(home, '.copilot'), now)).toEqual([])
     } finally {
       fs.rmSync(outside, { recursive: true, force: true })
     }
@@ -192,7 +230,7 @@ describe("a Kimi Code conversation's sub-agents", () => {
   const session = () => join(home, '.kimi-code', 'sessions', 'wd_proj_caffba220b07', KID)
   const rec = (at, type, fields) => ({ type, time: at, ...fields })
 
-  it('from the wire of the agent that started each one, nested ones included', () => {
+  it('from the wire of the agent that started each one, nested ones included', async () => {
     const s = session()
     fs.mkdirSync(s, { recursive: true })
     fs.writeFileSync(join(s, 'state.json'), JSON.stringify({ agents: { main: { type: 'main' }, 'agent-1': { type: 'sub', parentAgentId: 'main' }, 'agent-2': { type: 'sub', parentAgentId: 'main', labels: { parentAgentId: 'agent-1' } } } }))
@@ -211,7 +249,7 @@ describe("a Kimi Code conversation's sub-agents", () => {
       rec(now - 499000, 'subagent.started', { subagentId: 'agent-2' })
     ], now - 300000)
     write(join(s, 'agents', 'agent-2', 'wire.jsonl'), [{ type: 'metadata', protocol_version: '1.5', created_at: now - 499000 }], now - 3000)
-    const list = kimiSubagents(KID, join(home, '.kimi-code'), now)
+    const list = await kimiSubagents(KID, join(home, '.kimi-code'), now)
     expect(list.map((c) => [c.id, c.type, c.title, c.state, c.background, c.tokens, c.model, c.effort])).toEqual([
       ['agent-3', 'explore', 'Look around', 'done', true, null, null, null],
       ['agent-2', 'coder', 'Patch one file', 'running', false, null, 'kimi-k2.6', null],
@@ -221,7 +259,7 @@ describe("a Kimi Code conversation's sub-agents", () => {
     expect(list[2].endedAt).toBe(now - 300000)
   })
 
-  it('one spawned long before the end a large wire is read from (read cold) is still listed', () => {
+  it('one spawned long before the end a large wire is read from (read cold) is still listed', async () => {
     const s = session()
     write(join(s, 'agents', 'main', 'wire.jsonl'), [
       rec(now - 600000, 'subagent.spawned', { subagentId: 'agent-1', subagentName: 'coder', parentToolCallId: 'tc1', description: 'Fix the tests', runInBackground: true, model: 'kimi-k2.6', thinkingEffort: 'high' }),
@@ -230,24 +268,24 @@ describe("a Kimi Code conversation's sub-agents", () => {
       ...Array.from({ length: 20 }, (_, i) => rec(now - 500000 + i, 'content.part', { text: 'x'.repeat(1000) }))
     ])
     write(join(s, 'agents', 'agent-1', 'wire.jsonl'), [{ type: 'metadata' }], now - 1000)
-    _setLogTailForTest(4096)
+    _setLogSizesForTest(4096)
     try {
-      expect(kimiSubagents(KID, join(home, '.kimi-code'), now).map((c) => [c.id, c.state, c.background, c.tokens, c.effort])).toEqual([
+      expect((await kimiSubagents(KID, join(home, '.kimi-code'), now)).map((c) => [c.id, c.state, c.background, c.tokens, c.effort])).toEqual([
         ['agent-2', 'done', false, 900, null],
         ['agent-1', 'running', true, null, 'high']
       ])
     } finally {
-      _setLogTailForTest()
+      _setLogSizesForTest()
     }
   })
 
-  it('an unfinished one whose wire is silent for 20 min is quiet; nothing for another session', () => {
+  it('an unfinished one whose wire is silent for 20 min is quiet; nothing for another session', async () => {
     const s = session()
     write(join(s, 'agents', 'main', 'wire.jsonl'), [rec(now - 3600000, 'subagent.spawned', { subagentId: 'agent-1', subagentName: 'coder', parentToolCallId: 'tc1', runInBackground: false })], now - 3600000)
     write(join(s, 'agents', 'agent-1', 'wire.jsonl'), [{ type: 'metadata' }], now - 20 * 60000)
-    expect(kimiSubagents(KID, join(home, '.kimi-code'), now).map((c) => c.state)).toEqual(['quiet'])
-    expect(kimiSubagents('session_other1', join(home, '.kimi-code'), now)).toEqual([])
-    expect(kimiSubagents('bad id', join(home, '.kimi-code'), now)).toEqual([])
+    expect((await kimiSubagents(KID, join(home, '.kimi-code'), now)).map((c) => c.state)).toEqual(['quiet'])
+    expect(await kimiSubagents('session_other1', join(home, '.kimi-code'), now)).toEqual([])
+    expect(await kimiSubagents('bad id', join(home, '.kimi-code'), now)).toEqual([])
   })
 })
 

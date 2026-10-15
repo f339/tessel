@@ -961,56 +961,76 @@ export function geminiSubagents(sessionId, geminiDir = join(process.env.GEMINI_C
 // what was added since (by file), each whole line that may matter (keep: a
 // quick test of its text) folded into that file's state. Before their last
 // 32 MB, only the lines that start or end a sub-agent (mark), so one started
-// long ago that still runs is never lost; nothing before their last 512 MB.
+// long ago that still runs is never lost; nothing before their last 256 MB.
+// Read without blocking: 1 MB at a time, the event loop free between two,
+// one read of a file at a time (a poll meanwhile waits for it).
 const LOG_TAIL_BYTES = 32 * 1024 * 1024
-const LOG_SCAN_BYTES = 512 * 1024 * 1024
+const LOG_SCAN_BYTES = 256 * 1024 * 1024
 const LOG_CHUNK = 1024 * 1024
 let logTail = LOG_TAIL_BYTES
+let logChunk = LOG_CHUNK
 // file -> { ino, born, offset, rest (a line not ended yet), cut, marked (read
-// up to there with mark only), state }
+// up to there with mark only), state, reading (the read under way) }
 const logCache = new Map()
+const nextTurn = () => new Promise((resolve) => setImmediate(resolve))
 
-function foldLog(file, st, keep, fold, mark = keep) {
+// Reads the file from c.offset up to `size`, a chunk per turn of the loop.
+async function readLog(file, c, size, keep, fold, mark) {
+  const fh = await fs.promises.open(file, 'r')
+  try {
+    let first = true
+    while (c.offset < size) {
+      if (!first) await nextTurn()
+      first = false
+      // Up to the start of its last 32 MB, then the rest.
+      const upTo = c.offset < c.marked ? Math.min(c.marked, size) : size
+      const buf = Buffer.alloc(Math.min(upTo - c.offset, logChunk))
+      const { bytesRead: n } = await fh.read(buf, 0, buf.length, c.offset)
+      if (n <= 0) break
+      c.offset += n
+      const data = c.rest.length ? Buffer.concat([c.rest, buf.subarray(0, n)]) : buf.subarray(0, n)
+      const end = data.lastIndexOf(10)
+      c.rest = Buffer.from(end < 0 ? data : data.subarray(end + 1))
+      if (end < 0) continue
+      const lines = data.toString('utf8', 0, end).split('\n')
+      if (c.cut) lines.shift() // read from the middle of a line
+      c.cut = false
+      // Before its last 32 MB: its starts and ends only.
+      const test = c.offset <= c.marked ? mark : keep
+      for (const l of lines) {
+        if (!test(l)) continue
+        try {
+          fold(c.state, JSON.parse(l))
+        } catch {
+          // not a record
+        }
+      }
+    }
+  } finally {
+    await fh.close()
+  }
+}
+
+async function foldLog(file, st, keep, fold, mark = keep) {
   let c = logCache.get(file)
   // Another file now, or shorter (rewritten): read again.
   if (!c || c.ino !== st.ino || c.born !== st.birthtimeMs || st.size < c.offset) {
     const offset = Math.max(0, st.size - LOG_SCAN_BYTES)
-    c = { ino: st.ino, born: st.birthtimeMs, offset, rest: Buffer.alloc(0), cut: offset > 0, marked: st.size - logTail, state: {} }
+    c = { ino: st.ino, born: st.birthtimeMs, offset, rest: Buffer.alloc(0), cut: offset > 0, marked: st.size - logTail, state: {}, reading: null }
+    if (!logCache.has(file) && logCache.size > 500) logCache.clear()
+    logCache.set(file, c)
   }
-  if (st.size > c.offset) {
-    const fd = fs.openSync(file, 'r')
-    try {
-      while (c.offset < st.size) {
-        // Up to the start of its last 32 MB, then the rest.
-        const upTo = c.offset < c.marked ? c.marked : st.size
-        const buf = Buffer.alloc(Math.min(upTo - c.offset, LOG_CHUNK))
-        const n = fs.readSync(fd, buf, 0, buf.length, c.offset)
-        if (n <= 0) break
-        c.offset += n
-        const data = c.rest.length ? Buffer.concat([c.rest, buf.subarray(0, n)]) : buf.subarray(0, n)
-        const end = data.lastIndexOf(10)
-        c.rest = Buffer.from(end < 0 ? data : data.subarray(end + 1))
-        if (end < 0) continue
-        const lines = data.toString('utf8', 0, end).split('\n')
-        if (c.cut) lines.shift() // read from the middle of a line
-        c.cut = false
-        // Before its last 32 MB: its starts and ends only.
-        const test = c.offset <= c.marked ? mark : keep
-        for (const l of lines) {
-          if (!test(l)) continue
-          try {
-            fold(c.state, JSON.parse(l))
-          } catch {
-            // not a record
-          }
-        }
-      }
-    } finally {
-      fs.closeSync(fd)
+  while (c.offset < st.size) {
+    const before = c.offset
+    if (!c.reading) {
+      const reading = readLog(file, c, st.size, keep, fold, mark).finally(() => {
+        if (c.reading === reading) c.reading = null
+      })
+      c.reading = reading
     }
+    await c.reading
+    if (c.offset === before) break // shorter than it said: next time
   }
-  if (!logCache.has(file) && logCache.size > 500) logCache.clear()
-  logCache.set(file, c)
   return c.state
 }
 
@@ -1092,7 +1112,7 @@ const copilotLine = (l) => l.includes('"agentId"') || l.includes('"subagent.') |
 // One that starts or ends a sub-agent (or sets its model and effort).
 const copilotMark = (l) => l.includes('"subagent.') || (l.includes('"tool.execution_start"') && /"toolName":\s*"task"/.test(l))
 
-export function copilotSubagents(sessionId, copilotDir = process.env.COPILOT_HOME || join(os.homedir(), '.copilot'), now = Date.now()) {
+export async function copilotSubagents(sessionId, copilotDir = process.env.COPILOT_HOME || join(os.homedir(), '.copilot'), now = Date.now()) {
   if (!SQL_ID.test(String(sessionId))) return []
   let base
   try {
@@ -1105,7 +1125,7 @@ export function copilotSubagents(sessionId, copilotDir = process.env.COPILOT_HOM
   if (!realInside(base, join(copilotDir, 'session-state'), true) || !realInside(base, dir, true) || !realInside(base, file, false)) return []
   let s
   try {
-    s = foldLog(file, fs.statSync(file), copilotLine, foldCopilot, copilotMark)
+    s = await foldLog(file, fs.statSync(file), copilotLine, foldCopilot, copilotMark)
   } catch {
     return []
   }
@@ -1175,7 +1195,7 @@ function foldKimi(s, r) {
 
 const kimiLine = (l) => l.includes('"subagent.')
 
-export function kimiSubagents(sessionId, kimiDir = process.env.KIMI_CODE_HOME || join(os.homedir(), '.kimi-code'), now = Date.now()) {
+export async function kimiSubagents(sessionId, kimiDir = process.env.KIMI_CODE_HOME || join(os.homedir(), '.kimi-code'), now = Date.now()) {
   if (!SQL_ID.test(String(sessionId))) return []
   let base
   try {
@@ -1216,7 +1236,7 @@ export function kimiSubagents(sessionId, kimiDir = process.env.KIMI_CODE_HOME ||
     try {
       const st = fs.statSync(file)
       wrote.set(n, st.mtimeMs)
-      const s = foldLog(file, st, kimiLine, foldKimi)
+      const s = await foldLog(file, st, kimiLine, foldKimi)
       if (s.kids) for (const [id, k] of s.kids) kids.set(id, k)
     } catch {
       // being written: next time
@@ -1405,9 +1425,11 @@ export function cursorSubagents(sessionId, cursorDir = join(os.homedir(), '.curs
   return out.slice(0, MAX_AGENTS)
 }
 
-// How much of a log is read whole (its last 32 MB), smaller in tests.
-export function _setLogTailForTest(bytes = LOG_TAIL_BYTES) {
-  logTail = bytes
+// How much of a log is read whole (its last 32 MB) and how much per turn
+// of the event loop (1 MB), smaller in tests.
+export function _setLogSizesForTest(tail = LOG_TAIL_BYTES, chunk = LOG_CHUNK) {
+  logTail = tail
+  logChunk = chunk
 }
 
 export function _clearChildCachesForTest() {
