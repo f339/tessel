@@ -78,6 +78,7 @@ import { createRemoteSkills } from './chat/remoteSkills'
 import { createChatImages } from './chat/chatImages'
 import { transcriptHomeFor } from './chat/transcriptHistory'
 import { createTranscriptViews } from './chat/transcriptView'
+import { createTerminalConversations } from './chat/terminalConversations'
 import { createTerminalSkills } from './chat/terminalSkills'
 import { createSessionSearch } from './sessionSearch/index.js'
 import { createClaudeChat } from './chat/claudeChat'
@@ -93,7 +94,7 @@ import { cleanEnv } from './cleanEnv'
 import { createPtyClient } from './ptyClient'
 import { watchLoopLag } from './loopLag'
 import { registerLiveShare } from './liveShare'
-import { listProcesses, treeOf, waitForExit, killPids, listProcessNames, runningWork, stopProcessSnapshots } from './processTree'
+import { listProcesses, treeOf, waitForExit, killPids, listProcessNames, runningWork, stopProcessSnapshots, pidRunning } from './processTree'
 import { pipeName } from './ptyProtocol'
 import { createUpdater } from './updater'
 import { createAgentUpdates } from './agentUpdates'
@@ -120,8 +121,11 @@ import {
   installSkill,
   removeSkill,
   isSkillPath,
-  createSkillSources
+  createSkillSources,
+  dropStaleSources
 } from './skillsManager'
+import { createSkillHistory } from './skillHistory'
+import { createSkillUpdates } from './skillUpdates'
 import { reviewInfo, reviewDiff, reviewMerge, reviewRemove, reviewCommit, reviewPush, setLeftoverStore } from './review'
 import { createLeftoverStore } from './worktreeLeftover'
 import * as scm from './sourceControl'
@@ -1384,6 +1388,18 @@ const transcriptViews = createTranscriptViews({
 })
 transcriptViews.register(ipcMain)
 app.on('will-quit', () => transcriptViews.closeAll())
+// The Conversations tab: what you and each terminal agent said in its
+// terminal, read from its conversation file (its account's folder for Claude
+// Code and Codex, resolved here; a host's file over its connection).
+createTerminalConversations({
+  log,
+  homes: async (agent, accountId) => {
+    const r = await accountSessions.roots({ agent, accountId })
+    return (r && r[agent]) || null
+  },
+  sessionsDir: () => sessionsDir(),
+  readAgentFile: (hostId, q) => (remoteHosts.get(hostId) ? remoteFs.readAgentFile(hostId, q) : { ok: false, error: 'unknown host' }) // i18n-ignore
+}).register(ipcMain)
 // The skills a terminal agent's chat view lists ("/" menu): its project's
 // (its open view's folder), the user's and its account's.
 createTerminalSkills({
@@ -2484,11 +2500,42 @@ ipcMain.handle(
 // Agent skills (the Skills window, skillsManager.js): listed per agent and
 // scope, added from a folder or GitHub after a preview, removed to the
 // Recycle Bin or deleted. A remote project has no local skill folders.
+// Each listed skill gets its version history (skillHistory.js: a version
+// kept whenever its content changed) and, added from GitHub, what the last
+// update check said (skillUpdates.js).
 const skillSources = createSkillSources(join(app.getPath('userData'), 'skill-sources.json'))
+const skillHistory = createSkillHistory(join(app.getPath('userData'), 'skill-history'))
+const skillUpdates = createSkillUpdates(join(app.getPath('userData'), 'skill-updates.json'), { sources: skillSources })
 const skillCwd = (cwd) => (typeof cwd === 'string' && cwd && !isRemotePath(cwd) ? cwd : null)
+const knownSkill = (q) => q && isSkillPath(q.dir, { cwd: skillCwd(q.cwd) })
+const unknownSkill = () => ({ ok: false, error: t('main.skills.unknownFolder', 'This is not a skill folder Tessel knows.') })
 ipcMain.handle(
   'skills:list',
-  safe((cwd) => listSkills({ cwd: skillCwd(cwd), sources: skillSources.all() }))
+  safe(async (arg) => {
+    // The project folder, or { cwd, quiet } (a list right after another one).
+    const q = arg && typeof arg === 'object' ? arg : { cwd: arg }
+    dropStaleSources(skillSources)
+    const listed = await listSkills({ cwd: skillCwd(q.cwd), sources: skillSources.all() })
+    await skillHistory.annotate(listed.skills, { sources: skillSources, cached: !!q.quiet })
+    skillUpdates.annotate(listed.skills)
+    return { ...listed, updates: skillUpdates.status() }
+  })
+)
+ipcMain.handle(
+  'skills:checkUpdates',
+  safe((q) => skillUpdates.check({ force: !!(q && q.force) }))
+)
+ipcMain.handle(
+  'skills:history',
+  safe((q) => (knownSkill(q) ? skillHistory.list(q.dir) : unknownSkill()))
+)
+ipcMain.handle(
+  'skills:historyDiff',
+  safe((q) => (knownSkill(q) ? skillHistory.diff(q.dir, String(q.id || '')) : unknownSkill()))
+)
+ipcMain.handle(
+  'skills:restore',
+  safe((q) => skillHistory.restore(q && q.dir, String((q && q.id) || ''), { cwd: skillCwd(q && q.cwd) }))
 )
 ipcMain.handle(
   'skills:fromFolder',
@@ -2500,11 +2547,18 @@ ipcMain.handle(
 )
 ipcMain.handle(
   'skills:forUpdate',
-  safe((dir) => packageForUpdate(dir, skillSources))
+  safe(async (dir) => {
+    // The new version and, from the GitHub API (that repository only), what
+    // changed since the installed one.
+    const [pkg, changes] = await Promise.all([packageForUpdate(dir, skillSources), skillUpdates.changesFor(dir).catch(() => null)])
+    return pkg && !pkg.candidates ? { ...pkg, changes } : pkg
+  })
 )
 ipcMain.handle(
   'skills:install',
-  safe((q) => installSkill({ ...(q || {}), cwd: skillCwd(q && q.cwd), sources: skillSources }))
+  safe((q) =>
+    installSkill({ ...(q || {}), cwd: skillCwd(q && q.cwd), sources: skillSources, history: skillHistory, trash: (p) => shell.trashItem(p) })
+  )
 )
 ipcMain.handle(
   'skills:remove',
@@ -4654,18 +4708,64 @@ ipcMain.handle('cli:reveal', (event) => {
 // can start the new copy a moment before the old one has exited. The new copy
 // then found the old one's lock and quit, and electron-vite (which stops when
 // its app exits) stopped with it. So the dev build waits for the lock
-// instead of giving up at once: up to a minute, since an old copy running
-// many terminals can take well over 8 seconds to be gone.
-async function acquireInstanceLock() {
+// instead of giving up at once: a minute, and longer while the copy that
+// holds it is still there (up to 10 min), since a stopped copy has once
+// taken over two minutes to be gone. That copy: the PID written next to the
+// data, else (a copy too old to write it) another main process of this same
+// electron.exe, neither a helper nor the terminal host.
+const INSTANCE_PID_FILE = join(app.getPath('userData'), 'instance.pid')
+function otherMainProcess() {
+  if (process.platform !== 'win32') return Promise.resolve(null)
+  const exe = process.execPath.replace(/'/g, "''")
+  const script = `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne ${process.pid} -and $_.ExecutablePath -eq '${exe}' -and $_.CommandLine -notmatch '--type=' -and $_.CommandLine -notmatch 'ptyHost' } | ForEach-Object { $_.ProcessId }` // i18n-ignore
+  return new Promise((resolve) =>
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 15000 }, (err, out) =>
+      resolve(err ? null : Number(String(out).trim().split(/\s+/)[0]) || null)
+    )
+  )
+}
+async function instanceHolder() {
+  try {
+    const pid = Number(fs.readFileSync(INSTANCE_PID_FILE, 'utf8').trim())
+    if (pid !== process.pid && pidRunning(pid)) return pid
+  } catch {
+    /* no PID written: looked up below */
+  }
+  return otherMainProcess()
+}
+async function waitInstanceLock() {
   if (app.requestSingleInstanceLock()) return true
   if (app.isPackaged) return false
+  const started = Date.now()
   log.info('app', 'waiting for the previous Tessel to exit (dev restart)')
-  const until = Date.now() + 60000
-  while (Date.now() < until) {
+  let holder = null
+  let checked = 0
+  for (;;) {
     await new Promise((r) => setTimeout(r, 250))
-    if (app.requestSingleInstanceLock()) return true
+    if (app.requestSingleInstanceLock()) {
+      log.info('app', `previous Tessel gone after ${((Date.now() - started) / 1000).toFixed(1)} s`)
+      return true
+    }
+    const waited = Date.now() - started
+    if (waited < 60000) continue
+    if (Date.now() - checked >= 30000) {
+      holder = await instanceHolder()
+      checked = Date.now()
+      if (holder) log.info('app', `still waiting for the previous Tessel (pid ${holder}) to exit: ${Math.round(waited / 1000)} s`)
+    }
+    if (!holder || waited >= 600000) return false
   }
-  return false
+}
+async function acquireInstanceLock() {
+  const got = await waitInstanceLock()
+  if (got) {
+    try {
+      fs.writeFileSync(INSTANCE_PID_FILE, String(process.pid))
+    } catch {
+      /* only used to wait longer on a dev restart */
+    }
+  }
+  return got
 }
 
 Promise.all([acquireInstanceLock(), app.whenReady()]).then(([gotInstanceLock]) => {

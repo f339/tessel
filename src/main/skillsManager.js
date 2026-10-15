@@ -22,7 +22,7 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import { t } from './i18n'
 import { skillFrontmatter } from './chat/skills.js'
 import { readTar, gunzipCapped } from './skillsTar'
@@ -42,7 +42,7 @@ export const SKILL_CAPS = {
 }
 
 const fail = (message, code) => Object.assign(new Error(message), code ? { code } : {})
-const sameKey = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p))
+export const sameKey = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p))
 const inside = (root, file) => {
   const rel = path.relative(root, file)
   return !!rel && !path.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`)
@@ -172,6 +172,79 @@ export function createSkillSources(file) {
   }
 }
 
+// Folders a tool fills inside a skill (packages, environments, caches,
+// builds, git): not the skill's content. Never read for its history, never
+// touched by it. A Python environment is one whatever its name (it holds a
+// pyvenv.cfg).
+export const SKIPPED_DIR = /^(\.git|node_modules|\.venv|venv|__pycache__|\.mypy_cache|\.pytest_cache|\.tox|\.cache|dist|build|coverage|target)$/i
+export const isSkippedRel = (rel) => String(rel).split('/').slice(0, -1).some((part) => SKIPPED_DIR.test(part))
+
+// A skill's content as one hash: each file's path and the hash of its bytes,
+// in path order. The same for a package in memory ({ rel, data }) and a
+// folder read from disk ({ rel, sha }), so an edited copy is noticed.
+const byRel = (x, y) => (x.rel < y.rel ? -1 : x.rel > y.rel ? 1 : 0)
+export const sha256 = (data) => createHash('sha256').update(data).digest('hex')
+export function contentHash(files) {
+  const envs = files.filter((f) => /(^|\/)pyvenv\.cfg$/.test(f.rel) && f.rel.includes('/')).map((f) => f.rel.slice(0, -'/pyvenv.cfg'.length) + '/')
+  const h = createHash('sha256')
+  const list = files.filter((f) => !isSkippedRel(f.rel) && !envs.some((e) => f.rel.startsWith(e))).map((f) => ({ rel: f.rel, sha: f.sha || sha256(f.data) }))
+  for (const f of list.sort(byRel)) h.update(`${f.rel}\0${f.sha}\n`)
+  return h.digest('hex')
+}
+
+// Skill folders being installed or updated right now (renamed aside for a
+// moment): their records are never taken for stale.
+const installing = new Set()
+
+// Deletes a folder and everything in it without ever following a link: a
+// link or a Windows junction inside is removed itself, never what it points
+// to (Electron's recursive fs.rm can follow junctions).
+export async function removeTree(target) {
+  const st = await fs.lstat(target).catch(() => null)
+  if (!st) return
+  if (st.isSymbolicLink()) {
+    try {
+      await fs.unlink(target)
+    } catch {
+      await fs.rmdir(target)
+    }
+  } else if (st.isDirectory()) {
+    for (const name of await fs.readdir(target)) await removeTree(path.join(target, name))
+    await fs.rmdir(target)
+  } else await fs.unlink(target)
+}
+
+// Records of skills whose folder is gone (deleted, a removed worktree) are
+// dropped: never checked for updates again, never given to a new folder of
+// the same name. One on a drive that is not there now is kept, and one being
+// installed.
+export function dropStaleSources(sources) {
+  let dropped = 0
+  for (const dir of Object.keys(sources ? sources.all() : {})) {
+    if (installing.has(sameKey(dir))) continue
+    try {
+      fsSync.statSync(dir)
+    } catch (err) {
+      if (err && err.code === 'ENOENT' && fsSync.existsSync(path.parse(path.resolve(dir)).root)) {
+        sources.remove(dir)
+        dropped++
+      }
+    }
+  }
+  return dropped
+}
+
+// Where a copy comes from: 'github' or 'folder' when Tessel recorded adding
+// it, 'agent' for the agent's own (synced, built in, plugin stores), else
+// 'own': made on this computer.
+export function skillOrigin(skill) {
+  if (skill && skill.managed) return 'agent'
+  const source = skill && skill.source
+  if (source && source.kind === 'github') return 'github'
+  if (source && source.kind === 'folder') return 'folder'
+  return 'own'
+}
+
 // ---------------------------------------------------------------- Listing
 
 async function readHead(file, bytes) {
@@ -246,6 +319,7 @@ export async function listSkills({ home = os.homedir(), env = process.env, cwd =
           source: source && typeof source === 'object' ? source : null,
           updatedAt: stat.mtimeMs
         })
+        skills[skills.length - 1].origin = skillOrigin(skills[skills.length - 1])
       } else if (!link && depth < caps.listDepth) {
         await visit(root, child, depth + 1, reason)
       }
@@ -564,10 +638,38 @@ async function writeTree(dest, files) {
   }
 }
 
+// A folder holding a SKILL.md at its top: a skill copy.
+async function hasSkillFile(dir) {
+  try {
+    return (await fs.readdir(dir, { withFileTypes: true })).some((e) => e.isFile() && /^skill\.md$/i.test(e.name))
+  } catch {
+    return false
+  }
+}
+
 // Copies the package into each target folder (<root>/<name>). An existing
 // skill of that name is kept (exists: true) unless `replace` names its folder
-// (Update): then the new copy takes its place, the old one is removed after.
-export async function installSkill({ id, agents = [], scope = 'user', cwd = null, replace = null, home = os.homedir(), env = process.env, sources = null } = {}) {
+// (Update): then the new copy takes its place, and the old folder goes to the
+// Recycle Bin whole (`trash`; .git, node_modules and all), never deleted for
+// good. Without `trash` it is removed (never following a link).
+// history (skillHistory.js): a skill copy being replaced is kept as a version
+// first, and the new content is noted as installed or updated. A copy that
+// cannot be kept whole (and is not exactly what was installed) is never
+// replaced; a folder without a SKILL.md is no skill copy and has no history.
+// A rename tried again while the file is held for a moment (antivirus right
+// after the files were written, on Windows).
+async function renameRetry(from, to) {
+  for (let i = 0; ; i++) {
+    try {
+      return await fs.rename(from, to)
+    } catch (err) {
+      if (i >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(err && err.code)) throw err
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  }
+}
+
+export async function installSkill({ id, agents = [], scope = 'user', cwd = null, replace = null, home = os.homedir(), env = process.env, sources = null, history = null, trash = null } = {}) {
   const pkg = getPackage(id)
   if (!pkg) throw fail(t('main.skills.expired', 'This preview has expired. Look the skill up again.'), 'SKILL_EXPIRED')
   const opts = { home, env, cwd }
@@ -585,9 +687,12 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
     targets = roots.map((root) => ({ root, dest: path.join(root.path, pkg.name) }))
   }
   const results = []
+  const hash = contentHash(pkg.files)
   for (const { root, dest } of targets) {
     const result = { dir: dest, seenBy: root.seenBy, scope: root.scope }
     const tmp = path.join(root.path, `.${path.basename(dest)}.tessel-${randomBytes(4).toString('hex')}`)
+    const key = sameKey(dest)
+    installing.add(key)
     try {
       const existing = await fs.lstat(dest).catch(() => null)
       if (existing && !replace) {
@@ -595,24 +700,72 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
         continue
       }
       if (replace && existing && (existing.isSymbolicLink() || !existing.isDirectory())) throw linkRefused(path.basename(dest))
+      if (existing && history && (await hasSkillFile(dest))) {
+        // A failed snapshot stops here: the old copy is untouched.
+        const snap = await history.track(dest)
+        const recorded = sources ? sources.get(dest) : null
+        const asInstalled = !snap.truncated && !!(recorded && recorded.hash) && snap.hash === recorded.hash
+        if (!snap.saved || !(snap.complete || asInstalled))
+          throw fail(
+            t('main.skills.history.notKeptUpdate', 'The copy there could not be kept whole in its history (too many files, or a file too large), so it was not replaced. Remove it first to install the new one.'),
+            'SKILL_HISTORY_INCOMPLETE'
+          )
+      }
       await fs.mkdir(root.path, { recursive: true })
       await writeTree(tmp, pkg.files)
       if (existing) {
-        const old = path.join(root.path, `.${path.basename(dest)}.tessel-old-${randomBytes(4).toString('hex')}`)
-        await fs.rename(dest, old)
+        // The old copy goes aside, the new one in its place, and only then is
+        // the old one let go: any failed step puts the old one back, so the
+        // skill never loses its folder (renames are retried while antivirus
+        // holds the new files for a moment). Aside, it keeps its own name in
+        // a hidden folder, so the Recycle Bin shows it as itself and no agent
+        // reads it as a second skill.
+        const aside = path.join(root.path, `.${path.basename(dest)}.tessel-old-${randomBytes(4).toString('hex')}`)
+        const old = path.join(aside, path.basename(dest))
+        await fs.mkdir(aside)
         try {
-          await fs.rename(tmp, dest)
+          await renameRetry(dest, old)
         } catch (err) {
-          await fs.rename(old, dest).catch(() => {})
+          await fs.rmdir(aside).catch(() => {})
           throw err
         }
-        await fs.rm(old, { recursive: true, force: true }).catch(() => {})
-      } else await fs.rename(tmp, dest)
-      if (sources) sources.set(dest, { ...pkg.source, name: pkg.name, installedAt: Date.now() })
+        try {
+          await renameRetry(tmp, dest)
+        } catch (err) {
+          await renameRetry(old, dest).then(() => fs.rmdir(aside)).catch(() => {})
+          throw err
+        }
+        if (trash) {
+          try {
+            await trash(old)
+          } catch (err) {
+            // No Recycle Bin there (a network share, \\wsl$): the old copy
+            // goes back as it was and the new one is dropped. Should a rename
+            // fail even so, the new copy stays and the old one stays aside.
+            await renameRetry(dest, tmp)
+              .then(() => renameRetry(old, dest).catch((e) => renameRetry(tmp, dest).then(() => { throw e })))
+              .then(() => fs.rmdir(aside))
+              .catch(() => {})
+            throw fail(
+              t('main.skills.trashFailed', 'The folder there could not be moved to the Recycle Bin ({{error}}), so it was not replaced.', { error: (err && err.message) || String(err) }),
+              'SKILL_TRASH_FAILED'
+            )
+          }
+          result.trashed = true
+        }
+        await removeTree(aside).catch(() => {})
+      } else await renameRetry(tmp, dest)
+      if (sources) sources.set(dest, { ...pkg.source, name: pkg.name, installedAt: Date.now(), hash })
+      if (history) {
+        const note = { kind: existing ? 'update' : 'install', from: pkg.source && pkg.source.kind, commit: (pkg.source && pkg.source.commit) || null }
+        await history.track(dest, { note }).catch(() => {})
+      }
       results.push({ ...result, ok: true })
     } catch (err) {
-      await fs.rm(tmp, { recursive: true, force: true }).catch(() => {})
+      await removeTree(tmp).catch(() => {})
       results.push({ ...result, ok: false, error: (err && err.message) || String(err) })
+    } finally {
+      installing.delete(key)
     }
   }
   return { ok: results.every((r) => r.ok), name: pkg.name, results }
@@ -622,7 +775,7 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
 
 // Only a skill folder directly in a known root, holding a SKILL.md, never a
 // link (the folder it points to is not Tessel's to remove).
-async function checkRemovable(dir, opts) {
+export async function checkRemovable(dir, opts) {
   const root = rootOfSkill(dir, opts)
   if (!root) throw fail(t('main.skills.unknownFolder', 'This is not a skill folder Tessel knows.'))
   const st = await fs.lstat(dir).catch(() => null)
@@ -637,7 +790,7 @@ async function checkRemovable(dir, opts) {
 export async function removeSkill({ dir, mode = 'trash', cwd = null, home = os.homedir(), env = process.env, trash = null, sources = null } = {}) {
   await checkRemovable(dir, { home, env, cwd })
   const target = path.resolve(dir)
-  if (mode === 'delete') await fs.rm(target, { recursive: true })
+  if (mode === 'delete') await removeTree(target)
   else {
     if (!trash) throw fail(t('main.skills.noTrash', 'The Recycle Bin is not available.'))
     await trash(target)

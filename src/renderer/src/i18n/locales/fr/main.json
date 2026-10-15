@@ -937,7 +937,24 @@
       "exists": "Une compétence de ce nom s'y trouve déjà.",
       "gone": "Cette compétence n'est plus là.",
       "noTrash": "La Corbeille n'est pas disponible.",
-      "noSource": "Cette compétence n'a pas été ajoutée depuis GitHub par Tessel : rien à mettre à jour."
+      "noSource": "Cette compétence n'a pas été ajoutée depuis GitHub par Tessel : rien à mettre à jour.",
+      "history": {
+        "noVersion": "Cette version n'est plus dans l'historique.",
+        "cannotRestore": "Cette version ne peut pas être restaurée : {{files}} n'a pas été gardé dans l'historique (trop volumineux).",
+        "unreadable": "L'historique de cette compétence n'a pas pu être lu. Réessayez dans un instant.",
+        "incomplete": "Le contenu actuel n'a pas pu être gardé en entier dans l'historique (trop de fichiers) : rien n'a été restauré.",
+        "notKeptFiles": "La restauration remplacerait {{files}}, trop volumineux pour être gardé dans l'historique : rien n'a été restauré.",
+        "blocked": "Cette version ne peut pas être restaurée : {{files}} est dans le chemin (désormais un dossier, un fichier ou un lien).",
+        "partial": "La restauration s'est arrêtée en cours de route : {{error}} Le contenu d'avant est dans l'historique.",
+        "notKeptUpdate": "La copie en place n'a pas pu être gardée en entier dans son historique (trop de fichiers, ou un fichier trop volumineux) : elle n'a pas été remplacée. Retirez-la d'abord pour installer la nouvelle."
+      },
+      "updates": {
+        "budget": "Trop de compétences à vérifier d'un coup ; les autres le seront la prochaine fois.",
+        "offline": "Impossible de joindre GitHub : {{error}}",
+        "timeout": "GitHub n'a pas répondu à temps."
+      },
+      "trashFailed": "Le dossier en place n'a pas pu être mis à la Corbeille ({{error}}) : il n'a pas été remplacé.",
+      "placeFailed": "La nouvelle copie n'a pas pu être mise en place ({{error}}). L'ancienne est dans la Corbeille."
     },
     "liveShare": {
       "tunnelStopped": "Le tunnel Cloudflare s’est arrêté (code {{code}}). Le partage est terminé.",

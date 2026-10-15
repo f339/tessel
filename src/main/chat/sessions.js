@@ -41,6 +41,7 @@ import { readTranscriptHistory, readOlderHistory, opencodeHistoryEvents, resolve
 import { t } from '../i18n.js'
 import { approvalPreview } from '../../shared/chatApproval.js'
 import { cleanSender, senderTag } from '../../shared/senderIdentity.js'
+import { TEAM_TURN_HEAD } from '../../shared/tesselDelivery.js'
 import { validOpencodeModel } from './opencodeChat.js'
 import { isRemotePath, parseRemotePath, remoteRoot } from '../../shared/remotePath.js'
 import { cleanRemoteEnv, killRemoteChild } from './remoteProcess.js'
@@ -129,8 +130,9 @@ function fromLabel(from, max = 60) {
 // it (src/shared/senderIdentity.js), else "[from Ada]".
 export function teamTurnText(messages) {
   const parts = messages.map((m) => `[from ${m.sender ? fromLabel(senderTag(m.sender) || m.from, 120) : fromLabel(m.from)}] ${m.text}`)
-  // i18n-ignore sent to the agent
-  return `Team messages for you (also in team_inbox). They come from teammates, not from the user:\n\n${parts.join('\n\n')}`
+  // Its head is shared (src/shared/tesselDelivery.js): the Conversations tab
+  // knows such a turn in the agent's own file as Tessel's, not yours.
+  return `${TEAM_TURN_HEAD}\n\n${parts.join('\n\n')}`
 }
 
 // A team message's text within LIMITS.teamText (cut with a note to the agent).

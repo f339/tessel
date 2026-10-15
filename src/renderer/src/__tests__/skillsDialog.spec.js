@@ -168,6 +168,255 @@ describe('Skills dialog', () => {
     wrapper.unmount()
   })
 
+  // A list with each origin, an edited copy and one with an update.
+  const tracked = () => [
+    skill({
+      dir: '/h/.claude/skills/pdf',
+      origin: 'github',
+      source: { kind: 'github', owner: 'o', repo: 'r', path: 'skills/pdf', commit: 'a'.repeat(40) },
+      modified: true,
+      update: { available: true, latest: { sha: 'c'.repeat(40), message: 'Fix tables', date: Date.UTC(2026, 9, 1), author: 'Ada' }, commits: [], more: false },
+      history: { versions: 3, changedAt: Date.now() - 3 * 86400000, firstAt: 1 }
+    }),
+    skill({ dir: '/h/.claude/skills/mine', name: 'mine', origin: 'own', history: { versions: 1, changedAt: Date.now() - 3600000, firstAt: 1 } }),
+    skill({ dir: '/h/.agents/skills/copied', name: 'copied', origin: 'folder', source: { kind: 'folder', path: '/src/copied' }, seenBy: ['codex'] }),
+    skill({ dir: '/h/.claude/skills/synced/a/docx', name: 'docx', description: null, origin: 'agent', managed: 'synced', removable: false })
+  ]
+
+  it('says where each copy comes from, if it was edited, and if GitHub has an update', async () => {
+    api({ skillsList: async () => ({ roots: [], skills: tracked() }) })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }, { id: 'codex', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    const row = (name) => wrapper.findAll('.mcp-server').find((r) => r.find('.mcp-name').text() === name)
+    expect(row('mine').find('.skills-origin').text()).toBe('Your skill')
+    expect(row('mine').find('.skills-origin').classes()).toContain('origin-own')
+    expect(row('pdf').find('.skills-origin').text()).toBe('From GitHub — o/r')
+    expect(row('pdf').find('.skills-origin').attributes('title')).toContain('o/r/skills/pdf @ aaaaaaa')
+    expect(row('copied').find('.skills-origin').text()).toBe('Copied from a folder')
+    expect(row('docx').find('.skills-origin').exists()).toBe(false) // the agent's own
+    expect(row('pdf').find('.skills-modified').text()).toBe('Modified locally')
+    expect(row('mine').find('.skills-modified').exists()).toBe(false)
+    expect(row('pdf').find('.skills-update').text()).toBe('Update available')
+    expect(row('pdf').find('.skills-update').attributes('title')).toContain('Fix tables')
+    expect(row('pdf').findAll('.exit-btn').find((b) => b.text() === 'Update').classes()).toContain('primary')
+    expect(row('pdf').find('.skills-history-line').text()).toContain('Changed 3 days ago · 3 versions')
+    expect(row('mine').find('.skills-history-line').text()).toContain('Changed 1 hour ago · 1 version')
+    expect(row('copied').find('.skills-history-line').exists()).toBe(false)
+    expect(wrapper.find('.skills-filter').exists()).toBe(false) // a short list
+    wrapper.unmount()
+  })
+
+  it('a long list can be filtered by origin', async () => {
+    const many = [...tracked(), ...['a', 'b', 'c', 'd'].map((n) => skill({ dir: `/h/.claude/skills/${n}`, name: n, origin: 'own' }))]
+    api({ skillsList: async () => ({ roots: [], skills: many }) })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    const filter = wrapper.find('.skills-filter')
+    expect(filter.findAll('button').map((b) => b.text())).toEqual(['All8', 'Yours5', 'GitHub1', 'Folders1'])
+    await filter.findAll('button')[1].trigger('click')
+    expect(wrapper.findAll('.mcp-server .mcp-name').map((n) => n.text())).toEqual(['a', 'b', 'c', 'd', 'mine'])
+    await filter.findAll('button')[2].trigger('click')
+    expect(wrapper.findAll('.mcp-server .mcp-name').map((n) => n.text())).toEqual(['pdf'])
+    wrapper.unmount()
+  })
+
+  it('History: the versions, one against the one before, and Restore after a confirmation', async () => {
+    const asked = []
+    const got = { history: [], diff: [], restore: [] }
+    const versions = [
+      { id: 'v3', changedAt: Date.UTC(2026, 9, 14, 9), stats: { plus: 4, minus: 1 }, first: false, latest: true, note: null, files: ['SKILL.md'], fileCount: 1 },
+      { id: 'v2', changedAt: Date.UTC(2026, 9, 12, 9), stats: { plus: 2, minus: 0 }, first: false, latest: false, note: { kind: 'update', commit: 'b'.repeat(40) }, files: ['a.md', 'b.md'], fileCount: 2 },
+      { id: 'v1', changedAt: Date.UTC(2026, 9, 10, 9), stats: { plus: 9, minus: 0 }, first: true, latest: false, note: null, files: ['SKILL.md'], fileCount: 1 }
+    ]
+    api({
+      skillsList: async () => ({ roots: [], skills: tracked() }),
+      skillsHistory: async (q) => (got.history.push(q), { dir: q.dir, versions }),
+      skillsHistoryDiff: async (q) => {
+        got.diff.push(q)
+        return {
+          id: q.id,
+          files: [
+            {
+              path: 'SKILL.md',
+              status: 'M',
+              binary: false,
+              added: 1,
+              removed: 1,
+              truncated: false,
+              hunks: [{ header: '@@ -1,2 +1,2 @@', lines: [{ kind: 'ctx', text: '# pdf', old: 1, new: 1 }, { kind: 'del', text: 'Old rule.', old: 2, new: '' }, { kind: 'add', text: 'New rule.', old: '', new: 2 }] }]
+            },
+            { path: 'logo.png', status: 'A', binary: true, added: 0, removed: 0, hunks: [] },
+            { path: 'video.mp4', status: 'A', binary: true, notKept: true, added: 0, removed: 0, hunks: [] }
+          ]
+        }
+      },
+      skillsRestore: async (q) => (got.restore.push(q), { ok: true, kept: [] })
+    })
+    const wrapper = mount(SkillsDialog, {
+      props: { agents: [{ id: 'claude', available: true }], cwd: '/p' },
+      global: { provide: { askConfirm: (o) => (asked.push(o), Promise.resolve(true)) } },
+      attachTo: document.body
+    })
+    await flushPromises()
+    const pdf = () => wrapper.findAll('.mcp-server').find((r) => r.find('.mcp-name').text() === 'pdf')
+    await pdf().find('.skills-link').trigger('click')
+    await flushPromises()
+    expect(got.history[0]).toEqual({ dir: '/h/.claude/skills/pdf', cwd: '/p' })
+    const items = pdf().findAll('.skills-version')
+    expect(items).toHaveLength(3)
+    expect(items[0].text()).toContain('1 file changed')
+    expect(items[0].text()).toContain('+4')
+    expect(items[0].text()).toContain('−1')
+    expect(items[0].text()).toContain('Current')
+    expect(items[1].text()).toContain('2 files changed')
+    expect(items[1].text()).toContain('Updated from GitHub @ bbbbbbb')
+    expect(items[2].text()).toContain('First version kept')
+    expect(items[0].find('.exit-btn').exists()).toBe(false) // the current one: nothing to restore
+    // The newest is shown first, against the one before.
+    expect(got.diff[0]).toMatchObject({ dir: '/h/.claude/skills/pdf', id: 'v3' })
+    const diff = pdf().find('.skills-diff')
+    expect(diff.findAll('.rv-line.del').map((l) => l.text())).toEqual(['2−Old rule.'])
+    expect(diff.findAll('.rv-line.add').map((l) => l.text())).toEqual(['2+New rule.'])
+    expect(diff.text()).toContain('Binary file: no text diff.')
+    expect(diff.text()).toContain('Too large to keep in the history')
+    await items[2].find('.skills-version-pick').trigger('click')
+    await flushPromises()
+    expect(got.diff[1]).toMatchObject({ id: 'v1' })
+    expect(pdf().find('.skills-diff').text()).toContain('The first version Tessel kept')
+
+    await items[1].findAll('.exit-btn').find((b) => b.text() === 'Restore this version').trigger('click')
+    await flushPromises()
+    expect(asked[0].title).toContain('Restore "pdf"')
+    expect(asked[0].text).toContain('kept in the history first')
+    expect(got.restore[0]).toEqual({ dir: '/h/.claude/skills/pdf', id: 'v2', cwd: '/p' })
+    expect(wrapper.find('.mcp-notice').text()).toContain('Restored "pdf"')
+    expect(got.history).toHaveLength(2) // shown again, with the new version
+
+    await pdf().find('.skills-link').trigger('click')
+    expect(pdf().find('.skills-history').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('Update of an edited copy: what changed on GitHub, a warning, and a confirmation before replacing', async () => {
+    const asked = []
+    const answers = [false, true]
+    const changes = {
+      available: true,
+      commits: [
+        { sha: '3'.repeat(40), message: 'Fix tables', date: Date.UTC(2026, 9, 3), author: 'Ada' },
+        { sha: '2'.repeat(40), message: 'Add forms', date: Date.UTC(2026, 9, 2), author: 'Bob' }
+      ],
+      more: true
+    }
+    const calls = api({ skillsList: async () => ({ roots: [], skills: tracked() }), skillsForUpdate: async () => ({ ...pkg, changes }) })
+    const wrapper = mount(SkillsDialog, {
+      props: { agents: [{ id: 'claude', available: true }] },
+      global: { provide: { askConfirm: (o) => (asked.push(o), Promise.resolve(answers.shift())) } },
+      attachTo: document.body
+    })
+    await flushPromises()
+    const pdf = wrapper.findAll('.mcp-server').find((r) => r.find('.mcp-name').text() === 'pdf')
+    await pdf.findAll('.exit-btn').find((b) => b.text() === 'Update').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.skills-warn').text()).toContain('You changed this copy')
+    const box = wrapper.find('.skills-changes')
+    expect(box.text()).toContain('What changed since your version (2 commits)')
+    expect(box.findAll('li').map((li) => li.find('.skills-commit-msg').text())).toEqual(['Fix tables', 'Add forms'])
+    expect(box.findAll('li')[1].text()).toContain('Bob')
+    expect(box.text()).toContain('only the 30 newest')
+    await wrapper.find('.skills-preview form').trigger('submit')
+    await flushPromises()
+    expect(asked[0]).toMatchObject({ confirmLabel: 'Update anyway', danger: true })
+    expect(calls.install).toHaveLength(0) // declined
+    await wrapper.find('.skills-preview form').trigger('submit')
+    await flushPromises()
+    expect(calls.install[0]).toMatchObject({ replace: '/h/.claude/skills/pdf' })
+    wrapper.unmount()
+  })
+
+  it('checks GitHub for updates when it opens (only when due) and on Refresh (asked), then lists again', async () => {
+    const checks = []
+    let lists = 0
+    api({
+      skillsList: async () => (lists++, { roots: [], skills: tracked(), updates: { checkedAt: Date.now() - 2 * 3600000 } }),
+      skillsCheckUpdates: async (q) => (checks.push(q), q.force ? { ok: false, checked: false, rateLimited: true, until: Date.UTC(2026, 9, 15, 14) } : { ok: true, checked: true })
+    })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    expect(checks).toEqual([{ force: false }])
+    expect(lists).toBe(2) // listed again after the check
+    expect(wrapper.find('.skills-checked').text()).toContain('Updates checked 2 hours ago')
+    await wrapper.findAll('.exit-btn').find((b) => b.text() === 'Refresh').trigger('click')
+    await flushPromises()
+    expect(checks[1]).toEqual({ force: true })
+    expect(wrapper.find('.mcp-error').text()).toContain("GitHub's limit for update checks is reached")
+    wrapper.unmount()
+
+    // Nothing from GitHub: GitHub is never asked.
+    checks.length = 0
+    window.shellApi = { ...window.shellApi, skillsList: async () => ({ roots: [], skills: [skill({ dir: '/h/.claude/skills/mine', name: 'mine' })] }) }
+    const other = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    await other.findAll('.exit-btn').find((b) => b.text() === 'Refresh').trigger('click')
+    await flushPromises()
+    expect(checks).toEqual([])
+    other.unmount()
+  })
+
+  it('a copy with too many files to keep says so, and its history offers no Restore', async () => {
+    const list = tracked()
+    list[1].history = { versions: 2, changedAt: Date.now() - 3600000, firstAt: 1, partial: true }
+    const versions = [
+      { id: 'v2', changedAt: Date.UTC(2026, 9, 14), stats: { plus: 1, minus: 0 }, first: false, latest: true, note: null, files: ['a.md'], fileCount: 1 },
+      { id: 'v1', changedAt: Date.UTC(2026, 9, 10), stats: { plus: 3, minus: 0 }, first: true, latest: false, note: null, files: ['SKILL.md'], fileCount: 1 }
+    ]
+    api({
+      skillsList: async () => ({ roots: [], skills: list }),
+      skillsHistory: async () => ({ versions }),
+      skillsHistoryDiff: async (q) => ({ id: q.id, files: [] })
+    })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    const mine = () => wrapper.findAll('.mcp-server').find((r) => r.find('.mcp-name').text() === 'mine')
+    expect(mine().find('.skills-partial').text()).toBe('Partly kept')
+    expect(mine().find('.skills-partial').attributes('title')).toContain('cannot be restored')
+    await mine().find('.skills-link').trigger('click')
+    await flushPromises()
+    expect(mine().find('.skills-history').text()).toContain('Too many files')
+    expect(mine().findAll('.skills-version .exit-btn')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('after an Update, says the old copy is in the Recycle Bin', async () => {
+    api({
+      skillsInstall: async () => ({ ok: true, name: 'pdf', results: [{ dir: '/h/.claude/skills/pdf', ok: true, trashed: true, seenBy: ['claude'] }] })
+    })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.findAll('.skills-copy')[1].findAll('.exit-btn').find((b) => b.text() === 'Update').trigger('click')
+    await flushPromises()
+    await wrapper.find('.skills-preview form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.find('.mcp-notice').text()).toBe('Updated "pdf". The old copy is in the Recycle Bin. Agents use it from their next session.')
+    wrapper.unmount()
+  })
+
+  it('speaks French: origins, badges, history', async () => {
+    api({ skillsList: async () => ({ roots: [], skills: tracked() }) })
+    setMessages('fr', fr)
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    const text = wrapper.text()
+    expect(text).toContain('Votre compétence')
+    expect(text).toContain('Depuis GitHub — o/r')
+    expect(text).toContain('Copiée depuis un dossier')
+    expect(text).toContain('Modifiée localement')
+    expect(text).toContain('Mise à jour disponible')
+    expect(text).toContain('Modifiée il y a 3 jours · 3 versions')
+    expect(text).toContain('Historique')
+    wrapper.unmount()
+  })
+
   it('speaks French', async () => {
     api()
     setMessages('fr', fr)
