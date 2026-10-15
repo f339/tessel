@@ -1,4 +1,5 @@
 <script setup>
+import { sidebarMaxWidth } from './layoutLimits'
 import { ensureAgentNames, renameAgentName, resolveAgentAddress, agentProgramLabel } from '../../shared/agentNames'
 import { ref, reactive, provide, watch, computed, nextTick, onMounted, onBeforeUnmount, toRaw } from 'vue'
 import SplitNode from './components/SplitNode.vue'
@@ -2544,12 +2545,12 @@ const taskPanelOpen = ref(false)
 // the default), saved with the layout.
 const TASK_PANEL_DEFAULT = 330
 const TASK_PANEL_MIN = 260
-const TASK_PANEL_MAX = 900
 const taskPanelWidth = ref(TASK_PANEL_DEFAULT)
 const taskResizing = ref(false)
 // The width asked for is kept (taskPanelWidth); what is shown always leaves
 // the terminals at least 420 px next to the workspace sidebar, also when the
-// window or the sidebar changes size later.
+// window or the sidebar changes size later. No fixed ceiling: on a wide or
+// ultrawide screen it may take all the rest.
 const winWidth = ref(window.innerWidth)
 const onWinResize = () => (winWidth.value = window.innerWidth)
 window.addEventListener('resize', onWinResize)
@@ -2573,7 +2574,7 @@ onBeforeUnmount(() => popupObserver && popupObserver.disconnect())
 
 function clampTaskPanel(w) {
   const side = sidebarCollapsed.value ? 52 : sidebarWidth.value
-  const max = Math.min(TASK_PANEL_MAX, Math.max(TASK_PANEL_MIN, winWidth.value - side - 420))
+  const max = Math.max(TASK_PANEL_MIN, winWidth.value - side - 420)
   return Math.round(Math.min(max, Math.max(TASK_PANEL_MIN, w)))
 }
 const taskPanelShown = computed(() => clampTaskPanel(taskPanelWidth.value))
@@ -11879,9 +11880,9 @@ async function restoreOrSeedLayout() {
       taskPanelOpen.value = true
     }
     if (Number.isFinite(saved.taskPanelWidth))
-      taskPanelWidth.value = Math.round(Math.min(TASK_PANEL_MAX, Math.max(TASK_PANEL_MIN, saved.taskPanelWidth)))
+      taskPanelWidth.value = Math.round(Math.max(TASK_PANEL_MIN, saved.taskPanelWidth))
     if (Number.isFinite(saved.sidebarWidth)) {
-      sidebarWidth.value = Math.min(500, Math.max(220, saved.sidebarWidth))
+      sidebarWidth.value = Math.min(sidebarMaxWidth(), Math.max(220, saved.sidebarWidth))
     }
     // Older saves kept only the font size at the top level.
     loadSettings(

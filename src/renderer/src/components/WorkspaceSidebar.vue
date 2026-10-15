@@ -7,6 +7,7 @@
 // task copy, with its branch) -> the agents and terminals working in each,
 // with their live state; the pane you are in is highlighted. The sidebar only
 // renders and emits intents: App owns the state.
+import { sidebarMaxWidth } from '../layoutLimits'
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import {
   Activity,
@@ -360,7 +361,6 @@ function toggleExpanded(key) {
 
 // --- Drag the right edge to resize ---------------------------------------------
 const MIN_WIDTH = 220 // Orca's
-const MAX_WIDTH = 500
 const DEFAULT_WIDTH = 280
 const COLLAPSE_BELOW = 110 // dragging this far left collapses the sidebar
 const navEl = ref(null)
@@ -389,7 +389,7 @@ function startResize(e) {
       return
     }
     wantsCollapse = raw < COLLAPSE_BELOW
-    emit('resize', Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, raw))))
+    emit('resize', Math.round(Math.min(sidebarMaxWidth(), Math.max(MIN_WIDTH, raw))))
   }
   const up = () => {
     resizing.value = false
