@@ -62,14 +62,17 @@ const within = (path, folder) => {
   return key === base || key.startsWith(base === '/' ? '/' : `${base}/`)
 }
 
-// The local folders of a Tessel project: its folder, or for a folder imported
-// as a group, each of its repositories. None for a project on an SSH host
-// (its history is not on this computer).
+// The local folders of a Tessel project: its folder, and for a folder
+// imported as a group, each of its repositories too (the group's own folder
+// stays: its agents start there by default; a repository, deeper, keeps its
+// own turns). None for a project on an SSH host (its history is not on this
+// computer).
 export function usageProjectFolders(workspace) {
   if (!object(workspace) || workspace.remote) return []
+  const own = localRoot(workspace.cwd) ? [workspace.cwd] : []
   if (object(workspace.group) && Array.isArray(workspace.group.repos))
-    return workspace.group.repos.map((repo) => (object(repo) ? repo.path : null)).filter(localRoot)
-  return localRoot(workspace.cwd) ? [workspace.cwd] : []
+    return [...workspace.group.repos.map((repo) => (object(repo) ? repo.path : null)).filter(localRoot), ...own]
+  return own
 }
 
 // What the "Tessel projects" scope holds now, like Orca's worktree scope:
@@ -109,7 +112,10 @@ export function usageScopeEntries({ workspaces = [], worktrees = {}, tasks = [],
       const named = projectKeys.get(folderKey(root)) || owner.get(folderKey(root))
       if (named) return named
     }
-    const holder = candidates.find((folder) => within(path, `${folder}.worktrees`) || within(path, folder)) // i18n-ignore
+    // The deepest one: a copy inside a project nested in another is that one's.
+    const holder = candidates
+      .filter((folder) => within(path, `${folder}.worktrees`) || within(path, folder)) // i18n-ignore
+      .sort((a, b) => folderKey(b).length - folderKey(a).length)[0]
     if (holder) return holder
     if (single && candidates.length === 1) return candidates[0]
     return localRoot(root) ? root : path

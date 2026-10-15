@@ -482,8 +482,9 @@ describe('Tessel projects scope', () => {
   ]
   const entries = usageScopeEntries({ workspaces, worktrees, tasks, panes })
 
-  it('holds each local project folder (each repository of a group), and under it its worktrees and copies, never SSH paths', () => {
+  it("holds each local project folder (a group's folder and each of its repositories), and under it its worktrees and copies, never SSH paths", () => {
     expect(usageScopeRoots(entries)).toEqual([
+      'C:\\Group',
       'C:\\Group\\api',
       { path: 'C:\\Group\\api.worktrees\\fix', project: 'C:\\Group\\api' },
       { path: 'C:\\Group\\api.worktrees\\other', project: 'C:\\Group\\api' },
@@ -502,6 +503,17 @@ describe('Tessel projects scope', () => {
     // The same folders always make the same query.
     expect(usageScopeRoots(usageScopeEntries({ workspaces: [{ cwd: 'C:\\B' }, { cwd: 'C:\\A' }] }))).toEqual(['C:\\A', 'C:\\B'])
     expect(usageScopeRoots()).toEqual([])
+  })
+
+  it('gives a copy to the deepest project that holds it', () => {
+    const nested = [{ cwd: 'C:\\Outer' }, { cwd: 'C:\\Outer\\inner' }]
+    const found = usageScopeEntries({
+      workspaces: nested,
+      tasks: [{ worktree: { path: 'C:\\Outer\\inner\\.wt\\t1' } }],
+      panes: [{ path: 'C:\\Outer\\other', workspace: nested[0] }]
+    })
+    expect(found).toContainEqual({ path: 'C:\\Outer\\inner\\.wt\\t1', project: 'C:\\Outer\\inner' })
+    expect(found).toContainEqual({ path: 'C:\\Outer\\other', project: 'C:\\Outer' })
   })
 
   it('remembers the copies seen, so one removed since still counts under its open project', () => {
