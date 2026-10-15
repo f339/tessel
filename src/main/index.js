@@ -4,6 +4,7 @@ import { join, isAbsolute, dirname, basename, resolve as resolvePath, sep } from
 import os from 'os'
 import fs from 'fs'
 import { spawn, execFile } from 'child_process'
+import { readDefaultPolicy, relaxShell } from './psPolicy'
 import { loadTasks, loadBoard, saveTasks } from './taskBoardPersistence'
 import { createAutomations } from './automations'
 import { createRemotePromptWriter } from './automationRemotePrompt'
@@ -394,6 +395,14 @@ function getShells() {
   if (!shellCache) shellCache = discoverShells()
   return shellCache
 }
+// Windows PowerShell left on its default script policy (Restricted): its
+// panes run with RemoteSigned for themselves, so npm's commands (npm, claude,
+// codex...) start there (psPolicy.js). Read as Tessel starts, before the
+// first panes open.
+readDefaultPolicy().then((relax) => {
+  if (relax && relaxShell(getShells().find((s) => s.id === 'powershell')))
+    log.info('shell', 'Windows PowerShell is on its default script policy (Restricted): its panes run with RemoteSigned for themselves, so npm, claude and codex can start')
+})
 
 // ---------------------------------------------------------------------------
 // AI agent presets
