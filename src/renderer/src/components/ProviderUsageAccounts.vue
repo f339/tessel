@@ -48,7 +48,7 @@ const has = (...ids) => !agents.value || ids.some((id) => agents.value.has(id))
 // installed here, or when something is already set or signed in for it.
 // The others are named on one quiet line at the end, and can be shown.
 const relevant = computed(() => ({
-  gemini: has('gemini', 'antigravity') || !!settings.value.geminiCliOAuth || state.value?.gemini?.signedIn === true,
+  gemini: has('gemini') || !!settings.value.geminiCliOAuth || state.value?.gemini?.signedIn === true,
   opencode: has('opencode') || !!(saved.value.opencodeGoApiKey || saved.value.opencodeCookie || settings.value.opencodeWorkspaceId),
   minimax: has('opencode', 'claude') || !!(saved.value.minimaxApiKey || saved.value.minimaxCookie),
   // A GLM Coding Plan is used from ZCode, Claude Code or OpenCode.
@@ -71,7 +71,7 @@ const minimaxConsole = computed(() =>
 
 // ---- One status line per row ----
 const gemini = computed(() => state.value?.gemini || null)
-// Expired, and nothing will refresh it: Gemini and Antigravity usage stop.
+// Expired, and nothing will refresh it: Gemini usage stops.
 const geminiStuck = computed(
   () =>
     gemini.value?.signedIn === true &&
@@ -234,8 +234,8 @@ onBeforeUnmount(() => {
       <template v-if="geminiStuck" #note>
         <span data-test="gemini-expired-help">{{
           settings.geminiCliOAuth
-            ? t('settings.accounts.gemini.expiredRun', 'Gemini and Antigravity usage can’t be read. Run gemini to sign in again.')
-            : t('settings.accounts.gemini.expiredHelp', 'Gemini and Antigravity usage can’t be read. Turn on “Use Gemini CLI credentials” below, or run gemini to sign in again.')
+            ? t('settings.accounts.gemini.expiredRun', 'Gemini usage can’t be read. Run gemini to sign in again.')
+            : t('settings.accounts.gemini.expiredHelp', 'Gemini usage can’t be read. Turn on “Use Gemini CLI credentials” below, or run gemini to sign in again.')
         }}</span>
       </template>
       <label class="usage-field usage-switch">

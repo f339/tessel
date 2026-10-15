@@ -4,7 +4,7 @@ export const USAGE_PROVIDERS = Object.freeze([
   { id: 'claude', name: 'Claude Code', agents: ['claude'], report: true },
   { id: 'codex', name: 'Codex', agents: ['codex'], report: true },
   { id: 'gemini', name: 'Gemini', agents: ['gemini'], report: false },
-  // Gemini's shared Google Code Assist quota (extraProviderUsage.js).
+  // The Antigravity CLI's own /usage answer (antigravityCliUsage.js).
   { id: 'antigravity', name: 'Antigravity', agents: ['antigravity'], report: false },
   { id: 'kimi', name: 'Kimi', agents: ['kimi'], report: false },
   { id: 'cursor', name: 'Cursor', agents: ['cursor'], report: false },

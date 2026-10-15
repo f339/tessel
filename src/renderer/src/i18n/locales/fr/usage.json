@@ -105,6 +105,7 @@
       "fiveHour": "5 heures",
       "weekly": "Hebdomadaire",
       "modelWeekly": "{{model}} hebdomadaire",
+      "modelFiveHour": "{{model}} 5 heures",
       "primary": "Fenêtre principale",
       "secondary": "Fenêtre secondaire",
       "minutes": "{{count}} min"

@@ -109,13 +109,20 @@ export function registerProviderUsage({
   // Settings > AI provider accounts' saved usage credentials (providerCredentials.js).
   credentials = null,
   // Tests: the provider logins read (default: this computer's).
-  usageSources = null
+  usageSources = null,
+  // The variables a provider's CLI runs with (Antigravity's agy /usage).
+  cliEnv = null
 }) {
   const history = userData
     ? createResetHistory({ file: join(userData, 'reset-history.json'), log })
     : null
   const usage = service || createProviderUsage({ accounts, history, log })
-  const extra = createExtraProviderUsage({ listAgents, credentials, ...(usageSources ? { sources: usageSources } : {}) })
+  const extra = createExtraProviderUsage({
+    listAgents,
+    credentials,
+    ...(usageSources ? { sources: usageSources } : {}),
+    ...(cliEnv ? { cliEnv } : {})
+  })
   const readOne = (query) => (LIVE.includes(query.provider) ? usage.read(query) : extra.read(query))
   // The providers the automatic refresh reads: shown in the Usage menu, with a
   // login found (Claude and Codex: their selected account is signed in).
