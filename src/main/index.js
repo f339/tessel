@@ -120,6 +120,8 @@ import {
   isSkillPath,
   createSkillSources
 } from './skillsManager'
+import { createSkillHistory } from './skillHistory'
+import { createSkillUpdates } from './skillUpdates'
 import { reviewInfo, reviewDiff, reviewMerge, reviewRemove, reviewCommit, reviewPush, setLeftoverStore } from './review'
 import { createLeftoverStore } from './worktreeLeftover'
 import * as scm from './sourceControl'
@@ -2470,11 +2472,39 @@ ipcMain.handle(
 // Agent skills (the Skills window, skillsManager.js): listed per agent and
 // scope, added from a folder or GitHub after a preview, removed to the
 // Recycle Bin or deleted. A remote project has no local skill folders.
+// Each listed skill gets its version history (skillHistory.js: a version
+// kept whenever its content changed) and, added from GitHub, what the last
+// update check said (skillUpdates.js).
 const skillSources = createSkillSources(join(app.getPath('userData'), 'skill-sources.json'))
+const skillHistory = createSkillHistory(join(app.getPath('userData'), 'skill-history'))
+const skillUpdates = createSkillUpdates(join(app.getPath('userData'), 'skill-updates.json'), { sources: skillSources })
 const skillCwd = (cwd) => (typeof cwd === 'string' && cwd && !isRemotePath(cwd) ? cwd : null)
+const knownSkill = (q) => q && isSkillPath(q.dir, { cwd: skillCwd(q.cwd) })
+const unknownSkill = () => ({ ok: false, error: t('main.skills.unknownFolder', 'This is not a skill folder Tessel knows.') })
 ipcMain.handle(
   'skills:list',
-  safe((cwd) => listSkills({ cwd: skillCwd(cwd), sources: skillSources.all() }))
+  safe(async (cwd) => {
+    const listed = await listSkills({ cwd: skillCwd(cwd), sources: skillSources.all() })
+    await skillHistory.annotate(listed.skills, { sources: skillSources })
+    skillUpdates.annotate(listed.skills)
+    return { ...listed, updates: skillUpdates.status() }
+  })
+)
+ipcMain.handle(
+  'skills:checkUpdates',
+  safe((q) => skillUpdates.check({ force: !!(q && q.force) }))
+)
+ipcMain.handle(
+  'skills:history',
+  safe((q) => (knownSkill(q) ? skillHistory.list(q.dir) : unknownSkill()))
+)
+ipcMain.handle(
+  'skills:historyDiff',
+  safe((q) => (knownSkill(q) ? skillHistory.diff(q.dir, String(q.id || '')) : unknownSkill()))
+)
+ipcMain.handle(
+  'skills:restore',
+  safe((q) => skillHistory.restore(q && q.dir, String((q && q.id) || ''), { cwd: skillCwd(q && q.cwd) }))
 )
 ipcMain.handle(
   'skills:fromFolder',
@@ -2486,11 +2516,15 @@ ipcMain.handle(
 )
 ipcMain.handle(
   'skills:forUpdate',
-  safe((dir) => packageForUpdate(dir, skillSources))
+  safe(async (dir) => {
+    // The new version and, from the GitHub API, what changed since the installed one.
+    const [pkg, changes] = await Promise.all([packageForUpdate(dir, skillSources), skillUpdates.changesFor(dir).catch(() => null)])
+    return pkg && !pkg.candidates ? { ...pkg, changes } : pkg
+  })
 )
 ipcMain.handle(
   'skills:install',
-  safe((q) => installSkill({ ...(q || {}), cwd: skillCwd(q && q.cwd), sources: skillSources }))
+  safe((q) => installSkill({ ...(q || {}), cwd: skillCwd(q && q.cwd), sources: skillSources, history: skillHistory }))
 )
 ipcMain.handle(
   'skills:remove',

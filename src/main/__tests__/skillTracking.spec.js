@@ -1,0 +1,494 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
+import os from 'node:os'
+import { listSkills, packageFromFolder, installSkill, createSkillSources, skillOrigin, contentHash, SKILL_CAPS } from '../skillsManager'
+import { createSkillHistory, readSkillTree, isText, HISTORY_CAPS } from '../skillHistory'
+import { createSkillUpdates, mapCommit, UPDATE_CHECK } from '../skillUpdates'
+import { diffTexts } from '../../shared/diff'
+import { setLanguage } from '../i18n'
+
+let tmp, home, env, clock
+const now = () => clock
+const write = (file, data) => {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, data)
+}
+const skillMd = (name, body = 'Do things.') => `---\nname: ${name}\ndescription: ${name} skill\n---\n\n${body}\n`
+const blobsOf = (history, dir) => {
+  try {
+    return fs.readdirSync(path.join(history.folderOf(dir), 'blobs'))
+  } catch {
+    return []
+  }
+}
+
+beforeEach(() => {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tessel-skilltrack-'))
+  home = path.join(tmp, 'home')
+  fs.mkdirSync(home, { recursive: true })
+  env = {}
+  clock = Date.UTC(2026, 9, 15, 12, 0, 0)
+})
+afterEach(() => {
+  setLanguage('en')
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
+
+describe('origin', () => {
+  it('is the user\'s own without a record, GitHub or folder when Tessel added it, the agent\'s when managed', () => {
+    expect(skillOrigin({ source: null, managed: null })).toBe('own')
+    expect(skillOrigin({ source: { kind: 'github', owner: 'o', repo: 'r' }, managed: null })).toBe('github')
+    expect(skillOrigin({ source: { kind: 'folder', path: '/x' }, managed: null })).toBe('folder')
+    expect(skillOrigin({ source: null, managed: 'synced' })).toBe('agent')
+    expect(skillOrigin({ source: { kind: 'github' }, managed: 'nested' })).toBe('agent')
+  })
+
+  it('comes with every listed copy', async () => {
+    const root = path.join(home, '.claude', 'skills')
+    write(path.join(root, 'mine', 'SKILL.md'), skillMd('mine'))
+    write(path.join(root, 'pdf', 'SKILL.md'), skillMd('pdf'))
+    write(path.join(root, 'copied', 'SKILL.md'), skillMd('copied'))
+    write(path.join(root, 'synced', 'acct', 'docx', 'SKILL.md'), skillMd('docx'))
+    const sources = createSkillSources(path.join(tmp, 'data', 'skill-sources.json'))
+    sources.set(path.join(root, 'pdf'), { kind: 'github', owner: 'o', repo: 'r', path: 'skills/pdf' })
+    sources.set(path.join(root, 'copied'), { kind: 'folder', path: '/somewhere' })
+    const { skills } = await listSkills({ home, env, sources: sources.all() })
+    const origin = Object.fromEntries(skills.map((s) => [s.name, s.origin]))
+    expect(origin).toEqual({ mine: 'own', pdf: 'github', copied: 'folder', docx: 'agent' })
+  })
+})
+
+describe('text diff', () => {
+  it('finds the lines added and removed, with context, in the shape of a parsed unified diff', () => {
+    const a = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'].join('\n') + '\n'
+    const b = ['one', 'two', 'THREE', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven'].join('\n') + '\n'
+    const d = diffTexts(a, b, { context: 1 })
+    expect(d).toMatchObject({ binary: false, added: 2, removed: 1, truncated: false })
+    expect(d.hunks).toHaveLength(2)
+    expect(d.hunks[0].header).toBe('@@ -2,3 +2,3 @@')
+    expect(d.hunks[0].lines.map((l) => [l.kind, l.text, l.old, l.new])).toEqual([
+      ['ctx', 'two', 2, 2],
+      ['del', 'three', 3, ''],
+      ['add', 'THREE', '', 3],
+      ['ctx', 'four', 4, 4]
+    ])
+    expect(d.hunks[1].lines.map((l) => l.kind)).toEqual(['ctx', 'add'])
+    expect(diffTexts('', 'a\nb\n')).toMatchObject({ added: 2, removed: 0 })
+    expect(diffTexts('a\r\nb\r\n', 'a\nb\n')).toMatchObject({ added: 0, removed: 0, hunks: [] })
+  })
+
+  it('stays bounded: a huge middle is shown replaced, and the lines shown are capped', () => {
+    const a = Array.from({ length: 300 }, (_, i) => `a${i}`).join('\n')
+    const b = Array.from({ length: 300 }, (_, i) => `b${i}`).join('\n')
+    const d = diffTexts(a, b, { maxCells: 100, maxLines: 50 })
+    expect(d).toMatchObject({ added: 300, removed: 300, truncated: true })
+    expect(d.hunks.reduce((n, h) => n + h.lines.length, 0)).toBe(50)
+  })
+})
+
+describe('version history', () => {
+  const skillDir = () => path.join(home, '.claude', 'skills', 'mine')
+  const historyAt = (caps) => createSkillHistory(path.join(tmp, 'data', 'skill-history'), { now, caps: { ...HISTORY_CAPS, ...caps } })
+
+  it('keeps a version only when the content changed, outside the skill folder', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'SKILL.md'), skillMd('mine'))
+    write(path.join(dir, 'notes.md'), 'line 1\nline 2\n')
+    const history = historyAt()
+    const first = await history.track(dir)
+    expect(first).toMatchObject({ versions: 1 })
+    expect(fs.readdirSync(dir).sort()).toEqual(['SKILL.md', 'notes.md']) // nothing written in the skill
+    clock += 1000
+    expect(await history.track(dir)).toMatchObject({ versions: 1, hash: first.hash })
+    // Saved again with the same content (a newer time): no version.
+    const later = new Date(Date.now() + 5000)
+    fs.utimesSync(path.join(dir, 'notes.md'), later, later)
+    expect(await history.track(dir)).toMatchObject({ versions: 1, hash: first.hash })
+    // Changed: a new version, with what it changed.
+    write(path.join(dir, 'notes.md'), 'line 1\nline two\nline 3\n')
+    clock += 1000
+    const second = await history.track(dir)
+    expect(second.versions).toBe(2)
+    expect(second.hash).not.toBe(first.hash)
+    const { versions } = history.list(dir)
+    expect(versions[0]).toMatchObject({ latest: true, first: false, files: ['notes.md'], fileCount: 1, stats: { modified: 1, plus: 2, minus: 1 } })
+    expect(versions[1]).toMatchObject({ first: true, latest: false, files: ['SKILL.md', 'notes.md'] })
+  })
+
+  it('keeps text files only: a binary or large file is noted by its hash', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'SKILL.md'), skillMd('mine'))
+    write(path.join(dir, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 1, 2]))
+    write(path.join(dir, 'big.txt'), 'x'.repeat(500))
+    const history = historyAt({ textFile: 200 })
+    await history.track(dir)
+    expect(blobsOf(history, dir)).toHaveLength(1) // SKILL.md only
+    expect(isText(Buffer.from('héllo'))).toBe(true)
+    expect(isText(Buffer.from([0xff, 0xfe, 0x41]))).toBe(false)
+  })
+
+  it('is bounded: the oldest versions go beyond the count or the text kept, with their contents', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'SKILL.md'), skillMd('mine'))
+    const history = historyAt({ versions: 3 })
+    for (let i = 0; i < 6; i++) {
+      write(path.join(dir, 'notes.md'), `version ${i}\n`.repeat(i + 1))
+      clock += 1000
+      await history.track(dir)
+    }
+    expect(history.list(dir).versions).toHaveLength(3)
+    expect(history.list(dir).versions[2]).toMatchObject({ oldest: true, first: false })
+    expect(blobsOf(history, dir)).toHaveLength(4) // SKILL.md + the 3 kept notes
+
+    const small = historyAt({ bytes: 600 })
+    const other = path.join(home, '.claude', 'skills', 'other')
+    write(path.join(other, 'SKILL.md'), skillMd('other'))
+    for (let i = 0; i < 4; i++) {
+      write(path.join(other, 'notes.md'), `${i}`.repeat(300))
+      clock += 1000
+      await small.track(other)
+    }
+    expect(small.list(other).versions.length).toBeLessThan(4)
+    expect(small.list(other).versions.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('compares a version with the one before: added, removed, changed, binary', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'SKILL.md'), skillMd('mine', 'Old rule.'))
+    write(path.join(dir, 'old.md'), 'gone\n')
+    write(path.join(dir, 'logo.png'), Buffer.from([1, 0, 2]))
+    const history = historyAt()
+    await history.track(dir)
+    write(path.join(dir, 'SKILL.md'), skillMd('mine', 'New rule.'))
+    fs.rmSync(path.join(dir, 'old.md'))
+    write(path.join(dir, 'new.md'), 'hello\nworld\n')
+    write(path.join(dir, 'logo.png'), Buffer.from([1, 0, 3, 4]))
+    clock += 1000
+    await history.track(dir)
+    const [latest, first] = history.list(dir).versions
+    const d = await history.diff(dir, latest.id)
+    expect(d.previous).toBe(first.id)
+    const by = Object.fromEntries(d.files.map((f) => [f.path, f]))
+    expect(by['SKILL.md']).toMatchObject({ status: 'M', added: 1, removed: 1, binary: false })
+    expect(by['SKILL.md'].hunks[0].lines.filter((l) => l.kind !== 'ctx').map((l) => l.text)).toEqual(['Old rule.', 'New rule.'])
+    expect(by['new.md']).toMatchObject({ status: 'A', added: 2, removed: 0 })
+    expect(by['old.md']).toMatchObject({ status: 'D', added: 0, removed: 1 })
+    expect(by['logo.png']).toMatchObject({ status: 'M', binary: true })
+    expect(latest.stats).toMatchObject({ added: 1, removed: 1, modified: 2, plus: 3, minus: 2 })
+    // The first version: shown whole.
+    const whole = await history.diff(dir, first.id)
+    expect(whole.previous).toBe(null)
+    expect(whole.files.find((f) => f.path === 'old.md')).toMatchObject({ status: 'A', added: 1 })
+    await expect(history.diff(dir, 'nope')).rejects.toThrow(/no longer in the history/)
+  })
+
+  it('restores a version after keeping the current content, and refuses a folder it does not know', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'SKILL.md'), skillMd('mine', 'Version one.'))
+    write(path.join(dir, 'docs', 'a.md'), 'a\n')
+    const history = historyAt()
+    await history.track(dir)
+    const v1 = history.list(dir).versions[0]
+    // Edited, never listed since: restore keeps this first.
+    write(path.join(dir, 'SKILL.md'), skillMd('mine', 'Version two, edited.'))
+    write(path.join(dir, 'extra', 'b.md'), 'b\n')
+    write(path.join(dir, 'pic.bin'), Buffer.from([0, 1, 2, 3]))
+    clock += 1000
+    const res = await history.restore(dir, v1.id, { home, env })
+    expect(res).toMatchObject({ ok: true, kept: ['pic.bin'] })
+    expect(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).toContain('Version one.')
+    expect(fs.existsSync(path.join(dir, 'extra'))).toBe(false) // emptied folder removed
+    expect(fs.existsSync(path.join(dir, 'docs', 'a.md'))).toBe(true)
+    const versions = history.list(dir).versions
+    expect(versions).toHaveLength(3)
+    expect(versions[0].note).toMatchObject({ kind: 'restore', from: v1.id })
+    // The edited version is in the history: it can come back.
+    const edited = versions[1]
+    expect((await history.diff(dir, edited.id)).files.map((f) => f.path)).toContain('extra/b.md')
+    await history.restore(dir, edited.id, { home, env })
+    expect(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).toContain('Version two, edited.')
+    expect(fs.readFileSync(path.join(dir, 'extra', 'b.md'), 'utf8')).toBe('b\n')
+
+    const elsewhere = path.join(tmp, 'elsewhere', 'mine')
+    write(path.join(elsewhere, 'SKILL.md'), skillMd('mine'))
+    await expect(history.restore(elsewhere, v1.id, { home, env })).rejects.toThrow(/not a skill folder Tessel knows/)
+  })
+
+  it('refuses to restore a version whose binary file was not kept and has changed since', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'SKILL.md'), skillMd('mine'))
+    write(path.join(dir, 'pic.bin'), Buffer.from([0, 1]))
+    const history = historyAt()
+    await history.track(dir)
+    const v1 = history.list(dir).versions[0]
+    write(path.join(dir, 'pic.bin'), Buffer.from([0, 1, 2]))
+    clock += 1000
+    await expect(history.restore(dir, v1.id, { home, env })).rejects.toMatchObject({ code: 'SKILL_HISTORY_MISSING' })
+    expect(fs.readFileSync(path.join(dir, 'pic.bin')).length).toBe(3) // untouched
+  })
+
+  it('never restores a kept content that was damaged', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'SKILL.md'), skillMd('mine', 'One.'))
+    const history = historyAt()
+    await history.track(dir)
+    const v1 = history.list(dir).versions[0]
+    for (const name of blobsOf(history, dir)) fs.writeFileSync(path.join(history.folderOf(dir), 'blobs', name), 'damaged')
+    write(path.join(dir, 'SKILL.md'), skillMd('mine', 'Two, longer.'))
+    clock += 1000
+    await expect(history.restore(dir, v1.id, { home, env })).rejects.toMatchObject({ code: 'SKILL_HISTORY_MISSING' })
+    expect(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).toContain('Two, longer.')
+  })
+
+  it('reads a skill folder within the caps, without links or .git', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'SKILL.md'), skillMd('mine'))
+    write(path.join(dir, '.git', 'HEAD'), 'ref')
+    for (let i = 0; i < 5; i++) write(path.join(dir, `f${i}.md`), 'x')
+    const tree = await readSkillTree(dir, { ...SKILL_CAPS, files: 4 })
+    expect(tree.files).toHaveLength(4)
+    expect(tree.truncated).toBe(true)
+    expect(tree.files.some((f) => f.rel.startsWith('.git'))).toBe(false)
+  })
+})
+
+describe('modified locally', () => {
+  it('compares each added copy with what was installed; an older record takes its content now', async () => {
+    const src = path.join(tmp, 'src', 'helper')
+    write(path.join(src, 'SKILL.md'), skillMd('helper'))
+    write(path.join(src, 'scripts', 'run.md'), 'step 1\n')
+    const sources = createSkillSources(path.join(tmp, 'data', 'skill-sources.json'))
+    const history = createSkillHistory(path.join(tmp, 'data', 'skill-history'), { now })
+    const pkg = await packageFromFolder(src)
+    const res = await installSkill({ id: pkg.id, agents: ['claude'], scope: 'user', home, env, sources, history })
+    expect(res.ok).toBe(true)
+    const dest = path.join(home, '.claude', 'skills', 'helper')
+    const recorded = sources.get(dest)
+    expect(recorded.hash).toBe(contentHash([{ rel: 'SKILL.md', data: Buffer.from(skillMd('helper')) }, { rel: 'scripts/run.md', data: Buffer.from('step 1\n') }]))
+    const listed = async () => {
+      const { skills } = await listSkills({ home, env, sources: sources.all() })
+      await history.annotate(skills, { sources })
+      return skills.find((s) => s.name === 'helper')
+    }
+    let copy = await listed()
+    expect(copy).toMatchObject({ origin: 'folder', modified: false })
+    expect(copy.history.versions).toBe(1)
+    expect(history.list(dest).versions[0].note).toMatchObject({ kind: 'install', from: 'folder' })
+
+    write(path.join(dest, 'scripts', 'run.md'), 'step 1\nstep 2 (mine)\n')
+    clock += 1000
+    copy = await listed()
+    expect(copy).toMatchObject({ modified: true })
+    expect(copy.history.versions).toBe(2)
+
+    // Updated (replaced): the edited copy stays in the history.
+    const again = await packageFromFolder(src)
+    clock += 1000
+    await installSkill({ id: again.id, replace: dest, home, env, sources, history })
+    copy = await listed()
+    expect(copy).toMatchObject({ modified: false })
+    const versions = history.list(dest).versions
+    expect(versions[0].note).toMatchObject({ kind: 'update' })
+    expect(versions.some((v) => v.files.includes('scripts/run.md') && v.stats.plus === 1)).toBe(true)
+
+    // Recorded before Tessel kept the installed content: taken as installed.
+    const legacy = path.join(home, '.claude', 'skills', 'legacy')
+    write(path.join(legacy, 'SKILL.md'), skillMd('legacy'))
+    sources.set(legacy, { kind: 'github', owner: 'o', repo: 'r', path: 'legacy' })
+    const { skills } = await listSkills({ home, env, sources: sources.all() })
+    await history.annotate(skills, { sources })
+    expect(skills.find((s) => s.name === 'legacy')).toMatchObject({ modified: false })
+    expect(sources.get(legacy)).toMatchObject({ hashAdopted: true })
+    expect(sources.get(legacy).hash).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('leaves the agent\'s own skills alone', async () => {
+    write(path.join(home, '.claude', 'skills', 'synced', 'acct', 'docx', 'SKILL.md'), skillMd('docx'))
+    const history = createSkillHistory(path.join(tmp, 'data', 'skill-history'), { now })
+    const { skills } = await listSkills({ home, env })
+    await history.annotate(skills)
+    expect(skills[0].history).toBeUndefined()
+    expect(fs.existsSync(path.join(tmp, 'data', 'skill-history'))).toBe(false)
+  })
+})
+
+describe('update check', () => {
+  const sha = (c) => c.repeat(40)
+  const H = sha('e')
+  const A = sha('a')
+  const commit = (s, message, date = '2026-10-01T10:00:00Z', name = 'Ada Lovelace') => ({
+    sha: s,
+    commit: { message, author: { name, date: '2026-09-30T00:00:00Z' }, committer: { name: 'GitHub', date } },
+    author: { login: 'ada' }
+  })
+  const reply = ({ status = 200, body = null, headers = {} } = {}) => ({ ok: status >= 200 && status < 300, status, headers: new Headers(headers), json: async () => body })
+  // routes: [[regex, reply | (url, init) => reply]]
+  function github(routes) {
+    const calls = []
+    const fn = async (url, init) => {
+      calls.push({ url, etag: init.headers['If-None-Match'] || null })
+      for (const [re, r] of routes) if (re.test(url)) return reply(typeof r === 'function' ? r(url, init) : r)
+      return reply({ status: 404 })
+    }
+    fn.calls = calls
+    return fn
+  }
+  const store = (entries) => {
+    const sources = createSkillSources(path.join(tmp, 'data', 'skill-sources.json'))
+    for (const [dir, source] of entries) sources.set(dir, source)
+    return sources
+  }
+  const pdfDir = () => path.join(home, '.claude', 'skills', 'pdf')
+  const pdfSource = (over = {}) => ({ kind: 'github', owner: 'o', repo: 'r', ref: null, path: 'skills/pdf', commit: A, ...over })
+  const limits = { 'x-ratelimit-remaining': '55', 'x-ratelimit-reset': String(Math.floor(Date.UTC(2026, 9, 15, 13) / 1000)) }
+  const newCommitRoutes = () => [
+    [/commits\?per_page=1$/, { body: [commit(H, 'Merge')], headers: { etag: 'W/"head1"', ...limits } }],
+    [new RegExp(`commits\\?sha=${H}&per_page=30&path=skills%2Fpdf$`), { body: [commit(sha('3'), 'Fix tables\n\nLong body'), commit(sha('2'), 'Add forms'), commit(sha('1'), 'First')], headers: limits }],
+    [new RegExp(`commits\\?sha=${A}&per_page=1&path=skills%2Fpdf$`), { body: [commit(sha('1'), 'First')], headers: limits }]
+  ]
+
+  it('maps a commit: first line of the message, date, author name', () => {
+    expect(mapCommit(commit(sha('1'), 'Fix it\nmore', '2026-10-02T08:30:00Z'))).toEqual({
+      sha: sha('1'),
+      message: 'Fix it',
+      date: Date.parse('2026-10-02T08:30:00Z'),
+      author: 'Ada Lovelace'
+    })
+    expect(mapCommit({ sha: sha('2'), commit: { message: 'x' }, author: { login: 'bob' } })).toMatchObject({ author: 'bob', date: null })
+  })
+
+  it('a newer commit touched the folder: update available, with the commits since the installed one', async () => {
+    const fetchFn = github(newCommitRoutes())
+    const sources = store([[pdfDir(), pdfSource()]])
+    const updates = createSkillUpdates(path.join(tmp, 'data', 'skill-updates.json'), { sources, fetchFn, now })
+    expect(updates.infoFor(sources.get(pdfDir()))).toBe(null) // not checked yet
+    expect(await updates.check()).toMatchObject({ ok: true, checked: true })
+    expect(fetchFn.calls).toHaveLength(3)
+    expect(fetchFn.calls[0].url).toBe('https://api.github.com/repos/o/r/commits?per_page=1')
+    const skills = [{ dir: pdfDir(), source: sources.get(pdfDir()) }]
+    updates.annotate(skills)
+    expect(skills[0].update).toMatchObject({ available: true, more: false, checkedAt: clock })
+    expect(skills[0].update.latest).toMatchObject({ sha: sha('3'), message: 'Fix tables' })
+    expect(skills[0].update.commits.map((c) => c.message)).toEqual(['Fix tables', 'Add forms'])
+    expect(skills[0].update.commits[0]).toMatchObject({ author: 'Ada Lovelace', date: Date.parse('2026-10-01T10:00:00Z') })
+    // Kept in Tessel's data: a new instance knows it without asking.
+    const again = createSkillUpdates(path.join(tmp, 'data', 'skill-updates.json'), { sources, fetchFn, now })
+    expect(again.infoFor(sources.get(pdfDir()))).toMatchObject({ available: true })
+    expect(fetchFn.calls).toHaveLength(3)
+  })
+
+  it('installed at the newest commit: no update, one request per repository for all its skills', async () => {
+    const fetchFn = github([[/commits\?per_page=1&sha=main$/, { body: [commit(H, 'Head')], headers: limits }]])
+    const sources = store([
+      [pdfDir(), pdfSource({ ref: 'main', commit: H })],
+      [path.join(home, '.claude', 'skills', 'docx'), pdfSource({ ref: 'main', commit: H, path: 'skills/docx' })]
+    ])
+    const updates = createSkillUpdates(path.join(tmp, 'data', 'skill-updates.json'), { sources, fetchFn, now })
+    await updates.check()
+    expect(fetchFn.calls).toHaveLength(1)
+    expect(updates.infoFor(sources.get(pdfDir()))).toMatchObject({ available: false, commits: [] })
+  })
+
+  it('a newer commit elsewhere in the repository: no update for this folder', async () => {
+    const routes = newCommitRoutes()
+    routes[1][1] = { body: [commit(sha('1'), 'First')], headers: limits }
+    const fetchFn = github(routes)
+    const sources = store([[pdfDir(), pdfSource()]])
+    const updates = createSkillUpdates(path.join(tmp, 'data', 'skill-updates.json'), { sources, fetchFn, now })
+    await updates.check()
+    expect(updates.infoFor(sources.get(pdfDir()))).toMatchObject({ available: false, commits: [] })
+  })
+
+  it('about once a day, and never again within a minute when asked; ETag kept: a 304 reuses the answers', async () => {
+    let head = 0
+    const routes = newCommitRoutes()
+    routes[0][1] = (url, init) => {
+      head++
+      return init.headers['If-None-Match'] === 'W/"head1"' ? { status: 304, headers: limits } : { body: [commit(H, 'Merge')], headers: { etag: 'W/"head1"', ...limits } }
+    }
+    const fetchFn = github(routes)
+    const sources = store([[pdfDir(), pdfSource()]])
+    const updates = createSkillUpdates(path.join(tmp, 'data', 'skill-updates.json'), { sources, fetchFn, now })
+    await updates.check()
+    expect(fetchFn.calls).toHaveLength(3)
+    clock += 3600 * 1000
+    expect(await updates.check()).toMatchObject({ checked: false }) // not a day yet
+    expect(fetchFn.calls).toHaveLength(3)
+    expect(await updates.check({ force: true })).toMatchObject({ checked: true })
+    expect(fetchFn.calls).toHaveLength(4) // the repository only: 304, the rest kept
+    expect(fetchFn.calls[3].etag).toBe('W/"head1"')
+    expect(head).toBe(2)
+    expect(updates.infoFor(sources.get(pdfDir()))).toMatchObject({ available: true })
+    clock += 10 * 1000
+    expect(await updates.check({ force: true })).toMatchObject({ checked: false })
+    expect(fetchFn.calls).toHaveLength(4)
+    clock += UPDATE_CHECK.every
+    expect(await updates.check()).toMatchObject({ checked: true })
+    expect(fetchFn.calls).toHaveLength(5)
+  })
+
+  it('rate limited (403 with nothing left): stops, and asks nothing until GitHub\'s reset time', async () => {
+    const reset = Math.floor(clock / 1000) + 600
+    const fetchFn = github([[/commits\?per_page=1$/, { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(reset) } }]])
+    const sources = store([[pdfDir(), pdfSource()]])
+    const updates = createSkillUpdates(path.join(tmp, 'data', 'skill-updates.json'), { sources, fetchFn, now })
+    expect(await updates.check()).toMatchObject({ ok: false, rateLimited: true, until: reset * 1000 })
+    clock += 60 * 1000
+    expect(await updates.check({ force: true })).toMatchObject({ rateLimited: true, checked: false })
+    expect(fetchFn.calls).toHaveLength(1)
+    expect(updates.status().until).toBe(reset * 1000)
+    clock = reset * 1000 + 1
+    await updates.check({ force: true })
+    expect(fetchFn.calls).toHaveLength(2)
+  })
+
+  it('429 with Retry-After, and a low remaining count: backs off without asking', async () => {
+    const fetchFn = github([[/commits\?per_page=1$/, { status: 429, headers: { 'retry-after': '120' } }]])
+    const sources = store([[pdfDir(), pdfSource()]])
+    const updates = createSkillUpdates(path.join(tmp, 'data', 'skill-updates.json'), { sources, fetchFn, now })
+    expect(await updates.check()).toMatchObject({ rateLimited: true, until: clock + 120 * 1000 })
+
+    const low = github([[/commits\?per_page=1$/, { body: [commit(H, 'Merge')], headers: { 'x-ratelimit-remaining': '3', 'x-ratelimit-reset': String(Math.floor(clock / 1000) + 900) } }]])
+    const updates2 = createSkillUpdates(path.join(tmp, 'data', 'other.json'), { sources, fetchFn: low, now })
+    expect(await updates2.check()).toMatchObject({ rateLimited: true })
+    expect(low.calls).toHaveLength(1) // the folder's commits were not asked
+  })
+
+  it('a repository gone or private: no update, noted as missing', async () => {
+    const fetchFn = github([])
+    const sources = store([[pdfDir(), pdfSource()]])
+    const updates = createSkillUpdates(path.join(tmp, 'data', 'skill-updates.json'), { sources, fetchFn, now })
+    expect(await updates.check()).toMatchObject({ ok: true })
+    expect(updates.infoFor(sources.get(pdfDir()))).toMatchObject({ available: false, missing: true })
+  })
+
+  it('nothing from GitHub: no request at all', async () => {
+    const fetchFn = github([])
+    const sources = store([[pdfDir(), { kind: 'folder', path: '/x' }]])
+    const updates = createSkillUpdates(path.join(tmp, 'data', 'skill-updates.json'), { sources, fetchFn, now })
+    expect(await updates.check({ force: true })).toMatchObject({ ok: true, checked: true })
+    expect(fetchFn.calls).toHaveLength(0)
+  })
+
+  it('before an update: what changed since the installed copy', async () => {
+    const fetchFn = github(newCommitRoutes())
+    const sources = store([[pdfDir(), pdfSource()]])
+    const updates = createSkillUpdates(path.join(tmp, 'data', 'skill-updates.json'), { sources, fetchFn, now })
+    const changes = await updates.changesFor(pdfDir())
+    expect(changes.commits.map((c) => c.sha)).toEqual([sha('3'), sha('2')])
+  })
+
+  it('speaks French when GitHub cannot be reached', async () => {
+    setLanguage('fr')
+    const sources = store([[pdfDir(), pdfSource()]])
+    const updates = createSkillUpdates(path.join(tmp, 'data', 'skill-updates.json'), {
+      sources,
+      fetchFn: async () => {
+        throw new Error('ENOTFOUND')
+      },
+      now
+    })
+    expect((await updates.check()).error).toBe('Impossible de joindre GitHub : ENOTFOUND')
+  })
+})

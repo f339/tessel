@@ -935,7 +935,15 @@
       "exists": "Une compétence de ce nom s'y trouve déjà.",
       "gone": "Cette compétence n'est plus là.",
       "noTrash": "La Corbeille n'est pas disponible.",
-      "noSource": "Cette compétence n'a pas été ajoutée depuis GitHub par Tessel : rien à mettre à jour."
+      "noSource": "Cette compétence n'a pas été ajoutée depuis GitHub par Tessel : rien à mettre à jour.",
+      "history": {
+        "noVersion": "Cette version n'est plus dans l'historique.",
+        "cannotRestore": "Cette version ne peut pas être restaurée : {{files}} n'a pas été gardé (binaire ou trop volumineux)."
+      },
+      "updates": {
+        "budget": "Trop de compétences à vérifier d'un coup ; les autres le seront la prochaine fois.",
+        "offline": "Impossible de joindre GitHub : {{error}}"
+      }
     },
     "liveShare": {
       "tunnelStopped": "Le tunnel Cloudflare s’est arrêté (code {{code}}). Le partage est terminé.",

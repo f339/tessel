@@ -422,6 +422,10 @@ const api = {
   skillsInstall: (q) => ipcRenderer.invoke('skills:install', q),
   skillsRemove: (q) => ipcRenderer.invoke('skills:remove', q),
   skillsOpen: (q) => ipcRenderer.invoke('skills:open', q),
+  skillsCheckUpdates: (q) => ipcRenderer.invoke('skills:checkUpdates', q),
+  skillsHistory: (q) => ipcRenderer.invoke('skills:history', q),
+  skillsHistoryDiff: (q) => ipcRenderer.invoke('skills:historyDiff', q),
+  skillsRestore: (q) => ipcRenderer.invoke('skills:restore', q),
   notify: (payload) => ipcRenderer.send('app:notify', payload),
   // The language the interface shows ('en', 'fr'): the main process uses it
   // for its dialogs, notifications and messages (src/main/i18n.js).

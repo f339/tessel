@@ -21,7 +21,7 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import { t } from './i18n'
 import { skillFrontmatter } from './chat/skills.js'
 import { readTar, gunzipCapped } from './skillsTar'
@@ -41,7 +41,7 @@ export const SKILL_CAPS = {
 }
 
 const fail = (message, code) => Object.assign(new Error(message), code ? { code } : {})
-const sameKey = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p))
+export const sameKey = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p))
 const inside = (root, file) => {
   const rel = path.relative(root, file)
   return !!rel && !path.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`)
@@ -169,6 +169,28 @@ export function createSkillSources(file) {
   }
 }
 
+// A skill's content as one hash: each file's path and the hash of its bytes,
+// in path order. The same for a package in memory ({ rel, data }) and a
+// folder read from disk ({ rel, sha }), so an edited copy is noticed.
+const byRel = (x, y) => (x.rel < y.rel ? -1 : x.rel > y.rel ? 1 : 0)
+export const sha256 = (data) => createHash('sha256').update(data).digest('hex')
+export function contentHash(files) {
+  const h = createHash('sha256')
+  for (const f of files.map((f) => ({ rel: f.rel, sha: f.sha || sha256(f.data) })).sort(byRel)) h.update(`${f.rel}\0${f.sha}\n`)
+  return h.digest('hex')
+}
+
+// Where a copy comes from: 'github' or 'folder' when Tessel recorded adding
+// it, 'agent' for the agent's own (synced, built in, plugin stores), else
+// 'own': made on this computer.
+export function skillOrigin(skill) {
+  if (skill && skill.managed) return 'agent'
+  const source = skill && skill.source
+  if (source && source.kind === 'github') return 'github'
+  if (source && source.kind === 'folder') return 'folder'
+  return 'own'
+}
+
 // ---------------------------------------------------------------- Listing
 
 async function readHead(file, bytes) {
@@ -243,6 +265,7 @@ export async function listSkills({ home = os.homedir(), env = process.env, cwd =
           source: source && typeof source === 'object' ? source : null,
           updatedAt: stat.mtimeMs
         })
+        skills[skills.length - 1].origin = skillOrigin(skills[skills.length - 1])
       } else if (!link && depth < caps.listDepth) {
         await visit(root, child, depth + 1, reason)
       }
@@ -564,7 +587,9 @@ async function writeTree(dest, files) {
 // Copies the package into each target folder (<root>/<name>). An existing
 // skill of that name is kept (exists: true) unless `replace` names its folder
 // (Update): then the new copy takes its place, the old one is removed after.
-export async function installSkill({ id, agents = [], scope = 'user', cwd = null, replace = null, home = os.homedir(), env = process.env, sources = null } = {}) {
+// history (skillHistory.js): the copy being replaced is kept as a version
+// first, and the new content is noted as installed or updated.
+export async function installSkill({ id, agents = [], scope = 'user', cwd = null, replace = null, home = os.homedir(), env = process.env, sources = null, history = null } = {}) {
   const pkg = getPackage(id)
   if (!pkg) throw fail(t('main.skills.expired', 'This preview has expired. Look the skill up again.'), 'SKILL_EXPIRED')
   const opts = { home, env, cwd }
@@ -582,6 +607,7 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
     targets = roots.map((root) => ({ root, dest: path.join(root.path, pkg.name) }))
   }
   const results = []
+  const hash = contentHash(pkg.files)
   for (const { root, dest } of targets) {
     const result = { dir: dest, seenBy: root.seenBy, scope: root.scope }
     const tmp = path.join(root.path, `.${path.basename(dest)}.tessel-${randomBytes(4).toString('hex')}`)
@@ -592,6 +618,7 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
         continue
       }
       if (replace && existing && (existing.isSymbolicLink() || !existing.isDirectory())) throw linkRefused(path.basename(dest))
+      if (existing && history) await history.track(dest).catch(() => {})
       await fs.mkdir(root.path, { recursive: true })
       await writeTree(tmp, pkg.files)
       if (existing) {
@@ -605,7 +632,11 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
         }
         await fs.rm(old, { recursive: true, force: true }).catch(() => {})
       } else await fs.rename(tmp, dest)
-      if (sources) sources.set(dest, { ...pkg.source, name: pkg.name, installedAt: Date.now() })
+      if (sources) sources.set(dest, { ...pkg.source, name: pkg.name, installedAt: Date.now(), hash })
+      if (history) {
+        const note = { kind: existing ? 'update' : 'install', from: pkg.source && pkg.source.kind, commit: (pkg.source && pkg.source.commit) || null }
+        await history.track(dest, { note }).catch(() => {})
+      }
       results.push({ ...result, ok: true })
     } catch (err) {
       await fs.rm(tmp, { recursive: true, force: true }).catch(() => {})
@@ -619,7 +650,7 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
 
 // Only a skill folder directly in a known root, holding a SKILL.md, never a
 // link (the folder it points to is not Tessel's to remove).
-async function checkRemovable(dir, opts) {
+export async function checkRemovable(dir, opts) {
   const root = rootOfSkill(dir, opts)
   if (!root) throw fail(t('main.skills.unknownFolder', 'This is not a skill folder Tessel knows.'))
   const st = await fs.lstat(dir).catch(() => null)
