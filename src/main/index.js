@@ -78,6 +78,7 @@ import { createRemoteSkills } from './chat/remoteSkills'
 import { createChatImages } from './chat/chatImages'
 import { transcriptHomeFor } from './chat/transcriptHistory'
 import { createTranscriptViews } from './chat/transcriptView'
+import { createTerminalConversations } from './chat/terminalConversations'
 import { createTerminalSkills } from './chat/terminalSkills'
 import { createSessionSearch } from './sessionSearch/index.js'
 import { createClaudeChat } from './chat/claudeChat'
@@ -1387,6 +1388,18 @@ const transcriptViews = createTranscriptViews({
 })
 transcriptViews.register(ipcMain)
 app.on('will-quit', () => transcriptViews.closeAll())
+// The Conversations tab: what you and each terminal agent said in its
+// terminal, read from its conversation file (its account's folder for Claude
+// Code and Codex, resolved here; a host's file over its connection).
+createTerminalConversations({
+  log,
+  homes: async (agent, accountId) => {
+    const r = await accountSessions.roots({ agent, accountId })
+    return (r && r[agent]) || null
+  },
+  sessionsDir: () => sessionsDir(),
+  readAgentFile: (hostId, q) => (remoteHosts.get(hostId) ? remoteFs.readAgentFile(hostId, q) : { ok: false, error: 'unknown host' }) // i18n-ignore
+}).register(ipcMain)
 // The skills a terminal agent's chat view lists ("/" menu): its project's
 // (its open view's folder), the user's and its account's.
 createTerminalSkills({
