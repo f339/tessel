@@ -94,7 +94,7 @@ import { cleanEnv } from './cleanEnv'
 import { createPtyClient } from './ptyClient'
 import { watchLoopLag } from './loopLag'
 import { registerLiveShare } from './liveShare'
-import { listProcesses, treeOf, waitForExit, killPids, listProcessNames, runningWork, stopProcessSnapshots } from './processTree'
+import { listProcesses, treeOf, waitForExit, killPids, listProcessNames, runningWork, stopProcessSnapshots, pidRunning } from './processTree'
 import { pipeName } from './ptyProtocol'
 import { createUpdater } from './updater'
 import { createAgentUpdates } from './agentUpdates'
@@ -4656,18 +4656,64 @@ ipcMain.handle('cli:reveal', (event) => {
 // can start the new copy a moment before the old one has exited. The new copy
 // then found the old one's lock and quit, and electron-vite (which stops when
 // its app exits) stopped with it. So the dev build waits for the lock
-// instead of giving up at once: up to a minute, since an old copy running
-// many terminals can take well over 8 seconds to be gone.
-async function acquireInstanceLock() {
+// instead of giving up at once: a minute, and longer while the copy that
+// holds it is still there (up to 10 min), since a stopped copy has once
+// taken over two minutes to be gone. That copy: the PID written next to the
+// data, else (a copy too old to write it) another main process of this same
+// electron.exe, neither a helper nor the terminal host.
+const INSTANCE_PID_FILE = join(app.getPath('userData'), 'instance.pid')
+function otherMainProcess() {
+  if (process.platform !== 'win32') return Promise.resolve(null)
+  const exe = process.execPath.replace(/'/g, "''")
+  const script = `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne ${process.pid} -and $_.ExecutablePath -eq '${exe}' -and $_.CommandLine -notmatch '--type=' -and $_.CommandLine -notmatch 'ptyHost' } | ForEach-Object { $_.ProcessId }` // i18n-ignore
+  return new Promise((resolve) =>
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 15000 }, (err, out) =>
+      resolve(err ? null : Number(String(out).trim().split(/\s+/)[0]) || null)
+    )
+  )
+}
+async function instanceHolder() {
+  try {
+    const pid = Number(fs.readFileSync(INSTANCE_PID_FILE, 'utf8').trim())
+    if (pid !== process.pid && pidRunning(pid)) return pid
+  } catch {
+    /* no PID written: looked up below */
+  }
+  return otherMainProcess()
+}
+async function waitInstanceLock() {
   if (app.requestSingleInstanceLock()) return true
   if (app.isPackaged) return false
+  const started = Date.now()
   log.info('app', 'waiting for the previous Tessel to exit (dev restart)')
-  const until = Date.now() + 60000
-  while (Date.now() < until) {
+  let holder = null
+  let checked = 0
+  for (;;) {
     await new Promise((r) => setTimeout(r, 250))
-    if (app.requestSingleInstanceLock()) return true
+    if (app.requestSingleInstanceLock()) {
+      log.info('app', `previous Tessel gone after ${((Date.now() - started) / 1000).toFixed(1)} s`)
+      return true
+    }
+    const waited = Date.now() - started
+    if (waited < 60000) continue
+    if (Date.now() - checked >= 30000) {
+      holder = await instanceHolder()
+      checked = Date.now()
+      if (holder) log.info('app', `still waiting for the previous Tessel (pid ${holder}) to exit: ${Math.round(waited / 1000)} s`)
+    }
+    if (!holder || waited >= 600000) return false
   }
-  return false
+}
+async function acquireInstanceLock() {
+  const got = await waitInstanceLock()
+  if (got) {
+    try {
+      fs.writeFileSync(INSTANCE_PID_FILE, String(process.pid))
+    } catch {
+      /* only used to wait longer on a dev restart */
+    }
+  }
+  return got
 }
 
 Promise.all([acquireInstanceLock(), app.whenReady()]).then(([gotInstanceLock]) => {
