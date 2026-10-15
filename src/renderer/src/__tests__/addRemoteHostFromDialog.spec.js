@@ -175,6 +175,19 @@ describe('Add remote host from Add a project', () => {
     w.unmount()
   })
 
+  it('the error goes once the form is changed (it said what was wrong with the old entry)', async () => {
+    const w = mountDialog()
+    await openForm(w)
+    await fillAndSave('bad host')
+    expect(form().querySelector('.rh-form-error').textContent).toMatch(/a space/)
+    const h = document.getElementById('ssh-target-host')
+    h.value = '51.79.12.34'
+    h.dispatchEvent(new Event('input'))
+    await flushPromises()
+    expect(form().querySelector('.rh-form-error')).toBeNull()
+    w.unmount()
+  })
+
   it('saved but the sign-in fails: selected anyway, the error under the actions, still no pane', async () => {
     connectResult = { ok: false, error: 'Connection refused' }
     const w = mountDialog()

@@ -225,9 +225,26 @@ export function formFromTarget(target) {
   }
 }
 
+// Text pasted from a chat or a web page can carry invisible characters
+// (zero-width spaces, direction marks, a no-break space): ssh refuses them and
+// nobody can see them, so they go.
+export function cleanSshText(value) {
+  return String(value || '')
+    .replace(/[\p{Cf}\u00a0]/gu, '')
+    .trim()
+}
+
+// What ssh takes as a host (main/remoteHosts.js HOST_RE): the first character
+// it refuses, or null.
+const HOST_CHAR = /[\p{L}\p{N}_.:%[\]-]/u
+export function badHostChar(host) {
+  for (const ch of String(host || '')) if (!HOST_CHAR.test(ch)) return ch
+  return null
+}
+
 // "server", "deploy@server:2222", "ssh://deploy@server:2222", "[::1]:22".
 export function parseSshHostInput(rawInput) {
-  const input = String(rawInput || '').trim()
+  const input = cleanSshText(rawInput)
   if (!input) return null
   if (/^ssh:\/\//i.test(input)) return parseSshUrl(input)
   const at = input.lastIndexOf('@')
@@ -238,23 +255,27 @@ export function parseSshHostInput(rawInput) {
   return { host: parsed.host, username, port: parsed.port, invalidPort: parsed.invalidPort, configHost: parsed.host }
 }
 
+// A Host typed (not an alias from ~/.ssh/config, aliasHost) is its own
+// alias: kept nowhere else, so a first entry typed wrong never stays behind.
+const aliasOf = (draft) => (draft.aliasHost ? draft.configHost.trim() : '')
+
 export function applyParsedSshHostInput(draft) {
   const parsed = parseSshHostInput(draft.host)
   if (!parsed || parsed.invalidPort) return draft
   return {
     ...draft,
     host: parsed.host,
-    configHost: draft.configHost.trim() || parsed.configHost,
-    username: draft.username.trim() || parsed.username || '',
+    configHost: aliasOf(draft),
+    username: cleanSshText(draft.username) || parsed.username || '',
     port: parsed.port !== undefined && isDefaultPortDraft(draft.port) ? String(parsed.port) : draft.port
   }
 }
 
 export function draftConnectionFields(draft) {
   const parsed = parseSshHostInput(draft.host)
-  const host = parsed?.host ?? draft.host.trim()
-  const configHost = draft.configHost.trim() || parsed?.configHost || host
-  const username = draft.username.trim() || parsed?.username || ''
+  const host = parsed?.host ?? cleanSshText(draft.host)
+  const configHost = aliasOf(draft) || parsed?.configHost || host
+  const username = cleanSshText(draft.username) || parsed?.username || ''
   const typedPort = /^\s*\d+\s*$/.test(draft.port) ? Number.parseInt(draft.port, 10) : draft.port.trim() ? Number.NaN : 22
   const port =
     parsed?.invalidPort === true
@@ -282,6 +303,12 @@ export function buildSavePayload(form) {
   const aliasKept = form.configHost && form.aliasHost !== undefined && host === form.aliasHost
   const configHost = form.configHost && form.aliasHost !== undefined && !aliasKept ? host : fields.configHost
   if (!host) return { ok: false, error: t('remote.pane.hostRequired', 'Host or SSH config alias is required') }
+  // Said here, with the character, rather than refused by the main process.
+  const bad = badHostChar(host)
+  if (bad) {
+    const char = /\s/.test(bad) ? t('remote.error.aSpace', 'a space') : `« ${bad} »`
+    return { ok: false, error: t('remote.error.hostChar', 'ssh cannot take {{char}} in a host. Enter only the server\'s name or IP address, like 203.0.113.5.', { char }) }
+  }
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     return { ok: false, error: t('remote.pane.portInvalid', 'Port must be between 1 and 65535') }
   return {

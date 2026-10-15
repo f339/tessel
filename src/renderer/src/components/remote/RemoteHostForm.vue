@@ -4,7 +4,7 @@
 // relay-only options (connection reuse, keeping terminals alive until reset,
 // the timeout after disconnect) are not offered: Tessel runs ssh.exe in a
 // pane, without Orca's remote relay.
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { FileKey, ChevronDown, X } from 'lucide-vue-next'
 import { t } from '../../i18n'
 import { applyParsedSshHostInput, hasAdvancedValues, isFormDirty } from '../../remoteHosts'
@@ -20,6 +20,24 @@ const emit = defineEmits(['save', 'close'])
 
 const form = ref({ ...props.initial })
 const baseline = { ...props.initial }
+// The last save's error, until the form is changed (then it no longer says
+// what is wrong with what is typed).
+const shownError = ref(props.error)
+let errorFor = JSON.stringify(form.value)
+watch(
+  () => props.error,
+  (e) => {
+    shownError.value = e
+    errorFor = JSON.stringify(form.value)
+  }
+)
+watch(
+  form,
+  (f) => {
+    if (shownError.value && JSON.stringify(f) !== errorFor) shownError.value = ''
+  },
+  { deep: true }
+)
 const advancedOpen = ref(hasAdvancedValues(props.initial))
 const dialogEl = ref(null)
 const hostEl = ref(null)
@@ -197,7 +215,7 @@ onMounted(() => nextTick(() => hostEl.value && hostEl.value.focus()))
               </div>
             </div>
           </div>
-          <p v-if="error" class="rh-form-error" role="alert">{{ error }}</p>
+          <p v-if="shownError" class="rh-form-error" role="alert">{{ shownError }}</p>
         </div>
 
         <footer class="rh-dialog-foot">

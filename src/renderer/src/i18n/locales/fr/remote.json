@@ -76,6 +76,8 @@
     },
     "error": {
       "hostInvalid": "Cet hôte ou cet alias contient des caractères que ssh ne peut pas accepter.",
+      "hostChar": "ssh n'accepte pas {{char}} dans un hôte. Entrez seulement le nom ou l'adresse IP du serveur, par exemple 203.0.113.5.",
+      "aSpace": "d'espace",
       "userInvalid": "Ce nom d'utilisateur contient des caractères que ssh ne peut pas accepter.",
       "identityInvalid": "Ce chemin de fichier d'identité n'est pas valide.",
       "jumpInvalid": "Cet hôte de rebond n'est pas valide.",

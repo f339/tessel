@@ -54,7 +54,37 @@ describe('host input and the save payload (Orca ssh-target-draft)', () => {
 
   it('fills username and port from the Host field on blur', () => {
     const draft = applyParsedSshHostInput({ ...emptyForm(), host: 'deploy@server:2222' })
-    expect(draft).toMatchObject({ host: 'server', username: 'deploy', port: '2222', configHost: 'server' })
+    // A typed Host is its own alias (configHost follows it on save).
+    expect(draft).toMatchObject({ host: 'server', username: 'deploy', port: '2222', configHost: '' })
+    expect(buildSavePayload(draft).target).toMatchObject({ host: 'server', configHost: 'server' })
+  })
+
+  it('a Host typed wrong first, then the IP: the IP is saved, nothing of the first entry stays', () => {
+    let draft = applyParsedSshHostInput({ ...emptyForm(), label: 'Website AfterlifeRP', host: 'Website AfterlifeRP', username: 'afterlife' })
+    draft = applyParsedSshHostInput({ ...draft, host: '51.79.12.34' })
+    expect(buildSavePayload(draft)).toEqual({
+      ok: true,
+      target: { label: 'Website AfterlifeRP', configHost: '51.79.12.34', host: '51.79.12.34', port: 22, username: 'afterlife', identityFile: '', proxyCommand: '', jumpHost: '' }
+    })
+  })
+
+  it('invisible characters pasted with an IP or a username go', () => {
+    const draft = applyParsedSshHostInput({ ...emptyForm(), host: '\u200b51.79.12.34\u00a0\u200e', username: 'afterlife\ufeff' })
+    expect(draft).toMatchObject({ host: '51.79.12.34', username: 'afterlife' })
+    expect(buildSavePayload({ ...emptyForm(), host: '51.79.12.34\u200b', username: '\u200bafterlife' }).target).toMatchObject({ host: '51.79.12.34', configHost: '51.79.12.34', username: 'afterlife' })
+  })
+
+  it('a host ssh cannot take: says which character, before the main process', () => {
+    expect(buildSavePayload({ ...emptyForm(), host: 'Website AfterlifeRP' }).error).toBe("ssh cannot take a space in a host. Enter only the server's name or IP address, like 203.0.113.5.")
+    expect(buildSavePayload({ ...emptyForm(), host: 'example.com/x' }).error).toMatch(/« \/ »/)
+    expect(buildSavePayload({ ...emptyForm(), host: '[::1]:2200' }).ok).toBe(true)
+  })
+
+  it("an alias from ~/.ssh/config stays while its Host is the same", () => {
+    const draft = applyParsedSshHostInput(formFromTarget(PROD))
+    expect(draft.configHost).toBe('prod')
+    expect(buildSavePayload(draft).target).toMatchObject({ configHost: 'prod', host: 'prod.example.com' })
+    expect(buildSavePayload(applyParsedSshHostInput({ ...draft, host: 'other.example.com' })).target).toMatchObject({ configHost: 'other.example.com' })
   })
 
   it('builds the target, or says what is wrong', () => {
