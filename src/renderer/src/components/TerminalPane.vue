@@ -1462,13 +1462,15 @@ function liveShareSize() {
   return ls && ls.cols > 1 && ls.rows > 0 ? { cols: ls.cols, rows: ls.rows } : null
 }
 
-// A Live Share pane keeps the host's columns and rows, drawn here: its text
-// is sized so they fill this pane, whether it is smaller or larger than the
-// host's (from 6 px to twice the usual size), never cut and with no empty
-// band beside them.
+// A Live Share pane keeps the host's columns and rows (the host's terminal
+// is never resized for a guest), drawn here at this guest's own text size: a
+// pane larger than the host's terminal gets larger text (up to twice the
+// usual size, no empty band); a smaller one a little smaller text at most,
+// and what does not fit then scrolls here, following the cursor.
 function fitLiveShareFont({ cols, rows }) {
   const base = paneFontSize()
   const max = base * 2
+  const min = Math.max(8, Math.floor(base * 0.85 * 2) / 2)
   let size = term.options.fontSize || base
   const room = () => {
     const p = fit.proposeDimensions()
@@ -1478,28 +1480,79 @@ function fitLiveShareFont({ cols, rows }) {
   for (let i = 0; i < 4; i++) {
     const scale = room()
     if (scale == null || (scale >= 1 && scale < 1.06) || (scale >= 1 && size >= max)) break
-    const next = Math.max(6, Math.min(max, Math.floor(size * scale * 2) / 2))
+    const next = Math.max(min, Math.min(max, Math.floor(size * scale * 2) / 2))
     if (next === size) break
     size = next
     term.options.fontSize = size
   }
-  // Then a half point at a time until nothing is cut.
+  // Then a half point at a time until nothing is cut, not below `min`.
   for (let i = 0; i < 12; i++) {
     const scale = room()
-    if (scale == null || scale >= 1 || size <= 6) break
-    size = Math.max(6, size - 0.5)
+    if (scale == null || scale >= 1 || size <= min) break
+    size = Math.max(min, size - 0.5)
     term.options.fontSize = size
   }
-  // A pane too small even at 6 px: the terminal is drawn smaller still
-  // (scaled down), never cut. Its mouse is off meanwhile (xterm would put a
-  // click on the wrong cell); a click on the pane still lets you type.
   const left = room()
-  const shrink = left != null && left < 1 ? left : 1
-  if (term.element) {
-    term.element.style.transformOrigin = shrink < 1 ? '0 0' : ''
-    term.element.style.transform = shrink < 1 ? `scale(${shrink})` : '' // i18n-ignore
-    term.element.style.pointerEvents = shrink < 1 ? 'none' : ''
+  setLiveShareScroll(left != null && left < 1)
+}
+
+// The host's terminal larger than this pane at this guest's text size: drawn
+// at its full size in the pane, which scrolls (both ways) and follows the
+// cursor, unless scrolled by hand a moment ago.
+let lsScroll = false
+let lsHandAt = 0
+let lsAutoAt = 0
+let lsFollowQueued = false
+const LS_HAND_MS = 4000
+function liveShareCell() {
+  const cell = term && term._core && term._core._renderService && term._core._renderService.dimensions && term._core._renderService.dimensions.css.cell
+  return cell && cell.width > 0 && cell.height > 0 ? { w: cell.width, h: cell.height } : null
+}
+function sizeLiveShareTerminal() {
+  const shared = liveShareSize()
+  const cell = liveShareCell()
+  if (!term || !term.element || !shared || !cell) return
+  term.element.style.width = `${Math.ceil(cell.w * shared.cols)}px`
+  term.element.style.height = `${Math.ceil(cell.h * shared.rows)}px`
+}
+function setLiveShareScroll(on) {
+  lsScroll = on
+  if (hostEl.value) hostEl.value.classList.toggle('ls-scroll', on)
+  if (!term || !term.element) return
+  // Never scaled down (an older version did): the mouse hits its cell.
+  term.element.style.transform = ''
+  term.element.style.transformOrigin = ''
+  term.element.style.pointerEvents = ''
+  if (on) sizeLiveShareTerminal()
+  else {
+    term.element.style.width = ''
+    term.element.style.height = ''
   }
+}
+function followLiveShareCursor() {
+  lsFollowQueued = false
+  const host = hostEl.value
+  const cell = liveShareCell()
+  if (!lsScroll || !term || !host || !cell || Date.now() - lsHandAt < LS_HAND_MS) return
+  const buf = term.buffer.active
+  const x = buf.cursorX * cell.w
+  const y = buf.cursorY * cell.h
+  let left = host.scrollLeft
+  let top = host.scrollTop
+  if (x < left || x > left + host.clientWidth - cell.w * 2) left = Math.max(0, x - host.clientWidth * 0.7)
+  if (y < top || y > top + host.clientHeight - cell.h * 2) top = Math.max(0, y - host.clientHeight + cell.h * 3)
+  if (left === host.scrollLeft && top === host.scrollTop) return
+  lsAutoAt = Date.now()
+  host.scrollLeft = left
+  host.scrollTop = top
+}
+function followLiveShareSoon() {
+  if (!lsScroll || lsFollowQueued) return
+  lsFollowQueued = true
+  requestAnimationFrame(followLiveShareCursor)
+}
+function onHostScroll() {
+  if (lsScroll && Date.now() - lsAutoAt > 150) lsHandAt = Date.now()
 }
 
 function doFit() {
@@ -1511,6 +1564,11 @@ function doFit() {
     if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
     // Never shrink to nothing (e.g. while the pane is momentarily unmeasurable).
     if (dims.cols < 2 || dims.rows < 1) return
+    if (shared && lsScroll)
+      requestAnimationFrame(() => {
+        sizeLiveShareTerminal()
+        followLiveShareCursor()
+      })
     if (dims.cols !== term.cols || dims.rows !== term.rows) {
       expectRedraw()
       const wasFollowing = following || atBottom()
@@ -2555,6 +2613,7 @@ onMounted(() => {
   term.onScroll(updateScrolled)
   term.onWriteParsed(() => {
     if (!term) return
+    followLiveShareSoon()
     const buf = term.buffer.active
     // Following the output: stay at the bottom; scrolled up by you: say so.
     const up = buf.viewportY < buf.baseY
@@ -3285,7 +3344,7 @@ const paneMenuBindings = computed(() => ({
       </div>
     </div>
 
-    <div ref="hostEl" class="term-host"></div>
+    <div ref="hostEl" class="term-host" @scroll.passive="onHostScroll"></div>
     <div v-if="chatShown" class="term-transcript" data-test="terminal-chat-view" @mousedown.stop="ctx.setActive(node.id)">
       <NativeChatTranscriptView
         ref="chatViewEl"

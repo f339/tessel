@@ -986,6 +986,13 @@ body.popup-open .toolbar {
   height: 100%;
 }
 
+/* A Live Share terminal larger than this guest's pane at the guest's text
+   size: it scrolls here (TerminalPane.vue setLiveShareScroll). */
+.term-host.ls-scroll {
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
 /* No scrollbar in terminals: the wheel and Shift+PageUp/PageDown still
    scroll the history. */
 .term-host .xterm-viewport {
