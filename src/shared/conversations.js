@@ -182,8 +182,10 @@ export function conversationLines(events, opts = {}) {
 export const recipients = (line) => (line.toAll && line.toAll.length ? line.toAll : [line.to])
 
 // --- What was said in an agent's terminal ---------------------------------------------
-// entries: [{ paneId, wsId, title, agentId, agentName?, sessionId?, host?,
-//   hostLabel?, items: [{ role: 'user' | 'agent', t, text, model?, effort? }] }]
+// entries: [{ paneId, group?, wsId, title, agentId, agentName?, sessionId?,
+//   host?: 'local' | 'ssh', hostLabel?, items: [{ role: 'user' | 'agent', t,
+//   text, model?, effort? }] }] (group: one conversation of the pane, its
+//   pane's id by default: a pane's earlier conversation has its own)
 // opts.effortLabel(effort) -> its name in the interface ("High"); opts.t.
 // A prompt goes from you to the agent, an answer from the agent to you; an
 // answer carries the agent as its sender, with the model it ran with (shown
@@ -195,6 +197,7 @@ export function terminalLines(entries, opts = {}) {
   for (const entry of Array.isArray(entries) ? entries : []) {
     if (!entry || typeof entry.paneId !== 'string' || !entry.paneId || !Array.isArray(entry.items)) continue
     const seen = new Map()
+    const group = typeof entry.group === 'string' && entry.group ? entry.group : entry.paneId
     for (const it of entry.items) {
       if (!it || !Number.isFinite(it.t) || typeof it.text !== 'string' || !it.text.trim()) continue
       const agent = agentWho(entry.title, entry.paneId, t, entry.agentId || null)
@@ -203,7 +206,7 @@ export function terminalLines(entries, opts = {}) {
       const effort = modelId && typeof it.effort === 'string' ? it.effort : ''
       const run = modelId ? { model: `${modelLabel(modelId)}${effort ? ` · ${effortName(effort)}` : ''}`, modelId, ...(effort ? { effort } : {}) } : null
       // The same time twice: the keys stay apart.
-      const base = `tm:${entry.paneId}:${it.t}:${mine ? 'u' : 'a'}` // i18n-ignore
+      const base = `tm:${group}:${it.t}:${mine ? 'u' : 'a'}` // i18n-ignore
       const n = seen.get(base) || 0
       seen.set(base, n + 1)
       const sender =
@@ -235,6 +238,8 @@ export function terminalLines(entries, opts = {}) {
         status: 'sent',
         scope: null,
         via: 'terminal',
+        group,
+        ...(entry.host === 'ssh' ? { remote: true } : {}),
         ...(run ? { run } : {}),
         ...(sender ? { sender } : {})
       })
@@ -246,13 +251,24 @@ export function terminalLines(entries, opts = {}) {
 // A message Tessel typed into a terminal is a line of the log (logged when it
 // was queued: it may wait hours before it is typed) and a prompt in the
 // agent's file; an answer Tessel recorded (a chat's) is in both too. Same
-// pane, same words (spaces aside, the first 2000 characters: the log keeps
-// 8000), at most this long apart: one line, the log's. When that message was
-// not yours (a lead's brief, a teammate's, a Tessel notice), the agent's
-// answer to it in its terminal is theirs, not yours: left out too.
+// pane, same words (spaces and image marks aside: the file says "[Image #1]",
+// the log does not; the first 2000 characters: the log keeps 8000), at most
+// this long apart: one line, the log's. When that message was not yours (a
+// lead's brief, a teammate's, a Tessel notice), the agent's answer to it in
+// its terminal is theirs, not yours: left out too.
+// An agent on an SSH host writes its host's clock, which may be off: its
+// lines repeat a log line within ECHO_AFTER_MS either way, and when its
+// prompts come before the log lines they repeat (Tessel types only after it
+// logs: the host is behind), that conversation's lines move by that much
+// (the middle of those gaps), keeping their order among themselves.
 export const ECHO_BEFORE_MS = 2 * 60 * 1000
 export const ECHO_AFTER_MS = 12 * 3600 * 1000
-const echoKey = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 2000)
+const echoKey = (s) =>
+  String(s || '')
+    .replace(/\[Image #\d+\]|\[image\]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 2000)
 export function withoutEchoes(terminal, logged) {
   const pool = new Map() // "<u|a>|<paneId>|<words>" -> [{ at, yours }]
   const add = (key, at, yours) => {
@@ -263,29 +279,56 @@ export function withoutEchoes(terminal, logged) {
   for (const l of logged || []) {
     if (l.via === 'terminal') continue
     if (l.kind === 'reply') {
-      if (l.from.paneId) add(`a|${l.from.paneId}|${echoKey(l.text)}`, l.t, true) // i18n-ignore
+      if (l.from.paneId && echoKey(l.text)) add(`a|${l.from.paneId}|${echoKey(l.text)}`, l.t, true) // i18n-ignore
       continue
     }
-    if (l.status === 'skipped' || l.status === 'failed') continue
+    if (l.status === 'skipped' || l.status === 'failed' || !echoKey(l.text)) continue
     for (const w of recipients(l)) if (w.paneId) add(`u|${w.paneId}|${echoKey(l.text)}`, l.t, l.from.kind === 'you') // i18n-ignore
   }
-  // A pane whose latest prompt was someone else's message: its answers go.
-  const notYours = new Set()
-  return (terminal || []).filter((l) => {
-    const answer = l.kind === 'reply'
-    const pane = answer ? l.from.paneId : l.to.paneId
-    const list = pool.get(`${answer ? 'a' : 'u'}|${pane}|${echoKey(l.text)}`) // i18n-ignore
-    const i = list ? list.findIndex((m) => l.t >= m.at - ECHO_BEFORE_MS && l.t - m.at <= ECHO_AFTER_MS) : -1
-    if (!answer) {
-      if (i >= 0 && !list[i].yours) notYours.add(pane)
-      else notYours.delete(pane)
+  const listOf = (l) => {
+    const words = echoKey(l.text)
+    return words ? pool.get(`${l.kind === 'reply' ? 'a' : 'u'}|${l.kind === 'reply' ? l.from.paneId : l.to.paneId}|${words}`) : null // i18n-ignore
+  }
+  const near = (l, m) => (l.remote ? Math.abs(l.t - m.at) <= ECHO_AFTER_MS : l.t >= m.at - ECHO_BEFORE_MS && l.t - m.at <= ECHO_AFTER_MS)
+  // Each conversation's lines, in their order.
+  const groups = new Map()
+  for (const l of terminal || []) {
+    const g = l.group || (l.kind === 'reply' ? l.from.paneId : l.to.paneId)
+    if (!groups.has(g)) groups.set(g, [])
+    groups.get(g).push(l)
+  }
+  const out = []
+  for (const lines of groups.values()) {
+    let shift = 0
+    if (lines[0].remote) {
+      const gaps = []
+      for (const l of lines) {
+        if (l.kind === 'reply') continue
+        let best = null
+        for (const m of listOf(l) || []) if (near(l, m) && (best === null || Math.abs(m.at - l.t) < Math.abs(best))) best = m.at - l.t
+        if (best !== null) gaps.push(best)
+      }
+      gaps.sort((a, b) => a - b)
+      const middle = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0
+      if (middle > ECHO_BEFORE_MS) shift = middle
     }
-    if (i >= 0) {
-      list.splice(i, 1)
-      return false
+    // Its latest prompt was someone else's message: its answers go.
+    let notYours = false
+    for (const raw of lines) {
+      const l = shift ? { ...raw, t: raw.t + shift } : raw
+      const answer = l.kind === 'reply'
+      const list = listOf(l)
+      const i = list ? list.findIndex((m) => near(l, m)) : -1
+      if (!answer) notYours = i >= 0 && !list[i].yours
+      if (i >= 0) {
+        list.splice(i, 1)
+        continue
+      }
+      if (answer && notYours) continue
+      out.push(l)
     }
-    return !(answer && notYours.has(pane))
-  })
+  }
+  return out
 }
 
 // Which thread a line belongs to: the team's when it goes between agents in
@@ -363,7 +406,8 @@ export function buildThreads(events, opts = {}) {
     } else {
       const agent = thread.lines.map((l) => (l.from.kind === 'agent' ? l.from : l.to)).find((w) => w.kind === 'agent')
       thread.agent = agent ? agent.label : t('conversations.anAgent', 'An agent')
-      thread.agentId = (agent && agent.paneId && panes[agent.paneId] && panes[agent.paneId].agentId) || null
+      // Its pane open now, else the program the lines name (a pane closed).
+      thread.agentId = (agent && agent.paneId && panes[agent.paneId] && panes[agent.paneId].agentId) || (agent && agent.agentId) || null
       thread.title = t('conversations.withAgent', 'You and {{agent}}', { agent: thread.agent })
     }
     out.push(thread)

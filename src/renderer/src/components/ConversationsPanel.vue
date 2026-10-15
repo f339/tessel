@@ -21,6 +21,7 @@ import BrandIcon from './BrandIcon.vue'
 import ThemedSelect from './ui/ThemedSelect.vue'
 import { buildThreads, filterThreads, lineCount, modelOf, participantsOf, recipients, replyText, statusText, threadText } from '../../../shared/conversations'
 import { nativeChatSessionChoiceLabel } from '../chat/orca/native-chat-session-option-labels'
+import { notePanes, paneSessionTrail } from '../paneSessionTrail'
 import { formatWhen } from '../timeFormat'
 import { agentLabel } from '../sessionHistory'
 import { t, intlLocale } from '../i18n'
@@ -60,24 +61,46 @@ const panes = computed(() => {
 const paneAlive = (id) => !!id && !!panes.value[id]
 
 // --- What was said in the agents' terminals ---------------------------------------------
-// The agent panes in scope (a terminal agent in a conversation; a chat
-// agent's messages already go through Tessel): each one's prompts and
-// answers, from its conversation file, asked while the tab is shown, when
-// it is shown, when the scope, the period or the panes change, and with the
-// clock's tick (every 20 s); the main process answers only what changed
-// since (by the key it gave).
-const terminal = shallowRef({}) // paneId -> { key, wsId, items, sessionId, host, hostLabel }
-function terminalPanes() {
-  const out = []
+// The conversations of the terminal agents in scope (a chat agent's messages
+// already go through Tessel): each pane's current one, then its earlier ones
+// and those of panes closed since, while this window runs (paneSessionTrail.js),
+// MAX_ASKS at most. Their prompts and answers come from each agent's own
+// conversation file, asked while the tab is shown, when it is shown, when
+// the scope, the period or the conversations change, and with the clock's
+// tick (every 20 s); the main process answers only what changed since (by
+// the key it gave), and nothing is rebuilt when nothing did.
+const MAX_ASKS = 32
+const terminal = shallowRef({}) // ask -> { key, items, paneId, wsId, title, agentId, sessionId, host, hostLabel }
+function terminalAsks() {
+  const open = new Map() // paneId -> { pane, wsId, hostLabel }
   for (const p of props.projects || []) {
     if (scope.value === 'workspace' && p.id !== props.workspaceId) continue
     for (const pane of p.panes || []) {
       if (!pane || !pane.id || pane.kind !== 'agent' || !pane.agentId || typeof pane.sessionId !== 'string' || !pane.sessionId) continue
-      out.push({ pane, wsId: p.id, hostLabel: p.remote && p.remote.host ? p.remote.host : '' })
+      open.set(pane.id, { pane, wsId: p.id, hostLabel: p.remote && p.remote.host ? p.remote.host : '' })
     }
   }
-  return out
+  const asks = []
+  const add = (a) => {
+    if (asks.length < MAX_ASKS && !asks.some((x) => x.ask === a.ask)) asks.push(a)
+  }
+  for (const { pane, wsId, hostLabel } of open.values())
+    add({ ask: pane.id, paneId: pane.id, agent: pane.agentId, sessionId: pane.sessionId, accountId: pane.accountId, hostId: pane.remoteHostId || null, wsId, title: pane.title, hostLabel })
+  const trail = Object.values(paneSessionTrail)
+  // An open pane's earlier conversations (the latest first).
+  for (const row of trail) {
+    const now = open.get(row.paneId)
+    if (!now || row.agentId !== now.pane.agentId) continue
+    for (const sid of [...row.sessions].reverse())
+      if (sid !== now.pane.sessionId) add({ ask: `${row.paneId}~${sid}`, paneId: row.paneId, agent: row.agentId, sessionId: sid, accountId: row.accountId, hostId: row.hostId, wsId: now.wsId, title: now.pane.title, hostLabel: now.hostLabel }) // i18n-ignore
+  }
+  // Panes closed since (the latest first).
+  const closed = trail.filter((row) => row.closedAt && !open.has(row.paneId) && (scope.value !== 'workspace' || row.wsId === props.workspaceId)).sort((a, b) => b.closedAt - a.closedAt)
+  for (const row of closed)
+    for (const sid of [...row.sessions].reverse()) add({ ask: `${row.paneId}~${sid}`, paneId: row.paneId, agent: row.agentId, sessionId: sid, accountId: row.accountId, hostId: row.hostId, wsId: row.wsId, title: row.title, hostLabel: '' }) // i18n-ignore
+  return asks
 }
+const sameMeta = (a, b) => ['paneId', 'wsId', 'title', 'agentId', 'sessionId', 'host', 'hostLabel'].every((k) => a[k] === b[k])
 let asking = false
 let askAgain = false
 async function askTerminal() {
@@ -91,31 +114,36 @@ async function askTerminal() {
   try {
     do {
       askAgain = false
-      const list = terminalPanes()
+      // Without App (its watch notes them too): what this tab sees.
+      notePanes(props.projects)
+      const asks = terminalAsks()
       const had = terminal.value
       const known = {}
-      for (const { pane } of list) if (had[pane.id] && had[pane.id].sessionId === pane.sessionId) known[pane.id] = had[pane.id].key
+      for (const a of asks) if (had[a.ask] && had[a.ask].sessionId === a.sessionId) known[a.ask] = had[a.ask].key
       const res = await api.terminal({
         from: from.value,
         known,
-        panes: list.map(({ pane }) => ({
-          paneId: pane.id,
-          agent: pane.agentId,
-          sessionId: pane.sessionId,
-          ...(pane.accountId !== undefined ? { accountId: pane.accountId } : {}),
-          ...(pane.remoteHostId ? { hostId: pane.remoteHostId } : {})
+        panes: asks.map((a) => ({
+          ask: a.ask,
+          paneId: a.paneId,
+          agent: a.agent,
+          sessionId: a.sessionId,
+          ...(a.accountId !== undefined ? { accountId: a.accountId } : {}),
+          ...(a.hostId ? { hostId: a.hostId } : {})
         }))
       })
       if (!res || !res.ok || !res.panes || typeof res.panes !== 'object') continue
       const next = {}
-      for (const { pane, wsId, hostLabel } of list) {
-        const r = res.panes[pane.id]
+      for (const a of asks) {
+        const r = res.panes[a.ask]
         if (!r || typeof r.key !== 'string') continue
-        const host = pane.remoteHostId ? 'ssh' : 'local'
-        if (r.same && had[pane.id]) next[pane.id] = { ...had[pane.id], wsId, host, hostLabel }
-        else if (Array.isArray(r.items)) next[pane.id] = { key: r.key, wsId, items: r.items, sessionId: pane.sessionId, host, hostLabel }
+        const meta = { paneId: a.paneId, wsId: a.wsId, title: a.title || '', agentId: a.agent, sessionId: a.sessionId, host: a.hostId ? 'ssh' : 'local', hostLabel: a.hostLabel || '' }
+        if (r.same && had[a.ask]) next[a.ask] = sameMeta(had[a.ask], meta) ? had[a.ask] : { ...had[a.ask], ...meta }
+        else if (Array.isArray(r.items)) next[a.ask] = { key: r.key, items: r.items, ...meta }
       }
-      terminal.value = next
+      // Every conversation as it was: the threads are not built again.
+      const keys = Object.keys(next)
+      if (keys.length !== Object.keys(had).length || keys.some((k) => next[k] !== had[k])) terminal.value = next
     } while (askAgain && props.active)
   } catch {
     // asked again with the next tick
@@ -124,8 +152,8 @@ async function askTerminal() {
   }
 }
 const terminalSignature = computed(() =>
-  terminalPanes()
-    .map(({ pane }) => `${pane.id}:${pane.sessionId}:${pane.remoteHostId || ''}`)
+  terminalAsks()
+    .map((a) => `${a.ask}:${a.sessionId}:${a.hostId || ''}`)
     .join('|')
 )
 
@@ -141,9 +169,11 @@ watch([() => props.active, scope, from, () => props.now, terminalSignature], () 
 // An effort in the app's language, as a pane's header says it ("Élevé").
 const effortLabel = (effort) => nativeChatSessionChoiceLabel({ value: effort, label: effort })
 const terminalEntries = computed(() =>
-  Object.entries(terminal.value).map(([paneId, e]) => {
-    const pane = panes.value[paneId] || {}
-    return { paneId, wsId: e.wsId, title: pane.title, agentId: pane.agentId, agentName: pane.agentId ? agentLabel(pane.agentId) : '', sessionId: e.sessionId, host: e.host, hostLabel: e.hostLabel, items: e.items }
+  Object.entries(terminal.value).map(([ask, e]) => {
+    // Its pane open now: its name and program as shown; closed: as noted.
+    const pane = panes.value[e.paneId] || {}
+    const agentId = pane.agentId || e.agentId
+    return { paneId: e.paneId, group: ask, wsId: e.wsId, title: pane.title || e.title, agentId, agentName: agentId ? agentLabel(agentId) : '', sessionId: e.sessionId, host: e.host, hostLabel: e.hostLabel, items: e.items }
   })
 )
 const threads = computed(() => {

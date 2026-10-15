@@ -251,3 +251,71 @@ describe('buildThreads with what was said in the terminals', () => {
     expect(buildThreads(events, { panes, terminal: [] })).toEqual(buildThreads(events, { panes }))
   })
 })
+
+describe('review fixes', () => {
+  it('an image message: the file says "[Image #1] …", the log does not: still one line', () => {
+    const logged = conversationLines([
+      msg(0, 'p1', ada, { scope: 'chat', text: 'What is wrong here?' })
+    ])
+    const kept = withoutEchoes(
+      terminalLines([
+        adaEntry([item(1, 'user', '[Image #1] What is wrong here?'), item(2, 'agent', 'A typo.')])
+      ]),
+      logged
+    )
+    expect(kept.map((l) => l.text)).toEqual(['A typo.'])
+  })
+
+  it('an agent on an SSH host whose clock is behind: Tessel’s message still shows once, its lines move into place', () => {
+    const logged = conversationLines([
+      msg(60, 'p1', ada, { scope: 'notes', text: 'Read the notes' })
+    ])
+    // The host writes 30 minutes behind this PC.
+    const host = adaEntry(
+      [
+        item(25, 'user', 'Typed there first'),
+        item(30, 'user', 'Read the notes'),
+        item(31, 'agent', 'Notes read.')
+      ],
+      { host: 'ssh' }
+    )
+    const kept = withoutEchoes(terminalLines([host]), logged)
+    expect(kept.map((l) => [l.text, (l.t - T0) / MIN])).toEqual([
+      ['Typed there first', 55],
+      ['Notes read.', 61]
+    ])
+    // Hours ahead: matched all the same (a local pane keeps the strict window).
+    const ahead = adaEntry([item(60 + 180, 'user', 'Read the notes')], { host: 'ssh' })
+    expect(withoutEchoes(terminalLines([ahead]), logged)).toEqual([])
+    const local = adaEntry([item(60 - 30, 'user', 'Read the notes')])
+    expect(withoutEchoes(terminalLines([local]), logged)).toHaveLength(1)
+  })
+
+  it('a pane’s conversations are told apart: an earlier one’s last prompt does not decide the next one’s answers', () => {
+    const logged = conversationLines([
+      msg(0, 'p1', ada, {
+        source: 'tessel',
+        scope: 'task',
+        text: 'Please review the changes Bob made.'
+      })
+    ])
+    const kept = withoutEchoes(
+      terminalLines([
+        adaEntry(
+          [item(1, 'user', 'Please review the changes Bob made.'), item(2, 'agent', 'Reviewed.')],
+          { group: 'p1~old' }
+        ),
+        adaEntry([item(3, 'agent', 'A new conversation, mid-turn.')])
+      ]),
+      logged
+    )
+    expect(kept.map((l) => l.text)).toEqual(['A new conversation, mid-turn.'])
+    expect(new Set(kept.map((l) => l.key)).size).toBe(1)
+  })
+
+  it('a pane closed since: its thread shows its program from its lines', () => {
+    const threads = buildThreads([], { panes: {}, terminal: [adaEntry([item(1, 'user', 'Hi')])] })
+    expect(threads[0].agentId).toBe('claude')
+    expect(threads[0].title).toBe('You and Ada')
+  })
+})

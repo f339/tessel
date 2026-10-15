@@ -15,6 +15,7 @@ import {
   TERMINAL_LIMITS
 } from '../terminalConversations'
 import { transcriptViewRoots } from '../transcriptView'
+import { leadHead, reviewRequest, teammateHead } from '../../../shared/tesselDelivery'
 
 const CLAUDE_ID = '11111111-2222-4333-8444-555555555555'
 const CODEX_ID = '0199aabb-ccdd-7eef-8000-000000000002'
@@ -310,6 +311,122 @@ describe('conversationItems', () => {
   })
 })
 
+const toolResult = (s, id) => ({
+  type: 'user',
+  uuid: `r${s}`,
+  timestamp: ts(s),
+  message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] }
+})
+const queued = (s, value, extra = {}) => ({
+  type: 'attachment',
+  uuid: `q${s}`,
+  timestamp: ts(s),
+  attachment: {
+    type: 'queued_command',
+    prompt: value,
+    commandMode: 'prompt',
+    origin: { kind: 'human' },
+    humanTurn: true,
+    ...extra
+  }
+})
+
+describe('what is yours (review fixes)', () => {
+  it('a message Tessel typed is not yours, nor the answer to it, even marked as a paste or headed as a teammate’s', () => {
+    const items = conversationItems(
+      'claude',
+      lines([
+        prompt(1, 'Fix the login bug'),
+        answer(2, 'm1', [{ type: 'text', text: 'Fixed the login bug.' }]),
+        prompt(
+          10,
+          '<pasted_content id="1">[Tessel] You have 1 new team message: read it with team_inbox.'
+        ),
+        answer(11, 'm2', [{ type: 'tool_use', id: 't1', name: 'team_inbox', input: {} }]),
+        toolResult(12, 't1'),
+        answer(13, 'm3', [{ type: 'text', text: 'Replied to the lead about the schema.' }]),
+        prompt(20, `${leadHead('Ada')} Ship the schema.`),
+        answer(21, 'm4', [{ type: 'text', text: 'Shipping.' }]),
+        prompt(30, `${teammateHead('Bob', 'Core', { id: 'm1', replyTo: 'm0' })} Done?`),
+        answer(31, 'm5', [{ type: 'text', text: 'Yes.' }]),
+        prompt(40, reviewRequest('Bob', ' in C:\\p', ' (branch b)')),
+        answer(41, 'm6', [{ type: 'text', text: 'Two bugs.' }]),
+        prompt(50, 'Please review the changes I made to the README'),
+        answer(51, 'm7', [{ type: 'text', text: 'Looks good.' }])
+      ]),
+      CLAUDE_ID
+    )
+    expect(items.map((i) => `${i.role}:${i.text}`)).toEqual([
+      'user:Fix the login bug',
+      'agent:Fixed the login bug.',
+      'user:Please review the changes I made to the README',
+      'agent:Looks good.'
+    ])
+  })
+
+  it('a prompt sent while it worked (queued) shows where it was given, and the turn’s answer is to it', () => {
+    const items = conversationItems(
+      'claude',
+      lines([
+        prompt(1, 'Refactor the parser'),
+        answer(2, 'm1', [
+          { type: 'text', text: 'Starting.' },
+          { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }
+        ]),
+        toolResult(3, 't1'),
+        queued(4, 'Also add tests for the empty file case'),
+        // Tessel's own, another session's, a task's notice: left out, the turn stays yours.
+        queued(
+          5,
+          '<pasted_content id="2">[Tessel] You have 1 new team message: read it with team_inbox.'
+        ),
+        queued(6, 'A message from another session', { origin: { kind: 'peer' }, isMeta: true }),
+        queued(7, '<task-notification>done</task-notification>', {
+          commandMode: 'task-notification',
+          origin: undefined
+        }),
+        queued(8, [
+          { type: 'text', text: 'And look at this' },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' }
+          }
+        ]),
+        answer(9, 'm2', [
+          { type: 'text', text: 'Parser refactored.' },
+          { type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'npm test' } }
+        ]),
+        toolResult(10, 't2'),
+        answer(11, 'm3', [{ type: 'text', text: 'Added the empty-file tests; all pass.' }])
+      ]),
+      CLAUDE_ID
+    )
+    expect(items.map((i) => `${i.role}:${i.text.split('\n')[0]}`)).toEqual([
+      'user:Refactor the parser',
+      'user:Also add tests for the empty file case',
+      'user:And look at this',
+      'agent:Added the empty-file tests; all pass.'
+    ])
+    expect(items.map((i) => i.t)).toEqual([at(1), at(4), at(8), at(11)])
+    expect(items[2].text).toContain('[image]')
+    expect(items[2].model).toBe('claude-opus-5-5')
+  })
+
+  it('only known context tags are taken off a prompt: a snippet of yours stays', () => {
+    expect(cleanPrompt('<router-view name="side"></router-view> renders nothing here, why?')).toBe(
+      '<router-view name="side"></router-view> renders nothing here, why?'
+    )
+    expect(cleanPrompt('<my-card title="x">\n  <slot />\n</my-card>')).toBe(
+      '<my-card title="x">\n  <slot />\n</my-card>'
+    )
+    expect(
+      cleanPrompt(
+        '<ide_selection>x</ide_selection><in-app-browser-context source="a">b</in-app-browser-context> Why?'
+      )
+    ).toBe('Why?')
+  })
+})
+
 describe('createTerminalConversations', () => {
   let tmp
   let roots
@@ -331,6 +448,7 @@ describe('createTerminalConversations', () => {
     bytesRead = 0
     // Counts what is read, to check the bounds.
     fsp = {
+      stat: (...a) => fs.promises.stat(...a),
       open: async (...a) => {
         const fh = await fs.promises.open(...a)
         return {
@@ -406,25 +524,116 @@ describe('createTerminalConversations', () => {
     expect(all.panes.p1.items).toHaveLength(2)
   })
 
-  it('reads only what was added since; decodes again only when the file changed', async () => {
+  it('reads again only when its size or time changed, and keeps only the decoded lines', async () => {
     const file = claudeFile(CLAUDE)
     const conv = make()
     const first = await conv.read({ from: 0, panes: [claudePane] })
+    const held = conv.held()
+    expect(held).toHaveLength(1)
+    expect(held[0].items).toBe(6)
+    expect(held[0].keys.some((k) => /line|tail|buf|data/i.test(k))).toBe(false)
     bytesRead = 0
     await conv.read({ from: 0, panes: [claudePane], known: { p1: first.panes.p1.key } })
     expect(bytesRead).toBe(0)
-    const more = jsonl([answer(17, 'm6', [{ type: 'text', text: 'Pasted lines read.' }])])
-    fs.appendFileSync(file, more)
+    fs.appendFileSync(
+      file,
+      jsonl([answer(17, 'm6', [{ type: 'text', text: 'Pasted lines read.' }])])
+    )
     const next = await conv.read({
       from: 0,
       panes: [claudePane],
       known: { p1: first.panes.p1.key }
     })
-    expect(bytesRead).toBe(Buffer.byteLength(more))
+    expect(bytesRead).toBe(fs.statSync(file).size)
     expect(next.panes.p1.key).not.toBe(first.panes.p1.key)
     expect(brief(next.panes.p1.items).slice(-2)).toEqual([
       'user:line one\nline two [claude-opus-5-5 high]',
       'agent:Pasted lines read. [claude-opus-5-5 high]'
+    ])
+  })
+
+  it('a later period start is still "same" (the window filters); an earlier one sends the lines again', async () => {
+    claudeFile(CLAUDE)
+    const conv = make()
+    const first = await conv.read({ from: at(10), panes: [claudePane] })
+    expect(first.panes.p1.items).toHaveLength(3)
+    const later = await conv.read({
+      from: at(12),
+      panes: [claudePane],
+      known: { p1: first.panes.p1.key }
+    })
+    expect(later.panes.p1).toEqual({ key: first.panes.p1.key, same: true })
+    const wider = await conv.read({
+      from: 0,
+      panes: [claudePane],
+      known: { p1: first.panes.p1.key }
+    })
+    expect(wider.panes.p1.items).toHaveLength(6)
+  })
+
+  it('a read refused for a moment (the file busy): what was read stays, tried again at the next ask', async () => {
+    const file = claudeFile(CLAUDE)
+    let busy = false
+    fsp.stat = async (f) => {
+      if (busy) throw Object.assign(new Error('busy'), { code: 'EBUSY' })
+      return fs.promises.stat(f)
+    }
+    const conv = make()
+    const first = await conv.read({ from: 0, panes: [claudePane] })
+    busy = true
+    fs.appendFileSync(file, jsonl([answer(17, 'm6', [{ type: 'text', text: 'Later.' }])]))
+    const during = await conv.read({
+      from: 0,
+      panes: [claudePane],
+      known: { p1: first.panes.p1.key }
+    })
+    expect(during.panes.p1).toEqual({ key: first.panes.p1.key, same: true })
+    busy = false
+    const after = await conv.read({
+      from: 0,
+      panes: [claudePane],
+      known: { p1: first.panes.p1.key }
+    })
+    expect(after.panes.p1.items[after.panes.p1.items.length - 1].text).toBe('Later.')
+  })
+
+  it('what is not asked for goes: one not asked lately at the next ask, all of it once nothing is asked', async () => {
+    claudeFile(CLAUDE)
+    codexFile(CODEX)
+    let idle = null
+    const timers = { setTimeout: (fn) => ((idle = fn), 1), clearTimeout: () => {} }
+    const conv = make({ timers })
+    await conv.read({ from: 0, panes: [claudePane, codexPane] })
+    expect(conv.size()).toBe(2)
+    clock += TERMINAL_LIMITS.idleMs + 1
+    await conv.read({ from: 0, panes: [codexPane] })
+    expect(conv.size()).toBe(1)
+    idle()
+    expect(conv.size()).toBe(0)
+  })
+
+  it('at most 32 conversations asked at once', async () => {
+    claudeFile(CLAUDE)
+    const asks = Array.from({ length: 40 }, (_, i) => ({ ...claudePane, ask: `p1~${i}` }))
+    const res = await make().read({ from: 0, panes: asks })
+    expect(Object.keys(res.panes)).toHaveLength(32)
+  })
+
+  it('a pane’s earlier conversation has its own ask, answered apart', async () => {
+    const old = '99999999-2222-4333-8444-555555555555'
+    claudeFile(CLAUDE)
+    claudeFile(
+      [prompt(0, 'Before /clear'), answer(1, 'm1', [{ type: 'text', text: 'Earlier answer.' }])],
+      old
+    )
+    const res = await make().read({
+      from: 0,
+      panes: [claudePane, { ask: `p1~${old}`, paneId: 'p1', agent: 'claude', sessionId: old }]
+    })
+    expect(res.panes.p1.items).toHaveLength(6)
+    expect(brief(res.panes[`p1~${old}`].items)).toEqual([
+      'user:Before /clear [claude-opus-5-5 high]',
+      'agent:Earlier answer. [claude-opus-5-5 high]'
     ])
   })
 
@@ -496,8 +705,9 @@ describe('createTerminalConversations', () => {
     expect((await conv.read({ from: 0, panes: [claudePane] })).panes.p1.items).toHaveLength(6)
   })
 
-  it('an agent on an SSH host: its file read over the connection, at most once a minute, only what was added', async () => {
+  it('an agent on an SSH host: its size and time first, the window only when they changed, at most once a minute', async () => {
     let data = Buffer.from(jsonl(CLAUDE))
+    let mtime = 1000
     const readAgentFile = vi.fn(async (hostId, { agent, id, offset, cap }) => {
       if (hostId !== 'ssh-box' || agent !== 'claude' || id !== CLAUDE_ID)
         return { ok: false, missing: true }
@@ -505,7 +715,7 @@ describe('createTerminalConversations', () => {
       return {
         ok: true,
         size: data.length,
-        mtimeMs: clock,
+        mtimeMs: mtime,
         data: data.subarray(start, Math.min(data.length, start + cap))
       }
     })
@@ -513,25 +723,77 @@ describe('createTerminalConversations', () => {
     const pane = { paneId: 'r1', agent: 'claude', sessionId: CLAUDE_ID, hostId: 'ssh-box' }
     const first = await conv.read({ from: 0, panes: [pane] })
     expect(first.panes.r1.items).toHaveLength(6)
-    expect(readAgentFile).toHaveBeenCalledTimes(1)
+    expect(readAgentFile.mock.calls.map((c) => c[1].cap)).toEqual([1, TERMINAL_LIMITS.remoteBytes])
+    // Within the minute: not asked.
     await conv.read({ from: 0, panes: [pane], known: { r1: first.panes.r1.key } })
-    expect(readAgentFile).toHaveBeenCalledTimes(1)
-    const size = data.length
+    expect(readAgentFile).toHaveBeenCalledTimes(2)
+    // A minute later, unchanged: its size only.
+    clock += TERMINAL_LIMITS.remoteEveryMs + 1
+    const same = await conv.read({ from: 0, panes: [pane], known: { r1: first.panes.r1.key } })
+    expect(same.panes.r1.same).toBe(true)
+    expect(readAgentFile).toHaveBeenCalledTimes(3)
     data = Buffer.concat([
       data,
       Buffer.from(jsonl([answer(17, 'm6', [{ type: 'text', text: 'From the host.' }])]))
     ])
+    mtime = 2000
     clock += TERMINAL_LIMITS.remoteEveryMs + 1
     const next = await conv.read({ from: 0, panes: [pane], known: { r1: first.panes.r1.key } })
-    expect(readAgentFile).toHaveBeenCalledTimes(2)
-    expect(readAgentFile.mock.calls[1][1].offset).toBe(size)
+    expect(readAgentFile).toHaveBeenCalledTimes(5)
     expect(next.panes.r1.items[next.panes.r1.items.length - 1].text).toBe('From the host.')
     // Not an agent whose file a host keeps: not asked.
     await conv.read({
       from: 0,
       panes: [{ paneId: 'r2', agent: 'antigravity', sessionId: AGY_ID, hostId: 'ssh-box' }]
     })
-    expect(readAgentFile).toHaveBeenCalledTimes(2)
+    expect(readAgentFile).toHaveBeenCalledTimes(5)
+  })
+
+  it('a host that hangs never holds the local files; a slow one is left alone a while', async () => {
+    claudeFile(CLAUDE)
+    const limits = { ...TERMINAL_LIMITS, remoteWaitMs: 50, slowHostMs: 10, hostDownMs: 90 * 1000 }
+    const hung = vi.fn(() => new Promise(() => {}))
+    const started = Date.now()
+    const res = await make({ readAgentFile: hung, limits }).read({
+      from: 0,
+      panes: [
+        { paneId: 'r1', agent: 'claude', sessionId: CLAUDE_ID, hostId: 'ssh-hung' },
+        claudePane
+      ]
+    })
+    expect(Date.now() - started).toBeLessThan(2000)
+    expect(res.panes.p1.items).toHaveLength(6)
+    expect(res.panes.r1).toBeUndefined()
+
+    const data = Buffer.from(jsonl(CLAUDE))
+    const slow = vi.fn(
+      (hostId, { offset, cap }) =>
+        new Promise((resolve) =>
+          setTimeout(() => {
+            const start = offset === null ? Math.max(0, data.length - cap) : offset
+            resolve({
+              ok: true,
+              size: data.length,
+              mtimeMs: 1,
+              data: data.subarray(start, start + cap)
+            })
+          }, 30)
+        )
+    )
+    const conv = make({ readAgentFile: slow, limits })
+    const pane = { paneId: 'r2', agent: 'claude', sessionId: CLAUDE_ID, hostId: 'ssh-slow' }
+    await conv.read({ from: 0, panes: [pane] })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    expect(slow).toHaveBeenCalledTimes(2)
+    const later = await conv.read({ from: 0, panes: [pane] })
+    // What it read meanwhile is there.
+    expect(later.panes.r2.items).toHaveLength(6)
+    clock += TERMINAL_LIMITS.remoteEveryMs + 1
+    await conv.read({ from: 0, panes: [pane] })
+    expect(slow).toHaveBeenCalledTimes(2)
+    clock += limits.hostDownMs + 1
+    await conv.read({ from: 0, panes: [pane] })
+    expect(slow).toHaveBeenCalledTimes(3)
   })
 
   it('registers one channel, answering what read answers', async () => {
@@ -562,7 +824,8 @@ describe('localWindowReader', () => {
       ])
       expect(await localWindowReader(join(tmp, 'none.jsonl'))({ offset: null, cap: 4 })).toEqual({
         ok: false,
-        missing: true
+        missing: true,
+        code: 'ENOENT'
       })
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true })

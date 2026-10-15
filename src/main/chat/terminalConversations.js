@@ -5,26 +5,30 @@
 // inside the agent's own folder, never a path from the window, and its lines
 // decoded by the same parsers), then cut to what a conversation shows.
 //
-// Kept: what you typed (not a tool's result, not Claude Code's own notes, a
-// hook's context or a background task's notice, not the context an agent
-// adds around a prompt, not Tessel's own "[Tessel …]" messages), and the
-// agent's answer to each prompt: the text it wrote after its last tool call
-// of the turn (not the text between its tool calls, not its thinking; not
-// its answer to Tessel's own message or another session's). Each
-// with its time, and the model and effort it ran with when the file says so
-// (Claude Code: each answer's model and effort; Codex: its turn_context, as
+// Kept: what you typed, also while the agent worked (Claude Code queues such
+// a prompt and records it apart), not a tool's result, not Claude Code's own
+// notes, a hook's or the IDE's context or a background task's notice, not
+// what Tessel itself typed there (src/shared/tesselDelivery.js); and the
+// agent's answer to the latest prompt: the text it wrote after its last tool
+// call of the turn (not the text between its tool calls, not its thinking;
+// not its answer to Tessel's own message or another session's). Each with its
+// time, and the model and effort it ran with when the file says so (Claude
+// Code: each answer's model and effort; Codex: its turn_context, as
 // agentModel.js reads them for the pane header); else none, never a guess.
 //
-// Bounded: the last 2 MB of a local file (512 KB of a host's), read async,
-// then only what was added since the last read (remoteTranscripts.js's tail,
-// for local files too); at most 200 lines a pane within the period asked
-// (300 000 characters), each text cut at 8000 characters; 64 panes asked at
-// once, 64 files kept in memory (the least recently asked go first), one read
-// at a time. A file is decoded again only when its size or time changed. An
-// agent on an SSH host (Claude Code, Codex: remoteFs.js readAgentFile, the
-// file found by its id in the agent's folder there) is asked at most once a
-// minute. The window names agents, session ids, panes, accounts and hosts,
-// never a folder or a file; what is read goes back to that window only.
+// Bounded: the last 2 MB of a local file (512 KB of a host's), read async and
+// only when its size or time changed; what is kept is the decoded lines (the
+// newest 200, 300 000 characters, each text cut at 8000 characters), never
+// the file's own lines. 32 conversations asked at once and kept, one local
+// read at a time; one not asked for 2 minutes (the tab hidden) is let go. A
+// file not found is looked for again a minute later; a read refused for a
+// moment (the file busy) keeps what was read and is tried again at the next
+// ask. An agent on an SSH host (Claude Code, Codex: remoteFs.js
+// readAgentFile, the file found by its id in the agent's folder there) is
+// read at most once a minute, apart from the local reads (an answer waits for
+// a host 1.5 s at most), and a host slow to answer is left alone 2 minutes.
+// The window names agents, session ids, panes, accounts and hosts, never a
+// folder or a file; what is read goes back to that window only.
 import fs from 'fs'
 import { HISTORY_LIMITS } from './transcriptHistory.js'
 import {
@@ -34,7 +38,8 @@ import {
   validViewId,
   viewEvents
 } from './transcriptView.js'
-import { createRemoteTail, remoteWindowReader, validRemoteTranscript } from './remoteTranscripts.js'
+import { remoteWindowReader, validRemoteTranscript } from './remoteTranscripts.js'
+import { isTesselDelivery } from '../../shared/tesselDelivery.js'
 
 // Cursor is left out: its file keeps no times (a line could not be placed).
 export const TERMINAL_CONVERSATION_AGENTS = [
@@ -56,14 +61,20 @@ export const TERMINAL_LIMITS = {
   items: 200,
   chars: 300000,
   text: 8000,
-  panes: 64,
-  entries: 64,
-  remoteEveryMs: 60 * 1000,
+  panes: 32,
+  entries: 32,
+  // Not asked for this long: let go.
+  idleMs: 2 * 60 * 1000,
   // A file not found is looked for again after this long.
-  missingMs: 60 * 1000
+  missingMs: 60 * 1000,
+  remoteEveryMs: 60 * 1000,
+  remoteWaitMs: 1500,
+  slowHostMs: 10 * 1000,
+  hostDownMs: 2 * 60 * 1000
 }
 
 const PANE_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}$/
+const ASK_ID = /^[A-Za-z0-9_-][A-Za-z0-9._~:-]{0,199}$/
 const ACCOUNT_ID = /^[\w.-]{1,80}$/
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 
@@ -83,18 +94,40 @@ function timeOf(v) {
 
 // ---- What a line says -------------------------------------------------------------
 
-// Context an agent or its host puts before a prompt (Claude Code's
-// <ide_opened_file>, <task-notification>, <bash-input>, Codex's
-// <in-app-browser-context>…): a tag whose name has a "-" or "_", closed.
-const CONTEXT_BLOCK = /^<([a-zA-Z][a-zA-Z0-9]*[_-][\w-]{0,60})(?:\s[^>]*)?>[\s\S]*?<\/\1>\s*/
+// The context an agent, its IDE or its host puts before a prompt (Claude
+// Code's, Codex's): only these known tags, closed (a prompt that starts with
+// a snippet of yours, <router-view …>, is yours).
+const CONTEXT_TAGS = [
+  'ide_opened_file',
+  'ide_selection',
+  'ide_diagnostics',
+  'task-notification',
+  'bash-input',
+  'bash-stdout',
+  'bash-stderr',
+  'user-prompt-submit-hook',
+  'command-message',
+  'local-command-caveat',
+  'local-command-stdout',
+  'local-command-stderr',
+  'in-app-browser-context',
+  'browser_instruction',
+  'send_user_message_question_reply',
+  'environment_context',
+  'user_instructions'
+]
+const CONTEXT_BLOCK = new RegExp(
+  `^<(${CONTEXT_TAGS.join('|')})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\1>\\s*`
+)
 const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
 // Claude Code's mark around a paste (no closing tag): the paste is kept.
 const PASTE_MARK = /<\/?pasted_content\b[^>]*>/g
 
-// What you typed, without what was added around it; '' when nothing is
-// yours (Tessel's own messages, a bare slash command such as /clear).
-export function cleanPrompt(text) {
-  let s = String(text || '')
+// A prompt as typed, without what was added around it: { text, tessel }.
+// text: '' when nothing is yours (a bare slash command such as /clear, only
+// context); tessel: Tessel typed it (its answer is not to you).
+export function promptOf(raw) {
+  let s = String(raw || '')
     .replace(REMINDER, '')
     .trim()
   for (let i = 0; i < 8; i++) {
@@ -103,11 +136,22 @@ export function cleanPrompt(text) {
     s = s.slice(m[0].length).trimStart()
   }
   s = s.replace(PASTE_MARK, '').trim()
-  if (!s || /^\[Tessel\b/.test(s) || /^\/[\w:.-]+$/.test(s)) return ''
-  return s
+  if (s && isTesselDelivery(s)) return { text: '', tessel: true }
+  if (!s || /^\/[\w:.-]+$/.test(s)) return { text: '', tessel: false }
+  return { text: s, tessel: false }
 }
+export const cleanPrompt = (raw) => promptOf(raw).text
 
 const clip = (s, max) => (s.length > max ? `${s.slice(0, max - 1)}…` : s)
+const textBlocks = (content) =>
+  typeof content === 'string'
+    ? content
+    : Array.isArray(content)
+      ? content
+          .filter((b) => obj(b) && b.type === 'text' && typeof b.text === 'string')
+          .map((b) => b.text)
+          .join('\n')
+      : ''
 
 // Claude Code: a user line that is not you (a background task's notice, a
 // message from another session such as Tessel's reminder in its inbox: its
@@ -116,17 +160,46 @@ const clip = (s, max) => (s.length > max ? `${s.slice(0, max - 1)}…` : s)
 // answer before it stays that turn's.
 const TURN = '\u0000turn'
 const PEER = '\u0000peer'
+const bare = (r, content) =>
+  JSON.stringify({
+    type: 'user',
+    uuid: r.uuid,
+    timestamp: r.timestamp,
+    message: { role: 'user', content }
+  })
 function claudeLine(line) {
+  if (line.includes('"queued_command"')) return queuedLine(line)
   if (!line.includes('"origin"') || !line.includes('"type":"user"')) return line
   const r = parse(line)
   if (!r || r.type !== 'user') return line
   const kind = obj(r.origin)?.kind
   if (typeof kind !== 'string' || kind === 'human') return line
+  return bare(r, kind === 'peer' ? PEER : TURN)
+}
+// A prompt you sent while it worked: Claude Code queues it and gives it
+// between its tool calls, recorded as an attachment (queued_command), never
+// as a user line: yours becomes a prompt where it was given (the turn's
+// answer is then to it). Another session's, a task's notice and Tessel's own
+// are left out, and the turn stays whose it was.
+function queuedLine(line) {
+  const r = parse(line)
+  const a = r && r.type === 'attachment' ? obj(r.attachment) : null
+  if (!a || a.type !== 'queued_command') return line
+  const kind = obj(a.origin)?.kind
+  if (
+    a.commandMode !== 'prompt' ||
+    a.isMeta === true ||
+    r.isSidechain === true ||
+    (typeof kind === 'string' && kind !== 'human')
+  )
+    return null
+  const content = typeof a.prompt === 'string' || Array.isArray(a.prompt) ? a.prompt : null
+  if (!content || promptOf(textBlocks(content)).tessel) return null
   return JSON.stringify({
     type: 'user',
-    uuid: r.uuid,
-    timestamp: r.timestamp,
-    message: { role: 'user', content: kind === 'peer' ? PEER : TURN }
+    uuid: str(r.uuid) || str(a.source_uuid),
+    timestamp: r.timestamp || a.timestamp,
+    message: { role: 'user', content }
   })
 }
 // Codex: an agent message marked as commentary (what it says between tool
@@ -198,7 +271,7 @@ function modelAt(timeline, t) {
 export function conversationItems(agent, lines, sessionId, limits = TERMINAL_LIMITS) {
   const claude = agent === 'claude' || agent === 'openclaude'
   const kept = claude
-    ? lines.map(claudeLine)
+    ? lines.map(claudeLine).filter(Boolean)
     : agent === 'codex'
       ? lines.filter(codexAnswer)
       : lines
@@ -223,9 +296,13 @@ export function conversationItems(agent, lines, sessionId, limits = TERMINAL_LIM
   for (const ev of events) {
     if (ev.type === 'user') {
       flush()
-      const own = ev.text === TURN || ev.text === PEER ? '' : cleanPrompt(ev.text)
-      yours = ev.text === TURN || !!own || (ev.text !== PEER && !/^\s*\[Tessel\b/.test(ev.text))
-      if (own) push('user', ev.at, own)
+      if (ev.text === TURN || ev.text === PEER) {
+        yours = ev.text === TURN
+        continue
+      }
+      const p = promptOf(ev.text)
+      yours = !p.tessel
+      if (p.text) push('user', ev.at, p.text)
     } else if (ev.type === 'turnEnd') flush()
     // A tool call (not a call's later status): the text before it was not the answer.
     else if (ev.type === 'tool' && typeof ev.name === 'string') reply = []
@@ -237,10 +314,11 @@ export function conversationItems(agent, lines, sessionId, limits = TERMINAL_LIM
     items.forEach((it, i) => {
       // Claude Code names the model on its answers: a prompt's is the answer's
       // to it (none yet: unknown). Codex names it when the turn starts.
+      const next = items[i + 1]
       const m =
         claude && it.role === 'user'
-          ? items[i + 1] && items[i + 1].role === 'agent'
-            ? modelAt(timeline, items[i + 1].t)
+          ? next && next.role === 'agent'
+            ? modelAt(timeline, next.t)
             : null
           : modelAt(timeline, it.t)
       if (m) {
@@ -254,8 +332,8 @@ export function conversationItems(agent, lines, sessionId, limits = TERMINAL_LIM
 
 // ---- Reading ------------------------------------------------------------------------
 
-// A local file read like a host's (remoteTranscripts.js createRemoteTail's
-// readWindow), async: { ok, size, mtimeMs, data } | { ok: false, missing? }.
+// A local file's window, async: { ok, size, mtimeMs, data } | { ok: false,
+// missing?, code? } (the window ends at its end, or starts at offset).
 export function localWindowReader(file, fsp = fs.promises) {
   return async ({ offset = null, cap }) => {
     let fh = null
@@ -274,17 +352,48 @@ export function localWindowReader(file, fsp = fs.promises) {
       }
       return { ok: true, size: st.size, mtimeMs: st.mtimeMs, data: data.subarray(0, got) }
     } catch (err) {
-      return { ok: false, missing: !!err && err.code === 'ENOENT' }
+      const code = err && err.code
+      return { ok: false, missing: code === 'ENOENT', ...(code ? { code } : {}) }
     } finally {
       if (fh) await fh.close().catch(() => {})
     }
   }
 }
 
-// The window's ask, checked: [{ paneId, agent, sessionId, accountId?, hostId? }].
-function panesOf(list, max) {
+// A window's complete lines: the first one when the window starts inside the
+// file (cut), and a last one still being written (not whole JSON), go.
+export function windowLines(data, cut) {
+  let text = data.toString('utf8')
+  if (cut) {
+    const nl = text.indexOf('\n')
+    text = nl < 0 ? '' : text.slice(nl + 1)
+  }
+  const lines = text.split('\n')
+  const last = lines.pop()
+  if (last && last.trim() && parse(last.replace(/\r$/, ''))) lines.push(last)
+  return lines.map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l)).filter(Boolean)
+}
+
+// The newest decoded lines only, within the bounds (what is kept).
+function newest(items, limits) {
   const out = []
-  for (const raw of Array.isArray(list) ? list.slice(0, max) : []) {
+  let chars = 0
+  for (let i = items.length - 1; i >= 0 && out.length < limits.items; i--) {
+    chars += items[i].text.length
+    if (chars > limits.chars) break
+    out.push(items[i])
+  }
+  return out.reverse()
+}
+
+// The window's ask, checked: [{ ask, paneId, agent, sessionId, accountId?, hostId? }].
+// ask: what the answer is filed under (a pane's earlier conversation has its
+// own); the pane's id by default.
+function asksOf(list, max) {
+  const out = []
+  const seen = new Set()
+  for (const raw of Array.isArray(list) ? list : []) {
+    if (out.length >= max) break
     const p = obj(raw)
     if (
       !p ||
@@ -293,9 +402,17 @@ function panesOf(list, max) {
       !TERMINAL_CONVERSATION_AGENTS.includes(p.agent)
     )
       continue
+    const ask =
+      p.ask === undefined
+        ? p.paneId
+        : typeof p.ask === 'string' && ASK_ID.test(p.ask)
+          ? p.ask
+          : null
+    if (!ask || seen.has(ask)) continue
     if (p.hostId != null) {
-      if (validRemoteTranscript(p.agent, p.hostId, p.sessionId))
-        out.push({ paneId: p.paneId, agent: p.agent, sessionId: p.sessionId, hostId: p.hostId })
+      if (!validRemoteTranscript(p.agent, p.hostId, p.sessionId)) continue
+      seen.add(ask)
+      out.push({ ask, paneId: p.paneId, agent: p.agent, sessionId: p.sessionId, hostId: p.hostId })
       continue
     }
     if (!validViewId(p.agent, p.sessionId)) continue
@@ -303,7 +420,8 @@ function panesOf(list, max) {
       p.accountId === null || (typeof p.accountId === 'string' && ACCOUNT_ID.test(p.accountId))
         ? p.accountId
         : undefined
-    out.push({ paneId: p.paneId, agent: p.agent, sessionId: p.sessionId, accountId })
+    seen.add(ask)
+    out.push({ ask, paneId: p.paneId, agent: p.agent, sessionId: p.sessionId, accountId })
   }
   return out
 }
@@ -320,73 +438,79 @@ export function createTerminalConversations({
   limits = TERMINAL_LIMITS,
   now = () => Date.now(),
   fsp = fs.promises,
-  log = null
+  log = null,
+  timers = globalThis
 } = {}) {
-  const entries = new Map() // key -> { key, agent, sessionId, hostId, tail, seen, stamp, items, readAt }
+  // key -> { id, key, agent, sessionId, hostId, file, reader, stamp, items, askedAt, readAt, pending }
+  const entries = new Map()
   const missing = new Map() // key -> when its file was last looked for in vain
+  const hostDown = new Map() // hostId -> until when it is left alone
+  const hostQueues = new Map() // hostId -> its reads, one after the other
   let queue = Promise.resolve()
   let serial = 0
+  let idleTimer = null
 
   function keep(entry) {
     entries.delete(entry.key)
     entries.set(entry.key, entry)
     while (entries.size > limits.entries) entries.delete(entries.keys().next().value)
   }
-  // One file's tail (only what was added is read each time); seen: its size
-  // and time at the last read.
-  function newEntry(key, agent, sessionId, hostId, readWindow, bytes) {
-    const entry = {
+  function newEntry(key, agent, sessionId, hostId, more) {
+    // What the window knows it by: a number (never a folder).
+    return {
+      id: ++serial,
       key,
       agent,
       sessionId,
       hostId,
-      tail: null,
-      seen: null,
+      file: null,
+      reader: null,
       stamp: '',
       items: null,
+      askedAt: 0,
       readAt: 0,
-      // What the window knows it by (never a folder).
-      id: ++serial
+      pending: null,
+      ...more
     }
-    entry.tail = createRemoteTail(async (q) => {
-      const r = await readWindow(q)
-      if (r && r.ok) entry.seen = { size: r.size, mtimeMs: r.mtimeMs ?? null }
-      return r
-    }, bytes)
-    return entry
   }
-
-  // A file not found (or a host not answering before anything was read):
-  // not looked for again before missingMs.
+  // A file not found: not looked for again before missingMs.
   function lost(key) {
     missing.set(key, now())
     if (missing.size > limits.entries * 4) missing.delete(missing.keys().next().value)
   }
   const lostLately = (key) => missing.has(key) && now() - missing.get(key) < limits.missingMs
+  // What nobody asked for lately goes (the tab hidden, a pane closed); all
+  // of it once nothing is asked at all for idleMs.
+  function sweep() {
+    for (const [key, e] of entries) if (now() - e.askedAt > limits.idleMs) entries.delete(key)
+  }
+  function armIdle() {
+    if (idleTimer) timers.clearTimeout(idleTimer)
+    idleTimer = timers.setTimeout(() => {
+      idleTimer = null
+      entries.clear()
+      missing.clear()
+      hostDown.clear()
+    }, limits.idleMs)
+    if (idleTimer && typeof idleTimer.unref === 'function') idleTimer.unref()
+  }
+  const decode = (e, r) => {
+    e.items = newest(
+      conversationItems(e.agent, windowLines(r.data, r.size > r.data.length), e.sessionId, limits),
+      limits
+    )
+    e.stamp = `${r.size}:${r.mtimeMs ?? ''}`
+  }
 
-  async function entryOf(p, homeOf) {
-    if (p.hostId) {
-      if (typeof readAgentFile !== 'function') return null
-      const key = `${p.agent}|ssh:${p.hostId}|${p.sessionId}` // i18n-ignore
-      if (entries.has(key)) return entries.get(key)
-      if (lostLately(key)) return null
-      return newEntry(
-        key,
-        p.agent,
-        p.sessionId,
-        p.hostId,
-        remoteWindowReader(readAgentFile, { hostId: p.hostId, agent: p.agent, id: p.sessionId }),
-        limits.remoteBytes
-      )
-    }
+  // ---- Local files ----
+  async function localEntry(p, homeOf) {
     let home = null
     if (ACCOUNT_AGENTS.includes(p.agent)) {
       home = await homeOf(p.agent, p.accountId)
       if (!home) return null
     }
     const key = `${p.agent}|${home || ''}|${p.sessionId}` // i18n-ignore
-    const known = entries.get(key)
-    if (known) return known
+    if (entries.has(key)) return entries.get(key)
     if (lostLately(key)) return null
     let reported = null
     if (REPORTING_AGENTS.includes(p.agent)) {
@@ -407,63 +531,118 @@ export function createTerminalConversations({
       return null
     }
     missing.delete(key)
-    return newEntry(
-      key,
-      p.agent,
-      p.sessionId,
-      null,
-      localWindowReader(file, fsp),
-      limits.localBytes
-    )
+    return newEntry(key, p.agent, p.sessionId, null, { file, reader: localWindowReader(file, fsp) })
   }
-
-  // The entry read again (what was added since), its lines decoded again
-  // only when the file changed. -> the entry, or null when it cannot be read.
-  async function refresh(entry) {
-    // A host's file: at most once a minute.
-    if (entry.hostId && entry.items && now() - entry.readAt < limits.remoteEveryMs) return entry
-    let r
+  // Read again when its size or time changed. Gone: let go (looked for again
+  // a minute later); busy for a moment: what was read stays, tried again at
+  // the next ask.
+  async function refreshLocal(e) {
+    let st
     try {
-      r = await entry.tail.read()
-    } catch {
-      r = null
+      st = await fsp.stat(e.file)
+    } catch (err) {
+      if (err && err.code === 'ENOENT') {
+        entries.delete(e.key)
+        lost(e.key)
+      }
+      return
     }
-    entry.readAt = now()
-    if (r === null) {
-      // A host that does not answer for a moment: what was read stays.
-      if (entry.hostId && entry.items) return entry
-      entries.delete(entry.key)
-      lost(entry.key)
-      return null
+    if (e.items && e.stamp === `${st.size}:${st.mtimeMs}`) return
+    const r = await e.reader({ offset: null, cap: limits.localBytes })
+    if (!r || !r.ok) {
+      if (r && r.missing) {
+        entries.delete(e.key)
+        lost(e.key)
+      }
+      return
     }
-    // Nothing new (or only a line still being written): as decoded before.
-    if (r === false && entry.items) return entry
-    // Its size and time when decoded: what the window's copy is known by.
-    entry.stamp = entry.seen ? `${entry.seen.size}:${entry.seen.mtimeMs}` : ''
-    entry.items = conversationItems(entry.agent, entry.tail.lines(), entry.sessionId, limits)
-    return entry
+    decode(e, r)
+    e.readAt = now()
   }
 
-  // A pane's lines from `from` on: the newest, within the bounds.
-  function windowOf(items, from) {
-    const out = []
-    let chars = 0
-    for (let i = items.length - 1; i >= 0 && out.length < limits.items; i--) {
-      const it = items[i]
-      if (it.t < from) break
-      chars += it.text.length
-      if (chars > limits.chars) break
-      out.push(it)
+  // ---- A host's files ----
+  function remoteEntry(p) {
+    if (typeof readAgentFile !== 'function') return null
+    const key = `${p.agent}|ssh:${p.hostId}|${p.sessionId}` // i18n-ignore
+    if (entries.has(key)) return entries.get(key)
+    if (lostLately(key)) return null
+    return newEntry(key, p.agent, p.sessionId, p.hostId, {
+      reader: remoteWindowReader(readAgentFile, {
+        hostId: p.hostId,
+        agent: p.agent,
+        id: p.sessionId
+      })
+    })
+  }
+  // Its size and time first (one byte); the window only when they changed.
+  async function refreshRemote(e) {
+    const probe = await e.reader({ offset: null, cap: 1 })
+    e.readAt = now()
+    if (!probe || !probe.ok) {
+      if (probe && probe.missing) {
+        entries.delete(e.key)
+        lost(e.key)
+      }
+      return
     }
-    return out.reverse()
+    if (e.items && e.stamp === `${probe.size}:${probe.mtimeMs ?? ''}`) return
+    const r = await e.reader({ offset: null, cap: limits.remoteBytes })
+    if (r && r.ok && Buffer.isBuffer(r.data)) decode(e, r)
+  }
+  // One read at a time per host, apart from the local reads; a host that
+  // took long is left alone hostDownMs.
+  function scheduleRemote(e) {
+    if (e.pending) return e.pending
+    if (e.readAt && now() - e.readAt < limits.remoteEveryMs) return Promise.resolve()
+    const down = () => (hostDown.get(e.hostId) || 0) > now()
+    if (down()) return Promise.resolve()
+    const run = (hostQueues.get(e.hostId) || Promise.resolve()).then(async () => {
+      if (down() || !entries.has(e.key)) return
+      const started = Date.now()
+      try {
+        await refreshRemote(e)
+      } catch {
+        // what was read stays
+      }
+      if (Date.now() - started > limits.slowHostMs)
+        hostDown.set(e.hostId, now() + limits.hostDownMs)
+    })
+    e.pending = run.finally(() => {
+      e.pending = null
+    })
+    hostQueues.set(
+      e.hostId,
+      e.pending.catch(() => {})
+    )
+    return e.pending
   }
 
-  // q: { panes, from, known: { [paneId]: key } }
-  // -> { ok: true, panes: { [paneId]: { key, items } | { key, same: true } } }
+  // What the window gets for one ask: its lines from `from` on, or "same"
+  // when its copy (known by the key it was given) still holds them: same
+  // conversation, same file, and a period no longer than it was sent for.
+  function answer(e, prevKey, from) {
+    const prev = typeof prevKey === 'string' ? prevKey.split('|') : null
+    if (
+      prev &&
+      prev.length === 3 &&
+      prev[0] === String(e.id) &&
+      prev[1] === e.stamp &&
+      Number(prev[2]) <= from
+    )
+      return { key: prevKey, same: true }
+    const items = []
+    for (const it of e.items) if (it.t >= from) items.push(it)
+    return { key: `${e.id}|${e.stamp}|${from}`, items } // i18n-ignore
+  }
+
+  // q: { panes: [{ ask?, paneId, agent, sessionId, accountId?, hostId? }],
+  //      from, known: { [ask]: key } }
+  // -> { ok: true, panes: { [ask]: { key, items } | { key, same: true } } }
   async function readAll(q) {
     const o = obj(q) || {}
     const from = Number.isFinite(o.from) ? o.from : 0
     const known = obj(o.known) || {}
+    sweep()
     const homesSeen = new Map()
     const homeOf = (agent, accountId) => {
       const k = `${agent}|${accountId === undefined ? '' : String(accountId)}` // i18n-ignore
@@ -477,29 +656,40 @@ export function createTerminalConversations({
       return homesSeen.get(k)
     }
     const out = {}
-    for (const p of panesOf(o.panes, limits.panes)) {
-      let entry = null
+    const remote = []
+    for (const p of asksOf(o.panes, limits.panes)) {
+      let e = null
       try {
-        entry = await entryOf(p, homeOf)
-        if (entry) entry = await refresh(entry)
+        e = p.hostId ? remoteEntry(p) : await localEntry(p, homeOf)
+        if (!e) continue
+        e.askedAt = now()
+        keep(e)
+        if (p.hostId) {
+          remote.push({ p, e, wait: scheduleRemote(e) })
+          continue
+        }
+        await refreshLocal(e)
       } catch (err) {
-        entry = null
         if (log) log.warn('conversations', `terminal read failed: ${err && err.message}`) // i18n-ignore
       }
-      if (entry && entry.items) {
-        keep(entry)
-        const key = `${entry.id}:${entry.stamp}:${from}` // i18n-ignore
-        out[p.paneId] =
-          known[p.paneId] === key
-            ? { key, same: true }
-            : { key, items: windowOf(entry.items, from) }
-      }
-      // The next pane after the window had its turn.
+      if (e && e.items) out[p.ask] = answer(e, known[p.ask], from)
+      // The window had its turn before the next file.
       await new Promise((resolve) => setImmediate(resolve))
     }
+    if (remote.length) {
+      let timer = null
+      await Promise.race([
+        Promise.all(remote.map((x) => x.wait.catch(() => {}))),
+        new Promise((resolve) => (timer = timers.setTimeout(resolve, limits.remoteWaitMs)))
+      ])
+      timers.clearTimeout(timer)
+      for (const { p, e } of remote) if (e.items) out[p.ask] = answer(e, known[p.ask], from)
+    }
+    armIdle()
     return { ok: true, panes: out }
   }
-  // One read at a time: a second ask waits for the first.
+  // One ask at a time: a second waits for the first (a host's reads do not
+  // hold it longer than remoteWaitMs).
   function read(q) {
     const run = queue.then(
       () => readAll(q),
@@ -511,5 +701,17 @@ export function createTerminalConversations({
   function register(ipcMain) {
     ipcMain.handle('conversations:terminal', (_e, q) => read(q).catch(() => ({ ok: false })))
   }
-  return { read, register, size: () => entries.size, clear: () => entries.clear() }
+  function dispose() {
+    if (idleTimer) timers.clearTimeout(idleTimer)
+    idleTimer = null
+    entries.clear()
+    missing.clear()
+  }
+  // What is held for each conversation (its fields, its decoded lines' count).
+  const held = () =>
+    [...entries.values()].map((e) => ({
+      keys: Object.keys(e),
+      items: e.items ? e.items.length : 0
+    }))
+  return { read, register, dispose, held, size: () => entries.size, clear: () => entries.clear() }
 }

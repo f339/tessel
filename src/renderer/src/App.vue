@@ -21,6 +21,8 @@ import { withWorktreePath } from './prAgentPrompts'
 import { workspaceViews, viewKey, leafViewPath, isTabLeaf, addTabLeaf, gridLeafFor, pruneTree } from './paneViews'
 import { createPortScanner, browserUrlForPort, addressForPort } from './portScanner'
 import { allowedBrowserUrl, BLANK_URL, displayUrl } from '../../shared/browserUrl'
+import { leadHead, reviewRequest, teammateHead } from '../../shared/tesselDelivery'
+import { notePanes } from './paneSessionTrail'
 import LaunchMenu from './components/LaunchMenu.vue'
 import { accountChoices, refreshAccountChoices, setOpenPanesSource } from './accountChoices'
 import SettingsDialog from './components/SettingsDialog.vue'
@@ -3967,11 +3969,9 @@ function reviewPrompt(fromLeaf, ws) {
   const who = fromLeaf ? fromLeaf.title : 'another agent' // i18n-ignore
   const where = dir ? ` in ${dir}` : '' // i18n-ignore
   const branch = fromLeaf && fromLeaf.worktree ? ` (branch ${fromLeaf.worktree.branch})` : '' // i18n-ignore
-  return (
-    `Please review the changes ${who} made${where}${branch}. ` + // i18n-ignore
-    'Run git status and git diff there to see them. Point out bugs, risky changes and missing ' + // i18n-ignore
-    'tests, with file and line references. Do not modify any files; only report.' // i18n-ignore
-  )
+  // Its words are shared (src/shared/tesselDelivery.js): the Conversations
+  // tab knows it in the reviewer's own conversation file.
+  return reviewRequest(who, where, branch)
 }
 
 // Hand text from one pane to another. 'selection' pastes without pressing
@@ -5794,6 +5794,21 @@ const sidebarProjects = computed(() =>
       ...(liveShare.isGuestWs(w) ? { live: 'guest' } : liveBanner.value && liveBanner.value.mode === 'host' && liveShare.isShared(w.id) ? { live: 'host' } : {})
     }
   })
+)
+
+// The Conversations tab's memory of each terminal agent's conversations while
+// Tessel runs (an earlier one of its pane, a pane closed since): noted as
+// they change (src/renderer/src/paneSessionTrail.js). Watched once mounted:
+// the panes' list reads state set up further down.
+onMounted(() =>
+  watch(
+    () =>
+      sidebarProjects.value
+        .map((p) => p.panes.map((x) => (x.kind === 'agent' && x.sessionId ? `${p.id}:${x.id}:${x.agentId}:${x.sessionId}:${x.title}:${x.remoteHostId || ''}:${x.accountId ?? ''}` : '')).join(',')) // i18n-ignore
+        .join('|'),
+    () => notePanes(sidebarProjects.value),
+    { immediate: true }
+  )
 )
 
 // Live ports of each workspace (Orca's scanner: every 30 s while visible).
@@ -7721,7 +7736,7 @@ function runMemberMessage(team, from, req) {
   }
   log.push(now)
   const isLead = lead && lead.id === from.id
-  const head = isLead ? `[From your lead ${paneLabel(from)}]` : `[From ${paneLabel(from)}, team "${team.name}"]` // i18n-ignore
+  const head = isLead ? leadHead(paneLabel(from)) : teammateHead(paneLabel(from), team.name)
   const meta = { source: isLead ? 'lead' : 'agent', scope: 'team', teamId: team.id, from: from.paneName || from.title, sender: senderSnapshotOf(from, team), waitIdle: true }
   const skipped = []
   for (const l of to) {
@@ -10792,7 +10807,7 @@ async function deliverChannel(team, members, round = teamRound) {
     const from = who[d.fromId]
     return d.fromId === 'tessel'
       ? `[Tessel] ${d.text}`
-      : `[From ${from ? paneLabel(from) : 'teammate'}, team "${team.name}", message ${d.id}${d.replyTo ? `, reply to ${d.replyTo}` : ''}] ${d.text}` // i18n-ignore
+      : `${teammateHead(from ? paneLabel(from) : 'teammate', team.name, { id: d.id, replyTo: d.replyTo || '' })} ${d.text}` // i18n-ignore
   }
   const api = window.shellApi.channel
   const where = { dir, teamId: team.id }

@@ -6,6 +6,14 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ConversationsPanel from '../components/ConversationsPanel.vue'
+import { clearPaneSessionTrail } from '../paneSessionTrail'
+import * as conversations from '../../../shared/conversations'
+
+// Counts the threads being built (a tick that changed nothing builds none).
+vi.mock('../../../shared/conversations', async (importOriginal) => {
+  const real = await importOriginal()
+  return { ...real, buildThreads: vi.fn(real.buildThreads) }
+})
 
 const NOW = new Date(2026, 9, 10, 15, 0, 0).getTime()
 const MIN = 60 * 1000
@@ -85,8 +93,8 @@ function api(
     ok: true,
     panes: Object.fromEntries(
       q.panes
-        .filter((p) => items[p.paneId])
-        .map((p) => [p.paneId, { key: `k-${p.paneId}`, items: items[p.paneId] }])
+        .filter((p) => items[p.ask])
+        .map((p) => [p.ask, { key: `k-${p.ask}`, items: items[p.ask] }])
     )
   })
 ) {
@@ -141,6 +149,7 @@ const texts = (el) => el.findAll('[data-test="cv-text"]').map((x) => x.text())
 afterEach(() => {
   document.body.innerHTML = ''
   delete window.shellApi
+  clearPaneSessionTrail()
 })
 
 describe('ConversationsPanel.vue: what was said in the terminals', () => {
@@ -149,8 +158,8 @@ describe('ConversationsPanel.vue: what was said in the terminals', () => {
     const w = make()
     await flushPromises()
     expect(calls[0].panes).toEqual([
-      { paneId: 'p1', agent: 'claude', sessionId: SID, accountId: 'acc-1' },
-      { paneId: 'p2', agent: 'codex', sessionId: SID2, hostId: 'ssh-box' }
+      { ask: 'p1', paneId: 'p1', agent: 'claude', sessionId: SID, accountId: 'acc-1' },
+      { ask: 'p2', paneId: 'p2', agent: 'codex', sessionId: SID2, hostId: 'ssh-box' }
     ])
     expect(calls[0].from).toBe(Math.floor((NOW - 7 * 24 * 3600 * 1000) / 60000) * 60000)
     const ada1 = thread(w, 'you:p1')
@@ -195,10 +204,10 @@ describe('ConversationsPanel.vue: what was said in the terminals', () => {
       ok: true,
       panes: Object.fromEntries(
         q.panes
-          .filter((p) => items[p.paneId])
+          .filter((p) => items[p.ask])
           .map((p) => [
-            p.paneId,
-            q.known[p.paneId] === 'k-p1'
+            p.ask,
+            q.known[p.ask] === 'k-p1'
               ? { key: 'k-p1', same: true }
               : { key: 'k-p1', items: items.p1 }
           ])
@@ -210,9 +219,56 @@ describe('ConversationsPanel.vue: what was said in the terminals', () => {
     await flushPromises()
     expect(calls[1].known).toEqual({ p1: 'k-p1' })
     expect(texts(thread(w, 'you:p1'))).toHaveLength(3)
+    // Every conversation answered "same": the threads were not built again.
+    const built = conversations.buildThreads.mock.calls.length
+    await w.setProps({ now: NOW + 40000 })
+    await flushPromises()
+    expect(calls).toHaveLength(3)
+    expect(conversations.buildThreads.mock.calls.length).toBe(built)
     await w.find('[data-test="cv-scope-all"]').trigger('click')
     await flushPromises()
     expect(calls[calls.length - 1].panes.map((p) => p.paneId)).toEqual(['p1', 'p2', 'p9'])
+    w.unmount()
+  })
+
+  it('after /clear, and once its pane is closed, what was said there stays in its thread', async () => {
+    const OLD = SID
+    const NEW = '22222222-2222-4333-8444-555555555555'
+    const said = {
+      p1: [{ role: 'user', t: NOW - 3 * MIN, text: 'After clear' }],
+      [`p1~${OLD}`]: [{ role: 'user', t: NOW - 20 * MIN, text: 'Before clear' }],
+      [`p2~${SID2}`]: [{ role: 'user', t: NOW - 40 * MIN, text: 'To Bob before he closed' }]
+    }
+    api((q) => ({
+      ok: true,
+      panes: Object.fromEntries(
+        q.panes
+          .filter((x) => said[x.ask])
+          .map((x) => [x.ask, { key: `k-${x.ask}`, items: said[x.ask] }])
+      )
+    }))
+    const w = make()
+    await flushPromises()
+    const cleared = [
+      {
+        ...projects[0],
+        panes: [{ ...projects[0].panes[0], sessionId: NEW }, ...projects[0].panes.slice(2)]
+      },
+      projects[1]
+    ]
+    await w.setProps({ projects: cleared })
+    await flushPromises()
+    const last = calls[calls.length - 1]
+    expect(last.panes.map((x) => [x.ask, x.sessionId])).toEqual([
+      ['p1', NEW],
+      [`p1~${OLD}`, OLD],
+      [`p2~${SID2}`, SID2]
+    ])
+    expect(last.panes[2]).toMatchObject({ paneId: 'p2', agent: 'codex', hostId: 'ssh-box' })
+    expect(texts(thread(w, 'you:p1'))).toEqual(['After clear', 'Read the notes', 'Before clear'])
+    const bob = thread(w, 'you:p2')
+    expect(bob.find('.sh-group-label').text()).toBe('You and Bob')
+    expect(texts(bob)).toEqual(['To Bob before he closed'])
     w.unmount()
   })
 
