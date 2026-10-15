@@ -197,6 +197,17 @@
       "leave": "Quitter",
       "leaveTitle": "Quitter la session Live Share ?",
       "leaveText": "Vous ne verrez plus les panneaux de {{host}}. Pour revenir, demandez un nouveau code d’invitation à {{host}}."
+    },
+    "guestView": {
+      "showTerminal": "Votre vue : chat. Afficher le terminal (seulement sur votre écran : le panneau de {{host}} ne change pas)",
+      "showChat": "Votre vue : terminal. Afficher la conversation en chat (seulement sur votre écran : le panneau de {{host}} ne change pas)",
+      "showTerminalLabel": "Votre vue : afficher le terminal",
+      "showChatLabel": "Votre vue : afficher le chat",
+      "readOnly": "Lecture seule : la conversation de {{host}}, seulement sur votre écran",
+      "backToTerminal": "Afficher le terminal",
+      "oldHost": "Le Tessel de {{host}} ne partage pas encore les conversations : il faut une version plus récente de Tessel. Le terminal montre toujours tout.",
+      "noTerminal": "{{host}} a ce panneau en mode chat : il n'a pas de terminal à montrer. Sa conversation s'affiche en chat.",
+      "showChatButton": "Afficher le chat"
     }
   }
 }

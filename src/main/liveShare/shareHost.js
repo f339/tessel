@@ -56,14 +56,27 @@
 // questions (cursor position, colours...) is never typed in the host's: the
 // host's own terminal answers.
 //
+//
+// A guest whose Tessel says so (the 'chat' feature, shareChat.js) can also
+// look at an agent pane of its projects as a chat, read only: it asks for
+// that pane's conversation ('chat', on), and gets it as the host's Tessel
+// reads it (sendChat: one copy for every guest watching, at most once a
+// second per pane, bounded), until it stops ('chat', off), loses the pane or
+// the project, or leaves. Nothing about it reaches the pane: no typing, no
+// mode, no restart. A guest whose Tessel does not say so gets none of it.
+//
 // Tessel itself is reached only through the callbacks below, so this file
 // runs (and is tested) without Electron.
 import crypto from 'crypto'
 import { WebSocketServer } from 'ws'
 import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitmentMatches, bindingSigned, signBinding, newSigningKey, NONCE_BYTES, COMMIT_BYTES, KX_BYTES } from './shareCrypto.js'
+import { SHARE_FEATURES, cleanFeatures, CHAT_LIMITS, CHAT_CODES } from './shareChat.js'
 
 // 4: several projects shared, each guest its own (the welcome and the
-// updates list projects, not panes). 3: the guest commits first
+// updates list projects, not panes). What came after 4 is said as features
+// in the sealed join and welcome (shareChat.js SHARE_FEATURES), not as a new
+// version: the hello's version must be the same on both sides, and an older
+// Tessel ignores features it does not know. 3: the guest commits first
 // (shareCrypto.js), proves its reconnect key and the host signs its welcome.
 // A Tessel with protocol 1 (no commitment) is told it is out of date; one
 // with protocol 2 or 3 reads the hello's version (an older guest: its Tessel
@@ -97,6 +110,13 @@ const OPENS_PER_MINUTE = 3
 const OPENS_IN_ALL = 12
 const CLOSES_PER_MINUTE = 6
 const RESYNCS_PER_MINUTE = 30 // pane screens asked again (a window reloaded)
+// Conversations (the 'chat' feature): watched by one guest at once, started
+// in a minute, and how often one pane's goes out (the latest when its time
+// comes); one bigger than this is not sent.
+const MAX_CHATS = 8
+const CHATS_PER_MINUTE = 30
+const CHAT_EVERY_MS = 1000
+const MAX_CHAT_BYTES = CHAT_LIMITS.bytes + 64 * 1024
 // Times a guest let in comes back in a minute (each time, every pane it sees
 // is taken again); past that it is turned away as busy (its Tessel tries
 // again a moment later).
@@ -204,6 +224,17 @@ const secretId = (secret) => crypto.createHash('sha256').update('tessel-liveshar
 //                             handshake: the code lets no new guest in until
 //                             rotate()
 //   onKnownChanged()       -> the guests let in changed (knownGuests())
+//   chatProject(id)        -> the shared project an agent pane a guest can
+//                             look at as a chat is in, or null (optional:
+//                             projects()' chats otherwise); checked like
+//                             paneProject for every conversation sent
+//   chatWatch(id, on)      -> optional (without it, no guest gets the 'chat'
+//                             feature): the first guest started watching that
+//                             pane's conversation (on), or the last one
+//                             stopped; its reads go out with sendChat(id, ...)
+// projects()' items may have chats: [{ id, title, agentId, accent,
+// terminal }] (shareChat.js cleanChatPanes), sent only to guests with the
+// 'chat' feature.
 // A share taken back after a restart: known (knownGuests()), secrets (its
 // earlier invite secrets), inviteExpires (its code's end), guard (its block,
 // guardState()), hostKey (its signing key, shareCrypto.js newSigningKey).
@@ -262,6 +293,13 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   let roomFull = Array.isArray(guard && guard.roomFull) ? guard.roomFull.filter((x) => Number.isFinite(x)) : [] // times of guests turned away by a full room
   let blocked = !!(guard && guard.blocked)
   let exchanges = [] // times of handshakes: [time, address]
+  // What this host speaks beyond the protocol version.
+  const hostFeatures = typeof callbacks.chatWatch === 'function' ? [...SHARE_FEATURES] : []
+  // Conversations watched: pane id -> Set of guest ids; the last one read
+  // (sent at once to a guest that starts watching), and when one last went out.
+  const chatWatchers = new Map()
+  const chatLast = new Map()
+  const chatTimes = new Map() // pane id -> { at, timer }
 
   // A guest offline for more than OFFLINE_KEEP_MS: forgotten.
   function forgetOld() {
@@ -297,6 +335,8 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     if (!guests.has(g.id)) return
     guests.delete(g.id)
     clearTimeout(g.flushTimer)
+    // Nothing more of its conversations goes out.
+    for (const id of [...g.chats.keys()]) unwatchChat(g, id)
     try {
       if (g.channel && g.socket.readyState === 1) g.socket.send(g.channel.seal({ t: 'bye', reason }))
     } catch {
@@ -378,6 +418,81 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   function forget(g, id) {
     g.subscribed.delete(id)
     g.pending.delete(id)
+  }
+
+  // --- Conversations (the 'chat' feature) ---------------------------------
+  const chatsOf = (p) => (Array.isArray(p && p.chats) ? p.chats : [])
+  function chatProject(id) {
+    if (callbacks.chatProject) return callbacks.chatProject(id) || null
+    const p = callbacks.projects().find((x) => chatsOf(x).some((c) => c.id === id))
+    return p ? p.id : null
+  }
+  const speaksChat = (g) => g.features.has('chat')
+  // Still good: the pane in the project it was asked in, that project still
+  // shared and the guest's.
+  const chatLive = (g, id) => {
+    const project = chatProject(id)
+    return speaksChat(g) && !!project && g.chats.get(id) === project && g.projects.has(project)
+  }
+  function watchChat(g, id, project) {
+    g.chats.set(id, project)
+    let watchers = chatWatchers.get(id)
+    const first = !watchers
+    if (!watchers) chatWatchers.set(id, (watchers = new Set()))
+    watchers.add(g.id)
+    if (first) {
+      try {
+        callbacks.chatWatch(id, true)
+      } catch {
+        /* the host's reading going wrong never ends the guest */
+      }
+      return
+    }
+    const last = chatLast.get(id)
+    if (last) send(g, { t: 'chat', id, ...last })
+  }
+  function unwatchChat(g, id) {
+    g.chats.delete(id)
+    const watchers = chatWatchers.get(id)
+    if (!watchers) return
+    watchers.delete(g.id)
+    if (watchers.size) return
+    chatWatchers.delete(id)
+    chatLast.delete(id)
+    clearTimeout(chatTimes.get(id)?.timer)
+    chatTimes.delete(id)
+    try {
+      callbacks.chatWatch(id, false)
+    } catch {
+      /* gone anyway */
+    }
+  }
+  // What a host's Tessel sends of a conversation: { ok: true, events,
+  // truncated } or { ok: false, code } (shareChat.js), checked again here.
+  function chatMessage(payload) {
+    if (!payload || typeof payload !== 'object') return null
+    if (payload.ok !== true) return { ok: false, code: CHAT_CODES.includes(payload.code) ? payload.code : 'error' }
+    if (!Array.isArray(payload.events)) return null
+    const message = { ok: true, events: payload.events.slice(-CHAT_LIMITS.events), truncated: !!payload.truncated }
+    let size = 0
+    try {
+      size = Buffer.byteLength(JSON.stringify(message), 'utf8')
+    } catch {
+      return { ok: false, code: 'error' }
+    }
+    return size > MAX_CHAT_BYTES ? { ok: false, code: 'unavailable' } : message
+  }
+  // The latest of a pane's conversation, to every guest watching it that may
+  // still see it.
+  function flushChat(id) {
+    const message = chatLast.get(id)
+    const watchers = chatWatchers.get(id)
+    if (!message || !watchers) return
+    chatTimes.set(id, { at: Date.now(), timer: null })
+    for (const gid of watchers) {
+      const g = guests.get(gid)
+      if (g && g.state === 'joined' && chatLive(g, id)) send(g, { t: 'chat', id, ...message })
+    }
   }
 
   // A pane's screen, then its output from there on. Output that came before
@@ -465,12 +580,19 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   }
 
   // The shared projects a guest sees, and where each of their terminals is
-  // (a pane listed in two projects is the first one's).
+  // (a pane listed in two projects is the first one's), and each agent pane
+  // it can look at as a chat (only for a guest with the 'chat' feature: the
+  // others get the projects as before).
   function projectsOf(g, projects = callbacks.projects()) {
-    const mine = projects.filter((p) => g.projects.has(p.id))
+    const chat = speaksChat(g)
+    const mine = projects.filter((p) => g.projects.has(p.id)).map((p) => (chat ? { id: p.id, layout: p.layout, panes: p.panes, chats: chatsOf(p) } : { id: p.id, layout: p.layout, panes: p.panes }))
     const where = new Map()
-    for (const p of mine) for (const pane of p.panes) if (!where.has(pane.id)) where.set(pane.id, p.id)
-    return { mine, where }
+    const chatWhere = new Map()
+    for (const p of mine) {
+      for (const pane of p.panes) if (!where.has(pane.id)) where.set(pane.id, p.id)
+      for (const c of p.chats || []) if (!chatWhere.has(c.id)) chatWhere.set(c.id, p.id)
+    }
+    return { mine, where, chatWhere }
   }
 
   // What a guest sees of the share now, sent to it: its projects (layouts and
@@ -478,8 +600,10 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   // goes out), a pane that moved to another of its projects is taken again,
   // and what it sees is taken (its screen, then its output).
   function sendProjects(g, projects) {
-    const { mine, where } = projectsOf(g, projects)
+    const { mine, where, chatWhere } = projectsOf(g, projects)
     for (const [id, sub] of [...g.subscribed]) if (where.get(id) !== sub.project) forget(g, id)
+    // A conversation it no longer sees: nothing more of it goes out.
+    for (const [id, project] of [...g.chats]) if (chatWhere.get(id) !== project) unwatchChat(g, id)
     send(g, { t: 'projects', projects: mine })
     for (const id of where.keys()) subscribe(g, id)
   }
@@ -568,7 +692,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     // This host's key, and its signature of this connection (a returning
     // guest checks it with the key it got the first time).
     const proof = { hostKey: hostKey.publicRaw.toString('base64'), hostSig: signBinding(hostKey, g.binding).toString('base64') }
-    send(g, { t: 'welcome', host: hostName, protocol: SHARE_PROTOCOL, projects: mine, rights: { ...g.rights }, ...proof })
+    send(g, { t: 'welcome', host: hostName, protocol: SHARE_PROTOCOL, features: [...hostFeatures], projects: mine, rights: { ...g.rights }, ...proof })
     for (const id of where.keys()) subscribe(g, id)
   }
 
@@ -621,6 +745,8 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
 
   async function onJoin(g, msg) {
     g.name = cleanName(msg.name)
+    // What its Tessel speaks too (an older one says nothing: none).
+    g.features = new Set(cleanFeatures(msg.features).filter((f) => hostFeatures.includes(f)))
     if (msg.rejoin && typeof msg.rejoin === 'object') return rejoin(g, msg.rejoin)
     // A new guest: the current code, not blocked or expired, the host not
     // pausing after a no, and its reconnect key.
@@ -737,6 +863,19 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
         keysChanged()
         callbacks.closePane(msg.id, publicGuest(g))
         return
+      // An agent pane's conversation, watched or no longer (read only: no
+      // right needed, nothing reaches the pane).
+      case 'chat': {
+        if (!speaksChat(g) || typeof msg.id !== 'string' || !/^[\w-]{1,80}$/.test(msg.id)) return
+        if (msg.on !== true) return unwatchChat(g, msg.id)
+        if (g.chats.has(msg.id)) return
+        const project = chatProject(msg.id)
+        if (!project || !g.projects.has(project)) return send(g, { t: 'chat', id: msg.id, ok: false, code: 'unavailable' })
+        const known = keys.get(g.keyHash)
+        if (g.chats.size >= MAX_CHATS || !known || !within(known, 'chatAsks', CHATS_PER_MINUTE)) return send(g, { t: 'chat', id: msg.id, ok: false, code: 'busy' })
+        watchChat(g, msg.id, project)
+        return
+      }
       default:
         return
     }
@@ -793,6 +932,8 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       everJoined: false,
       rights: { ...NO_RIGHTS },
       projects: new Set(), // the shared projects it sees (once in)
+      features: new Set(), // what its Tessel speaks beyond the protocol (shareChat.js)
+      chats: new Map(), // pane id -> the project it was asked in: the conversations it watches
       subscribed: new Map(), // pane id -> { state: 'loading' | 'live', held, exit, project }
       pending: new Map(),
       flushTimer: null,
@@ -934,6 +1075,8 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       stopped = true
       clearInterval(pingTimer)
       for (const g of [...guests.values()]) drop(g, reason)
+      for (const st of chatTimes.values()) clearTimeout(st.timer)
+      chatTimes.clear()
       try {
         wss?.close()
       } catch {
@@ -955,6 +1098,26 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
         if (!g.flushTimer) g.flushTimer = setTimeout(() => flush(g), FLUSH_MS)
       }
     },
+    // A pane's conversation as the host's Tessel read it (shareChat.js
+    // guestChatPayload: { ok: true, events, truncated } or { ok: false,
+    // code }), to every guest watching it that may still see it; at most
+    // once every CHAT_EVERY_MS per pane (the latest goes when its time comes).
+    sendChat(id, payload) {
+      if (!chatWatchers.has(id)) return
+      const message = chatMessage(payload)
+      if (!message) return
+      chatLast.set(id, message)
+      const st = chatTimes.get(id)
+      if (st && st.timer) return
+      const wait = st ? st.at + CHAT_EVERY_MS - Date.now() : 0
+      if (wait > 0) {
+        chatTimes.set(id, { at: st.at, timer: setTimeout(() => flushChat(id), wait) })
+        return
+      }
+      flushChat(id)
+    },
+    // The panes whose conversation guests watch now, and who (guest ids).
+    chatsWatched: () => [...chatWatchers].map(([id, set]) => ({ id, guests: [...set] })),
     sendExit(id, exitCode) {
       if (!paneProject(id)) return
       for (const g of guests.values()) {

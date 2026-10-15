@@ -345,7 +345,7 @@ describe('Live Share in the window, as the host', () => {
     expect(t.api.setLayouts).not.toHaveBeenCalled()
     sharingNow(['ws-1'])
     await flush()
-    expect(lastLayouts()).toEqual([{ id: 'ws-1', layout: expect.objectContaining({ project: 'tessel', activeId: 'pane-1' }) }])
+    expect(lastLayouts()).toEqual([{ id: 'ws-1', layout: expect.objectContaining({ project: 'tessel', activeId: 'pane-1' }), chats: [] }])
     shared.tree.title = 'npm run dev'
     await flush()
     expect(lastLayouts()[0].layout.tree.title).toBe('npm run dev')
@@ -699,7 +699,7 @@ describe('Live Share in the window: what the review found', () => {
     expect(t.api.setLayouts.mock.calls.every(([list]) => list.length === 0)).toBe(true)
     t.workspaces.value.push(reactive({ id: 'ws-1', name: 'tessel', activeId: 'pane-1', tree: { type: 'leaf', id: 'pane-1', kind: 'shell', title: 'PowerShell' } }))
     await flush()
-    expect(t.api.setLayouts).toHaveBeenLastCalledWith([{ id: 'ws-1', layout: expect.objectContaining({ project: 'tessel' }) }])
+    expect(t.api.setLayouts).toHaveBeenLastCalledWith([{ id: 'ws-1', layout: expect.objectContaining({ project: 'tessel' }), chats: [] }])
     expect(t.ls.sharedWss().map((w) => w.id)).toEqual(['ws-1'])
     expect(t.api.share).not.toHaveBeenCalled()
     // The window has its projects back and ws-2 is not among them: out of the share.
@@ -749,5 +749,117 @@ describe('Live Share in the window: what the review found', () => {
   it('tells the host when the code got blocked', () => {
     t.listeners.onHost({ state: 'sharing', invite: 'x', guests: [], inviteBlocked: true })
     expect(t.toasts.at(-1)).toMatch(/no longer lets anyone in/)
+  })
+})
+
+describe('Live Share, as a guest: your own view of a host’s agent pane', () => {
+  let t
+  beforeEach(async () => {
+    t = setup()
+    t.api.chatWatch = vi.fn(async ({ on }) => (on ? { ok: true, last: t.last || null } : { ok: true }))
+    t.api.onChat = (cb) => {
+      t.listeners.onChat = cb
+      return () => delete t.listeners.onChat
+    }
+    await t.ls.init()
+  })
+  afterEach(() => t.ls.dispose())
+
+  const agent = (id, extra = {}) => pane(id, { kind: 'agent', agentId: 'claude', ...extra })
+  const layoutOf = (...children) => ({ project: 'site', tree: children.length === 1 ? children[0] : { type: 'split', dir: 'row', sizes: children.map(() => 100 / children.length), children }, activeId: null, maximizedId: null })
+  const chatOf = (id, terminal = true) => ({ id, project: 'ws-a', title: id, agentId: 'claude', accent: null, terminal })
+  // Everything that would reach the host's pane or this window's terminals.
+  const reachedHost = () => [t.api.open, t.api.leave, t.api.approve, t.api.setRights, t.api.stop, t.deps.killPty, t.deps.closeLeaf, t.deps.launch].some((fn) => fn.mock.calls.length)
+  const leafOf = (id) => {
+    const find = (n) => (!n ? null : n.type === 'leaf' ? (n.id === id ? n : null) : n.children.map(find).find(Boolean) || null)
+    return find(t.workspaces.value[0].tree)
+  }
+
+  it('a shared agent pane has the chat button (its terminal shown first); switching is yours only', async () => {
+    t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [agent('pane-ls1-a'), pane('pane-ls1-ps')], layout: layoutOf(leaf('pane-ls1-a'), leaf('pane-ls1-ps')), chat: true, chats: [chatOf('pane-ls1-a')] })
+    await flush()
+    const a = leafOf('pane-ls1-a')
+    expect(a.liveShare).toMatchObject({ chat: 'shared', terminal: true, view: 'terminal' })
+    expect(leafOf('pane-ls1-ps').liveShare.chat).toBe(null)
+    const attaches = window.shellApi.attachPty.mock.calls.length
+
+    expect(t.ls.setGuestView('pane-ls1-a', 'chat')).toBe(true)
+    expect(a.liveShare.view).toBe('chat')
+    expect(t.ls.setGuestView('pane-ls1-a', 'terminal')).toBe(true)
+    expect(a.liveShare.view).toBe('terminal')
+    // A pane with no conversation, or a view that is not one: nothing.
+    expect(t.ls.setGuestView('pane-ls1-ps', 'chat')).toBe(false)
+    expect(t.ls.setGuestView('pane-ls1-a', 'editor')).toBe(false)
+    // Nothing went to the host, nor to a terminal: not even a read.
+    expect(reachedHost()).toBe(false)
+    expect(t.api.chatWatch).not.toHaveBeenCalled()
+    expect(window.shellApi.attachPty.mock.calls.length).toBe(attaches)
+  })
+
+  it('your choice stays for each pane during the session, also when the host switches its pane to chat mode and back', async () => {
+    const status = (panes, chats) => ({ state: 'joined', host: 'Ada', session: 1, panes, layout: layoutOf(...chats.map((c) => leaf(c.id, c.terminal ? 'terminal' : 'chat'))), chat: true, chats })
+    t.listeners.onGuest(status([agent('pane-ls1-a')], [chatOf('pane-ls1-a')]))
+    await flush()
+    t.ls.setGuestView('pane-ls1-a', 'chat')
+    // The host's pane goes to chat mode: no terminal here, the chat kept.
+    t.listeners.onGuest(status([], [chatOf('pane-ls1-a', false)]))
+    await flush()
+    const asChat = leafOf('pane-ls1-a')
+    expect(asChat.liveShare).toMatchObject({ terminal: false, chat: 'shared', view: 'chat' })
+    t.ls.setGuestView('pane-ls1-a', 'terminal')
+    // Back to a terminal on the host: your last choice (its terminal).
+    t.listeners.onGuest(status([agent('pane-ls1-a')], [chatOf('pane-ls1-a')]))
+    await flush()
+    const back = leafOf('pane-ls1-a')
+    expect(back).not.toBe(asChat)
+    expect(back.liveShare).toMatchObject({ terminal: true, view: 'terminal' })
+    t.ls.setGuestView('pane-ls1-a', 'chat')
+    t.listeners.onGuest(status([agent('pane-ls1-a')], [chatOf('pane-ls1-a')]))
+    await flush()
+    expect(leafOf('pane-ls1-a').liveShare.view).toBe('chat')
+    expect(reachedHost()).toBe(false)
+  })
+
+  it('a pane the host has in chat mode shows as a chat (no terminal attached)', async () => {
+    t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-ps')], layout: layoutOf(leaf('pane-ls1-ps'), leaf('pane-ls1-c', 'chat')), chat: true, chats: [chatOf('pane-ls1-c', false)] })
+    await flush()
+    const c = leafOf('pane-ls1-c')
+    expect(c).toBeTruthy()
+    expect(c.backend).toBe('liveshare')
+    expect(c.liveShare).toMatchObject({ terminal: false, chat: 'shared', view: 'chat', canType: false, project: 'ws-a' })
+    expect(window.shellApi.attachPty.mock.calls.map(([id]) => id)).toEqual(['pane-ls1-ps'])
+  })
+
+  it('a host whose Tessel does not share conversations: its agent panes still have the button (the chat view says why)', async () => {
+    t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [agent('pane-ls1-a'), pane('pane-ls1-ps')], layout: layoutOf(leaf('pane-ls1-a'), leaf('pane-ls1-ps')) })
+    await flush()
+    expect(leafOf('pane-ls1-a').liveShare.chat).toBe('old-host')
+    expect(leafOf('pane-ls1-ps').liveShare.chat).toBe(null)
+    expect(t.ls.setGuestView('pane-ls1-a', 'chat')).toBe(true)
+    expect(reachedHost()).toBe(false)
+  })
+
+  it('the chat view reads the host’s conversation through main, read only, for its own pane', async () => {
+    t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [agent('pane-ls1-a')], layout: layoutOf(leaf('pane-ls1-a')), chat: true, chats: [chatOf('pane-ls1-a')] })
+    await flush()
+    const source = t.ls.chatSource('pane-ls1-a')
+    const events = []
+    const off = source.onEvent((m) => events.push(m))
+    t.last = { ok: true, events: [{ type: 'assistant', messageId: 'm1', text: 'hi' }], truncated: false }
+    expect(await source.open({ agent: 'claude', sessionId: 'x' })).toEqual({ viewId: 'pane-ls1-a', ok: true, events: t.last.events, truncated: false, more: false, background: [] })
+    expect(t.api.chatWatch).toHaveBeenCalledWith({ id: 'pane-ls1-a', on: true })
+    t.listeners.onChat({ id: 'pane-ls1-other', ok: true, events: [] })
+    t.listeners.onChat({ id: 'pane-ls1-a', ok: false, code: 'busy' })
+    t.listeners.onChat({ id: 'pane-ls1-a', ok: true, events: [{ type: 'assistant', messageId: 'm2', text: 'more' }] })
+    expect(events).toEqual([
+      { viewId: 'pane-ls1-a', ok: false, code: 'closed' },
+      { viewId: 'pane-ls1-a', ok: true, events: [{ type: 'assistant', messageId: 'm2', text: 'more' }], truncated: false, more: false, background: [] }
+    ])
+    source.close()
+    await flush()
+    expect(t.api.chatWatch).toHaveBeenLastCalledWith({ id: 'pane-ls1-a', on: false })
+    off()
+    // Nothing else went to the host.
+    expect(reachedHost()).toBe(false)
   })
 })

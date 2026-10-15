@@ -17,12 +17,18 @@
 // host's signature with it (hostKey) before anything else.
 // A connection that hears nothing from the host (not even its pings, every
 // 25 s) for 70 s is over.
+// The join says what this Tessel speaks beyond the protocol version
+// (shareChat.js SHARE_FEATURES), the welcome what the host does (onFeatures;
+// an older host says nothing: none). With 'chat' on both sides, chat(id, on)
+// starts or stops watching an agent pane's conversation (read only), which
+// comes with onChat(id, message).
 //
 // Tessel itself is reached only through the callbacks, so this file runs
 // (and is tested) without Electron.
 import WebSocket from 'ws'
 import { fallbackLookup } from './shareDns.js'
 import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitment, signBinding, bindingSigned, NONCE_BYTES, KX_BYTES } from './shareCrypto.js'
+import { SHARE_FEATURES, cleanFeatures } from './shareChat.js'
 
 const CONNECT_TIMEOUT_MS = 20000
 const SILENCE_MS = 70000
@@ -42,11 +48,14 @@ const BYE_REASONS = new Set(['stopped', 'restarting', 'denied', 'removed', 'repl
 // onSnapshot(id, data, cols, rows), onData(id, data), onExit(id, exitCode),
 // onRestart(id) (the pane restarted on the host: a new screen follows),
 // onRights(rights), onNotice(code), onClosed(reason) (once, at the end).
-// onHostKey(raw) (the host's key, from the first welcome).
+// onHostKey(raw) (the host's key, from the first welcome). onFeatures(list)
+// (what the host speaks beyond the protocol, from each welcome), onChat(id,
+// message) (an agent pane's conversation: { ok, events, truncated, code }).
 // signingKey: { privateKey, publicRaw } (shareCrypto.js newSigningKey);
 // back: coming back with it (shareHost.js rejoin), no question; hostKey:
-// the host's key kept from the first welcome (a Buffer).
-export function createShareGuest({ url, secret, name, signingKey, back = false, hostKey = null, callbacks }) {
+// the host's key kept from the first welcome (a Buffer). features: what this
+// Tessel speaks beyond the protocol (SHARE_FEATURES; an older Tessel: none).
+export function createShareGuest({ url, secret, name, signingKey, back = false, hostKey = null, callbacks, features: speaks = SHARE_FEATURES }) {
   let socket = null
   let channel = null
   let code = null
@@ -105,6 +114,7 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
         welcomed = true
         // What it may do first: the window takes it as the starting point.
         if (msg.rights) callbacks.onRights?.(rightsOf(msg.rights))
+        callbacks.onFeatures?.(cleanFeatures(msg.features))
         callbacks.onState?.('joined', { host: String(msg.host || '') })
         callbacks.onProjects?.(Array.isArray(msg.projects) ? msg.projects : [])
         return
@@ -129,6 +139,9 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
         return
       case 'restart':
         callbacks.onRestart?.(msg.id)
+        return
+      case 'chat':
+        if (typeof msg.id === 'string') callbacks.onChat?.(msg.id, msg)
         return
       case 'bye':
         finish(BYE_REASONS.has(msg.reason) ? msg.reason : 'closed')
@@ -172,8 +185,9 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
     binding = session.binding
     const key = signingKey.publicRaw.toString('base64')
     const sig = signBinding(signingKey, binding).toString('base64')
-    if (back) send({ t: 'join', name, rejoin: { key, sig } })
-    else send({ t: 'join', name, key, sig })
+    const features = cleanFeatures(speaks)
+    if (back) send({ t: 'join', name, features, rejoin: { key, sig } })
+    else send({ t: 'join', name, features, key, sig })
   }
 
   return {
@@ -215,6 +229,10 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
     // The pane's screen again (this window reloaded).
     resync(id) {
       send({ t: 'resync', id })
+    },
+    // An agent pane's conversation watched (on) or no longer: read only.
+    chat(id, on) {
+      send({ t: 'chat', id, on: !!on })
     },
     leave() {
       send({ t: 'leave' })

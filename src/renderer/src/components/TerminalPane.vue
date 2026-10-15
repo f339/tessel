@@ -86,6 +86,7 @@ import { remoteHostsState } from '../remoteHosts'
 import { readText as readScreenText, createShellIntegration, createTerminalAdapter } from '../agentTerminal/screenRead'
 import { terminalControl, terminalLog } from '../agentTerminal/agentTerminalState'
 import { nativeChatSessionChoiceLabel } from '../chat/orca/native-chat-session-option-labels'
+import { liveShareFit } from '../liveShareFit'
 
 const props = defineProps({
   node: { type: Object, required: true }
@@ -107,6 +108,18 @@ const isActive = computed(() => ctx.activeId.value === props.node.id)
 const isMember = computed(() => ctx.broadcast.value && props.node.broadcast)
 const isMaximized = computed(() => ctx.maximizedId.value === props.node.id)
 const isAgent = computed(() => props.node.kind === 'agent')
+// The agent the header shows (its icon, accent and name): this pane's, or the
+// one a Live Share host runs in its pane (liveShareWindow.js: kind 'shell'
+// here, liveShare.kind / agentId). Display only: a host's pane is never one
+// of this computer's agents (no session, model, sub-agents, account, restart
+// or hooks here: those all follow isAgent).
+const shownAgentId = computed(() => {
+  if (isAgent.value) return props.node.agentId || null
+  const ls = props.node.backend === 'liveshare' ? props.node.liveShare : null
+  return ls && ls.kind === 'agent' && typeof ls.agentId === 'string' && ls.agentId ? ls.agentId : null
+})
+const showsAgent = computed(() => !!shownAgentId.value)
+const guestAgent = computed(() => showsAgent.value && !isAgent.value)
 // The account a Claude Code or Codex pane runs on, when that agent has more
 // than one (on an SSH host it is the host's own sign-in: not shown).
 const accountInfo = computed(() => (isAgent.value && !props.node.remoteHostId ? paneAccount(props.node.agentId, props.node.accountId) : null))
@@ -969,12 +982,38 @@ function toggleChatView() {
   if (!chatViewAvailable.value) return
   props.node.chatView = !props.node.chatView || undefined
 }
+// Live Share, as a guest: a host's agent pane shows its conversation as a
+// chat on your screen only (liveShareWindow.js setGuestView: nothing goes to
+// the host, its pane stays as it is). 'shared': the host sends it;
+// 'old-host': the host's Tessel does not share conversations (said there).
+const guestChat = computed(() => (props.node.backend === 'liveshare' && props.node.liveShare ? props.node.liveShare.chat || null : null))
+const guestChatShown = computed(() => !!guestChat.value && props.node.liveShare.view === 'chat')
+const guestChatSource = computed(() => (guestChat.value === 'shared' && ctx.liveShareChatSource ? ctx.liveShareChatSource(props.node.id) : null))
+const guestHost = computed(() => (props.node.liveShare && props.node.liveShare.host) || '?')
+const guestChatTitle = computed(() =>
+  guestChatShown.value
+    ? t('liveShare.guestView.showTerminal', 'Your view: chat. Show the terminal (only on your screen: {{host}}’s pane does not change)', { host: guestHost.value })
+    : t('liveShare.guestView.showChat', 'Your view: terminal. Show the conversation as a chat (only on your screen: {{host}}’s pane does not change)', { host: guestHost.value })
+)
+const guestOldHostText = computed(() => t('liveShare.guestView.oldHost', '{{host}}’s Tessel does not share conversations yet: it needs a newer version of Tessel. The terminal still shows everything.', { host: guestHost.value }))
+function toggleGuestChat() {
+  closeCtxMenu()
+  if (ctx.liveShareView) ctx.liveShareView(props.node.id, guestChatShown.value ? 'terminal' : 'chat')
+}
 // The chat covers the terminal: the terminal gives up the keyboard (keys
 // would reach the agent unseen), and gets it back with the terminal view.
 watch(chatShown, (shown) => {
   if (shown) {
     if (term && term.textarea) term.textarea.blur()
     nextTick(() => isActive.value && chatViewEl.value && chatViewEl.value.focus())
+  } else if (isActive.value) nextTick(() => termFocus())
+})
+// The guest's chat view covers the host's terminal: keys never reach it
+// unseen (the chat is read only); the terminal view gets them back.
+const guestChatEl = ref(null)
+watch(guestChatShown, (shown) => {
+  if (shown) {
+    if (term && term.textarea) term.textarea.blur()
   } else if (isActive.value) nextTick(() => termFocus())
 })
 const chatViewEl = ref(null)
@@ -989,6 +1028,10 @@ function termFocus() {
   }
   if (chatShown.value) {
     if (chatViewEl.value) chatViewEl.value.focus()
+    return
+  }
+  if (guestChatShown.value) {
+    if (guestChatEl.value) guestChatEl.value.focus()
     return
   }
   term.focus()
@@ -1370,8 +1413,12 @@ const headerHover = useHoverCard({
 // The agent's own name (the pane can be renamed), or the shell's.
 const agentName = computed(() => {
   const n = props.node
-  if (!isAgent.value) return n.shellName || ''
   const list = ctx.agents && ctx.agents.value
+  if (guestAgent.value) {
+    const found = Array.isArray(list) ? list.find((a) => a && a.id === shownAgentId.value) : null
+    return (found && found.name) || shownAgentId.value
+  }
+  if (!isAgent.value) return n.shellName || ''
   const found = Array.isArray(list) ? list.find((a) => a && a.id === n.agentId) : null
   return (found && found.name) || (!n.titleSet && n.title) || n.agentId || ''
 })
@@ -1396,8 +1443,8 @@ const hoverInfo = computed(() => {
   return {
     heading: paneTitle.value,
     agentName: agentName.value,
-    iconKind: agent ? n.agentId : n.shellId,
-    accent: agent ? n.accent : null,
+    iconKind: showsAgent.value ? shownAgentId.value : n.shellId,
+    accent: showsAgent.value ? n.accent : null,
     model: agent ? modelText.value : '',
     account: accountInfo.value ? accountInfo.value.title : '',
     conversation: autoTitle.value,
@@ -1491,35 +1538,19 @@ function liveShareSize() {
 // A Live Share pane keeps the host's columns and rows (the host's terminal
 // is never resized for a guest), drawn here at this guest's own text size: a
 // pane larger than the host's terminal gets larger text (up to twice the
-// usual size, no empty band); a smaller one a little smaller text at most,
-// and what does not fit then scrolls here, following the cursor.
+// usual size, no empty band); a smaller one smaller text, down to a readable
+// minimum (liveShareFit.js), so a host's terminal a bit wider or taller than
+// the pane fits without scrolling; only one still too big then scrolls
+// here, following the cursor.
 function fitLiveShareFont({ cols, rows }) {
-  const base = paneFontSize()
-  const max = base * 2
-  const min = Math.max(8, Math.floor(base * 0.85 * 2) / 2)
-  let size = term.options.fontSize || base
-  const room = () => {
+  const roomAt = (size) => {
+    if (term.options.fontSize !== size) term.options.fontSize = size
     const p = fit.proposeDimensions()
     return p && p.cols > 0 && p.rows > 0 ? Math.min(p.cols / cols, p.rows / rows) : null
   }
-  // Toward the size where they just fit (the cells grow with the text).
-  for (let i = 0; i < 4; i++) {
-    const scale = room()
-    if (scale == null || (scale >= 1 && scale < 1.06) || (scale >= 1 && size >= max)) break
-    const next = Math.max(min, Math.min(max, Math.floor(size * scale * 2) / 2))
-    if (next === size) break
-    size = next
-    term.options.fontSize = size
-  }
-  // Then a half point at a time until nothing is cut, not below `min`.
-  for (let i = 0; i < 12; i++) {
-    const scale = room()
-    if (scale == null || scale >= 1 || size <= min) break
-    size = Math.max(min, size - 0.5)
-    term.options.fontSize = size
-  }
-  const left = room()
-  setLiveShareScroll(left != null && left < 1)
+  const { size, scroll } = liveShareFit(paneFontSize(), term.options.fontSize, roomAt)
+  if (term.options.fontSize !== size) term.options.fontSize = size
+  setLiveShareScroll(scroll)
 }
 
 // The host's terminal larger than this pane at this guest's text size: drawn
@@ -2267,6 +2298,11 @@ function jumpToBottom() {
   term.scrollToBottom()
   scrolledUp.value = false
   newBelow.value = false
+  // A Live Share terminal that scrolls in its pane: to its cursor too.
+  if (lsScroll) {
+    lsHandAt = 0
+    followLiveShareSoon()
+  }
   termFocus()
 }
 
@@ -3131,8 +3167,8 @@ const paneMenuBindings = computed(() => ({
          state badge; then a few actions. The rest is in the … menu. -->
     <div
       class="pane-nav"
-      :class="{ agent: isAgent, busy: isAgent && (agentStatus === 'busy' || subRunning > 0) }"
-      :style="isAgent ? { '--accent': node.accent } : null"
+      :class="{ agent: showsAgent, busy: isAgent && (agentStatus === 'busy' || subRunning > 0) }"
+      :style="showsAgent ? { '--accent': node.accent } : null"
       data-test="pane-header"
       @mousedown.stop="onNavMouseDown"
       @pointerdown="onNavPointerDown"
@@ -3144,15 +3180,16 @@ const paneMenuBindings = computed(() => ({
         <span v-if="team" class="pane-team-num" :class="{ lead: isLead }" data-test="pane-team-num" aria-hidden="true">{{ teamNumber(team.name) }}</span>
         <span
           class="pane-icon"
-          :class="isAgent ? ['agent', agentStatus === 'busy' ? 'busy' : backgroundRunning ? 'monitoring' : needsYou ? 'attention' : subRunning > 0 ? 'busy' : agentStatus, { yolo: node.launchYolo }] : null"
-          :style="isAgent ? { '--accent': node.accent } : null"
+          :class="isAgent ? ['agent', agentStatus === 'busy' ? 'busy' : backgroundRunning ? 'monitoring' : needsYou ? 'attention' : subRunning > 0 ? 'busy' : agentStatus, { yolo: node.launchYolo }] : guestAgent ? ['agent'] : null"
+          :style="showsAgent ? { '--accent': node.accent } : null"
+          :data-agent="shownAgentId || undefined"
           :aria-label="agentName"
           :aria-description="isAgent ? statusTitle : undefined"
         >
           <BrandIcon
-            :kind="isAgent ? node.agentId : node.shellId"
-            :accent="isAgent ? node.accent : null"
-            :label="isAgent ? node.title : null"
+            :kind="showsAgent ? shownAgentId : node.shellId"
+            :accent="showsAgent ? node.accent : null"
+            :label="showsAgent ? node.title : null"
             :size="15"
           />
           <span v-if="isAgent" class="pane-status-dot"></span>
@@ -3312,6 +3349,26 @@ const paneMenuBindings = computed(() => ({
             <path d="M2.5 3.5h11v7.2H7l-3 2.6v-2.6H2.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
           </svg>
         </button>
+        <!-- Live Share guest: your own view of the host's agent pane (its
+             chat or its terminal, on your screen only) -->
+        <button
+          v-else-if="guestChat"
+          class="pane-nav-btn"
+          :class="{ on: guestChatShown }"
+          data-test="pane-chat-toggle"
+          :title="guestChatTitle"
+          :aria-label="guestChatShown ? t('liveShare.guestView.showTerminalLabel', 'Your view: show the terminal') : t('liveShare.guestView.showChatLabel', 'Your view: show the chat')"
+          :aria-pressed="guestChatShown"
+          @click="toggleGuestChat"
+        >
+          <svg v-if="guestChatShown" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="1.8" y="2.5" width="12.4" height="11" rx="1.6" stroke="currentColor" stroke-width="1.4" />
+            <path d="M4.5 6.2l2 1.8-2 1.8M8 10h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <svg v-else width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2.5 3.5h11v7.2H7l-3 2.6v-2.6H2.5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+          </svg>
+        </button>
         <!-- voice typing (its language: in the … menu) -->
         <button
           class="pane-nav-btn mic-btn"
@@ -3406,6 +3463,24 @@ const paneMenuBindings = computed(() => ({
         :send-held-reason="chatSendHeldReason"
         @close="toggleChatView"
       />
+    </div>
+    <div v-else-if="guestChatShown" ref="guestChatEl" class="term-transcript" data-test="liveshare-chat-view" tabindex="-1" @mousedown.stop="ctx.setActive(node.id)">
+      <NativeChatTranscriptView
+        v-if="guestChatSource"
+        :agent="node.liveShare.agentId || 'claude'"
+        :session-id="`liveshare-${node.id}`"
+        :agent-name="paneTitle"
+        :node="node"
+        :is-visible="paneOnScreen"
+        :source="guestChatSource"
+        :read-only-note="t('liveShare.guestView.readOnly', 'Read only: {{host}}’s conversation, on your screen only', { host: guestHost })"
+        :back-label="t('liveShare.guestView.backToTerminal', 'Show the terminal')"
+        @close="toggleGuestChat"
+      />
+      <div v-else class="ls-guest-note" data-test="liveshare-chat-unavailable" role="note">
+        <p>{{ guestOldHostText }}</p>
+        <button class="exit-btn primary" data-test="liveshare-chat-back" @click="toggleGuestChat">{{ t('liveShare.guestView.backToTerminal', 'Show the terminal') }}</button>
+      </div>
     </div>
     <div v-else-if="transcriptOpen && canViewTranscript" class="term-transcript" @mousedown.stop="ctx.setActive(node.id)">
       <NativeChatTranscriptView

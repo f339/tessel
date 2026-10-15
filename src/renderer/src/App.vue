@@ -2229,6 +2229,9 @@ function closeLeaf(leafId, opts = {}) {
   // to close it on their computer, for everyone in the session (asked here
   // first), when the host lets you. It stays here until the host closed it.
   if (closing && liveShare.isGuestLeaf(closing) && liveShare.state.guest.state === 'joined') {
+    // A host's pane in chat mode (shown here as a chat): the host's guests
+    // can't ask to close it.
+    if (closing.liveShare && closing.liveShare.terminal === false) return
     if (!liveShare.canClose()) return
     const name = closing.paneName || closing.title
     if (opts.force) return liveShare.requestClose(leafId, name)
@@ -3040,6 +3043,10 @@ provide('panelCtx', {
   // Asked while the agent works: done when its turn ends (never interrupted).
   switchToChat: (id) => requestSwitch(id, 'chat'),
   switchToTerminal: (id) => requestSwitch(id, 'terminal'),
+  // Live Share, as a guest: your own view of a host's agent pane (its chat or
+  // its terminal, on your screen only), and its conversation, read only.
+  liveShareView: (id, view) => liveShare.setGuestView(id, view),
+  liveShareChatSource: (id) => liveShare.chatSource(id),
   // A terminal agent's chat view (nothing restarts): what you write there,
   // and its agent's real end (back to the terminal).
   sendFromChatView: (id, text, callbacks) => sendFromChatView(id, text, callbacks),

@@ -3553,7 +3553,20 @@ liveShare = registerLiveShare({
   },
   log,
   // Taken back once this is the only Tessel running (below).
-  resume: false
+  resume: false,
+  // The conversations guests watch (read only): a reader of their own, never
+  // the window's chat views; no images or files (liveShare/shareChat.js).
+  chatViews: (sendView) =>
+    createTranscriptViews({
+      send: sendView,
+      log,
+      homes: async (agent, accountId) => {
+        const r = await accountSessions.roots({ agent, accountId })
+        return (r && r[agent]) || null
+      },
+      sessionsDir: () => sessionsDir(),
+      limits: { bytes: 2 * 1024 * 1024, events: 1000, text: 32 * 1024 }
+    })
 })
 // A quit that skipped before-quit still ends the tunnel (cloudflared).
 app.on('will-quit', () => liveShare?.stopAll())

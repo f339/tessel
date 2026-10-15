@@ -709,6 +709,10 @@ const api = {
     join: ({ invite, name } = {}) => ipcRenderer.invoke('liveShare:join', { invite, name }),
     leave: () => ipcRenderer.invoke('liveShare:leave'),
     open: ({ kind, agent, project } = {}) => ipcRenderer.invoke('liveShare:open', { kind, agent, project }),
+    // Guest: a host's agent pane's conversation watched here (read only),
+    // which comes with onChat.
+    chatWatch: ({ id, on } = {}) => ipcRenderer.invoke('liveShare:chatWatch', { id, on: !!on }),
+    onChat: (cb) => subscribe('liveShare:chat', cb),
     onHost: (cb) => subscribe('liveShare:host', cb),
     onGuest: (cb) => subscribe('liveShare:guest', cb),
     onAsk: (cb) => subscribe('liveShare:ask', cb),

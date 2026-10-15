@@ -1,12 +1,17 @@
 // A Live Share pane (the host's terminal, shown on a guest's screen) keeps
 // the host's columns and rows (never resized for a guest), drawn at the
-// guest's own text size (TerminalPane.vue fitLiveShareFont): larger text in a
-// larger pane, a little smaller at most in a smaller one, and then it scrolls
-// here, following the cursor.
+// guest's own text size (TerminalPane.vue fitLiveShareFont, liveShareFit.js):
+// larger text in a larger pane, smaller in a smaller one down to 75% of it
+// (never under 9 px), so a host's terminal a bit wider than the pane fits
+// without scrolling; only one still too big scrolls here, following the
+// cursor, with Tessel's own thin bar (never the native one with arrows).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 import { resetSettings, settings } from '../settings'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { liveShareFit, liveShareFontRange } from '../liveShareFit'
 
 // The pane's room in pixels, and the cell size the font gives (6/10 of the
 // font size wide, 12/10 high), as xterm's fit addon measures them.
@@ -140,17 +145,26 @@ describe('a Live Share pane on a guest screen', () => {
     expect(Math.floor(1000 / ((size + 0.5) * 0.6))).toBeLessThan(120)
   })
 
-  it('a pane much smaller than the host’s terminal: the guest’s own text size, and it scrolls here', async () => {
+  it('a host’s terminal a bit wider than the pane: smaller text, and it fits (no scrolling)', async () => {
+    // 120 columns at 14 px need 1008 px: at 11 px they fit in 800.
+    const term = await show(800, 600)
+    expect(term.options.fontSize).toBe(11)
+    expect(term.cols).toBe(120)
+    expect(wrapper.find('.term-host').element.classList.contains('ls-scroll')).toBe(false)
+    expect(term.element.style.width).toBe('')
+  })
+
+  it('a pane much smaller than the host’s terminal: readable text, and it scrolls here', async () => {
     const term = await show(360, 240)
-    // A little smaller than the usual 14 px at most, never shrunk to fit.
-    expect(term.options.fontSize).toBe(11.5)
+    // 75% of the usual 14 px at most, never shrunk further to fit.
+    expect(term.options.fontSize).toBe(10.5)
     expect(term.cols).toBe(120)
     expect(term.rows).toBe(30)
     const hostEl = wrapper.find('.term-host').element
     expect(hostEl.classList.contains('ls-scroll')).toBe(true)
-    // Drawn at its full size (120 x 30 cells of 6.9 x 13.8 px), never scaled.
-    expect(term.element.style.width).toBe(`${Math.ceil(11.5 * 0.6 * 120)}px`)
-    expect(term.element.style.height).toBe(`${Math.ceil(11.5 * 1.2 * 30)}px`)
+    // Drawn at its full size (120 x 30 cells of 6.3 x 12.6 px), never scaled.
+    expect(term.element.style.width).toBe(`${Math.ceil(10.5 * 0.6 * 120)}px`)
+    expect(term.element.style.height).toBe(`${Math.ceil(10.5 * 1.2 * 30)}px`)
     expect(term.element.style.transform).toBe('')
     expect(term.element.style.pointerEvents).toBe('')
   })
@@ -171,7 +185,7 @@ describe('a Live Share pane on a guest screen', () => {
       term.written()
       expect(hostEl.scrollLeft).toBeGreaterThan(0)
       expect(hostEl.scrollTop).toBeGreaterThan(0)
-      const cellW = 11.5 * 0.6
+      const cellW = 10.5 * 0.6
       expect(100 * cellW).toBeGreaterThanOrEqual(hostEl.scrollLeft)
       expect(100 * cellW).toBeLessThanOrEqual(hostEl.scrollLeft + 360)
       // Scrolled by hand: left there while the cursor moves.
@@ -199,5 +213,47 @@ describe('a Live Share pane on a guest screen', () => {
     expect(size).toBeGreaterThan(14)
     expect(size).toBeLessThanOrEqual(28)
     expect(Math.floor(2000 / (size * 0.6))).toBeGreaterThanOrEqual(120)
+  })
+})
+
+describe('liveShareFit: fit the host’s terminal, or scroll', () => {
+  it('the text goes from 75% of the guest’s size (never under 9 px) to twice it', () => {
+    expect(liveShareFontRange(14)).toEqual({ min: 10.5, max: 28 })
+    expect(liveShareFontRange(13)).toEqual({ min: 9.5, max: 26 })
+    expect(liveShareFontRange(12)).toEqual({ min: 9, max: 24 })
+    expect(liveShareFontRange(10)).toEqual({ min: 9, max: 20 })
+    expect(liveShareFontRange(8)).toEqual({ min: 8, max: 16 })
+  })
+
+  // The pane is `w` px wide; the host's terminal 120 columns of 0.6 x the text size.
+  const widthRoom = (w) => (size) => Math.floor(w / (size * 0.6)) / 120
+
+  it('somewhat wider than the pane: smaller text that fits, no scrolling', () => {
+    expect(liveShareFit(14, 14, widthRoom(900))).toEqual({ size: 12, scroll: false })
+    expect(liveShareFit(14, 14, widthRoom(760))).toEqual({ size: 10.5, scroll: false })
+  })
+
+  it('too wide even at the smallest size: that size, and it scrolls', () => {
+    expect(liveShareFit(14, 14, widthRoom(600))).toEqual({ size: 10.5, scroll: true })
+    expect(liveShareFit(12, 12, widthRoom(300))).toEqual({ size: 9, scroll: true })
+  })
+
+  it('a larger pane: larger text, up to twice; not measurable now: left as it is', () => {
+    expect(liveShareFit(14, 14, widthRoom(2000))).toEqual({ size: 27.5, scroll: false })
+    expect(liveShareFit(14, 14, widthRoom(5000))).toEqual({ size: 28, scroll: false })
+    expect(liveShareFit(14, 12, () => null)).toEqual({ size: 12, scroll: false })
+  })
+
+  it('Tessel’s own thin scrollbar, never the native one with arrows', () => {
+    const css = readFileSync(join(__dirname, '..', 'style.css'), 'utf8')
+    const block = (sel) => {
+      const at = css.indexOf(`${sel} {`)
+      expect(at).toBeGreaterThan(-1)
+      return css.slice(at, css.indexOf('}', at))
+    }
+    // scrollbar-width would make Chromium drop the ::-webkit-scrollbar styles.
+    expect(block('.term-host.ls-scroll')).not.toMatch(/scrollbar-(width|color)/)
+    expect(block('.term-host.ls-scroll::-webkit-scrollbar')).toMatch(/width:\s*0/)
+    expect(block('.term-host.ls-scroll::-webkit-scrollbar')).toMatch(/height:\s*8px/)
   })
 })

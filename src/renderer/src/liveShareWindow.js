@@ -28,9 +28,19 @@
 // computer never mix with the host's: none moves in or out, and one that
 // opened there anyway (a page, a file) comes back to a project of yours when
 // its project goes.
+//
+// Your own view of a host's agent pane: its header's chat button shows its
+// conversation as a chat (read only: nothing is sent from it) or its terminal
+// again, on your screen only (setGuestView: the host's pane, its mode, its
+// terminal and its agent never change, and nothing is sent to the host to
+// switch). Your choice stays for each pane during the session. A pane the
+// host has in chat mode has no terminal: it shows as a chat, and its terminal
+// view says so. The conversation comes from the host (chatSource: main's
+// liveShare:chatWatch, read only); a host whose Tessel does not share
+// conversations yet: the chat view says so.
 import { reactive, watch } from 'vue'
 import { t } from './i18n'
-import { buildGuestTree, hostLayoutFromWorkspace } from './liveShareLayout'
+import { buildGuestTree, hostLayoutFromWorkspace, hostChatsFromWorkspace, GUEST_CHAT_AGENTS } from './liveShareLayout'
 
 const REASONS = {
   denied: () => t('liveShare.reason.denied', 'The host said no.'),
@@ -86,7 +96,7 @@ export function createLiveShareWindow(deps) {
   const api = () => (window.shellApi && window.shellApi.liveShare) || null
   const state = reactive({
     host: { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectIds: [], guests: [], progress: null, error: null },
-    guest: { state: 'off', host: null, session: null, panes: [], projects: [], reason: null, rights: null, code: null },
+    guest: { state: 'off', host: null, session: null, panes: [], projects: [], reason: null, rights: null, code: null, chat: false, chats: [] },
     defaultName: '',
     // The projects you pick to share (their ids), before you start. While
     // sharing, the projects shared are main's (host.projectIds).
@@ -100,6 +110,10 @@ export function createLiveShareWindow(deps) {
   const attaching = new Set()
   const offs = []
   const stops = []
+  // Your own view of each host pane (local pane id -> 'chat' | 'terminal'),
+  // for the session.
+  const views = new Map()
+  const chatListeners = new Set()
 
   const isGuestWs = (ws) => !!(ws && ws.liveShare)
   const isGuestLeaf = (leaf) => !!(leaf && leaf.backend === 'liveshare')
@@ -131,9 +145,10 @@ export function createLiveShareWindow(deps) {
   const chosenIds = () => (hostSharing() || hostStarting() ? sharedIds() : state.pickedIds)
 
   // What guests see of each shared project you have here. The fullscreen
-  // pane is the window's: only for the project on screen.
+  // pane is the window's: only for the project on screen. Its agent panes
+  // with a conversation (chats) are for main only: guests get them by name.
   function layoutsNow() {
-    return sharedWss().map((ws) => ({ id: ws.id, layout: hostLayoutFromWorkspace(ws, deps.currentWsId() === ws.id ? deps.maximizedId() : null) }))
+    return sharedWss().map((ws) => ({ id: ws.id, layout: hostLayoutFromWorkspace(ws, deps.currentWsId() === ws.id ? deps.maximizedId() : null), chats: hostChatsFromWorkspace(ws) }))
   }
 
   // Before you start: the projects picked last time that are still there,
@@ -341,6 +356,17 @@ export function createLiveShareWindow(deps) {
   // --- Guest ---------------------------------------------------------------
   // What this guest may do (a host from before rights: everything).
   const may = (right) => !state.guest.rights || !!state.guest.rights[right]
+  // A host pane's chat: 'shared' (the host sends its conversation), 'old-host'
+  // (an agent pane of a host whose Tessel does not share conversations yet:
+  // the chat view says so) or null (no chat button).
+  const chatEntry = (id) => (state.guest.chats || []).find((c) => c.id === id) || null
+  function chatOf(p) {
+    if (state.guest.chat) return chatEntry(p.id) ? 'shared' : null
+    return p.kind === 'agent' && GUEST_CHAT_AGENTS.includes(p.agentId) ? 'old-host' : null
+  }
+  // Your view of a pane: your choice, else its terminal (the chat when it has
+  // none).
+  const viewOf = (id, terminal) => views.get(id) || (terminal ? 'terminal' : 'chat')
   const projectName = (p) => (p && p.layout && p.layout.project) || ''
   // A leaf of the host's shown here, in this project of the host's.
   const leafIn = (id, projectId) => {
@@ -438,7 +464,7 @@ export function createLiveShareWindow(deps) {
         sessionId: null,
         // The host's pane: its project, its size (the terminal shows it at
         // that size), what it runs there, and whether you may type in it.
-        liveShare: { session, project: p.project || null, cols: p.cols || 0, rows: p.rows || 0, kind: p.kind, agentId: p.agentId || null, canType: may('type'), host: state.guest.host || '' },
+        liveShare: { session, project: p.project || null, cols: p.cols || 0, rows: p.rows || 0, kind: p.kind, agentId: p.agentId || null, canType: may('type'), host: state.guest.host || '', terminal: true, chat: chatOf(p), view: 'terminal' },
         // A new terminal here each time the host's pane starts again (or the
         // connection came back): SplitNode's key.
         gen: p.gen || 0,
@@ -448,6 +474,7 @@ export function createLiveShareWindow(deps) {
         broadcast: false
       })
       leaf.attached = true
+      leaf.liveShare.view = leaf.liveShare.chat ? viewOf(p.id, true) : 'terminal'
       guestLeaves.set(p.id, leaf)
       applyAll(session)
     } finally {
@@ -470,6 +497,34 @@ export function createLiveShareWindow(deps) {
     ws.activeId = null
     if (ws.liveShare) follow.delete(ws.liveShare.project)
     deps.removeWorkspace(ws.id, true, true)
+  }
+
+  // A pane the host has in chat mode: no terminal here, its conversation
+  // shown as a chat (and a note in its terminal view).
+  function chatLeaf(c, session) {
+    const host = state.guest.host || ''
+    return reactive({
+      type: 'leaf',
+      id: c.id,
+      shellId: 'liveshare',
+      shellName: host || t('liveShare.title', 'Live Share'),
+      title: c.title || t('liveShare.title', 'Live Share'),
+      kind: 'shell',
+      agentId: null,
+      agentCommand: null,
+      accent: c.accent || null,
+      worktree: null,
+      backend: 'liveshare',
+      pid: null,
+      startDir: null,
+      sessionId: null,
+      liveShare: { session, project: c.project || null, cols: 0, rows: 0, kind: 'agent', agentId: c.agentId || null, canType: false, host, terminal: false, chat: 'shared', view: viewOf(c.id, false) },
+      gen: 0,
+      launchedAt: Date.now(),
+      exitedAtStart: false,
+      restoredText: '',
+      broadcast: false
+    })
   }
 
   function syncGuest(s) {
@@ -500,10 +555,25 @@ export function createLiveShareWindow(deps) {
       }
     }
     const ids = new Set(s.panes.map((p) => p.id))
+    // The host's panes in chat mode (no terminal).
+    const chatOnly = new Map((s.chat ? s.chats || [] : []).filter((c) => c.terminal === false && !ids.has(c.id)).map((c) => [c.id, c]))
     for (const [id, leaf] of [...guestLeaves]) {
-      if (ids.has(id) && leaf.liveShare.session === s.session) continue
+      // A pane that went to chat mode or came back to a terminal on the host
+      // is a new leaf here (a terminal, or none).
+      const kept = leaf.liveShare.terminal === false ? chatOnly.has(id) : ids.has(id)
+      if (kept && leaf.liveShare.session === s.session) continue
       guestLeaves.delete(id)
       deps.dropBuffer(id)
+    }
+    for (const c of chatOnly.values()) {
+      const leaf = guestLeaves.get(c.id)
+      if (!leaf) guestLeaves.set(c.id, chatLeaf(c, s.session))
+      else {
+        if (c.title) leaf.title = c.title
+        leaf.accent = c.accent || null
+        leaf.liveShare.project = c.project || null
+        leaf.liveShare.agentId = c.agentId || null
+      }
     }
     for (const p of s.panes) {
       const leaf = guestLeaves.get(p.id)
@@ -515,6 +585,9 @@ export function createLiveShareWindow(deps) {
           leaf.liveShare.rows = p.rows
         }
         leaf.liveShare.canType = may('type')
+        // Its chat (the host may start or stop sharing its conversation).
+        leaf.liveShare.chat = chatOf(p)
+        leaf.liveShare.view = leaf.liveShare.chat ? viewOf(p.id, true) : 'terminal'
         if ((p.gen || 0) !== (leaf.gen || 0)) {
           if (!attaching.has(p.id)) reattachGuestPane(p, leaf, s.session)
         } else if (p.project && leaf.liveShare.project !== p.project) leaf.liveShare.project = p.project
@@ -526,6 +599,7 @@ export function createLiveShareWindow(deps) {
   function endGuest(s) {
     for (const id of guestLeaves.keys()) deps.dropBuffer(id)
     guestLeaves.clear()
+    views.clear()
     // Its panes are not terminals of this computer: nothing to stop here.
     for (const ws of deps.workspaces().filter((w) => w.liveShare)) dropGuestWs(ws)
     follow.clear()
@@ -537,7 +611,7 @@ export function createLiveShareWindow(deps) {
     const was = state.guest.state
     const wasIn = was === 'joined' || was === 'reconnecting'
     const before = JSON.stringify(state.guest.rights || null)
-    Object.assign(state.guest, { rights: null, code: null, projects: [] }, s)
+    Object.assign(state.guest, { rights: null, code: null, projects: [], chat: false, chats: [] }, s)
     if (s.state === 'joined') {
       // The host changed what you may do (not the first word on it): said once.
       if (was === 'joined' && before !== 'null' && JSON.stringify(s.rights || null) !== before) deps.showToast(`${t('liveShare.toast.rights', '{{host}} changed what you can do.', { host: s.host || '?' })} ${rightsText(s.rights)}`, { timeout: 6000 })
@@ -593,11 +667,78 @@ export function createLiveShareWindow(deps) {
     api()?.leave()
   }
 
+  // Your own view of a host's pane: its chat or its terminal, on your screen
+  // only. Nothing goes to the host (its pane, its mode, its terminal and its
+  // agent stay as they are); remembered for the session. -> done
+  function setGuestView(id, view) {
+    const leaf = guestLeaves.get(id)
+    if (!leaf || !leaf.liveShare || (view !== 'chat' && view !== 'terminal')) return false
+    if (view === 'chat' && !leaf.liveShare.chat) return false
+    leaf.liveShare.view = view
+    views.set(id, view)
+    return true
+  }
+
+  // A host pane's conversation, read only, for its chat view (the shape of
+  // shellApi.transcriptView: open, close, onEvent). null: not available.
+  const CHAT_FIRST_MS = 15000
+  function onChat(fn) {
+    chatListeners.add(fn)
+    return () => chatListeners.delete(fn)
+  }
+  // The first word on a conversation (main has none yet): up to CHAT_FIRST_MS.
+  function firstChat(id) {
+    return new Promise((resolve) => {
+      let off = null
+      const timer = setTimeout(() => {
+        off?.()
+        resolve(null)
+      }, CHAT_FIRST_MS)
+      off = onChat((m) => {
+        if (m.id !== id) return
+        clearTimeout(timer)
+        off()
+        resolve(m)
+      })
+    })
+  }
+  // What the host said, as the chat view reads it ('closed': it opens again
+  // later; 'missing': looked for again soon).
+  const asRead = (m) => (m.ok ? { ok: true, events: Array.isArray(m.events) ? m.events : [], truncated: !!m.truncated, more: false, background: [] } : { ok: false, code: m.code === 'busy' ? 'closed' : 'missing' })
+  function chatSource(id) {
+    const a = api()
+    if (!a || typeof a.chatWatch !== 'function') return null
+    return {
+      async open() {
+        const r = await Promise.resolve(a.chatWatch({ id, on: true })).catch(() => null)
+        if (!r || !r.ok) return { ok: false, code: r && r.code === 'missing' ? 'missing' : 'error' }
+        const m = r.last || (await firstChat(id))
+        if (!m) return { ok: false, code: 'missing' }
+        const read = asRead(m)
+        if (!read.ok) return { ok: false, code: read.code === 'closed' ? 'missing' : read.code }
+        return { viewId: id, ...read }
+      },
+      close() {
+        Promise.resolve(a.chatWatch({ id, on: false })).catch(() => {})
+      },
+      onEvent(cb) {
+        return onChat((m) => m.id === id && cb({ viewId: id, ...asRead(m) }))
+      }
+    }
+  }
+
   async function init() {
     const a = api()
     if (!a) return
     offs.push(a.onHost(onHost), a.onGuest(onGuest), a.onAsk(onAsk), a.onHostRequest(onHostRequest))
     if (a.onNotice) offs.push(a.onNotice(onNotice))
+    if (a.onChat)
+      offs.push(
+        a.onChat((m) => {
+          if (!m || typeof m.id !== 'string') return
+          for (const fn of [...chatListeners]) fn(m)
+        })
+      )
     try {
       const s = await a.state()
       state.defaultName = s.defaultName || ''
@@ -656,6 +797,8 @@ export function createLiveShareWindow(deps) {
     canClose,
     requestClose,
     leave,
+    setGuestView,
+    chatSource,
     answerAsk,
     setRights,
     setGuestProjects,

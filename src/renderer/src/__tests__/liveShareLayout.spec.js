@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { isReactive, reactive } from 'vue'
-import { hostLayoutFromWorkspace, buildGuestTree } from '../liveShareLayout'
+import { hostLayoutFromWorkspace, buildGuestTree, hostChatsFromWorkspace } from '../liveShareLayout'
 
 const leaf = (id, extra = {}) => ({ type: 'leaf', id, title: id, ...extra })
 const split = (dir, sizes, children) => ({ type: 'split', id: `split-${Math.random()}`, dir, sizes, children })
@@ -140,8 +140,8 @@ describe('buildGuestTree', () => {
     expect(tree.id).toBe('ls-split-r')
     expect(tree.children[1]).toBe(getLeaf({ id: 'b' }))
     expect(tree.sizes).toEqual([50, 50])
-    // Only one pane in all: no split at all.
-    expect(buildGuestTree({ tree: lsplit('row', [50, 50], [term('a'), { ...term('x'), view: 'chat' }]) }, getLeaf)).toBe(getLeaf({ id: 'a' }))
+    // Only one pane in all: no split at all (an editor is never one).
+    expect(buildGuestTree({ tree: lsplit('row', [50, 50], [term('a'), { ...term('x'), view: 'editor' }]) }, getLeaf)).toBe(getLeaf({ id: 'a' }))
   })
 
   it('a pane getLeaf has none for is left out', () => {
@@ -175,5 +175,40 @@ describe('buildGuestTree', () => {
     }
     const getLeaf = pool()
     expect(buildGuestTree(hostLayoutFromWorkspace(ws), getLeaf)).toBe(getLeaf({ id: 'pane-1' }))
+  })
+})
+
+describe('Live Share conversations: the host’s agent panes, a guest’s chat panes', () => {
+  const UUID = '0b8f3c1e-5a2d-4c7b-9e1f-2a3b4c5d6e7f'
+
+  it('lists the agent panes whose conversation is known, with where it is (for the host’s main only)', () => {
+    const ws = {
+      name: 'site',
+      cwd: 'C:\\work\\site',
+      tree: split('row', [25, 25, 25, 25], [
+        leaf('pane-1', { kind: 'agent', agentId: 'claude', sessionId: UUID, accountId: 'acct-1', startDir: 'C:\\work\\site\\app', paneName: 'Reviewer' }),
+        leaf('pane-2', { kind: 'chat', agentId: 'codex', sessionId: UUID, cwd: 'C:\\work\\site', paneName: 'Codex chat' }),
+        split('col', [50, 50], [
+          // No conversation yet, an agent Tessel does not read, an SSH host's.
+          leaf('pane-3', { kind: 'agent', agentId: 'claude' }),
+          leaf('pane-4', { kind: 'agent', agentId: 'aider', sessionId: UUID })
+        ]),
+        leaf('pane-5', { kind: 'agent', agentId: 'claude', sessionId: UUID, remoteHostId: 'h1', cwd: 'ssh://h1/home/x' })
+      ])
+    }
+    expect(hostChatsFromWorkspace(ws)).toEqual([
+      { id: 'pane-1', agentId: 'claude', sessionId: UUID, accountId: 'acct-1', terminal: true, title: '', roots: ['C:\\work\\site\\app', 'C:\\work\\site'] },
+      { id: 'pane-2', agentId: 'codex', sessionId: UUID, terminal: false, title: 'Codex chat', roots: ['C:\\work\\site'] }
+    ])
+    expect(hostChatsFromWorkspace(null)).toEqual([])
+  })
+
+  it('a pane the host has in chat mode is kept in the guest’s tree when the guest’s window has a leaf for it', () => {
+    const term = (id, view = 'terminal') => ({ type: 'leaf', id, view, title: id, kind: 'shell', agentId: null, accent: null })
+    const leaves = new Map([['a', reactive({ type: 'leaf', id: 'a' })], ['c', reactive({ type: 'leaf', id: 'c' })]])
+    const tree = buildGuestTree({ tree: { type: 'split', dir: 'row', sizes: [40, 30, 30], children: [term('a'), term('c', 'chat'), term('e', 'editor')] } }, (l) => leaves.get(l.id) || null)
+    expect(tree.children.map((c) => c.id)).toEqual(['a', 'c'])
+    // An older guest window (no leaf for it): left out, as before.
+    expect(buildGuestTree({ tree: { type: 'split', dir: 'row', sizes: [50, 50], children: [term('a'), term('c', 'chat')] } }, (l) => (l.id === 'a' ? leaves.get('a') : null)).id).toBe('a')
   })
 })

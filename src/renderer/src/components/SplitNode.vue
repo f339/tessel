@@ -11,6 +11,7 @@ import TerminalPane from './TerminalPane.vue'
 import EditorPane from './EditorPane.vue'
 import BrowserPane from './BrowserPane.vue'
 import ChatPane from './chat/ChatPane.vue'
+import LiveShareChatPane from './LiveShareChatPane.vue'
 
 const props = defineProps({
   node: { type: Object, required: true }
@@ -113,6 +114,8 @@ function startDrag(e, i) {
   <EditorPane v-if="node.type === 'leaf' && node.kind === 'editor'" :key="node.id" :node="node" />
   <BrowserPane v-else-if="node.type === 'leaf' && node.kind === 'browser'" :key="node.id" :node="node" />
   <ChatPane v-else-if="node.type === 'leaf' && node.kind === 'chat'" :key="node.id" :node="node" />
+  <!-- A Live Share host's pane in chat mode: no terminal here -->
+  <LiveShareChatPane v-else-if="node.type === 'leaf' && node.backend === 'liveshare' && node.liveShare && node.liveShare.terminal === false" :key="node.id + ':chat'" :node="node" />
   <TerminalPane v-else-if="node.type === 'leaf'" :key="node.id + ':' + (node.gen || 0)" :node="node" />
 
   <!-- Split: N children separated by draggable dividers -->

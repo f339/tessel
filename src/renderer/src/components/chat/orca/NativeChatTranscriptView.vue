@@ -46,6 +46,10 @@
 // joins the transcript once it is typed (onTyped).
 // The "/" menu also lists the agent's skills (transcriptView:skills), and
 // scrolling up reads earlier lines of its file (transcriptView:earlier).
+// source (read only): where the conversation comes from instead of this
+// computer's files, with the same open / close / onEvent (Live Share: a
+// host's pane, liveShareWindow.js chatSource); its links never open files
+// here. readOnlyNote, backLabel: the bar's words instead of the usual ones.
 // Emits: close (back to the terminal).
 // Exposed: focus() (the composer).
 import { computed, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue'
@@ -64,6 +68,7 @@ import { createJournalAdapter } from '../../../chat/orca/adapter/journalAdapter.
 import { reduceStructuredAgentSession, EMPTY_STRUCTURED_AGENT_SESSION } from '../../../chat/orca/shared/structured-agent-session-reducer.js'
 import { projectStructuredAgentSessionMessages } from '../../../chat/orca/structured-agent-session-message-projection.js'
 import { useNativeChatLinkActions } from '../../../chat/orca/composables/use-native-chat-link-actions.js'
+import { routeNativeChatHref } from '../../../chat/orca/shared/native-chat-href-routing.js'
 import { useNativeChatSessionOptionCommand } from '../../../chat/orca/composables/use-native-chat-session-option-command.js'
 import { useNativeChatWorkspaceFileDrop } from '../../../chat/orca/composables/use-native-chat-workspace-file-drop.js'
 import { useStructuredAgentSessionContextUsage } from '../../../chat/orca/composables/use-structured-agent-session-context-usage.js'
@@ -143,7 +148,11 @@ const props = defineProps({
   // The right-click menu, the background-task dock, held messages (interactive).
   paneActions: { type: Object, default: null },
   background: { type: Object, default: null },
-  sendHeldReason: { type: Function, default: undefined }
+  sendHeldReason: { type: Function, default: undefined },
+  // Read only: the conversation from elsewhere (a Live Share host's pane).
+  source: { type: Object, default: null },
+  readOnlyNote: { type: String, default: '' },
+  backLabel: { type: String, default: '' }
 })
 const emit = defineEmits(['close'])
 
@@ -192,6 +201,7 @@ const askedImages = new Set()
 let lastRead = null
 
 function api() {
+  if (props.source) return typeof props.source.open === 'function' ? props.source : null
   const a = typeof window !== 'undefined' && window.shellApi ? window.shellApi.transcriptView : null
   return a && typeof a.open === 'function' ? a : null
 }
@@ -432,7 +442,20 @@ const fileLinkContext = computed(() => {
   const folder = n && (n.startDir || n.cwd || n.projectDir)
   return folder ? { worktreeId: n.id, worktreePath: folder, roots: [folder, n.projectDir].filter(Boolean) } : null
 })
-const { onLinkClick } = useNativeChatLinkActions(fileLinkContext, rootRef, () => ({ isVisible: props.isVisible }))
+const { onLinkClick: openLink } = useNativeChatLinkActions(fileLinkContext, rootRef, () => ({ isVisible: props.isVisible }))
+// A conversation from elsewhere names files of another computer: none opens
+// here (web links still do).
+const onLinkClick = computed(() =>
+  props.source
+    ? (event, href) => {
+        if (routeNativeChatHref(href).kind === 'file') {
+          event.preventDefault()
+          return
+        }
+        return openLink.value(event, href)
+      }
+    : openLink.value
+)
 // Its own text size (Ctrl+= / Ctrl+- / Ctrl+0, Ctrl+wheel) while it is the
 // selected pane, kept per pane: never the terminals' size, never another chat's.
 // Also while the keyboard is in it (its composer): the pane may not be the
@@ -991,11 +1014,11 @@ const title = computed(() => t('chat.orca.transcriptView.title', 'Conversation o
     <div v-if="!interactive" class="nc-transcript-head">
       <MessagesSquare class="nc-transcript-icon" aria-hidden="true" />
       <span class="nc-transcript-title">{{ title }}</span>
-      <span v-if="!interactive" class="nc-transcript-note">{{ t('chat.orca.transcriptView.readOnly', 'Read only: type in the terminal') }}</span>
+      <span v-if="!interactive" class="nc-transcript-note" data-test="transcript-view-note">{{ readOnlyNote || t('chat.orca.transcriptView.readOnly', 'Read only: type in the terminal') }}</span>
       <span v-if="truncated" class="nc-transcript-note" data-test="transcript-view-truncated">{{ t('chat.orca.transcriptView.truncated', 'Latest part only') }}</span>
       <Button variant="ghost" size="sm" class="nc-transcript-back" data-test="transcript-view-close" @click="emit('close')">
         <SquareTerminal />
-        {{ interactive ? t('chat.orca.terminalChat.showTerminal', 'Show terminal') : t('chat.orca.transcriptView.back', 'Back to terminal') }}
+        {{ interactive ? t('chat.orca.terminalChat.showTerminal', 'Show terminal') : backLabel || t('chat.orca.transcriptView.back', 'Back to terminal') }}
       </Button>
     </div>
     <div class="nc-transcript-body">
@@ -1025,7 +1048,7 @@ const title = computed(() => t('chat.orca.transcriptView.title', 'Conversation o
         :expand-signal="false"
         :show-live-turn-activity="false"
         :on-link-click="onLinkClick"
-        :allow-file-uri-links="true"
+        :allow-file-uri-links="!source"
         :scroll-to-latest-signal="sentSignal"
       />
     </div>

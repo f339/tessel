@@ -3,8 +3,15 @@
 // the one src/main/liveShare.js keeps (cleanLayout): splits ({ type: 'split',
 // dir, sizes, children }) and panes ({ type: 'leaf', id, view, title, kind,
 // agentId, accent }). Pure functions: App sends the one and draws the other.
+//
+// The host's agent panes whose conversation guests can look at as a chat
+// (hostChatsFromWorkspace: where it is, for the host's main only, which never
+// sends it to guests), and the guest's own leaves for them: a pane the host
+// has in chat mode (no terminal) is kept in a guest's tree like a terminal
+// when the guest's window has a leaf for it.
 import { reactive } from 'vue'
 import { workspaceViews } from './paneViews'
+import { isRemotePath } from '../../shared/remotePath.js'
 
 const VIEWS = ['editor', 'browser', 'chat']
 
@@ -39,17 +46,58 @@ function layoutNode(node) {
 // { name, tree, activeId }), the view of it on screen (a project's task
 // copies each have their own, paneViews.js: only that one), and its
 // fullscreen pane.
-export function hostLayoutFromWorkspace(ws, maximizedId = null) {
-  if (!ws) return null
+function shownTree(ws) {
   const views = workspaceViews(ws)
   const onScreen = views.find((v) => v.active) || views[0]
-  const tree = layoutNode(onScreen ? onScreen.tree : ws.tree)
+  return onScreen ? onScreen.tree : ws.tree
+}
+
+export function hostLayoutFromWorkspace(ws, maximizedId = null) {
+  if (!ws) return null
+  const tree = layoutNode(shownTree(ws))
   return {
     project: ws.name || null,
     tree,
     activeId: hasLeaf(tree, ws.activeId) ? ws.activeId : null,
     maximizedId: hasLeaf(tree, maximizedId) ? maximizedId : null
   }
+}
+
+// The agents whose conversation file Tessel reads (src/main/chat/
+// transcriptView.js TRANSCRIPT_VIEW_AGENTS): their panes' conversations can
+// be shown to guests.
+export const GUEST_CHAT_AGENTS = ['claude', 'openclaude', 'codex', 'cursor', 'antigravity', 'grok', 'omp']
+const isLocalDir = (p) => typeof p === 'string' && !!p && !isRemotePath(p)
+
+// The agent panes of the project's view on screen whose conversation guests
+// can look at as a chat: a terminal agent, or a pane in chat mode (terminal:
+// false), of this computer, whose conversation is known. Where it is (the
+// agent, its session, its account) and the project's folders (paths outside
+// them are hidden from guests) are for the host's main only.
+export function hostChatsFromWorkspace(ws) {
+  if (!ws) return []
+  const out = []
+  const walk = (n) => {
+    if (!n) return
+    if (n.type !== 'leaf') return (n.children || []).forEach(walk)
+    const chat = n.kind === 'chat'
+    if (!(n.kind === 'agent' || chat) || !GUEST_CHAT_AGENTS.includes(n.agentId) || typeof n.sessionId !== 'string' || !n.sessionId) return
+    // An agent on an SSH host: its conversation is the host's, not shown.
+    if (n.remoteHostId || (typeof n.cwd === 'string' && isRemotePath(n.cwd))) return
+    const roots = [n.startDir, n.cwd, n.projectDir, n.worktree && n.worktree.path, ws.cwd].filter(isLocalDir)
+    out.push({
+      id: n.id,
+      agentId: n.agentId,
+      sessionId: n.sessionId,
+      ...(typeof n.accountId === 'string' || n.accountId === null ? { accountId: n.accountId } : {}),
+      terminal: !chat,
+      // A pane in chat mode has no name in the layout (only terminals do).
+      title: chat ? n.paneName || n.title || '' : '',
+      roots: [...new Set(roots)]
+    })
+  }
+  walk(shownTree(ws))
+  return out
 }
 
 // A guest's tree from the host's layout (its pane ids already this window's).
@@ -63,7 +111,8 @@ export function hostLayoutFromWorkspace(ws, maximizedId = null) {
 export function buildGuestTree(layout, getLeaf) {
   const build = (node, path) => {
     if (!node) return null
-    if (node.type === 'leaf') return node.view === 'terminal' ? getLeaf(node) || null : null
+    // A terminal, or a pane in chat mode the guest's window shows as a chat.
+    if (node.type === 'leaf') return node.view === 'terminal' || node.view === 'chat' ? getLeaf(node) || null : null
     const kept = []
     ;(node.children || []).forEach((c, i) => {
       const built = build(c, `${path}-${i}`)

@@ -969,6 +969,25 @@ body.popup-open .toolbar {
   background: var(--term);
 }
 
+/* Live Share guest: what shows instead of a host's conversation or terminal
+   that can't show here (LiveShareChatPane, TerminalPane's chat view). */
+.ls-guest-note {
+  margin: auto;
+  max-width: 440px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.ls-guest-note p {
+  margin: 0;
+}
+
 .pane:not(.active) > .term-host {
   opacity: var(--inactive-pane-opacity, 1);
 }
@@ -986,11 +1005,18 @@ body.popup-open .toolbar {
   height: 100%;
 }
 
-/* A Live Share terminal larger than this guest's pane at the guest's text
-   size: it scrolls here (TerminalPane.vue setLiveShareScroll). */
+/* A Live Share terminal still larger than this guest's pane at the smallest
+   text it gets (liveShareFit.js): it scrolls here (TerminalPane.vue
+   setLiveShareScroll). Tessel's own thin bar for the width, never
+   scrollbar-width (Chromium then drops the ::-webkit-scrollbar styles for
+   its native bars with arrows); none for the height, like a local terminal
+   (the wheel and the cursor still move it). */
 .term-host.ls-scroll {
   overflow: auto;
-  scrollbar-width: thin;
+}
+.term-host.ls-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 8px;
 }
 
 /* No scrollbar in terminals: the wheel and Shift+PageUp/PageDown still
