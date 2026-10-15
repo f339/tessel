@@ -9,6 +9,7 @@
 import fs from 'fs'
 import os from 'os'
 import { join, relative, isAbsolute } from 'path'
+import { createHash } from 'crypto'
 import { readRows } from './fileRead'
 import { antigravityModelFromText } from './agentModel'
 
@@ -963,21 +964,73 @@ export function geminiSubagents(sessionId, geminiDir = join(process.env.GEMINI_C
 // 32 MB, only the lines that start or end a sub-agent (mark), so one started
 // long ago that still runs is never lost; nothing before their last 256 MB.
 // Read without blocking: 1 MB at a time, the event loop free between two,
-// one read of a file at a time (a poll meanwhile waits for it).
+// one read of a file at a time (a poll meanwhile waits for it). Each read
+// first checks the file is still the one folded (the same first 4 KB and the
+// same 64 bytes before where it was read to), then that it was not cut and
+// written again meanwhile; if it was, its state is dropped and it is read
+// again from its start.
 const LOG_TAIL_BYTES = 32 * 1024 * 1024
 const LOG_SCAN_BYTES = 256 * 1024 * 1024
 const LOG_CHUNK = 1024 * 1024
+const PRINT_HEAD = 4096
+const PRINT_TAIL = 64
 let logTail = LOG_TAIL_BYTES
 let logChunk = LOG_CHUNK
-// file -> { ino, born, offset, rest (a line not ended yet), cut, marked (read
-// up to there with mark only), state, reading (the read under way) }
+// file -> { ino, born, mtime, offset, rest (a line not ended yet), cut,
+// marked (read up to there with mark only), state, print, stale, reading
+// (the read under way) }
 const logCache = new Map()
 const nextTurn = () => new Promise((resolve) => setImmediate(resolve))
 
-// Reads the file from c.offset up to `size`, a chunk per turn of the loop.
-async function readLog(file, c, size, keep, fold, mark) {
+async function readAt(fh, pos, len) {
+  const buf = Buffer.alloc(len)
+  const { bytesRead } = await fh.read(buf, 0, len, pos)
+  return buf.subarray(0, bytesRead)
+}
+
+// The file as read up to `at`: a hash of its first bytes, the bytes before `at`.
+async function printOf(fh, headLen, at) {
+  const head = createHash('sha1').update(await readAt(fh, 0, headLen)).digest('hex')
+  const from = Math.max(0, at - PRINT_TAIL)
+  return { headLen, head, at, tail: (await readAt(fh, from, at - from)).toString('hex') }
+}
+
+async function samePrint(fh, p) {
+  const now = await printOf(fh, p.headLen, p.at)
+  return now.head === p.head && now.tail === p.tail
+}
+
+function freshLog(file, st) {
+  const offset = Math.max(0, st.size - LOG_SCAN_BYTES)
+  const c = {
+    ino: st.ino,
+    born: st.birthtimeMs,
+    mtime: null,
+    offset,
+    rest: Buffer.alloc(0),
+    cut: offset > 0,
+    marked: st.size - logTail,
+    state: {},
+    print: null,
+    stale: false,
+    reading: null
+  }
+  if (!logCache.has(file) && logCache.size > 500) logCache.clear()
+  logCache.set(file, c)
+  return c
+}
+
+// Reads the file from c.offset up to its size in `st`, a chunk per turn of
+// the loop; c.stale when it is no longer the file read so far.
+async function readLog(file, c, st, keep, fold, mark) {
+  const size = st.size
   const fh = await fs.promises.open(file, 'r')
   try {
+    if (c.print && !(await samePrint(fh, c.print))) {
+      c.stale = true
+      return
+    }
+    const start = c.print || (await printOf(fh, Math.min(PRINT_HEAD, size), 0))
     let first = true
     while (c.offset < size) {
       if (!first) await nextTurn()
@@ -1006,32 +1059,40 @@ async function readLog(file, c, size, keep, fold, mark) {
         }
       }
     }
+    // Replaced, or cut and written again, while it was read.
+    const now = await fs.promises.stat(file)
+    if (now.ino !== c.ino || now.birthtimeMs !== c.born || now.size < c.offset || !(await samePrint(fh, start))) {
+      c.stale = true
+      return
+    }
+    c.print = await printOf(fh, start.headLen, c.offset)
+    c.mtime = st.mtimeMs
   } finally {
     await fh.close()
   }
 }
 
 async function foldLog(file, st, keep, fold, mark = keep) {
-  let c = logCache.get(file)
-  // Another file now, or shorter (rewritten): read again.
-  if (!c || c.ino !== st.ino || c.born !== st.birthtimeMs || st.size < c.offset) {
-    const offset = Math.max(0, st.size - LOG_SCAN_BYTES)
-    c = { ino: st.ino, born: st.birthtimeMs, offset, rest: Buffer.alloc(0), cut: offset > 0, marked: st.size - logTail, state: {}, reading: null }
-    if (!logCache.has(file) && logCache.size > 500) logCache.clear()
-    logCache.set(file, c)
-  }
-  while (c.offset < st.size) {
-    const before = c.offset
-    if (!c.reading) {
-      const reading = readLog(file, c, st.size, keep, fold, mark).finally(() => {
-        if (c.reading === reading) c.reading = null
-      })
-      c.reading = reading
+  for (let tries = 0; tries < 3; tries++) {
+    let c = logCache.get(file)
+    // Another file now, shorter, or found rewritten: from its start.
+    if (!c || c.stale || c.ino !== st.ino || c.born !== st.birthtimeMs || st.size < c.offset) c = freshLog(file, st)
+    // Grown, or written to, since it was read.
+    while (!c.stale && (c.offset < st.size || c.mtime !== st.mtimeMs)) {
+      const before = c.offset
+      if (!c.reading) {
+        const reading = readLog(file, c, st, keep, fold, mark).finally(() => {
+          if (c.reading === reading) c.reading = null
+        })
+        c.reading = reading
+      }
+      await c.reading
+      if (!c.stale && c.offset === before && c.mtime === st.mtimeMs) break // shorter than it said: next time
     }
-    await c.reading
-    if (c.offset === before) break // shorter than it said: next time
+    if (!c.stale) return c.state
+    st = await fs.promises.stat(file)
   }
-  return c.state
+  return {} // rewritten each time it is read: next time
 }
 
 // GitHub Copilot CLI (its task tool, custom agents): sub-agents have no

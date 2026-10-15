@@ -210,6 +210,54 @@ describe("a Copilot CLI conversation's sub-agents", () => {
     }
   })
 
+  const fill = (ch, count) => Array.from({ length: count }, (_, i) => ev(now - 400000 + i, 'assistant.message', { content: ch.repeat(1000) }))
+  const started = (id, title) => ev(now - 500000, 'subagent.started', { toolCallId: id, agentName: 'explore', agentDisplayName: title }, id)
+
+  it('a log cut and written again to its old size or more is read again from its start (between two polls)', async () => {
+    const head = ev(now - 600000, 'session.start', { sessionId: SID, context: 'h'.repeat(5000) })
+    write(events(), [head, started('call_OLD', 'Old task'), ...fill('x', 5)])
+    expect((await copilotSubagents(SID, join(home, '.copilot'), now)).map((c) => c.id)).toEqual(['call_OLD'])
+    const size = fs.statSync(events()).size
+    // The same first 4 KB, other lines after (the same file, cut and written).
+    write(events(), [head, started('call_NEWER', 'New task'), ...fill('y', 8)])
+    expect(fs.statSync(events()).size).toBeGreaterThanOrEqual(size)
+    expect((await copilotSubagents(SID, join(home, '.copilot'), now)).map((c) => c.id)).toEqual(['call_NEWER'])
+    // Another first line.
+    write(events(), [ev(now, 'session.start', { sessionId: SID, context: 'k'.repeat(5000) }), started('call_THIRD', 'Third'), ...fill('z', 12)])
+    expect((await copilotSubagents(SID, join(home, '.copilot'), now)).map((c) => c.id)).toEqual(['call_THIRD'])
+  })
+
+  it('a log cut and written again while it is read is read again from its start', async () => {
+    write(events(), [started('call_OLD', 'Old task'), ...fill('x', 300)])
+    _setLogSizesForTest(64 * 1024, 16 * 1024)
+    const realOpen = fs.promises.open.bind(fs.promises)
+    let rewritten = false
+    const opened = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const fh = await realOpen(...args)
+      const read = fh.read.bind(fh)
+      let reads = 0
+      // Right after its first chunk (its print is read first: two reads).
+      fh.read = async (...a) => {
+        const r = await read(...a)
+        if (++reads === 3 && !rewritten) {
+          rewritten = true
+          write(events(), [started('call_NEWER', 'New task'), ...fill('y', 400)])
+        }
+        return r
+      }
+      return fh
+    })
+    try {
+      const list = await copilotSubagents(SID, join(home, '.copilot'), now)
+      expect(rewritten).toBe(true)
+      expect(list.map((c) => [c.id, c.title])).toEqual([['call_NEWER', 'New task']])
+      expect(opened.mock.calls.length).toBeGreaterThanOrEqual(2)
+    } finally {
+      opened.mockRestore()
+      _setLogSizesForTest()
+    }
+  })
+
   it('nothing outside its session folder', async () => {
     expect(await copilotSubagents('../../etc', join(home, '.copilot'), now)).toEqual([])
     expect(await copilotSubagents(SID, join(home, 'nowhere'), now)).toEqual([])
