@@ -187,7 +187,7 @@ describe('usage-only provider sections', () => {
     expect(gemini().get('[data-test="provider-status"]').text()).toBe('Sign-in expired')
     expect(gemini().get('[data-test="provider-status"]').classes()).toContain('warn')
     expect(gemini().get('[data-test="gemini-expired-help"]').text()).toContain('Turn on “Use Gemini CLI credentials”')
-    expect(gemini().get('[data-test="gemini-expired-help"]').text()).toContain('Antigravity')
+    expect(gemini().get('[data-test="gemini-expired-help"]').text()).not.toContain('Antigravity')
     expect(gemini().get('[data-test="provider-details-toggle"]').attributes('aria-expanded')).toBe('true')
     await gemini().get('[data-test="gemini-cli-oauth"]').setValue(true)
     await flushPromises()

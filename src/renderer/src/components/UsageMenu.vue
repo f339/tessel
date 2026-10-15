@@ -176,8 +176,8 @@ async function readProvider(id) {
     // Its plan (from its login) even when its usage could not be read.
     if (typeof result?.plan === 'string') providerPlans.value[id] = { accountId, plan: result.plan }
     if (!result?.ok) {
-      // A provider you opened stays, with its reason (Antigravity without a
-      // Gemini sign-in), instead of vanishing under the pointer.
+      // A provider you opened stays, with its reason (Antigravity without its
+      // CLI signed in), instead of vanishing under the pointer.
       if (result?.code === 'unavailable' && selectedProvider.value !== id)
         unavailable.value = [...new Set([...unavailable.value, id])]
       if (typeof result?.code === 'string') providerErrorCodes.value[id] = result.code
@@ -680,7 +680,10 @@ function windowLabel(l) {
   if (minutes) return t('usage.window.minutes', '{{count}} min', { count: Number(minutes[1]) })
   // A model's weekly limit ("Opus weekly", "Sonnet weekly", …), named by the provider.
   const model = /^(.{1,40}) weekly$/.exec(String(l || '')) // i18n-ignore
-  return model ? t('usage.window.modelWeekly', '{{model}} weekly', { model: model[1] }) : l
+  if (model) return t('usage.window.modelWeekly', '{{model}} weekly', { model: model[1] })
+  // A model group's 5-hour limit (Antigravity: "Gemini 5-hour").
+  const group = /^(.{1,40}) 5-hour$/.exec(String(l || '')) // i18n-ignore
+  return group ? t('usage.window.modelFiveHour', '{{model}} 5-hour', { model: group[1] }) : l
 }
 // Anthropic's own words for a locked window, shown as is (bounded).
 function lockedText(w) {
@@ -1052,6 +1055,8 @@ const emptyTitle = () => t('usage.menu.buttonTitleEmpty', "Usage of your agents'
                 ? t('usage.menu.loading', 'Loading usage…')
                 : a.unlimited
                   ? t('usage.menu.unlimited', 'Unlimited')
+                  : providerErrorCodes[a.id] === 'unsupported'
+                    ? t('usage.menu.unsupported', 'No longer supported')
                   : errorAction(a.id) === 'signIn'
                     ? t('usage.menu.signInAgain', 'Sign in again')
                     : errorAction(a.id) === 'retry'

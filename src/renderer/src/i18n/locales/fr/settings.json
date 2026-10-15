@@ -667,8 +667,8 @@
         "readsCli": "Lit la connexion de Gemini CLI",
         "signedOut": "Non connecté — lancez gemini pour vous connecter",
         "refreshed": "{{who}} · renouvelée avec les identifiants de Gemini CLI",
-        "expiredRun": "L'usage de Gemini et d'Antigravity ne peut pas être lu. Lancez gemini pour vous reconnecter.",
-        "expiredHelp": "L'usage de Gemini et d'Antigravity ne peut pas être lu. Activez « Utiliser les identifiants de Gemini CLI » ci-dessous, ou lancez gemini pour vous reconnecter.",
+        "expiredRun": "L'usage de Gemini ne peut pas être lu. Lancez gemini pour vous reconnecter.",
+        "expiredHelp": "L'usage de Gemini ne peut pas être lu. Activez « Utiliser les identifiants de Gemini CLI » ci-dessous, ou lancez gemini pour vous reconnecter.",
         "hintShort": "Renouvelle une connexion expirée de Gemini CLI avec les identifiants de la CLI (émis pour Gemini CLI, pas pour Tessel). Désactivé : l'usage n'est lu que tant que la connexion est valide. Peut cesser de fonctionner si Google modifie la CLI."
       },
       "opencode": {

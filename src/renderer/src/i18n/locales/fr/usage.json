@@ -64,6 +64,7 @@
       "refreshNeeded": "Actualisation requise",
       "signInAgain": "Se reconnecter",
       "couldNotRead": "L'utilisation n'a pas pu être lue",
+      "unsupported": "N'est plus pris en charge",
       "openForUsage": "Ouvrir pour voir",
       "lastKnownReadingLower": "dernière lecture connue",
       "details": "Détails et historique d'utilisation",
@@ -105,6 +106,7 @@
       "fiveHour": "5 heures",
       "weekly": "Hebdomadaire",
       "modelWeekly": "{{model}} hebdomadaire",
+      "modelFiveHour": "{{model}} 5 heures",
       "primary": "Fenêtre principale",
       "secondary": "Fenêtre secondaire",
       "minutes": "{{count}} min"

@@ -2037,6 +2037,8 @@ registerProviderUsage({
   userData: app.getPath('userData'),
   log,
   listAgents: () => getAgents(),
+  // Antigravity's usage: agy runs with the fresh PATH, like the panes.
+  cliEnv: () => freshEnv(),
   send,
   getWindow: () => mainWindow,
   onLiveIngest: (ingest) => {

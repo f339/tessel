@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest'
-import { createExtraProviderUsage, USAGE_URLS } from '../extraProviderUsage'
+import { createExtraProviderUsage, USAGE_URLS, geminiUnsupported } from '../extraProviderUsage'
 import { ProviderReadError } from '../usageProviderSources'
 import {
   mapGemini,
@@ -69,17 +69,49 @@ function setup(options = {}) {
       (id) => ({ id, available: true })
     )
   )
+  // Antigravity's CLI: never this computer's agy in a test.
+  const antigravityCli = { present: vi.fn(() => false), read: vi.fn(async () => ({ ok: false, reason: 'missing' })), timeoutMs: 20000 }
   const service = createExtraProviderUsage({
     sources,
     request,
     listAgents,
     clock: () => now,
+    antigravityCli,
     ...options
   })
   return { service, sources, request, listAgents }
 }
 const read = (service, provider) => service.read({ provider, accountId: null })
 describe('explicit additional quota collectors', () => {
+  it("Gemini CLI on a personal account Google no longer serves: says so, never a failed read", async () => {
+    const { service, request } = setup()
+    request.mockImplementation(async (url) =>
+      new Response(
+        JSON.stringify(
+          url === USAGE_URLS.geminiProject
+            ? {
+                allowedTiers: [{ id: 'standard-tier', isDefault: true, userDefinedCloudaicompanionProject: true }],
+                ineligibleTiers: [{ tierId: 'free-tier', reasonCode: 'UNSUPPORTED_CLIENT', reasonMessage: 'This client is no longer supported.' }]
+              }
+            : {}
+        )
+      )
+    )
+    const res = await read(service, 'gemini')
+    expect(res).toMatchObject({ ok: false, provider: 'gemini', code: 'unsupported' })
+    expect(res.error).toMatch(/no longer supports Gemini CLI for personal accounts/)
+    expect(res.error).toMatch(/Antigravity/)
+    // Only the tier question was asked: no quota read for a project it has not got.
+    expect(request.mock.calls.map(([url]) => url)).toEqual([USAGE_URLS.geminiProject])
+  })
+
+  it('geminiUnsupported: only UNSUPPORTED_CLIENT among the refused tiers', () => {
+    expect(geminiUnsupported({ ineligibleTiers: [{ reasonCode: 'UNSUPPORTED_CLIENT' }] })).toBe(true)
+    expect(geminiUnsupported({ ineligibleTiers: [{ reasonCode: 'INELIGIBLE_ACCOUNT' }] })).toBe(false)
+    expect(geminiUnsupported({})).toBe(false)
+    expect(geminiUnsupported(null)).toBe(false)
+  })
+
   it('detects installed configured capabilities without reading credentials or requesting usage', async () => {
     const { service, sources, request } = setup()
     sources.present.mockImplementation(async (id) => id !== 'kimi')
@@ -294,48 +326,88 @@ describe('explicit additional quota collectors', () => {
     }
   })
 })
-describe('Antigravity quota, from the shared Gemini quota', () => {
-  const withAntigravity = async () =>
-    ['antigravity'].map((id) => ({ id, available: true }))
-  it('is offered when Antigravity is installed and a Gemini login exists', async () => {
-    const { service, sources } = setup({ listAgents: withAntigravity })
-    sources.present.mockImplementation(async (id) => id === 'gemini')
+describe('Antigravity quota, from the Antigravity CLI only', () => {
+  const withAntigravity = async () => ['antigravity', 'gemini'].map((id) => ({ id, available: true }))
+  const rows = [
+    { label: 'Gemini 5-hour', usedPct: 25, resetsAt: now + 3600000 },
+    { label: 'Gemini weekly', usedPct: 10, resetsAt: now + 86400000 }
+  ]
+  const cli = (result, present = true) => ({
+    present: vi.fn(() => present),
+    read: vi.fn(async () => result),
+    timeoutMs: 20000
+  })
+  it('is offered when agy is found, without running it or looking at a Gemini login', async () => {
+    const antigravityCli = cli({ ok: true, windows: rows })
+    const { service, sources } = setup({ listAgents: async () => [{ id: 'antigravity', available: true }], antigravityCli })
+    sources.present.mockResolvedValue(false)
     const result = await service.capabilities()
     expect(result.providers.map((p) => p.id)).toEqual(['antigravity'])
-    expect(sources.present).toHaveBeenCalledWith('gemini')
+    expect(antigravityCli.present).toHaveBeenCalled()
+    expect(antigravityCli.read).not.toHaveBeenCalled()
+    expect(sources.present).not.toHaveBeenCalledWith('gemini')
     expect(sources.auth).not.toHaveBeenCalled()
   })
-  it('reads Gemini quota endpoints and labels them Antigravity', async () => {
-    const { service, sources, request } = setup({ listAgents: withAntigravity })
-    const result = await read(service, 'antigravity')
-    expect(result).toMatchObject({ ok: true, provider: 'antigravity', source: 'live' })
-    expect(result.windows).toEqual(mapGemini(fixtures.gemini))
-    expect(sources.auth).toHaveBeenCalledWith('gemini')
-    expect(request.mock.calls.map(([url]) => url)).toEqual([USAGE_URLS.geminiProject, USAGE_URLS.gemini])
-    expect(JSON.stringify(result)).not.toContain('fixture-only')
+  it('is not offered without agy, even with a Gemini login', async () => {
+    const { service, sources } = setup({ listAgents: withAntigravity, antigravityCli: cli(null, false) })
+    sources.present.mockResolvedValue(true)
+    const result = await service.capabilities()
+    expect(result.providers.map((p) => p.id)).toEqual(['gemini'])
   })
-  it('says a Gemini sign-in is needed, not that Antigravity failed', async () => {
-    const { service, sources, request } = setup({ listAgents: withAntigravity })
-    sources.auth.mockRejectedValue(new ProviderReadError('unavailable', 'Sign in with Gemini CLI.'))
+  it("reads agy's windows, and never a Gemini login or endpoint", async () => {
+    const antigravityCli = cli({ ok: true, windows: rows, observedAt: now - 5000 })
+    const { service, sources, request } = setup({ listAgents: withAntigravity, antigravityCli })
     const result = await read(service, 'antigravity')
-    expect(result).toMatchObject({ ok: false, provider: 'antigravity', code: 'unavailable' })
-    expect(result.error).toMatch(/Gemini CLI sign-in/)
+    expect(result).toEqual({ ok: true, provider: 'antigravity', accountId: null, source: 'live', observedAt: now - 5000, windows: rows })
+    expect(antigravityCli.read).toHaveBeenCalledTimes(1)
+    expect(sources.auth).not.toHaveBeenCalled()
     expect(request).not.toHaveBeenCalled()
   })
-  it('says the shared quota could not be read when Gemini answers badly', async () => {
-    const { service, request } = setup({ listAgents: withAntigravity })
-    request.mockResolvedValue(new Response('', { status: 500 }))
+  it.each(['missing', 'signed-out', 'failed'])('%s: says the Antigravity CLI is needed, never Gemini', async (reason) => {
+    const { service, sources, request } = setup({ listAgents: withAntigravity, antigravityCli: cli({ ok: false, reason }) })
     const result = await read(service, 'antigravity')
-    expect(result).toMatchObject({ ok: false, code: 'unavailable' })
-    expect(result.error).toMatch(/could not be read/)
+    expect(result).toEqual({
+      ok: false,
+      provider: 'antigravity',
+      accountId: null,
+      code: 'unavailable',
+      error: "Antigravity's usage needs the Antigravity CLI (agy), installed and signed in."
+    })
+    expect(result.error).not.toMatch(/Gemini|Code Assist/)
+    expect(sources.auth).not.toHaveBeenCalled()
+    expect(request).not.toHaveBeenCalled()
+  })
+  it('a timeout or an unreadable answer offers a retry', async () => {
+    for (const [reason, code] of [['timeout', 'timeout'], ['response', 'response']]) {
+      const { service, request } = setup({ listAgents: withAntigravity, antigravityCli: cli({ ok: false, reason }) })
+      expect(await read(service, 'antigravity')).toMatchObject({ ok: false, code })
+      expect(request).not.toHaveBeenCalled()
+    }
+  })
+  it('gives agy its own time before the read times out', async () => {
+    vi.useFakeTimers()
+    try {
+      const antigravityCli = { present: () => true, read: () => new Promise(() => {}), timeoutMs: 100 }
+      const { service } = setup({ listAgents: withAntigravity, antigravityCli, timeoutMs: 10 })
+      let result = null
+      read(service, 'antigravity').then((r) => (result = r))
+      await vi.advanceTimersByTimeAsync(1050)
+      expect(result).toBe(null)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(result).toMatchObject({ ok: false, code: 'timeout' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
   it('refuses when Antigravity itself is not installed', async () => {
-    const { service, sources } = setup()
+    const antigravityCli = cli({ ok: true, windows: rows })
+    const { service, sources } = setup({ antigravityCli })
     expect(await read(service, 'antigravity')).toMatchObject({
       ok: false,
       code: 'unavailable',
       error: 'The matching agent is not installed.'
     })
+    expect(antigravityCli.read).not.toHaveBeenCalled()
     expect(sources.auth).not.toHaveBeenCalled()
   })
 })
