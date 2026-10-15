@@ -115,6 +115,14 @@ const agentText = computed(() =>
 
 let ready = false // loadURL needs the webview attached and its first dom-ready
 let pendingUrl = null
+// Until the page first started (its first dom-ready), a dark "Loading" shows
+// over it rather than Chromium's white page, which has a small sad face when
+// the page's process could not start. Still not started after a while: said,
+// with Reload.
+const pageStarted = ref(false)
+const startSlow = ref(false)
+const START_SLOW_MS = 15000
+let startTimer = null
 
 
 // --- Scroll kept when the pane is rebuilt ------------------------------------------------------
@@ -153,6 +161,8 @@ const isBlank = computed(() => !displayUrl(currentUrl.value))
 const headerTitle = computed(() => pageTitle.value || (isBlank.value ? '' : hostOf(currentUrl.value)) || t('browser.pane.title', 'Browser'))
 const failureView = computed(() => (failure.value ? loadFailureView(failure.value) : null))
 const showEmpty = computed(() => isBlank.value && !failure.value && !loading.value)
+const showStarting = computed(() => !pageStarted.value && !failure.value)
+const startingHost = computed(() => (isBlank.value ? '' : hostOf(currentUrl.value)))
 
 // --- The webview ---------------------------------------------------------------------------
 function wv() {
@@ -207,6 +217,9 @@ function setTitle(title) {
 function onDomReady() {
   const first = !ready
   ready = true
+  pageStarted.value = true
+  startSlow.value = false
+  clearTimeout(startTimer)
   const id = call('getWebContentsId')
   if (id != null) guestId.value = id
   if (page) {
@@ -261,7 +274,8 @@ function onFailLoad(e) {
     setTitle(pageTitleFor('', url))
   }
 }
-function onGone() {
+function onGone(e) {
+  if (window.shellApi.log) window.shellApi.log('warn', `browser page stopped in ${props.node.id}: ${(e && ((e.details && e.details.reason) || e.reason)) || 'unknown'}`) // i18n-ignore
   failure.value = { kind: 'crash', url: currentUrl.value }
   loading.value = false
   props.node.audible = false
@@ -867,7 +881,10 @@ function onBoxMouseDown() {
 // A page taken back: what it shows now.
 function adoptLivePage() {
   ready = page.ready
+  if (ready) pageStarted.value = true
   if (page.guestId != null) guestId.value = page.guestId
+  // Its process ended while no pane showed it: said, with Reload.
+  if (call('isCrashed') === true) onGone({ reason: 'crashed while hidden' })
   loading.value = !!call('isLoading')
   props.node.audible = !!call('isCurrentlyAudible')
   applyMuted()
@@ -911,6 +928,7 @@ onMounted(() => {
   // A new page is silent until it says otherwise (a page taken back: asked).
   props.node.audible = false
   mountPage()
+  if (!pageStarted.value) startTimer = setTimeout(() => (startSlow.value = !pageStarted.value), START_SLOW_MS)
   const el = wv()
   if (el) for (const [name, fn] of Object.entries(WEBVIEW_EVENTS)) el.addEventListener(name, fn)
   unregisterWebview = registerWebview(el)
@@ -922,6 +940,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   clearTimeout(noticeTimer)
+  clearTimeout(startTimer)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   releaseNavigationOwner(pageOwner)
   const el = wv()
@@ -1298,8 +1317,22 @@ defineExpose({ navigate, focusAddress })
           @active="designActive = $event"
         />
 
+        <!-- Until the page started: never Chromium's white page. -->
+        <div v-if="showStarting" class="bp-empty bp-starting" data-test="browser-starting" aria-live="polite">
+          <div class="bp-empty-inner">
+            <div class="bp-round"><Loader2 v-if="!startSlow" :size="20" class="bp-spin" /><Globe v-else :size="20" /></div>
+            <p class="bp-empty-title">{{ startingHost || t('browser.empty.title', 'New Tab') }}</p>
+            <p class="bp-empty-text">
+              {{ startSlow ? t('browser.starting.slow', 'The page has not started yet.') : t('browser.starting.loading', 'Loading…') }}
+            </p>
+            <button v-if="startSlow" type="button" class="bp-fbtn primary" data-test="browser-starting-reload" @click="call('reload')">
+              {{ t('browser.starting.reload', 'Reload') }}
+            </button>
+          </div>
+        </div>
+
         <!-- Orca's blank tab, with the active local servers one click away. -->
-        <div v-if="showEmpty" class="bp-empty" data-test="browser-empty">
+        <div v-if="showEmpty && !showStarting" class="bp-empty" data-test="browser-empty">
           <div class="bp-empty-inner">
             <div class="bp-round"><Globe :size="20" /></div>
             <p class="bp-empty-title">{{ t('browser.empty.title', 'New Tab') }}</p>
@@ -1850,6 +1883,9 @@ body.ws-resizing .bp-webview,
   overflow: auto;
 }
 
+.bp-starting {
+  z-index: 5;
+}
 .bp-empty {
   z-index: 3;
   background: radial-gradient(circle at center, rgba(255, 255, 255, 0.02), transparent 58%), var(--term);

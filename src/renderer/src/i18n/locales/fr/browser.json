@@ -114,6 +114,11 @@
       "stopHint": "Empêcher les agents de piloter cette page",
       "stopped": "Les agents ne peuvent plus piloter cette page. Fermez-la et ouvrez-en une nouvelle pour le leur permettre à nouveau."
     },
+    "starting": {
+      "loading": "Chargement…",
+      "slow": "La page n'a pas encore démarré.",
+      "reload": "Recharger"
+    },
     "fullscreen": {
       "exitHint": "Appuyez sur Échap pour quitter le plein écran"
     },

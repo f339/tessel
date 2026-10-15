@@ -482,6 +482,11 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
       }
     })
     guest.on('destroyed', () => cancelPick(guest.id))
+    // A page's process that ends (a crash, killed, out of memory): logged,
+    // the window shows "page stopped" with Reload.
+    guest.on('render-process-gone', (_event, details) => {
+      warn(`a page's process ended: ${String((details && details.reason) || 'unknown').slice(0, 40)} (exit code ${details && details.exitCode})`)
+    })
   }
 
   // --- The right-click menu ------------------------------------------------------------
