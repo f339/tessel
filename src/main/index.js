@@ -93,7 +93,7 @@ import { cleanEnv } from './cleanEnv'
 import { createPtyClient } from './ptyClient'
 import { watchLoopLag } from './loopLag'
 import { registerLiveShare } from './liveShare'
-import { listProcesses, treeOf, waitForExit, killPids, listProcessNames, runningWork } from './processTree'
+import { listProcesses, treeOf, waitForExit, killPids, listProcessNames, runningWork, stopProcessSnapshots } from './processTree'
 import { pipeName } from './ptyProtocol'
 import { createUpdater } from './updater'
 import { createAgentUpdates } from './agentUpdates'
@@ -1359,6 +1359,13 @@ const sessionSearch = createSessionSearch({
 })
 sessionSearch.register(ipcMain)
 app.whenReady().then(() => sessionSearch.start())
+// The PowerShell kept open for the process list (processTree.js): started a
+// moment after Tessel, so the first terminal closed does not wait for it;
+// closed with Tessel.
+app.whenReady().then(() => {
+  if (process.platform === 'win32') setTimeout(() => listProcessNames().catch(() => null), 8000).unref?.()
+})
+app.on('will-quit', () => stopProcessSnapshots())
 app.on('will-quit', () => sessionSearch.close())
 // Claude Code and Codex: the folder of the pane's account (resolved here from
 // its id), and the session file its hooks reported (sessions/<pane>.json).
