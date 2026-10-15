@@ -29,6 +29,45 @@ describe('MCP servers dialog', () => {
     wrapper.unmount()
   })
 
+  it('lists the Antigravity CLI servers (its own mcp_config.json), one it turned off marked so, and adds to it', async () => {
+    previousApi = window.shellApi
+    const added = []
+    window.shellApi = {
+      mcpList: async () => ({
+        claude: [],
+        codex: [],
+        others: {
+          antigravity: {
+            servers: [
+              { name: 'tessel-team', scope: 'user', type: 'stdio', target: 'node s.cjs' },
+              { name: 'figma', scope: 'user', type: 'http', target: 'https://x/mcp', enabled: false }
+            ]
+          }
+        }
+      }),
+      checkTools: async () => ({}),
+      mcpAdd: async (spec) => {
+        added.push(spec.agent)
+        return { ok: true }
+      },
+      mcpTest: async () => ({ ok: true, status: 'connected', tools: [] })
+    }
+    const agents = ['claude', 'antigravity'].map((id) => ({ id, available: true }))
+    const wrapper = mount(McpDialog, { props: { agents }, attachTo: document.body })
+    await flushPromises()
+    const row = (name) => wrapper.findAll('.mcp-server').find((r) => r.find('.mcp-name').text() === name)
+    expect(row('tessel-team').text()).toContain('Antigravity CLI')
+    expect(row('figma').text()).toContain('Turned off')
+    expect(row('tessel-team').text()).not.toContain('Turned off')
+    await wrapper.findAll('.launch-seg-btn').find((b) => b.text() === 'Catalog').trigger('click')
+    const card = () => wrapper.findAll('.mcp-entry').find((e) => e.text().includes('Context7'))
+    await card().find('.mcp-entry-head .exit-btn').trigger('click')
+    await card().find('form').trigger('submit')
+    await flushPromises()
+    expect(added).toEqual(['claude', 'antigravity'])
+    wrapper.unmount()
+  })
+
   it('adds to every chosen agent even when one fails, and shows Needs sign-in with Sign in instead of Added', async () => {
     previousApi = window.shellApi
     const have = { claude: [], codex: [], gemini: [] }

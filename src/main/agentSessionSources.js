@@ -18,6 +18,7 @@
 import fs from 'fs'
 import os from 'os'
 import { basename, dirname, join, isAbsolute, relative, resolve, sep, win32 } from 'path'
+import { fileURLToPath } from 'url'
 import { normDir, readHead, readTail, readRows } from './fileRead'
 import { clineDataDir } from './jsonAgents'
 
@@ -326,9 +327,11 @@ export function ompSessions(home = os.homedir(), { since = 0 } = {}) {
 // --- Antigravity -----------------------------------------------------------------
 // ~/.gemini/antigravity-cli/brain/<conversation id>/.system_generated/logs/transcript.jsonl
 // ({ source: USER_EXPLICIT, type: USER_INPUT, content: <USER_REQUEST>..</USER_REQUEST>,
-// created_at }). The transcript has no folder: history.jsonl beside brain/ has
-// { display, workspace, timestamp }, joined on the first prompt within 2 s,
-// only when that match is unique.
+// created_at }). The transcript has no folder: agy's own index of its
+// conversations (conversation_summaries.db beside brain/) has each one's
+// folder, title and parent (a sub-agent's conversation); else history.jsonl
+// ({ display, workspace, timestamp, conversationId? }) names it, by id or
+// joined on the first prompt within 2 s, only when that match is unique.
 
 function antigravityRequest(content) {
   const c = typeof content === 'string' ? content : ''
@@ -355,39 +358,75 @@ export function parseAntigravityHead(text) {
   }
   return { started, prompt: first, promptAt: at || started }
 }
-export function antigravityWorkspace(historyText, prompt, at) {
-  if (!prompt || !at) return ''
+export function antigravityWorkspace(historyText, prompt, at, id = '') {
+  const named = new Set()
   const hits = new Set()
   for (const r of jsonLines(historyText)) {
-    if (oneLine(r.display) !== prompt || !folder(r.workspace)) continue
-    if (Math.abs(time(r.timestamp) - at) <= 2000) hits.add(r.workspace)
+    if (!folder(r.workspace)) continue
+    // A line naming the conversation (agy writes its id with later prompts).
+    if (id && r.conversationId === id) named.add(r.workspace)
+    if (prompt && at && oneLine(r.display) === prompt && Math.abs(time(r.timestamp) - at) <= 2000) hits.add(r.workspace)
   }
+  if (named.size === 1) return [...named][0]
   return hits.size === 1 ? [...hits][0] : ''
+}
+
+// agy's index of its conversations: id -> { cwd, title, parent }. Its folder
+// is the first workspace URI (file:///C:/Proj); "New Chat" is no title.
+// Read-only; busy, missing or another layout: an empty map.
+export function antigravitySummaries(root) {
+  const db = join(root, 'conversation_summaries.db')
+  if (!insideDir(root, db)) return new Map()
+  const rows = readRows(db, 'SELECT conversation_id, workspace_uris, title, parent_conversation_id FROM conversation_summaries LIMIT 2000')
+  const out = new Map()
+  for (const r of rows) {
+    if (!r || !plainId(r.conversation_id)) continue
+    let cwd = ''
+    try {
+      const uris = JSON.parse(r.workspace_uris || '[]')
+      const uri = Array.isArray(uris) ? uris.find((u) => typeof u === 'string' && /^file:\/\//i.test(u)) : null
+      if (uri) cwd = folder(fileURLToPath(uri))
+    } catch {
+      cwd = ''
+    }
+    const name = title(r.title)
+    out.set(r.conversation_id, { cwd, title: name === 'New Chat' ? '' : name, parent: str(r.parent_conversation_id) })
+  }
+  return out
 }
 
 export function antigravitySessions(home = os.homedir(), { since = 0 } = {}) {
   const root = sessionDirs(home).antigravity
   const brain = join(root, 'brain')
   let history = null // read once, only when needed
+  let summaries = null
   const out = []
   for (const d of entries(brain)) {
     if (!d.isDirectory() || d.isSymbolicLink() || !plainId(d.name)) continue
     const file = join(brain, d.name, '.system_generated', 'logs', 'transcript.jsonl')
     const s = stat(file)
     if (!s || !s.isFile() || s.mtimeMs < since - SLACK) continue
+    if (summaries === null) summaries = antigravitySummaries(root)
+    const known = summaries.get(d.name) || null
+    // A sub-agent's conversation: part of its parent's, never resumed alone.
+    if (known && known.parent) continue
     const head = parseAntigravityHead(headIn(root, file))
-    if (history === null) {
-      // Newest prompts are at its end: its last 2 MB.
-      const h = join(root, 'history.jsonl')
-      history = insideDir(root, h) ? readTail(h, 2 * 1024 * 1024) : ''
+    let cwd = known ? known.cwd : ''
+    if (!cwd) {
+      if (history === null) {
+        // Newest prompts are at its end: its last 2 MB.
+        const h = join(root, 'history.jsonl')
+        history = insideDir(root, h) ? readTail(h, 2 * 1024 * 1024) : ''
+      }
+      cwd = antigravityWorkspace(history, head.prompt, head.promptAt, d.name)
     }
     out.push({
       agent: 'antigravity',
       id: d.name,
-      cwd: antigravityWorkspace(history, head.prompt, head.promptAt),
+      cwd,
       started: head.started || s.birthtimeMs || s.mtimeMs,
       updated: s.mtimeMs,
-      title: title(head.prompt)
+      title: (known && known.title) || title(head.prompt)
     })
     if (out.length > 400) break
   }

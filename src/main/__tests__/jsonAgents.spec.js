@@ -22,6 +22,10 @@ afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true })
 })
 const read = (...p) => JSON.parse(fs.readFileSync(join(home, ...p), 'utf8'))
+const put = (rel, text) => {
+  fs.mkdirSync(join(home, rel, '..'), { recursive: true })
+  fs.writeFileSync(join(home, rel), text)
+}
 
 describe('MCP servers in agents settings files', () => {
   it('Gemini: adds, lists, reads and removes, keeping the rest of the file', () => {
@@ -78,6 +82,39 @@ describe('MCP servers in agents settings files', () => {
     expect(teamToolsEntry('opencode', 'C:/t/s.cjs').environment).toEqual({ TESSEL_PANE_ID: '{env:TESSEL_PANE_ID}', TESSEL_TEAM_SECRET: '{env:TESSEL_TEAM_SECRET}' })
     // Cline hands the pane's environment on and never expands $VAR: no env.
     expect(teamToolsEntry('cline', 'C:/t/s.cjs', NODE)).toEqual({ command: NODE, args: ['C:/t/s.cjs'] })
+    // So does the Antigravity CLI (checked: a "$TESSEL_PANE_ID" value reaches
+    // the server as it is, and the pane's own variables reach it anyway).
+    expect(teamToolsEntry('antigravity', 'C:/t/s.cjs', NODE)).toEqual({ command: NODE, args: ['C:/t/s.cjs'] })
+  })
+
+  it('Antigravity CLI: its own ~/.gemini/config/mcp_config.json, never Gemini CLI settings', () => {
+    put('.gemini/settings.json', JSON.stringify({ mcpServers: { gem: { command: 'g' } } }))
+    // An empty file (agy creates one) is no error.
+    put('.gemini/config/mcp_config.json', '')
+    expect(listJsonAgent('antigravity', home)).toEqual({ servers: [], error: null })
+    const NODE = 'C:\\Program Files\\nodejs\\node.exe'
+    expect(setJsonAgentServer('antigravity', 'tessel-team', teamToolsEntry('antigravity', 'C:/t/tessel-team-mcp.cjs', NODE), home)).toEqual({ ok: true, changed: true })
+    expect(read('.gemini', 'config', 'mcp_config.json')).toEqual({ mcpServers: { 'tessel-team': { command: NODE, args: ['C:/t/tessel-team-mcp.cjs'] } } })
+    expect(read('.gemini', 'settings.json').mcpServers).toEqual({ gem: { command: 'g' } })
+    // Again: nothing to change.
+    expect(setJsonAgentServer('antigravity', 'tessel-team', teamToolsEntry('antigravity', 'C:/t/tessel-team-mcp.cjs', NODE), home)).toEqual({ ok: true, changed: false })
+  })
+
+  it('Antigravity CLI: reads url or serverUrl, and a server agy turned off', () => {
+    put('.gemini/config/mcp_config.json', JSON.stringify({ mcpServers: { a: { url: 'https://a/mcp' }, b: { serverUrl: 'https://b/mcp', disabled: true }, c: { command: 'node', args: ['c.js'], disabled: false } } }))
+    expect(listJsonAgent('antigravity', home).servers).toEqual([
+      { name: 'a', scope: 'user', type: 'http', target: 'https://a/mcp' },
+      { name: 'b', scope: 'user', type: 'http', target: 'https://b/mcp', enabled: false },
+      { name: 'c', scope: 'user', type: 'stdio', target: 'node c.js' }
+    ])
+    expect(jsonAgentConfig('antigravity', 'b', home)).toEqual({ transport: 'http', sse: false, url: 'https://b/mcp', headers: {} })
+  })
+
+  it('Antigravity CLI: a file with comments (agy accepts them) is never rewritten', () => {
+    const text = '{ // mine\n "mcpServers": {} }'
+    put('.gemini/config/mcp_config.json', text)
+    expect(setJsonAgentServer('antigravity', 'x', { command: 'x' }, home).ok).toBe(false)
+    expect(fs.readFileSync(join(home, '.gemini', 'config', 'mcp_config.json'), 'utf8')).toBe(text)
   })
 
   it('Cline: its settings/cline_mcp_settings.json, http as streamableHttp', () => {
@@ -121,7 +158,9 @@ describe('MCP server formats, per agent', () => {
     opencode: { file: ['.config', 'opencode', 'opencode.json'], key: 'mcp', http: { type: 'remote', url: http.url, enabled: true, headers: { K: 'v' } }, sse: { type: 'remote', url: sse.url, enabled: true }, stdio: { type: 'local', command: ['npx', '-y', 'srv'], enabled: true, environment: { A: '1' } } },
     cline: { file: ['.cline', 'data', 'settings', 'cline_mcp_settings.json'], key: 'mcpServers', http: { type: 'streamableHttp', url: http.url, headers: { K: 'v' } }, sse: { type: 'sse', url: sse.url }, stdio: { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } } },
     kimi: { file: ['.kimi-code', 'mcp.json'], key: 'mcpServers', http: { transport: 'http', url: http.url, headers: { K: 'v' } }, sse: { transport: 'sse', url: sse.url }, stdio: { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } } },
-    cursor: { file: ['.cursor', 'mcp.json'], key: 'mcpServers', http: { url: http.url, headers: { K: 'v' } }, sse: { url: sse.url }, stdio: { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } } }
+    cursor: { file: ['.cursor', 'mcp.json'], key: 'mcpServers', http: { url: http.url, headers: { K: 'v' } }, sse: { url: sse.url }, stdio: { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } } },
+    // What `agy mcp add` writes (checked with agy 1.3.5); it has no SSE (refused before, see agentTools).
+    antigravity: { file: ['.gemini', 'config', 'mcp_config.json'], key: 'mcpServers', http: { serverUrl: http.url, headers: { K: 'v' } }, sse: { serverUrl: sse.url }, stdio: { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } } }
   }
   const saved = {}
   beforeEach(() => {
@@ -154,7 +193,7 @@ describe('MCP server formats, per agent', () => {
     ])
     // Read back as it was written (OpenCode and Cursor find SSE by themselves).
     expect(jsonAgentConfig(agent, 'web', home)).toEqual({ ...http, sse: false })
-    expect(jsonAgentConfig(agent, 'old', home).sse).toBe(!['opencode', 'cursor'].includes(agent))
+    expect(jsonAgentConfig(agent, 'old', home).sse).toBe(!['opencode', 'cursor', 'antigravity'].includes(agent))
     expect(jsonAgentConfig(agent, 'cmd', home)).toEqual(stdio)
     expect(removeJsonAgentServer(agent, 'web', home).changed).toBe(true)
     expect(Object.keys(read(...c.file)[c.key])).toEqual(['old', 'cmd'])

@@ -295,3 +295,11 @@ describe("Cursor's launcher (a .cmd that runs a PowerShell script beside it)", (
     expect(shimTarget(cmd.replace('cursor-agent.ps1', String.raw`..\x.ps1`), dir, null, () => true)).toBe(null)
   })
 })
+
+describe('the Antigravity CLI and SSE servers', () => {
+  it('refuses an SSE endpoint before writing anything (agy speaks streamable HTTP only)', async () => {
+    const { addMcp } = await import('../agentTools')
+    const r = await addMcp({ agent: 'antigravity', name: 'old', transport: 'http', url: 'https://x/sse', sse: true })
+    expect(r).toEqual({ ok: false, error: 'The Antigravity CLI only connects to streamable HTTP servers, not SSE ones.' })
+  })
+})

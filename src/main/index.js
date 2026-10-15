@@ -108,8 +108,10 @@ import {
   removeMcp,
   testMcp,
   copyMcp,
-  hklFromTip
+  hklFromTip,
+  runAgentCommand
 } from './agentTools'
+import { listAgyPlugins, setAgyPlugin, removeAgyPlugin } from './agyPlugins'
 import {
   listSkills,
   packageFromFolder,
@@ -2408,8 +2410,9 @@ ipcMain.handle(
     } catch {
       errors.push(t('main.hooks.kimiInstallIncomplete', 'Kimi Code hooks: installation could not be completed.'))
     }
-    // Gemini CLI, Qwen Code, Copilot CLI, OpenCode, Cline: in their settings file,
-    // for those installed here (a file Tessel cannot read is left alone).
+    // Gemini CLI, Qwen Code, Copilot CLI, OpenCode, Cline, Kimi Code, Antigravity
+    // CLI: in their settings file, for those installed here (a file Tessel
+    // cannot read is left alone).
     for (const agent of JSON_AGENTS) {
       // Cursor's servers are listed and edited in Settings > MCP; the team
       // tools are not set up for it.
@@ -2504,6 +2507,21 @@ ipcMain.handle(
     const error = await shell.openPath(dir)
     return error ? { ok: false, error } : { ok: true }
   })
+)
+
+// The Antigravity CLI's plugins (the Skills window): listed, turned on or
+// off and uninstalled with agy's own commands (agyPlugins.js).
+ipcMain.handle(
+  'agyPlugins:list',
+  safe(() => listAgyPlugins(runAgentCommand))
+)
+ipcMain.handle(
+  'agyPlugins:set',
+  safe((q) => setAgyPlugin({ name: q && q.name, enabled: !!(q && q.enabled) }, runAgentCommand))
+)
+ipcMain.handle(
+  'agyPlugins:remove',
+  safe((q) => removeAgyPlugin({ name: q && q.name }, runAgentCommand))
 )
 
 // "An agent needs you": native notification + taskbar flash. Clicking the

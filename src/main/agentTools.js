@@ -295,6 +295,9 @@ async function runDirect(exe, args, cwd) {
   return run(target.file, [...target.pre, ...args], { cwd, timeout: 90000, env })
 }
 
+// An agent CLI's own command (agy plugin list...), run as above.
+export const runAgentCommand = (exe, args, cwd = null) => runAgentCli(exe, args, cwd)
+
 export function cliError(res, fallback) {
   const text = cleanPsOutput(res.stderr || res.stdout || res.error || '').trim()
   const line = text.split(/\r?\n/).filter(Boolean).slice(-3).join(' ')
@@ -482,6 +485,11 @@ export async function listMcp(cwd) {
   return { claude, codex, codexError, others }
 }
 
+// The Antigravity CLI connects to streamable HTTP servers only (its MCP
+// guide: the legacy HTTP+SSE transport is not supported).
+const antigravityNoSse = () =>
+  t('main.mcp.antigravityNoSse', 'The Antigravity CLI only connects to streamable HTTP servers, not SSE ones.')
+
 // spec: { agent: 'claude'|'codex', name, transport: 'stdio'|'http',
 //         commandLine, url, env: 'K=V lines', headers: 'Name: value lines',
 //         scope: 'user'|'project', cwd }
@@ -560,6 +568,7 @@ export async function addMcp(spec, deps = {}) {
     if (transport === 'http') {
       if (!/^https?:\/\//i.test(spec.url || ''))
         return { ok: false, error: t('main.mcp.urlRequired', 'Enter a URL starting with http:// or https://') }
+      if (spec.sse && agent === 'antigravity') return { ok: false, error: antigravityNoSse() }
       cfg = { transport: 'http', url: spec.url, headers, sse: !!spec.sse }
     } else {
       const words = splitCommandLine(spec.commandLine)
@@ -885,6 +894,7 @@ export async function copyMcp({ from, to, name, scope, cwd }) {
   const cfg = await fullConfig({ agent: from, name, scope, cwd })
   if (!cfg) return { ok: false, error: t('main.mcp.serverNotFound', 'Server not found.') }
   if (JSON_AGENTS.includes(to)) {
+    if (to === 'antigravity' && cfg.transport === 'http' && cfg.sse) return { ok: false, error: antigravityNoSse() }
     const res = setJsonAgentServer(to, name, configToEntry(to, { ...cfg, args: cfg.args || [], env: cfg.env || {}, headers: cfg.headers || {} }))
     return res.ok ? { ok: true, note: null } : res
   }

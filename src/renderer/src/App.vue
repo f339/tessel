@@ -7980,7 +7980,7 @@ let teamToolsReady = false
 // every 30 s (teamMcp/server.cjs, .tessel/agents/<pane>.json). An agent of a
 // team with no such sign for a minute after it started gets a warning on its
 // row and a message once; both go when the tools are back.
-const MCP_AGENT_IDS = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode', 'cline']
+const MCP_AGENT_IDS = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode', 'cline', 'antigravity']
 const toolsDown = reactive({}) // paneId -> true
 const toolsWarned = new Set()
 let toolsCheckAt = 0
