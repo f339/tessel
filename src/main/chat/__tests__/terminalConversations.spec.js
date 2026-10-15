@@ -15,7 +15,8 @@ import {
   TERMINAL_LIMITS
 } from '../terminalConversations'
 import { transcriptViewRoots } from '../transcriptView'
-import { leadHead, reviewRequest, teammateHead } from '../../../shared/tesselDelivery'
+import { channelHead, leadHead, reviewRequest } from '../../../shared/tesselDelivery'
+import { teamTurnText } from '../sessions'
 
 const CLAUDE_ID = '11111111-2222-4333-8444-555555555555'
 const CODEX_ID = '0199aabb-ccdd-7eef-8000-000000000002'
@@ -347,7 +348,7 @@ describe('what is yours (review fixes)', () => {
         answer(13, 'm3', [{ type: 'text', text: 'Replied to the lead about the schema.' }]),
         prompt(20, `${leadHead('Ada')} Ship the schema.`),
         answer(21, 'm4', [{ type: 'text', text: 'Shipping.' }]),
-        prompt(30, `${teammateHead('Bob', 'Core', { id: 'm1', replyTo: 'm0' })} Done?`),
+        prompt(30, `${channelHead('Bob', 'Core', 'm1', 'm0')} Done?`),
         answer(31, 'm5', [{ type: 'text', text: 'Yes.' }]),
         prompt(40, reviewRequest('Bob', ' in C:\\p', ' (branch b)')),
         answer(41, 'm6', [{ type: 'text', text: 'Two bugs.' }]),
@@ -424,6 +425,49 @@ describe('what is yours (review fixes)', () => {
         '<ide_selection>x</ide_selection><in-app-browser-context source="a">b</in-app-browser-context> Why?'
       )
     ).toBe('Why?')
+  })
+
+  it('a slash command queued during Tessel’s task does not make the turn yours', () => {
+    const items = conversationItems(
+      'claude',
+      lines([
+        prompt(1, '[Tessel task] Build X'),
+        answer(2, 'm1', [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'x' } }]),
+        toolResult(3, 't1'),
+        queued(4, '/compact'),
+        answer(5, 'm2', [{ type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'y' } }]),
+        toolResult(6, 't2'),
+        answer(7, 'm3', [{ type: 'text', text: 'Built X. TASK_COMPLETE' }]),
+        // Typed by you while it worked: the answer after it is yours.
+        prompt(10, '[Tessel task] Build Y'),
+        answer(11, 'm4', [{ type: 'tool_use', id: 't3', name: 'Bash', input: { command: 'z' } }]),
+        toolResult(12, 't3'),
+        queued(13, 'Use pnpm please'),
+        answer(14, 'm5', [{ type: 'text', text: 'Built Y with pnpm.' }])
+      ]),
+      CLAUDE_ID
+    )
+    expect(items.map((i) => `${i.role}:${i.text}`)).toEqual([
+      'user:Use pnpm please',
+      'agent:Built Y with pnpm.'
+    ])
+  })
+
+  it('a chat’s turn of team messages (the same file, claude -p) is Tessel’s, and so is its answer', () => {
+    const items = conversationItems(
+      'claude',
+      lines([
+        prompt(1, teamTurnText([{ from: 'Bob', text: 'Is the API ready?' }])),
+        answer(2, 'm1', [{ type: 'text', text: 'Told Bob it is.' }]),
+        prompt(3, 'And for me?'),
+        answer(4, 'm2', [{ type: 'text', text: 'Ready for you too.' }])
+      ]),
+      CLAUDE_ID
+    )
+    expect(items.map((i) => `${i.role}:${i.text}`)).toEqual([
+      'user:And for me?',
+      'agent:Ready for you too.'
+    ])
   })
 })
 

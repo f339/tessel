@@ -252,44 +252,55 @@ export function terminalLines(entries, opts = {}) {
 // was queued: it may wait hours before it is typed) and a prompt in the
 // agent's file; an answer Tessel recorded (a chat's) is in both too. Same
 // pane, same words (spaces and image marks aside: the file says "[Image #1]",
-// the log does not; the first 2000 characters: the log keeps 8000), at most
-// this long apart: one line, the log's. When that message was not yours (a
-// lead's brief, a teammate's, a Tessel notice), the agent's answer to it in
-// its terminal is theirs, not yours: left out too.
-// An agent on an SSH host writes its host's clock, which may be off: its
-// lines repeat a log line within ECHO_AFTER_MS either way, and when its
-// prompts come before the log lines they repeat (Tessel types only after it
-// logs: the host is behind), that conversation's lines move by that much
-// (the middle of those gaps), keeping their order among themselves.
+// the log does not; the first 2000 characters: the log keeps 8000), typed
+// from just before to ECHO_AFTER_MS after it was logged: one line, the log's.
+// The closest pairs go first (a "continue" you typed at 9:00 is not the one
+// Tessel sent at 13:00), each logged message pairs once. When that message
+// was not yours (a lead's brief, a teammate's, a Tessel notice), the agent's
+// answer to it in its terminal is theirs, not yours: left out too.
+// An agent on an SSH host writes its host's clock, which may be off by a few
+// minutes: its prompt may come up to SKEW_MAX_MS before the message it
+// repeats. When at least SKEW_MATCHES of its prompts repeat Tessel's own
+// deliveries (never your messages: you may type the same words) and agree
+// within SKEW_SPREAD_MS on how far behind the host is, its lines move by that
+// (the lower middle of those gaps, SKEW_MAX_MS at most, never past now),
+// keeping their order among themselves.
 export const ECHO_BEFORE_MS = 2 * 60 * 1000
 export const ECHO_AFTER_MS = 12 * 3600 * 1000
+export const SKEW_MAX_MS = 30 * 60 * 1000
+export const SKEW_SPREAD_MS = 2 * 60 * 1000
+export const SKEW_MATCHES = 3
 const echoKey = (s) =>
   String(s || '')
     .replace(/\[Image #\d+\]|\[image\]/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 2000)
-export function withoutEchoes(terminal, logged) {
-  const pool = new Map() // "<u|a>|<paneId>|<words>" -> [{ at, yours }]
-  const add = (key, at, yours) => {
+// opts.now: no line moves past it (Date.now() by default).
+export function withoutEchoes(terminal, logged, opts = {}) {
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now()
+  const pool = new Map() // "<u|a>|<paneId>|<words>" -> [{ at, yours, tessel, used }]
+  const add = (key, entry) => {
     const list = pool.get(key)
-    if (list) list.push({ at, yours })
-    else pool.set(key, [{ at, yours }])
+    if (list) list.push(entry)
+    else pool.set(key, [entry])
   }
   for (const l of logged || []) {
     if (l.via === 'terminal') continue
+    const words = echoKey(l.text)
+    if (!words) continue
     if (l.kind === 'reply') {
-      if (l.from.paneId && echoKey(l.text)) add(`a|${l.from.paneId}|${echoKey(l.text)}`, l.t, true) // i18n-ignore
+      if (l.from.paneId) add(`a|${l.from.paneId}|${words}`, { at: l.t, yours: true, tessel: false, used: false }) // i18n-ignore
       continue
     }
-    if (l.status === 'skipped' || l.status === 'failed' || !echoKey(l.text)) continue
-    for (const w of recipients(l)) if (w.paneId) add(`u|${w.paneId}|${echoKey(l.text)}`, l.t, l.from.kind === 'you') // i18n-ignore
+    if (l.status === 'skipped' || l.status === 'failed') continue
+    const yours = l.from.kind === 'you'
+    for (const w of recipients(l)) if (w.paneId) add(`u|${w.paneId}|${words}`, { at: l.t, yours, tessel: !yours, used: false }) // i18n-ignore
   }
   const listOf = (l) => {
     const words = echoKey(l.text)
     return words ? pool.get(`${l.kind === 'reply' ? 'a' : 'u'}|${l.kind === 'reply' ? l.from.paneId : l.to.paneId}|${words}`) : null // i18n-ignore
   }
-  const near = (l, m) => (l.remote ? Math.abs(l.t - m.at) <= ECHO_AFTER_MS : l.t >= m.at - ECHO_BEFORE_MS && l.t - m.at <= ECHO_AFTER_MS)
   // Each conversation's lines, in their order.
   const groups = new Map()
   for (const l of terminal || []) {
@@ -299,34 +310,48 @@ export function withoutEchoes(terminal, logged) {
   }
   const out = []
   for (const lines of groups.values()) {
+    // gap: the line's time less the log's (a host's may be behind).
+    const pairs = []
+    lines.forEach((l, i) => {
+      for (const m of listOf(l) || []) {
+        const gap = l.t - m.at
+        const earliest = l.remote ? -(SKEW_MAX_MS + ECHO_BEFORE_MS) : -ECHO_BEFORE_MS
+        if (gap >= earliest && gap <= ECHO_AFTER_MS) pairs.push({ i, m, gap })
+      }
+    })
+    pairs.sort((a, b) => Math.abs(a.gap) - Math.abs(b.gap))
+    const matched = new Map() // line index -> { m, gap }
+    for (const pair of pairs) {
+      if (matched.has(pair.i) || pair.m.used) continue
+      pair.m.used = true
+      matched.set(pair.i, pair)
+    }
     let shift = 0
     if (lines[0].remote) {
-      const gaps = []
-      for (const l of lines) {
-        if (l.kind === 'reply') continue
-        let best = null
-        for (const m of listOf(l) || []) if (near(l, m) && (best === null || Math.abs(m.at - l.t) < Math.abs(best))) best = m.at - l.t
-        if (best !== null) gaps.push(best)
+      const behind = [...matched.values()]
+        .filter((x) => x.m.tessel && x.gap < -ECHO_BEFORE_MS)
+        .map((x) => -x.gap)
+        .sort((a, b) => a - b)
+      for (let k = 0; k + SKEW_MATCHES <= behind.length; k++) {
+        let last = k
+        while (last + 1 < behind.length && behind[last + 1] - behind[k] <= SKEW_SPREAD_MS) last++
+        if (last - k + 1 < SKEW_MATCHES) continue
+        shift = Math.min(SKEW_MAX_MS, behind[k + Math.floor((last - k) / 2)])
+        break
       }
-      gaps.sort((a, b) => a - b)
-      const middle = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0
-      if (middle > ECHO_BEFORE_MS) shift = middle
+      if (shift) {
+        const latest = Math.max(...lines.map((l) => l.t))
+        shift = Math.max(0, Math.min(shift, now - latest))
+      }
     }
     // Its latest prompt was someone else's message: its answers go.
     let notYours = false
-    for (const raw of lines) {
-      const l = shift ? { ...raw, t: raw.t + shift } : raw
-      const answer = l.kind === 'reply'
-      const list = listOf(l)
-      const i = list ? list.findIndex((m) => near(l, m)) : -1
-      if (!answer) notYours = i >= 0 && !list[i].yours
-      if (i >= 0) {
-        list.splice(i, 1)
-        continue
-      }
-      if (answer && notYours) continue
-      out.push(l)
-    }
+    lines.forEach((raw, i) => {
+      const hit = matched.get(i)
+      if (raw.kind !== 'reply') notYours = !!hit && !hit.m.yours
+      if (hit || (raw.kind === 'reply' && notYours)) return
+      out.push(shift ? { ...raw, t: raw.t + shift } : raw)
+    })
   }
   return out
 }
@@ -351,14 +376,14 @@ export function threadKeyOf(line) {
 //   opts.notices   keep Tessel's notices (false: left out)
 //   opts.terminal  what was said in the agents' terminals (terminalLines'
 //                  entries), merged in time with the log's lines
-//   opts.effortLabel: see terminalLines
+//   opts.effortLabel: see terminalLines; opts.now: see withoutEchoes
 export function buildThreads(events, opts = {}) {
   const t = opts.t || english
   const panes = opts.panes || {}
   const teams = new Map((opts.teams || []).map((x) => [x.id, x]))
   const threads = new Map()
   const logged = conversationLines(events, { t })
-  const said = opts.terminal && opts.terminal.length ? withoutEchoes(terminalLines(opts.terminal, opts), logged) : []
+  const said = opts.terminal && opts.terminal.length ? withoutEchoes(terminalLines(opts.terminal, opts), logged, { now: opts.now }) : []
   // Oldest first; the log's line first at the same time.
   const all = said.length ? [...logged, ...said].sort((a, b) => a.t - b.t) : logged
   for (const line of all) {

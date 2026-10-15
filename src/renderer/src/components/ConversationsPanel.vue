@@ -21,7 +21,7 @@ import BrandIcon from './BrandIcon.vue'
 import ThemedSelect from './ui/ThemedSelect.vue'
 import { buildThreads, filterThreads, lineCount, modelOf, participantsOf, recipients, replyText, statusText, threadText } from '../../../shared/conversations'
 import { nativeChatSessionChoiceLabel } from '../chat/orca/native-chat-session-option-labels'
-import { notePanes, paneSessionTrail } from '../paneSessionTrail'
+import { confirmSession, notePanes, paneSessionTrail, sessionIds } from '../paneSessionTrail'
 import { formatWhen } from '../timeFormat'
 import { agentLabel } from '../sessionHistory'
 import { t, intlLocale } from '../i18n'
@@ -72,33 +72,42 @@ const paneAlive = (id) => !!id && !!panes.value[id]
 const MAX_ASKS = 32
 const terminal = shallowRef({}) // ask -> { key, items, paneId, wsId, title, agentId, sessionId, host, hostLabel }
 function terminalAsks() {
-  const open = new Map() // paneId -> { pane, wsId, hostLabel }
+  const open = new Map() // paneId -> { pane, wsId, hostLabel }, every workspace's
+  // A chat's conversation goes through Tessel: never read from its file.
+  const chats = new Set()
   for (const p of props.projects || []) {
-    if (scope.value === 'workspace' && p.id !== props.workspaceId) continue
     for (const pane of p.panes || []) {
-      if (!pane || !pane.id || pane.kind !== 'agent' || !pane.agentId || typeof pane.sessionId !== 'string' || !pane.sessionId) continue
+      if (!pane || !pane.id) continue
+      if (pane.kind === 'chat' && pane.sessionId) chats.add(pane.sessionId)
+      if (pane.kind !== 'agent' || !pane.agentId || typeof pane.sessionId !== 'string' || !pane.sessionId) continue
       open.set(pane.id, { pane, wsId: p.id, hostLabel: p.remote && p.remote.host ? p.remote.host : '' })
     }
   }
-  const asks = []
+  // One pane per conversation: an open pane's first, then the latest closed
+  // (a conversation resumed in another pane is that pane's now).
+  const all = []
+  const taken = new Set()
   const add = (a) => {
-    if (asks.length < MAX_ASKS && !asks.some((x) => x.ask === a.ask)) asks.push(a)
+    const conv = `${a.agent}|${a.hostId || ''}|${a.sessionId}` // i18n-ignore
+    if (taken.has(conv) || chats.has(a.sessionId)) return
+    taken.add(conv)
+    all.push(a)
   }
   for (const { pane, wsId, hostLabel } of open.values())
     add({ ask: pane.id, paneId: pane.id, agent: pane.agentId, sessionId: pane.sessionId, accountId: pane.accountId, hostId: pane.remoteHostId || null, wsId, title: pane.title, hostLabel })
-  const trail = Object.values(paneSessionTrail)
+  const trail = Object.values(paneSessionTrail).filter((row) => !row.chat)
   // An open pane's earlier conversations (the latest first).
   for (const row of trail) {
     const now = open.get(row.paneId)
     if (!now || row.agentId !== now.pane.agentId) continue
-    for (const sid of [...row.sessions].reverse())
+    for (const sid of sessionIds(row).reverse())
       if (sid !== now.pane.sessionId) add({ ask: `${row.paneId}~${sid}`, paneId: row.paneId, agent: row.agentId, sessionId: sid, accountId: row.accountId, hostId: row.hostId, wsId: now.wsId, title: now.pane.title, hostLabel: now.hostLabel }) // i18n-ignore
   }
   // Panes closed since (the latest first).
-  const closed = trail.filter((row) => row.closedAt && !open.has(row.paneId) && (scope.value !== 'workspace' || row.wsId === props.workspaceId)).sort((a, b) => b.closedAt - a.closedAt)
+  const closed = trail.filter((row) => row.closedAt && !open.has(row.paneId)).sort((a, b) => b.closedAt - a.closedAt)
   for (const row of closed)
-    for (const sid of [...row.sessions].reverse()) add({ ask: `${row.paneId}~${sid}`, paneId: row.paneId, agent: row.agentId, sessionId: sid, accountId: row.accountId, hostId: row.hostId, wsId: row.wsId, title: row.title, hostLabel: '' }) // i18n-ignore
-  return asks
+    for (const sid of sessionIds(row).reverse()) add({ ask: `${row.paneId}~${sid}`, paneId: row.paneId, agent: row.agentId, sessionId: sid, accountId: row.accountId, hostId: row.hostId, wsId: row.wsId, title: row.title, hostLabel: '' }) // i18n-ignore
+  return all.filter((a) => scope.value !== 'workspace' || a.wsId === props.workspaceId).slice(0, MAX_ASKS)
 }
 const sameMeta = (a, b) => ['paneId', 'wsId', 'title', 'agentId', 'sessionId', 'host', 'hostLabel'].every((k) => a[k] === b[k])
 let asking = false
@@ -140,6 +149,8 @@ async function askTerminal() {
         const meta = { paneId: a.paneId, wsId: a.wsId, title: a.title || '', agentId: a.agent, sessionId: a.sessionId, host: a.hostId ? 'ssh' : 'local', hostLabel: a.hostLabel || '' }
         if (r.same && had[a.ask]) next[a.ask] = sameMeta(had[a.ask], meta) ? had[a.ask] : { ...had[a.ask], ...meta }
         else if (Array.isArray(r.items)) next[a.ask] = { key: r.key, items: r.items, ...meta }
+        // Its file was read: the pane really ran it (kept once it is left).
+        if (next[a.ask]) confirmSession(a.paneId, a.sessionId)
       }
       // Every conversation as it was: the threads are not built again.
       const keys = Object.keys(next)

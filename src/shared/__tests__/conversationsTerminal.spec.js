@@ -266,29 +266,134 @@ describe('review fixes', () => {
     expect(kept.map((l) => l.text)).toEqual(['A typo.'])
   })
 
-  it('an agent on an SSH host whose clock is behind: Tessel’s message still shows once, its lines move into place', () => {
+  it('an agent on an SSH host: Tessel’s message shows once, a few minutes either way; a host far ahead still matches', () => {
     const logged = conversationLines([
       msg(60, 'p1', ada, { scope: 'notes', text: 'Read the notes' })
     ])
-    // The host writes 30 minutes behind this PC.
-    const host = adaEntry(
+    // 20 minutes behind: matched, but one message is no reason to move anything.
+    const behind = adaEntry(
       [
-        item(25, 'user', 'Typed there first'),
-        item(30, 'user', 'Read the notes'),
-        item(31, 'agent', 'Notes read.')
+        item(35, 'user', 'Typed there first'),
+        item(40, 'user', 'Read the notes'),
+        item(41, 'agent', 'Notes read.')
       ],
       { host: 'ssh' }
     )
-    const kept = withoutEchoes(terminalLines([host]), logged)
-    expect(kept.map((l) => [l.text, (l.t - T0) / MIN])).toEqual([
-      ['Typed there first', 55],
-      ['Notes read.', 61]
+    expect(
+      withoutEchoes(terminalLines([behind]), logged, { now: T0 + 600 * MIN }).map((l) => [
+        l.text,
+        (l.t - T0) / MIN
+      ])
+    ).toEqual([
+      ['Typed there first', 35],
+      ['Notes read.', 41]
     ])
-    // Hours ahead: matched all the same (a local pane keeps the strict window).
-    const ahead = adaEntry([item(60 + 180, 'user', 'Read the notes')], { host: 'ssh' })
-    expect(withoutEchoes(terminalLines([ahead]), logged)).toEqual([])
-    const local = adaEntry([item(60 - 30, 'user', 'Read the notes')])
-    expect(withoutEchoes(terminalLines([local]), logged)).toHaveLength(1)
+    // Hours ahead: matched all the same; a local pane keeps the strict window.
+    expect(
+      withoutEchoes(
+        terminalLines([adaEntry([item(60 + 180, 'user', 'Read the notes')], { host: 'ssh' })]),
+        logged
+      )
+    ).toEqual([])
+    expect(
+      withoutEchoes(terminalLines([adaEntry([item(60 - 30, 'user', 'Read the notes')])]), logged)
+    ).toHaveLength(1)
+    // Hours before it: not that message.
+    expect(
+      withoutEchoes(
+        terminalLines([adaEntry([item(60 - 120, 'user', 'Read the notes')], { host: 'ssh' })]),
+        logged
+      )
+    ).toHaveLength(1)
+  })
+
+  it('"continue" typed at 9:00 and sent through Tessel at 13:00: the 13:00 one is the log’s, nothing moves', () => {
+    const at = (h) => h * 60
+    const logged = conversationLines([msg(at(13), 'p1', ada, { scope: 'notes', text: 'continue' })])
+    const lines = [
+      item(at(9), 'user', 'continue'),
+      item(at(9) + 1, 'agent', 'Continued (morning).'),
+      item(at(13), 'user', 'continue'),
+      item(at(13) + 1, 'agent', 'Continued (afternoon).')
+    ]
+    for (const host of ['ssh', 'local']) {
+      const kept = withoutEchoes(terminalLines([adaEntry(lines, { host })]), logged, {
+        now: T0 + at(20) * MIN
+      })
+      expect(kept.map((l) => [l.text, (l.t - T0) / MIN])).toEqual([
+        ['continue', at(9)],
+        ['Continued (morning).', at(9) + 1],
+        ['Continued (afternoon).', at(13) + 1]
+      ])
+    }
+    // A single "yes" Tessel sent 11 hours later (it never reached the file): not that one.
+    const yes = conversationLines([
+      msg(at(20), 'p1', ada, { source: 'tessel', scope: 'task', text: 'yes' })
+    ])
+    const kept = withoutEchoes(
+      terminalLines([
+        adaEntry([item(at(9), 'user', 'yes'), item(at(9) + 1, 'agent', 'Proceeding.')], {
+          host: 'ssh'
+        })
+      ]),
+      yes,
+      { now: T0 + at(21) * MIN }
+    )
+    expect(kept.map((l) => [l.text, (l.t - T0) / MIN])).toEqual([
+      ['yes', at(9)],
+      ['Proceeding.', at(9) + 1]
+    ])
+  })
+
+  it('a host behind: its lines move only when three of Tessel’s deliveries agree, by the lower middle, never past now', () => {
+    const notice = (min, text) => msg(min, 'p1', ada, { source: 'tessel', scope: 'task', text })
+    const logged = conversationLines([notice(60, 'one'), notice(120, 'two'), notice(180, 'three')])
+    const host = (skews) =>
+      adaEntry(
+        [
+          item(60 - skews[0], 'user', 'one'),
+          item(60 - skews[0] + 1, 'user', 'mine'),
+          item(120 - skews[1], 'user', 'two'),
+          item(180 - skews[2], 'user', 'three'),
+          item(180 - skews[2] + 2, 'user', 'later mine')
+        ],
+        { host: 'ssh' }
+      )
+    const times = (kept) => kept.map((l) => [l.text, (l.t - T0) / MIN])
+    // 10, 10 and 11 minutes behind: moved by 10.
+    expect(
+      times(withoutEchoes(terminalLines([host([10, 10, 11])]), logged, { now: T0 + 600 * MIN }))
+    ).toEqual([
+      ['mine', 61],
+      ['later mine', 181]
+    ])
+    // Two agreeing gaps only, or gaps far apart: nothing moves.
+    const two = conversationLines([notice(60, 'one'), notice(120, 'two')])
+    expect(
+      times(withoutEchoes(terminalLines([host([10, 10, 10])]), two, { now: T0 + 600 * MIN })).slice(
+        0,
+        1
+      )
+    ).toEqual([['mine', 51]])
+    expect(
+      times(withoutEchoes(terminalLines([host([5, 15, 25])]), logged, { now: T0 + 600 * MIN }))[0]
+    ).toEqual(['mine', 56])
+    // Your own messages never tell the host's clock.
+    const yours = conversationLines(
+      ['one', 'two', 'three'].map((text, i) =>
+        msg(60 * (i + 1), 'p1', ada, { scope: 'notes', text })
+      )
+    )
+    expect(
+      times(withoutEchoes(terminalLines([host([10, 10, 10])]), yours, { now: T0 + 600 * MIN }))[0]
+    ).toEqual(['mine', 51])
+    // Never past now.
+    expect(
+      times(withoutEchoes(terminalLines([host([10, 10, 10])]), logged, { now: T0 + 175 * MIN }))
+    ).toEqual([
+      ['mine', 54],
+      ['later mine', 175]
+    ])
   })
 
   it('a pane’s conversations are told apart: an earlier one’s last prompt does not decide the next one’s answers', () => {

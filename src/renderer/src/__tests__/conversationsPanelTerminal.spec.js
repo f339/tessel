@@ -21,6 +21,8 @@ const ada = { title: 'Ada', agentId: 'claude' }
 const bob = { title: 'Bob', agentId: 'codex' }
 const SID = '11111111-2222-4333-8444-555555555555'
 const SID2 = '0199aabb-ccdd-7eef-8000-000000000002'
+const SID3 = '33333333-2222-4333-8444-555555555555'
+const SID9 = '99999999-2222-4333-8444-555555555555'
 const msg = (ago, paneId, agent, extra = {}) => ({
   t: NOW - ago,
   type: 'message',
@@ -55,7 +57,7 @@ const projects = [
         remoteHostId: 'ssh-box'
       },
       // A chat agent (its messages already go through Tessel), an agent not in a conversation yet, a shell.
-      { id: 'p3', kind: 'chat', agentId: 'claude', title: 'Cy', sessionId: SID },
+      { id: 'p3', kind: 'chat', agentId: 'claude', title: 'Cy', sessionId: SID3 },
       { id: 'p4', kind: 'agent', agentId: 'claude', title: 'Di', sessionId: null },
       { id: 'p5', kind: 'shell', title: 'Terminal' }
     ]
@@ -63,7 +65,7 @@ const projects = [
   {
     id: 'ws2',
     name: 'other',
-    panes: [{ id: 'p9', kind: 'agent', agentId: 'claude', title: 'Zed', sessionId: SID }]
+    panes: [{ id: 'p9', kind: 'agent', agentId: 'claude', title: 'Zed', sessionId: SID9 }]
   }
 ]
 
@@ -269,6 +271,60 @@ describe('ConversationsPanel.vue: what was said in the terminals', () => {
     const bob = thread(w, 'you:p2')
     expect(bob.find('.sh-group-label').text()).toBe('You and Bob')
     expect(texts(bob)).toEqual(['To Bob before he closed'])
+    w.unmount()
+  })
+
+  it('one pane per conversation: resumed in a new pane, it is that pane’s; a chat’s is never read', async () => {
+    api((q) => ({
+      ok: true,
+      panes: Object.fromEntries(
+        q.panes.map((x) => [
+          x.ask,
+          { key: `k-${x.ask}`, items: [{ role: 'user', t: NOW - MIN, text: `asked as ${x.ask}` }] }
+        ])
+      )
+    }))
+    const w = make()
+    await flushPromises()
+    // Ada's pane closed, her conversation resumed in a new pane (Eve), Bob's pane became a chat.
+    const resumed = [
+      {
+        ...projects[0],
+        panes: [
+          { id: 'p7', kind: 'agent', agentId: 'claude', title: 'Eve', sessionId: SID },
+          { id: 'p2', kind: 'chat', agentId: 'codex', title: 'Bob', sessionId: SID2 },
+          ...projects[0].panes.slice(2)
+        ]
+      },
+      projects[1]
+    ]
+    await w.setProps({ projects: resumed })
+    await flushPromises()
+    const last = calls[calls.length - 1]
+    expect(last.panes.map((x) => x.ask)).toEqual(['p7'])
+    expect(thread(w, 'you:p7').exists()).toBe(true)
+    expect(texts(thread(w, 'you:p1'))).toEqual(['Read the notes'])
+    expect(thread(w, 'you:p2').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('an id reported first and corrected at once is not kept as an earlier conversation', async () => {
+    api(() => ({ ok: true, panes: {} }))
+    const w = make()
+    await flushPromises()
+    const fixed = [
+      {
+        ...projects[0],
+        panes: [{ ...projects[0].panes[0], sessionId: SID9 }, ...projects[0].panes.slice(1)]
+      },
+      projects[1]
+    ]
+    await w.setProps({ projects: fixed })
+    await flushPromises()
+    expect(calls[calls.length - 1].panes.map((x) => [x.ask, x.sessionId])).toEqual([
+      ['p1', SID9],
+      ['p2', SID2]
+    ])
     w.unmount()
   })
 

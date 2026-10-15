@@ -21,7 +21,7 @@ import { withWorktreePath } from './prAgentPrompts'
 import { workspaceViews, viewKey, leafViewPath, isTabLeaf, addTabLeaf, gridLeafFor, pruneTree } from './paneViews'
 import { createPortScanner, browserUrlForPort, addressForPort } from './portScanner'
 import { allowedBrowserUrl, BLANK_URL, displayUrl } from '../../shared/browserUrl'
-import { leadHead, reviewRequest, teammateHead } from '../../shared/tesselDelivery'
+import { channelHead, leadHead, reviewRequest, teammateHead } from '../../shared/tesselDelivery'
 import { notePanes } from './paneSessionTrail'
 import LaunchMenu from './components/LaunchMenu.vue'
 import { accountChoices, refreshAccountChoices, setOpenPanesSource } from './accountChoices'
@@ -10807,7 +10807,7 @@ async function deliverChannel(team, members, round = teamRound) {
     const from = who[d.fromId]
     return d.fromId === 'tessel'
       ? `[Tessel] ${d.text}`
-      : `${teammateHead(from ? paneLabel(from) : 'teammate', team.name, { id: d.id, replyTo: d.replyTo || '' })} ${d.text}` // i18n-ignore
+      : `${channelHead(from ? paneLabel(from) : 'teammate', team.name, d.id, d.replyTo)} ${d.text}` // i18n-ignore
   }
   const api = window.shellApi.channel
   const where = { dir, teamId: team.id }

@@ -194,7 +194,12 @@ function queuedLine(line) {
   )
     return null
   const content = typeof a.prompt === 'string' || Array.isArray(a.prompt) ? a.prompt : null
-  if (!content || promptOf(textBlocks(content)).tessel) return null
+  if (!content) return null
+  // Tessel's own, or nothing typed (a slash command such as /compact, only
+  // context; an image is something): the turn stays whose it was.
+  const p = promptOf(textBlocks(content))
+  const image = Array.isArray(content) && content.some((b) => obj(b) && b.type === 'image')
+  if (p.tessel || (!p.text && !image)) return null
   return JSON.stringify({
     type: 'user',
     uuid: str(r.uuid) || str(a.source_uuid),
