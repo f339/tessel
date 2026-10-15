@@ -39,7 +39,7 @@ import ToolsDialog from './components/ToolsDialog.vue'
 import SessionsDialog from './components/SessionsDialog.vue'
 import { OWN_ID_AGENTS, FOUND_IN_FILES, resumeArgs, safeSessionId } from './agentResumeLine'
 import { getPane } from './paneRegistry'
-import { installChain } from './shellChain'
+import { installChain, nodeStep, NVM_INSTALL_URL } from './shellChain'
 import {
   agentStatus,
   attention,
@@ -3559,12 +3559,28 @@ async function addProjects({ projects, source } = {}) {
   else if (added > 1) showToast(t('project.toast.imported', '{{count}} projects added', { count: added }))
 }
 
+// An npm install in WSL may first install Node.js with nvm, its installer
+// downloaded from GitHub (shellChain.js nodeStep): shown and asked first, like
+// a vendor's installer. -> true to go on.
+async function confirmWslNode(label, steps, shellId) {
+  if (shellId !== 'wsl' || !steps.some((s) => /^npm\s/i.test(String(s || '').trim()))) return true
+  const ok = await askConfirm({
+    title: t('app.install.wslNodeTitle', 'Install {{agent}} in WSL?', { agent: label }),
+    text: t('app.install.wslNodeText', "If Node.js is not installed in WSL, Tessel first installs it with nvm: this downloads nvm's installer from GitHub and runs it in WSL, in your home folder (no password asked). Only continue if you trust it."),
+    code: nodeStep('wsl'),
+    details: [{ label: t('app.install.confirmSource', 'Source'), value: NVM_INSTALL_URL }],
+    confirmLabel: t('app.install.confirmRun', 'Install')
+  })
+  return ok === true
+}
+
 // Run a command (or steps) in a new terminal pane (installs, setup). `shell`
 // forces a shell, e.g. PowerShell for commands written in PowerShell syntax.
 async function runInPane({ label, command, steps, shell }) {
   closeMenus()
   toolsOpen.value = false
   const shellId = shell && shells.value.some((s) => s.id === shell) ? shell : selectedShell.value
+  if (!(await confirmWslNode(label, steps || [command], shellId))) return
   // Installs run on this computer, also from a remote project.
   const leaf = await openPaneBelow(shellId, null, { local: true })
   if (!leaf) return
@@ -3650,6 +3666,7 @@ async function installAgent(agent) {
   const shellId = selectedShell.value
   // Install first; start the agent (with its session) only if that succeeds.
   const install = [].concat(agent.install)
+  if (!(await confirmWslNode(agent.name, install, shellId))) return
   const leaf = await openPaneBelow(shellId, agent, {
     wrap: (startLine) => installChain(install, startLine, shellId)
   })

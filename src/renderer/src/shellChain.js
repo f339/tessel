@@ -22,14 +22,27 @@ export const MARK_OK = 'TESSEL-INSTALL-OK'
 export const MARK_FAILED = 'TESSEL-INSTALL-FAILED'
 
 // An npm install on a PC without Node.js ("npm is not recognized"): Node.js
-// LTS is installed first with winget (Windows' own package manager), and the
-// pane's PATH read again from Windows, so npm is found right after. Nothing
-// happens when npm is there. PowerShell and the Command Prompt (Git Bash and
-// WSL have their own Node.js, or not: left as they are).
+// LTS is installed first, and found on the same line. Nothing happens when
+// npm is there. PowerShell, the Command Prompt and Git Bash: with winget
+// (Windows' own package manager), the PATH read again from Windows. WSL
+// (Linux): with nvm, in the user's home (no password asked); a Windows npm
+// seen through WSL (/mnt/...) does not count, it would install for Windows.
 const WINGET_NODE = 'winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements'
 const NODE_MISSING = 'Node.js is not installed: installing it with winget...' // i18n-ignore
 const NODE_FAILED = 'Node.js (npm) could not be installed. Install it from https://nodejs.org and try again.' // i18n-ignore
+// nvm's own installer, a fixed release (WSL only, shown to the user before it runs).
+export const NVM_INSTALL_URL = 'https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh'
 export function nodeStep(shellId) {
+  if (shellId === 'gitbash') {
+    const path = 'export PATH="/c/Program Files/nodejs:$(cygpath -u "$APPDATA")/npm:$PATH"' // i18n-ignore
+    return `{ command -v npm >/dev/null 2>&1 || { echo '${NODE_MISSING}'; winget.exe ${WINGET_NODE.slice('winget '.length)}; ${path}; }; command -v npm >/dev/null 2>&1 || { echo '${NODE_FAILED}' >&2; false; }; }` // i18n-ignore
+  }
+  if (shellId === 'wsl') {
+    const linuxNpm = 'case "$(command -v npm 2>/dev/null)" in ""|/mnt/*)' // i18n-ignore
+    const fetch = `{ if command -v curl >/dev/null 2>&1; then curl -fsSL ${NVM_INSTALL_URL}; else wget -qO- ${NVM_INSTALL_URL}; fi; } | bash` // i18n-ignore
+    const install = `echo 'Node.js is not installed in WSL: installing it with nvm...'; export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] || ${fetch}; . "$NVM_DIR/nvm.sh" && nvm install --lts` // i18n-ignore
+    return `{ ${linuxNpm} ${install};; esac; ${linuxNpm} echo '${NODE_FAILED}' >&2; false;; esac; }` // i18n-ignore
+  }
   if (shellId === 'powershell' || shellId === 'pwsh') {
     const refresh = "$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')"
     return `if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Write-Host '${NODE_MISSING}'; ${WINGET_NODE}; ${refresh} }; if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Write-Error '${NODE_FAILED}' }` // i18n-ignore

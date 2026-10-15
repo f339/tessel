@@ -326,6 +326,8 @@
       "confirmShell": "Shell",
       "confirmSource": "Source",
       "confirmRun": "Installer",
+      "wslNodeTitle": "Installer {{agent}} dans WSL ?",
+      "wslNodeText": "Si Node.js n'est pas installé dans WSL, Tessel l'installe d'abord avec nvm : son installateur est téléchargé depuis GitHub et exécuté dans WSL, dans votre dossier personnel (aucun mot de passe demandé). Ne continuez que si vous lui faites confiance.",
       "agentScript": "Installation de {{agent}} ci-dessous. Tessel vous avertit quand c'est terminé."
     },
     "send": {
