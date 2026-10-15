@@ -217,20 +217,23 @@ describe.skipIf(!sqlite)('database agents', () => {
     ses.run('ses_parent01', null, 'Parent', 'build', null, now - 600000, now)
     ses.run('ses_child001', 'ses_parent01', 'Find the bug (@explore subagent)', 'explore', null, now - 300000, now - 5000)
     msg.run('m1', 'ses_child001', now - 290000, now - 290000, JSON.stringify({ role: 'user', time: { created: now - 290000 } }))
-    msg.run('m2', 'ses_child001', now - 280000, now - 5000, JSON.stringify({ role: 'assistant', time: { created: now - 280000, completed: now - 5000 }, finish: 'tool-calls', modelID: 'mimo-v2.6-flash-free', tokens: { input: 100, output: 20, cache: { read: 1000, write: 0 } } }))
-    ses.run('ses_child002', 'ses_parent01', 'Write the tests', 'general', '{"providerID":"x","modelID":"big-model"}', now - 200000, now - 100000)
+    msg.run('m2', 'ses_child001', now - 280000, now - 5000, JSON.stringify({ role: 'assistant', time: { created: now - 280000, completed: now - 5000 }, finish: 'tool-calls', modelID: 'mimo-v2.6-flash-free', variant: 'high', tokens: { input: 100, output: 20, cache: { read: 1000, write: 0 } } }))
+    ses.run('ses_child002', 'ses_parent01', 'Write the tests', 'general', '{"providerID":"x","modelID":"big-model","variant":"max"}', now - 200000, now - 100000)
     msg.run('m3', 'ses_child002', now - 150000, now - 100000, JSON.stringify({ role: 'assistant', time: { created: now - 150000, completed: now - 100000 }, finish: 'stop', tokens: { input: 5, output: 5, cache: { read: 0, write: 0 } } }))
     ses.run('ses_other001', 'ses_someone', 'Not mine', 'general', null, now - 1000, now - 1000)
     db.close()
     const list = opencodeSubagents('ses_parent01', dir, now)
-    expect(list.map((c) => [c.id, c.type, c.title, c.state, c.tokens, c.model])).toEqual([
-      ['ses_child002', 'general', 'Write the tests', 'done', 10, 'big-model'],
-      ['ses_child001', 'explore', 'Find the bug (@explore subagent)', 'running', 1120, 'mimo-v2.6-flash-free']
+    // Its effort: the variant of its last message, else its session's.
+    expect(list.map((c) => [c.id, c.type, c.title, c.state, c.tokens, c.model, c.effort])).toEqual([
+      ['ses_child002', 'general', 'Write the tests', 'done', 10, 'big-model', 'max'],
+      ['ses_child001', 'explore', 'Find the bug (@explore subagent)', 'running', 1120, 'mimo-v2.6-flash-free', 'high']
     ])
     expect(list[0].endedAt).toBe(now - 100000)
     expect(opencodeSubagents('bad id!', dir, now)).toEqual([])
     expect(opencodeSubagents('ses_parent01', join(dir, 'nowhere'), now)).toEqual([])
-    expect(summarizeOpencodeMessage('{bad')).toEqual({ done: false, endedAt: null, tokens: null, model: null })
+    expect(summarizeOpencodeMessage('{bad')).toEqual({ done: false, endedAt: null, tokens: null, model: null, effort: null })
+    expect(summarizeOpencodeMessage({ role: 'user', model: { modelID: 'm', variant: 'low' } }).effort).toBe('low')
+    expect(summarizeOpencodeMessage({ role: 'assistant', variant: 'default' }).effort).toBe(null)
     expect(summarizeOpencodeMessage({ role: 'assistant', error: { name: 'x' }, time: { created: 1 } }).done).toBe(true)
   })
 

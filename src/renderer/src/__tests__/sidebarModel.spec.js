@@ -106,7 +106,9 @@ describe('states in Orca words', () => {
     expect(paneRow(pane('x', { sessionId: 's1' }), NOW).children).toEqual({ agent: 'claude', sessionId: 's1' })
     expect(paneRow(pane('x', { agentId: 'codex', sessionId: 's1', accountId: null }), NOW).children).toEqual({ agent: 'codex', sessionId: 's1', accountId: null })
     expect(paneRow(pane('x', { agentId: 'opencode', sessionId: 'ses_1' }), NOW).children).toEqual({ agent: 'opencode', sessionId: 'ses_1' })
-    expect(paneRow(pane('x', { agentId: 'gemini', sessionId: 's1' }), NOW).children).toBeNull()
+    expect(paneRow(pane('x', { agentId: 'gemini', sessionId: 's1' }), NOW).children).toEqual({ agent: 'gemini', sessionId: 's1' })
+    expect(paneRow(pane('x', { agentId: 'antigravity', sessionId: 's1' }), NOW).children).toEqual({ agent: 'antigravity', sessionId: 's1' })
+    expect(paneRow(pane('x', { agentId: 'aider', sessionId: 's1' }), NOW).children).toBeNull()
   })
 })
 

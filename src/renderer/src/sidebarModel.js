@@ -306,7 +306,7 @@ export function paneRow(pane, now = Date.now()) {
     activityAt: pane.activityAt || 0,
     pid: chat ? null : pane.pid || null,
     trackLevel: pane.track ? pane.track.level : null,
-    // Sub-agents (Claude Code, Codex, OpenCode, Cline) are listed under its row.
+    // Sub-agents (CHILD_AGENTS: Claude Code, Codex, OpenCode, ...) are listed under its row.
     children:
       agent && listsChildren(pane.agentId) && pane.sessionId && !pane.sleeping
         ? { agent: pane.agentId, sessionId: pane.sessionId, ...(pane.accountId !== undefined ? { accountId: pane.accountId } : {}) }

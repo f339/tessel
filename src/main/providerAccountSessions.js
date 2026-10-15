@@ -5,7 +5,17 @@ import { join } from 'path'
 import { claudeSessionExists, findCodexSession, listSessions } from './agentSessions'
 import { findAgentSession } from './agentResume'
 import { claudeSessionTitle, codexSessionTitle } from './sessionTitle'
-import { claudeSubagents, codexSubagents, opencodeSubagents, clineSubagents } from './agentChildren'
+import {
+  claudeSubagents,
+  codexSubagents,
+  opencodeSubagents,
+  clineSubagents,
+  antigravitySubagents,
+  geminiSubagents,
+  copilotSubagents,
+  kimiSubagents,
+  cursorSubagents
+} from './agentChildren'
 import { clineDataDir } from './jsonAgents'
 import { deleteSession, revealSessionFile, sessionDetails } from './sessionDetails'
 
@@ -50,13 +60,17 @@ export function createAccountSessions({
       const r = await roots(q)
       return r ? deleteSession(q, home, r, trashItem) : { ok: false, error: 'missing' }
     },
-    // The sub-agents a Claude Code or Codex conversation started
-    // (agentChildren.js), read in the home it came from (a Codex pane's
-    // account CODEX_HOME).
+    // The sub-agents a conversation started (agentChildren.js), read in the
+    // home it came from (a Codex pane's account CODEX_HOME).
     async children({ agent, sessionId, accountId } = {}) {
-      // OpenCode and Cline: one shared data folder (no managed logins).
+      // The others: one data folder each (no managed logins).
       if (agent === 'opencode') return opencodeSubagents(sessionId, env.XDG_DATA_HOME || join(home, '.local', 'share'))
       if (agent === 'cline') return clineSubagents(sessionId, clineDataDir(home))
+      if (agent === 'antigravity') return antigravitySubagents(sessionId, join(home, '.gemini'))
+      if (agent === 'gemini') return geminiSubagents(sessionId, join(env.GEMINI_CLI_HOME || home, '.gemini'))
+      if (agent === 'copilot') return copilotSubagents(sessionId, env.COPILOT_HOME || join(home, '.copilot'))
+      if (agent === 'kimi') return kimiSubagents(sessionId, env.KIMI_CODE_HOME || join(home, '.kimi-code'))
+      if (agent === 'cursor') return cursorSubagents(sessionId, join(home, '.cursor'))
       if (agent !== 'claude' && agent !== 'codex') return []
       const scope = await accounts.sessionEnv(agent, accountId)
       if (!scope.ok) return []
