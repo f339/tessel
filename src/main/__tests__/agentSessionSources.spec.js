@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
+import { fileURLToPath } from 'url'
 import {
   droidSessions,
   grokSessions,
@@ -148,10 +149,50 @@ describe('Antigravity', () => {
     expect(findAgentSession({ agent: 'antigravity', cwd: 'C:\\Proj', since: T }, home)).toBe(U1)
     expect(resumeTarget({ agent: 'antigravity', sessionId: U1 }, home)).toEqual({})
   })
+  it('over the cap, the most recent conversations are kept, whatever the folder order', () => {
+    // 405 conversations, the newest one named so it comes last in the folder.
+    const ids = Array.from({ length: 405 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`)
+    ids.forEach((id, i) => {
+      const f = `.gemini/antigravity-cli/brain/${id}/.system_generated/logs/transcript.jsonl`
+      put(f, lines({ source: 'USER', type: 'REQUEST', content: `ask ${i}`, created_at: iso(T) }))
+      const t = new Date(T + i * 1000)
+      fs.utimesSync(join(home, f), t, t)
+    })
+    const rows = antigravitySessions(home)
+    expect(rows.length).toBeLessThan(405)
+    expect(rows[0].id).toBe(ids[404])
+    expect(rows.map((r) => r.id)).toContain(ids[400])
+    expect(rows.map((r) => r.id)).not.toContain(ids[0])
+  })
   it('leaves the folder unknown when two workspaces match', () => {
     put(`.gemini/antigravity-cli/brain/${U2}/.system_generated/logs/transcript.jsonl`, lines({ source: 'USER', type: 'REQUEST', content: 'same', created_at: iso(T) }))
     put(`.gemini/antigravity-cli/history.jsonl`, lines({ display: 'same', workspace: 'C:\\A', timestamp: T }, { display: 'same', workspace: 'C:\\B', timestamp: T + 100 }))
     expect(antigravitySessions(home)[0].cwd).toBe('')
+  })
+  it('a history line naming the conversation gives its folder', () => {
+    put(`.gemini/antigravity-cli/brain/${U2}/.system_generated/logs/transcript.jsonl`, lines({ source: 'USER', type: 'REQUEST', content: 'same', created_at: iso(T) }))
+    put(`.gemini/antigravity-cli/history.jsonl`, lines({ display: 'same', workspace: 'C:\\A', timestamp: T }, { display: 'same', workspace: 'C:\\B', timestamp: T + 100 }, { display: 'later', workspace: 'C:\\B', timestamp: T + 9000, conversationId: U2 }))
+    expect(antigravitySessions(home)[0].cwd).toBe('C:\\B')
+  })
+  it.skipIf(!sqlite)("takes the folder, title and sub-agents from agy's own conversation index", () => {
+    const U3 = '33333333-2222-4333-8444-555555555555'
+    for (const id of [U1, U2, U3]) put(`.gemini/antigravity-cli/brain/${id}/.system_generated/logs/transcript.jsonl`, lines({ source: 'USER_EXPLICIT', type: 'USER_INPUT', content: `<USER_REQUEST>ask ${id}</USER_REQUEST>`, created_at: iso(T) }))
+    const db = new sqlite.DatabaseSync(join(home, '.gemini', 'antigravity-cli', 'conversation_summaries.db'))
+    db.exec('CREATE TABLE conversation_summaries (conversation_id text, title text NOT NULL DEFAULT "", workspace_uris text NOT NULL, parent_conversation_id text NOT NULL DEFAULT "")')
+    const add = db.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?)')
+    add.run(U1, 'Fix the login page', '["file:///C:/My%20Proj"]', '')
+    add.run(U2, 'New Chat', '["file:///C:/Other"]', '')
+    add.run(U3, 'A sub-agent', '["file:///C:/My%20Proj"]', U1)
+    db.close()
+    const rows = antigravitySessions(home).sort((a, b) => a.id.localeCompare(b.id))
+    // The sub-agent's conversation is not listed; "New Chat" is no title.
+    // (C:\My Proj on Windows.)
+    const proj = fileURLToPath('file:///C:/My%20Proj')
+    expect(rows.map((r) => [r.id, r.cwd, r.title])).toEqual([
+      [U1, proj, 'Fix the login page'],
+      [U2, fileURLToPath('file:///C:/Other'), `ask ${U2}`]
+    ])
+    expect(findAgentSession({ agent: 'antigravity', cwd: proj, since: T }, home)).toBe(U1)
   })
 })
 

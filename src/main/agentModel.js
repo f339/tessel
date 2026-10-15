@@ -1,8 +1,9 @@
 // Which model an agent pane uses, for the pane header.
 //
 // Best first:
-// 1. The running session (Claude Code, Codex, Copilot: its conversation
-//    file; Cline: its sessions database), so a change with /model shows up.
+// 1. The running session (Claude Code, Codex, Copilot, Antigravity CLI: its
+//    conversation file; Cline: its sessions database), so a change with
+//    /model shows up.
 // 2. A --model / -m option in the agent's command.
 // 3. What the agent remembers or its settings file (OpenCode's last picked
 //    model, Cline's provider settings, the folder's settings, the user's).
@@ -13,7 +14,8 @@ import os from 'os'
 import { join } from 'path'
 import { isUuid } from './agentSessions'
 import { clineDataDir } from './jsonAgents'
-import { normDir, readRows, readTail as readTailBytes, readText } from './fileRead'
+import { normDir, readHead, readRows, readTail as readTailBytes, readText } from './fileRead'
+import { antigravityLabelParts } from '../shared/antigravityModels'
 
 const TAIL = 256 * 1024
 const readTail = (file) => readTailBytes(file, TAIL)
@@ -305,6 +307,59 @@ function copilotLiveSession(cwd, home) {
   return best ? best.file : null
 }
 
+// The Antigravity CLI (agy) notes the model in its conversation's transcript
+// (~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/
+// transcript.jsonl): the prompt after a change says so, the first prompt
+// included: <USER_SETTINGS_CHANGE>The user changed setting `Model Selection`
+// from None to Gemini 4 Argon (High). …</USER_SETTINGS_CHANGE>. Only agy's
+// own note counts, never the user's request beside it.
+// -> { model: label, name, effort, at } of the latest change, or null.
+export function antigravityModelFromText(text) {
+  const lines = String(text || '').split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]
+    if (!line.includes('Model Selection')) continue
+    let o
+    try {
+      o = JSON.parse(line)
+    } catch {
+      continue // a line cut by the tail read
+    }
+    if (!o || o.type !== 'USER_INPUT' || typeof o.content !== 'string') continue
+    const notes = o.content.replace(/<USER_REQUEST>[\s\S]*?<\/USER_REQUEST>/g, '')
+    const changes = [...notes.matchAll(/<USER_SETTINGS_CHANGE>([\s\S]*?)<\/USER_SETTINGS_CHANGE>/g)]
+    for (let j = changes.length - 1; j >= 0; j--) {
+      const m = /setting `Model Selection` from .{1,120}? to (.{1,120}?)\.(?: |$)/.exec(changes[j][1].replace(/\s+/g, ' ').trim())
+      const parts = m && antigravityLabelParts(m[1])
+      if (!parts) continue
+      const at = Date.parse(o.created_at)
+      return { model: m[1].trim(), name: parts.name, effort: parts.effort, ...(Number.isFinite(at) ? { at } : {}) }
+    }
+  }
+  return null
+}
+
+export function antigravityTranscript(id, home = os.homedir()) {
+  if (!isUuid(id)) return null
+  const f = join(home, '.gemini', 'antigravity-cli', 'brain', id, '.system_generated', 'logs', 'transcript.jsonl')
+  return fs.existsSync(f) ? f : null
+}
+
+// Its latest change, else (a long conversation) the one its first prompt notes.
+function antigravitySession(id, home) {
+  const f = antigravityTranscript(id, home)
+  if (!f) return null
+  return antigravityModelFromText(readTail(f)) || antigravityModelFromText(readHead(f, TAIL))
+}
+
+// agy saves the model picked last (/model, /effort, in any agy) as its label:
+// ~/.gemini/antigravity-cli/settings.json { "model": "Gemini 4 Argon (High)" }.
+function antigravitySettings(home) {
+  const label = jsonModel(join(home, '.gemini', 'antigravity-cli', 'settings.json'), plainModel)
+  const parts = label && antigravityLabelParts(label)
+  return parts ? { model: label, name: parts.name, effort: parts.effort } : null
+}
+
 // OpenCode remembers the models last picked in its model list (newest first).
 function opencodeRecent(home) {
   const dir = process.env.XDG_STATE_HOME || join(home, '.local', 'state')
@@ -575,6 +630,20 @@ function agentModelFound({ agentId, sessionId, command, cwd, launchedAt = 0, cod
     if (flag) return { model: flag, effort: null, source: 'command' }
     return set ? { model: set.model, effort: null, source: 'settings' } : null
   }
+  if (agentId === 'antigravity') {
+    // Its conversation (a /model or /effort shows with the next prompt; the
+    // pane reads agy's footer for at once), its --model / --effort, then the
+    // model agy saved last.
+    const session = isUuid(sessionId) ? antigravitySession(sessionId, home) : null
+    if (session) return { ...session, source: 'session' }
+    const flag = modelFromCommand(command)
+    const flagEffort = effortFromCommand(command)
+    const saved = antigravitySettings(home)
+    if (flag) return { model: flag, effort: flagEffort, source: 'command' }
+    // --effort alone: the saved model at that effort.
+    if (flagEffort && saved) return { model: saved.name, name: saved.name, effort: flagEffort, source: 'command' }
+    return saved ? { ...saved, source: 'settings' } : null
+  }
   if (isUuid(sessionId)) {
     if (agentId === 'claude') {
       const f = claudeTranscript(sessionId, home)
@@ -629,7 +698,10 @@ export function watchModelFiles(onChange, home = os.homedir()) {
     { agent: 'cline', dir: join(cline, 'db'), match: /^sessions\.db/ },
     // Cursor writes its last pick there (its /model picker, --model): its
     // panes read their status line again.
-    { agent: 'cursor', dir: join(home, '.cursor'), match: /^cli-config\.json$/ }
+    { agent: 'cursor', dir: join(home, '.cursor'), match: /^cli-config\.json$/ },
+    // The Antigravity CLI saves each /model and /effort there: its panes read
+    // their footer again.
+    { agent: 'antigravity', dir: join(home, '.gemini', 'antigravity-cli'), match: /^settings\.json$/ }
   ]
   const watchers = new Map() // target -> fs.FSWatcher
   const timers = new Map() // agent -> timeout

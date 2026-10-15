@@ -164,7 +164,8 @@
       "registryTimeout": "le registre n'a pas répondu à temps",
       "registryTooLarge": "réponse du registre trop volumineuse",
       "registryUnreadable": "réponse du registre illisible",
-      "hintInstaller": "Relancez son installateur pour le mettre à jour."
+      "hintInstaller": "Relancez son installateur pour le mettre à jour.",
+      "hintAntigravity": "L'Antigravity CLI se met à jour seule à son démarrage (ou lancez : agy update)."
     },
     "agents": {
       "alreadyGenerating": "Un message est déjà en cours de génération.",
@@ -256,7 +257,8 @@
       "codexOtherForm": "Codex a déjà « {{name}} » écrit autrement dans config.toml : Tessel n'y touche pas. Modifiez-le à la main ou retirez-le d'abord.",
       "codexRejectedEntry": "Codex n'a pas pu lire le nouveau serveur, Tessel a donc laissé ses paramètres tels quels.",
       "codexNoSse": "Codex se connecte uniquement aux serveurs HTTP streamable, pas aux serveurs SSE.",
-      "envVarInvalid": "Utilisez des lettres, des chiffres et _ pour le nom de la variable."
+      "envVarInvalid": "Utilisez des lettres, des chiffres et _ pour le nom de la variable.",
+      "antigravityNoSse": "L'Antigravity CLI se connecte uniquement aux serveurs HTTP streamable, pas aux serveurs SSE."
     },
     "needs": {
       "agentName": "Un agent IA",
@@ -559,6 +561,7 @@
       "chooseProvider": "Choisissez un fournisseur pris en charge et sa connexion locale.",
       "agentNotInstalled": "L'agent correspondant n'est pas installé.",
       "geminiNoProject": "Gemini n'a renvoyé aucun projet de quota.",
+      "geminiUnsupported": "Google ne prend plus en charge Gemini CLI pour les comptes personnels (Gemini Code Assist pour les particuliers) : utilisez Antigravity à la place. Un forfait payant avec un projet Google Cloud fonctionne toujours.",
       "minimaxRefused": "MiniMax a refusé la demande d'utilisation. Vérifiez sa clé API.",
       "loginChanged": "La connexion du fournisseur ou la demande d'utilisation a changé. Actualisez l'utilisation.",
       "noWindows": "Ce compte n'a renvoyé aucune fenêtre de quota prise en charge.",
@@ -951,6 +954,14 @@
         "stopped": "cloudflared s'est arrêté avant de donner une adresse ({{detail}}).",
         "start": "cloudflared n'a pas pu démarrer ({{detail}})."
       }
+    },
+    "agyPlugins": {
+      "notInstalled": "L'Antigravity CLI n'est pas installée.",
+      "listFailed": "Impossible de lister les plugins de l'Antigravity CLI.",
+      "listUnreadable": "Impossible de lire la liste des plugins de l'Antigravity CLI.",
+      "badName": "Nom de plugin invalide.",
+      "setFailed": "L'Antigravity CLI n'a pas pu modifier ce plugin.",
+      "removeFailed": "L'Antigravity CLI n'a pas pu désinstaller ce plugin."
     }
   },
   "main.chat.image.tooLarge": "Cette image dépasse {{mb}} Mo.",

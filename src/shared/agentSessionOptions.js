@@ -385,17 +385,39 @@ export const GROK_SESSION_OPTION_CATALOG = {
 
 // --- Antigravity (agent-session-option-catalog-antigravity.ts) --------------
 
-const ANTIGRAVITY_EFFORT = {
-  id: 'effort',
-  label: 'Reasoning effort',
-  category: 'thought_level',
-  kind: { type: 'select', choices: STANDARD_EFFORT_CHOICES, defaultValue: 'high' },
-  apply: {
-    launchArgs: (value) => ['--effort', String(value)],
-    agentArgsOverride: (tokens) => hasFlag(tokens, ['--effort']),
-    removeAgentArgs: (tokens) => removeAgentArgOption(tokens, ['--effort']),
-    midSession: { kind: 'command', build: (value) => `/effort ${String(value)}` }
+const ANTIGRAVITY_EFFORT_CHOICES = EXTENDED_EFFORT_CHOICES
+function antigravityEffort(choices, defaultValue) {
+  return {
+    id: 'effort',
+    label: 'Reasoning effort',
+    category: 'thought_level',
+    kind: { type: 'select', choices, defaultValue },
+    apply: {
+      launchArgs: (value) => ['--effort', String(value)],
+      agentArgsOverride: (tokens) => hasFlag(tokens, ['--effort']),
+      removeAgentArgs: (tokens) => removeAgentArgOption(tokens, ['--effort']),
+      midSession: { kind: 'command', build: (value) => `/effort ${String(value)}` }
+    }
   }
+}
+const ANTIGRAVITY_EFFORT = antigravityEffort(STANDARD_EFFORT_CHOICES, 'high')
+
+// A model agy lists in several effort variants (antigravityModels.js): its
+// efforts, and only those (agy refuses one the model lacks). One variant or
+// none: no effort option (its id launches as listed).
+export function createAntigravityCatalogOptions(efforts) {
+  const choices = ANTIGRAVITY_EFFORT_CHOICES.filter((choice) => (efforts || []).includes(choice.value))
+  if (choices.length < 2) return []
+  return [antigravityEffort(choices, choices.some((c) => c.value === 'medium') ? 'medium' : choices[0].value)]
+}
+
+// A variant id with an effort of its own ("gemini-4-argon-high" picked with
+// low, from a list or a choice saved before models were grouped): agy refuses
+// the pair ("conflicts with --effort=low"), so its base id goes with --effort.
+const AGY_VARIANT = /-(low|medium|high|xhigh|max)$/
+export function antigravityLaunchModel(modelId, values) {
+  const id = String(modelId)
+  return values && typeof values.effort === 'string' && values.effort && AGY_VARIANT.test(id) ? id.replace(AGY_VARIANT, '') : id
 }
 
 export const ANTIGRAVITY_SESSION_OPTION_CATALOG = {
@@ -405,10 +427,12 @@ export const ANTIGRAVITY_SESSION_OPTION_CATALOG = {
     launchArgs: (value) => ['--model', String(value)],
     agentArgsOverride: (tokens) => hasFlag(tokens, ['--model']),
     removeAgentArgs: (tokens) => removeAgentArgOption(tokens, ['--model']),
-    // "/model <id>" switches at once (by id, name or label) and keeps it as
-    // its default; a bare "/model" opens its own picker.
+    // "/model <id>" switches at once (by id, name or label, a base id at its
+    // default effort) and keeps it as its default; a bare "/model" opens its
+    // own picker.
     midSession: { kind: 'command', build: (value) => `/model ${String(value)}` }
   },
+  composeModelValue: (modelId, values) => antigravityLaunchModel(modelId, values),
   unknownModelOptions: [ANTIGRAVITY_EFFORT],
   probed: true
 }

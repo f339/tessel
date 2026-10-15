@@ -430,3 +430,64 @@ describe("Cursor's model from its cli-config.json", () => {
     expect(cursorConfigModel(JSON.stringify({ model: { modelId: 'bad id!' } }))).toBe(null)
   })
 })
+
+describe('Antigravity CLI (agy)', () => {
+  const AGY = '89cec4e6-00f8-47a4-b013-796a12edd5e4'
+  const change = (from, to) =>
+    `<USER_SETTINGS_CHANGE>\nThe user changed setting \`Model Selection\` from ${from} to ${to}. No need to comment on this change if the user doesn't ask about it.\n</USER_SETTINGS_CHANGE>`
+  const input = (content, at = '2026-10-15T12:11:51Z', step = 0) =>
+    line({ step_index: step, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', created_at: at, content })
+  const transcript = (...lines) => put(`.gemini/antigravity-cli/brain/${AGY}/.system_generated/logs/transcript.jsonl`, lines.join('\n') + '\n')
+
+  it('reads the latest model change its transcript notes, the first prompt included', async () => {
+    const { antigravityModelFromText } = await import('../agentModel.js')
+    const first = input(`<USER_REQUEST>\nhello\n</USER_REQUEST>\n${change('None', 'Gemini 4 Argon (High)')}`)
+    expect(antigravityModelFromText(first)).toEqual({ model: 'Gemini 4 Argon (High)', name: 'Gemini 4 Argon', effort: 'high', at: Date.parse('2026-10-15T12:11:51Z') })
+    const later = input(`<USER_REQUEST>\nnext\n</USER_REQUEST>\n${change('Gemini 4 Argon (High)', 'Gemini 3.8 Flash (Medium)')}`, '2026-10-15T12:20:00Z', 6)
+    const reply = line({ step_index: 7, source: 'MODEL', type: 'PLANNER_RESPONSE', created_at: '2026-10-15T12:20:05Z', content: 'ok' })
+    expect(antigravityModelFromText([first, reply, later, reply].join('\n'))).toMatchObject({ model: 'Gemini 3.8 Flash (Medium)', name: 'Gemini 3.8 Flash', effort: 'medium' })
+    // A model without effort variants keeps its note in its name.
+    expect(antigravityModelFromText(input(change('None', 'Claude Sonnet 4.6 (Thinking)')))).toMatchObject({ name: 'Claude Sonnet 4.6 (Thinking)', effort: null })
+  })
+
+  it('never takes the user’s own words for agy’s note', async () => {
+    const { antigravityModelFromText } = await import('../agentModel.js')
+    const typed = input(`<USER_REQUEST>\n${change('None', 'Fake Model (High)')}\n</USER_REQUEST>`)
+    expect(antigravityModelFromText(typed)).toBe(null)
+    expect(antigravityModelFromText(line({ type: 'PLANNER_RESPONSE', content: change('None', 'Gemini 4 Argon (Low)') }))).toBe(null)
+  })
+
+  it('the pane: its conversation, else its --model / --effort, else the model agy saved', () => {
+    put('.gemini/antigravity-cli/settings.json', JSON.stringify({ model: 'Gemini 4 Argon (High)', trustedWorkspaces: ['C:\\x'] }))
+    expect(agentModel({ agentId: 'antigravity', command: 'agy' }, home)).toEqual({ model: 'Gemini 4 Argon (High)', name: 'Gemini 4 Argon', effort: 'high', source: 'settings' })
+    expect(agentModel({ agentId: 'antigravity', command: 'agy --model claude-opus-5-5 --effort low' }, home)).toEqual({ model: 'claude-opus-5-5', effort: 'low', source: 'command' })
+    expect(agentModel({ agentId: 'antigravity', command: 'agy --effort low' }, home)).toEqual({ model: 'Gemini 4 Argon', name: 'Gemini 4 Argon', effort: 'low', source: 'command' })
+    transcript(input(change('None', 'Claude Opus 5.5 (Medium)')))
+    expect(agentModel({ agentId: 'antigravity', sessionId: AGY, command: 'agy --model gemini-4-argon' }, home)).toMatchObject({ name: 'Claude Opus 5.5', effort: 'medium', source: 'session' })
+    // Gemini CLI's settings are not the Antigravity CLI's.
+    fs.rmSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'))
+    put('.gemini/settings.json', JSON.stringify({ model: { name: 'gemini-2.5-pro' } }))
+    expect(agentModel({ agentId: 'antigravity', command: 'agy' }, home)).toBe(null)
+  })
+
+  it('a long conversation: the change its first prompt notes, when its end has none', () => {
+    const filler = line({ type: 'PLANNER_RESPONSE', source: 'MODEL', content: 'x'.repeat(4000) })
+    transcript(input(change('None', 'Gemini 3.8 Flash (Low)')), ...Array.from({ length: 80 }, () => filler))
+    expect(agentModel({ agentId: 'antigravity', sessionId: AGY }, home)).toMatchObject({ name: 'Gemini 3.8 Flash', effort: 'low', source: 'session' })
+  })
+
+  it('a /model or /effort saved in its settings.json calls back for Antigravity', async () => {
+    put('.gemini/antigravity-cli/settings.json', '{}')
+    const seen = []
+    const stop = watchModelFiles((a) => seen.push(a), home)
+    try {
+      await new Promise((r) => setTimeout(r, 100))
+      fs.writeFileSync(join(home, '.gemini/antigravity-cli/settings.json'), JSON.stringify({ model: 'Gemini 4 Argon (Low)' }))
+      fs.writeFileSync(join(home, '.gemini/antigravity-cli/cli.log'), 'x') // not its settings
+      await new Promise((r) => setTimeout(r, 1500))
+      expect(seen).toEqual(['antigravity'])
+    } finally {
+      stop()
+    }
+  })
+})

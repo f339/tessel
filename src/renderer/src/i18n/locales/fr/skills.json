@@ -24,7 +24,8 @@
     },
     "tab": {
       "installed": "Installées",
-      "add": "Ajouter"
+      "add": "Ajouter",
+      "plugins": "Plugins Antigravity"
     },
     "installed": {
       "seenBy": "Vue par {{agents}}",
@@ -95,6 +96,39 @@
       "title": "Elle est fournie avec une commande d'installation.",
       "body": "Tessel ne la lance pas. Si vous en avez besoin, lancez-la vous-même dans un terminal et répondez-y là.",
       "button": "Lancer son installation dans un terminal"
+    },
+    "plugins": {
+      "intro": "Les plugins de l'Antigravity CLI regroupent des skills, des serveurs MCP, des sous-agents, des hooks et des règles. Parcourez sa boutique avec /plugin dans un panneau Antigravity CLI, ou installez-en un ici par son nom ou depuis un dossier.",
+      "placeholder": "nom@antigravity-plugins-official",
+      "install": "Installer",
+      "fromFolder": "Depuis un dossier…",
+      "empty": "Aucun plugin de l'Antigravity CLI installé.",
+      "off": "Désactivé",
+      "turnOff": "Désactiver",
+      "turnOn": "Activer",
+      "uninstall": "Désinstaller",
+      "skillOne": "1 skill",
+      "skillMany": "{{count}} skills",
+      "mcpOne": "1 serveur MCP",
+      "mcpMany": "{{count}} serveurs MCP",
+      "agentOne": "1 sous-agent",
+      "agentMany": "{{count}} sous-agents",
+      "hooks": "hooks",
+      "rules": "règles",
+      "commandOne": "1 commande",
+      "commandMany": "{{count}} commandes",
+      "from": "Depuis {{source}}",
+      "turnedOff": "« {{name}} » désactivé. Les panneaux Antigravity CLI appliquent le changement à leur prochain démarrage.",
+      "turnedOn": "« {{name}} » activé. Les panneaux Antigravity CLI appliquent le changement à leur prochain démarrage.",
+      "failed": "L'Antigravity CLI n'a pas pu le modifier.",
+      "removeConfirm": "Désinstaller le plugin « {{name}} » ?",
+      "removeText": "L'Antigravity CLI supprime son dossier, avec les skills, serveurs MCP et hooks qu'il apportait.",
+      "removed": "« {{name}} » désinstallé.",
+      "installPane": "Plugin Antigravity : {{name}}",
+      "badTarget": "Saisissez un nom de plugin (nom@boutique) ou le chemin d'un dossier.",
+      "installing": "Installation dans un terminal. Actualisez cette liste quand elle est terminée.",
+      "pickTitle": "Choisissez le dossier d'un plugin (avec un plugin.json)",
+      "badFolder": "Le chemin de ce dossier contient des caractères que Tessel ne peut pas passer sur une ligne de commande."
     }
   }
 }

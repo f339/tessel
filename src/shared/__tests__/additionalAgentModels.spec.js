@@ -25,11 +25,14 @@ describe('Pi, Cursor and Antigravity model output fixtures', () => {
     expect(sessionOptionLaunchText('cursor', { model: 'new-model', effort: 'high' }, '', models)).toBe('--model new-model')
   })
 
-  it('Antigravity accepts only tab-separated ids and names, keeping the effort control', () => {
+  it('Antigravity accepts only tab-separated ids and names; effort only for a model listed in effort variants', () => {
     const rows = parseAntigravityModelList('id\tlabel\ngemini-3.5-flash\tGemini 3.5 Flash\nGemini 3.5 Flash (Medium)\nbad id\tBad\n--yolo\tBad\n$(whoami)\tBad')
     expect(rows).toEqual([{ id: 'gemini-3.5-flash', label: 'Gemini 3.5 Flash' }])
+    // agy lists every effort it offers as a variant: one listed once has none.
     const models = listedToCatalogModels('antigravity', rows)
-    expect(sessionOptionLaunchText('antigravity', { model: rows[0].id, effort: 'medium' }, '', models)).toBe('--model gemini-3.5-flash --effort medium')
+    expect(sessionOptionLaunchText('antigravity', { model: rows[0].id, effort: 'medium' }, '', models)).toBe('--model gemini-3.5-flash')
+    const variants = listedToCatalogModels('antigravity', parseAntigravityModelList('gemini-3.5-flash-low\tGemini 3.5 Flash (Low)\ngemini-3.5-flash-medium\tGemini 3.5 Flash (Medium)'))
+    expect(sessionOptionLaunchText('antigravity', { model: 'gemini-3.5-flash', effort: 'medium' }, '', variants)).toBe('--model gemini-3.5-flash --effort medium')
   })
 
   it.each([parsePiModelList, parseCursorModelList, parseAntigravityModelList])('bounds hostile output without parsing shell values', (parse) => {

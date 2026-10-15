@@ -7,9 +7,11 @@
 //   Cline        ~/.cline/data/settings/cline_mcp_settings.json "mcpServers": { name: { command, args, env | type: streamableHttp, url, headers } }
 //   Kimi Code    ~/.kimi-code/mcp.json           "mcpServers": { name: { command, args, env | transport: http|sse, url, headers } }
 //   Cursor CLI   ~/.cursor/mcp.json              "mcpServers": { name: { command, args, env | url, headers } }
+//   Antigravity  ~/.gemini/config/mcp_config.json "mcpServers": { name: { command, args, env | serverUrl, headers, disabled } }
+//                (the format `agy mcp add` writes; agy reads url too)
 // HTTP servers are streamable HTTP unless `sse` is set (an SSE endpoint):
 // Gemini/Qwen httpUrl vs url, Copilot/Cline/Kimi their type, OpenCode and
-// Cursor find out by themselves.
+// Cursor find out by themselves. Antigravity only speaks streamable HTTP.
 // Only the server entries are read or changed; everything else in the file is
 // kept as it is. A file that cannot be read as JSON (comments in a .jsonc,
 // say) is never rewritten: the change is refused with a clear error.
@@ -20,13 +22,15 @@ import { writeFileAtomic } from './safeJson'
 import { t } from './i18n'
 import { findNode } from './nodePath'
 
-export const JSON_AGENTS = ['gemini', 'qwen', 'copilot', 'opencode', 'cline', 'kimi', 'cursor']
+export const JSON_AGENTS = ['gemini', 'qwen', 'copilot', 'opencode', 'cline', 'kimi', 'cursor', 'antigravity']
 
 function settingsFile(agent, home = os.homedir()) {
   if (agent === 'gemini') return join(home, '.gemini', 'settings.json')
   if (agent === 'qwen') return join(home, '.qwen', 'settings.json')
   if (agent === 'copilot') return join(home, '.copilot', 'mcp-config.json')
   if (agent === 'cursor') return join(home, '.cursor', 'mcp.json')
+  // The Antigravity CLI's own servers (not Gemini CLI's ~/.gemini/settings.json).
+  if (agent === 'antigravity') return join(home, '.gemini', 'config', 'mcp_config.json')
   if (agent === 'kimi') return join(process.env.KIMI_CODE_HOME || join(home, '.kimi-code'), 'mcp.json')
   if (agent === 'cline') {
     // Cline's own overrides first (CLINE_MCP_SETTINGS_PATH, CLINE_DATA_DIR, CLINE_DIR).
@@ -50,7 +54,7 @@ export function clineDataDir(home = os.homedir()) {
   return join(dir, 'data')
 }
 
-const KEY = { gemini: 'mcpServers', qwen: 'mcpServers', copilot: 'mcpServers', opencode: 'mcp', cline: 'mcpServers', kimi: 'mcpServers', cursor: 'mcpServers' }
+const KEY = { gemini: 'mcpServers', qwen: 'mcpServers', copilot: 'mcpServers', opencode: 'mcp', cline: 'mcpServers', kimi: 'mcpServers', cursor: 'mcpServers', antigravity: 'mcpServers' }
 
 // -> { data } (null data: no file yet) or { error }
 function readSettings(file) {
@@ -90,7 +94,8 @@ export function entryToConfig(agent, e = {}) {
     const cmd = Array.isArray(e.command) ? e.command.map(String) : e.command ? [String(e.command)] : []
     return { transport: 'stdio', command: cmd[0] || '', args: cmd.slice(1), env: { ...(e.environment || {}) } }
   }
-  const url = e.httpUrl || e.url
+  // Antigravity: url, or the older serverUrl its own `agy mcp add` writes.
+  const url = e.httpUrl || e.url || (agent === 'antigravity' ? e.serverUrl : '')
   if (url || ['http', 'sse', 'streamableHttp'].includes(e.type) || ['http', 'sse'].includes(e.transport)) {
     const sse =
       e.type === 'sse' ||
@@ -139,6 +144,18 @@ export function configToEntry(agent, cfg, extra = {}) {
     if (cfg.env && Object.keys(cfg.env).length) e.env = cfg.env
     return e
   }
+  // Antigravity: what `agy mcp add` writes (serverUrl for HTTP). It has no
+  // SSE transport: an SSE endpoint is refused before this (addMcp, copyMcp).
+  if (agent === 'antigravity') {
+    if (cfg.transport === 'http') {
+      const e = { serverUrl: cfg.url }
+      if (cfg.headers && Object.keys(cfg.headers).length) e.headers = cfg.headers
+      return e
+    }
+    const e = { command: cfg.command, args: cfg.args || [] }
+    if (cfg.env && Object.keys(cfg.env).length) e.env = cfg.env
+    return e
+  }
   if (agent === 'cursor') {
     if (cfg.transport === 'http') {
       const e = { url: cfg.url }
@@ -172,8 +189,9 @@ export function listJsonAgent(agent, home) {
     const cfg = entryToConfig(agent, e)
     if (!cfg) continue
     const target = cfg.transport === 'http' ? cfg.url : [cfg.command, ...cfg.args].filter(Boolean).join(' ')
-    // Never expose env values or headers (usually secrets).
-    servers.push({ name, scope: 'user', type: cfg.transport === 'http' ? 'http' : 'stdio', target })
+    // Never expose env values or headers (usually secrets). Antigravity's
+    // `agy mcp disable` keeps a server with "disabled": true.
+    servers.push({ name, scope: 'user', type: cfg.transport === 'http' ? 'http' : 'stdio', target, ...(agent === 'antigravity' && e && e.disabled === true ? { enabled: false } : {}) })
   }
   return { servers, error: null }
 }
@@ -235,9 +253,11 @@ export function teamToolsEntry(agent, scriptPath, node = findNode()) {
   // pane's variables (TESSEL_PROJECT_DIR...) reach the server anyway, as
   // OpenCode starts a local server with its own environment plus these.
   if (agent === 'opencode') return configToEntry(agent, { ...stdio, env: { TESSEL_PANE_ID: '{env:TESSEL_PANE_ID}', TESSEL_TEAM_SECRET: '{env:TESSEL_TEAM_SECRET}' } })
-  // Kimi, Copilot and Cline hand their whole environment (the pane's) to the
-  // server; Cline never expands $VAR in env values, so none is written.
-  if (agent === 'copilot' || agent === 'cline' || agent === 'kimi') return configToEntry(agent, stdio)
+  // Kimi, Copilot, Cline and Antigravity hand their whole environment (the
+  // pane's) to the server; Cline and Antigravity never expand $VAR in env
+  // values (a "$TESSEL_PANE_ID" would reach the server as it is), so none is
+  // written.
+  if (agent === 'copilot' || agent === 'cline' || agent === 'kimi' || agent === 'antigravity') return configToEntry(agent, stdio)
   // Gemini CLI / Qwen Code: variables expanded from the environment; trusted,
   // so its tools run without asking each time (like Codex's "approve").
   return configToEntry(
