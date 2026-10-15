@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
+import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { listSkills, packageFromFolder, installSkill, removeSkill, createSkillSources, skillOrigin, contentHash, dropStaleSources, SKILL_CAPS } from '../skillsManager'
@@ -871,5 +872,216 @@ describe('review fixes: update check', () => {
         expect(sources.get(`${letter}:\\skills\\away`)).not.toBe(null)
       }
     }
+  })
+})
+
+// The second review (each reproduced first).
+describe('second review fixes', () => {
+  const skillDir = () => path.join(home, '.claude', 'skills', 'mine')
+  const historyAt = (caps = {}, skillCaps = {}) =>
+    createSkillHistory(path.join(tmp, 'data', 'skill-history'), { now, caps: { ...HISTORY_CAPS, ...caps }, skillCaps: { ...SKILL_CAPS, ...skillCaps } })
+  const filesIn = (dir) => fs.readdirSync(dir, { recursive: true }).map((f) => String(f).replace(/\\/g, '/')).sort()
+  // A Recycle Bin: the folder moved into tmp/bin.
+  const binOf = () => {
+    const bin = path.join(tmp, 'bin')
+    const moved = []
+    const trash = async (p) => {
+      fs.mkdirSync(bin, { recursive: true })
+      const to = path.join(bin, `${moved.length}-${path.basename(p)}`)
+      fs.renameSync(p, to)
+      moved.push({ from: p, to })
+    }
+    return { trash, moved }
+  }
+  async function installed(name, files = {}) {
+    const src = path.join(tmp, 'src', name)
+    write(path.join(src, 'SKILL.md'), skillMd(name))
+    for (const [rel, text] of Object.entries(files)) write(path.join(src, rel), text)
+    const sources = createSkillSources(path.join(tmp, 'data', 'skill-sources.json'))
+    const history = createSkillHistory(path.join(tmp, 'data', 'skill-history'), { now })
+    const pkg = await packageFromFolder(src)
+    await installSkill({ id: pkg.id, agents: ['claude'], scope: 'user', home, env, sources, history })
+    const again = async () => (await packageFromFolder(src)).id
+    return { sources, history, dest: path.join(home, '.claude', 'skills', name), again }
+  }
+
+  it('N1. a name\'s case is changed in one step, tried again while locked, and the SKILL.md never goes missing', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'skill.md'), skillMd('mine', 'v1 body'))
+    if (!fs.existsSync(path.join(dir, 'SKILL.md'))) return // a file system that tells cases apart
+    const history = historyAt()
+    await history.track(dir)
+    const v1 = history.list(dir).versions[0]
+    fs.renameSync(path.join(dir, 'skill.md'), path.join(dir, 'tmpx'))
+    fs.renameSync(path.join(dir, 'tmpx'), path.join(dir, 'SKILL.md'))
+    write(path.join(dir, 'SKILL.md'), skillMd('mine', 'v2 body, longer'))
+    clock += 1000
+    const realRename = fsp.rename
+    const tried = []
+    fsp.rename = async (a, b) => {
+      if (path.basename(String(b)) === 'skill.md' || String(b).includes('.tessel-case-')) {
+        tried.push(String(b))
+        throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+      }
+      return realRename(a, b)
+    }
+    let res
+    try {
+      res = await history.restore(dir, v1.id, { home, env })
+    } finally {
+      fsp.rename = realRename
+    }
+    expect(res.ok).toBe(true)
+    expect(tried.length).toBeGreaterThan(1) // tried again
+    expect(tried.some((t) => t.includes('.tessel-case-'))).toBe(false) // never through a temporary name
+    expect(fs.readdirSync(dir)).toEqual(['SKILL.md'])
+    expect(fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).toContain('v1 body')
+    expect((await listSkills({ home, env })).skills).toHaveLength(1)
+  })
+
+  it('N2. Replace onto a leftover folder without SKILL.md goes ahead, the folder to the Recycle Bin; a Bin that refuses changes nothing', async () => {
+    const { sources, history, again } = await installed('helper')
+    const leftover = path.join(home, '.claude', 'skills', 'leftover')
+    write(path.join(leftover, 'notes.txt'), 'leftover\n')
+    const { trash, moved } = binOf()
+    const res = await installSkill({ id: await again(), replace: leftover, home, env, sources, history, trash })
+    expect(res.results[0]).toMatchObject({ ok: true, trashed: true })
+    expect(moved.map((m) => m.from)).toEqual([leftover])
+    expect(filesIn(moved[0].to)).toEqual(['notes.txt'])
+    expect(fs.existsSync(path.join(leftover, 'SKILL.md'))).toBe(true)
+
+    const other = path.join(home, '.claude', 'skills', 'other')
+    write(path.join(other, 'notes.txt'), 'mine\n')
+    const refused = await installSkill({
+      id: await again(),
+      replace: other,
+      home,
+      env,
+      sources,
+      history,
+      trash: async () => {
+        throw new Error('in use')
+      }
+    })
+    expect(refused.ok).toBe(false)
+    expect(refused.results[0].error).toMatch(/could not be moved to the Recycle Bin \(in use\), so it was not replaced/)
+    expect(filesIn(other)).toEqual(['notes.txt'])
+    expect(fs.readdirSync(path.join(home, '.claude', 'skills')).filter((n) => n.includes('tessel'))).toEqual([])
+  })
+
+  it('N3. Update moves the old copy to the Recycle Bin whole: its .git and node_modules are never deleted for good', async () => {
+    const { sources, history, dest, again } = await installed('tool')
+    write(path.join(dest, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+    write(path.join(dest, 'node_modules', 'x', 'i.js'), 'x\n')
+    write(path.join(dest, 'SKILL.md'), skillMd('tool', 'edited'))
+    clock += 1000
+    const { trash, moved } = binOf()
+    const res = await installSkill({ id: await again(), replace: dest, home, env, sources, history, trash })
+    expect(res.results[0]).toMatchObject({ ok: true, trashed: true })
+    expect(filesIn(moved[0].to)).toEqual(['.git', '.git/HEAD', 'SKILL.md', 'node_modules', 'node_modules/x', 'node_modules/x/i.js'])
+    expect(filesIn(dest)).toEqual(['SKILL.md'])
+    // The edited SKILL.md is in the history too.
+    expect(history.list(dest).versions.some((v) => v.files.includes('SKILL.md') && !v.first && v.note === null)).toBe(true)
+  })
+
+  it('N4. the walk stops at the caps, SKILL.md first; tool folders (dist, build, caches, a Python environment) are left out', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'SKILL.md'), skillMd('mine'))
+    for (let i = 0; i < 10; i++) write(path.join(dir, `0${i}.md`), `${i}\n`)
+    const top = await readSkillTree(dir, { ...SKILL_CAPS, files: 3 })
+    expect(top.files.map((f) => f.rel)).toContain('SKILL.md')
+    expect(top.truncated).toBe(true)
+
+    for (let i = 0; i < 60; i++) write(path.join(dir, 'assets', `a${i}.txt`), `${i}\n`)
+    const realStat = fsp.stat
+    let stats = 0
+    fsp.stat = async (...args) => {
+      stats++
+      return realStat(...args)
+    }
+    try {
+      await readSkillTree(dir, { ...SKILL_CAPS, files: 5 })
+    } finally {
+      fsp.stat = realStat
+    }
+    expect(stats).toBeLessThanOrEqual(5)
+    for (let i = 0; i < 20; i++) fs.mkdirSync(path.join(dir, 'deep', `d${i}`), { recursive: true })
+    expect((await readSkillTree(dir, { ...SKILL_CAPS, dirs: 5 })).truncated).toBe(true)
+
+    const tool = path.join(home, '.claude', 'skills', 'tool')
+    write(path.join(tool, 'SKILL.md'), skillMd('tool'))
+    write(path.join(tool, 'run.py'), 'print(1)\n')
+    for (const sub of ['dist', 'build', '.cache', 'coverage', 'target']) for (let i = 0; i < 5; i++) write(path.join(tool, sub, `f${i}`), 'x\n')
+    write(path.join(tool, 'myenv', 'pyvenv.cfg'), 'home = /usr\n')
+    for (let i = 0; i < 5; i++) write(path.join(tool, 'myenv', 'lib', `m${i}.py`), 'x\n')
+    const tree = await readSkillTree(tool, { ...SKILL_CAPS, files: 3 })
+    expect(tree).toMatchObject({ truncated: false })
+    expect(tree.files.map((f) => f.rel)).toEqual(['SKILL.md', 'run.py'])
+    // The installed content's hash leaves them out the same way.
+    const md = { rel: 'SKILL.md', data: Buffer.from('x') }
+    expect(contentHash([md, { rel: 'myenv/pyvenv.cfg', data: Buffer.from('h') }, { rel: 'myenv/lib/m.py', data: Buffer.from('m') }, { rel: 'dist/a.js', data: Buffer.from('a') }])).toBe(contentHash([md]))
+  })
+
+  it('N4. a quiet list reuses the last walk for a minute; opening, an edit to SKILL.md or the minute passing walks again', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'SKILL.md'), skillMd('mine'))
+    write(path.join(dir, 'docs', 'a.md'), 'a\n')
+    const history = historyAt()
+    const skills = () => [{ dir, name: 'mine', managed: null, source: null }]
+    await history.annotate(skills())
+    const realStat = fsp.stat
+    let stats = 0
+    fsp.stat = async (...args) => {
+      stats++
+      return realStat(...args)
+    }
+    try {
+      await history.annotate(skills(), { cached: true })
+      expect(stats).toBeLessThanOrEqual(2) // the folder and its SKILL.md
+    } finally {
+      fsp.stat = realStat
+    }
+    write(path.join(dir, 'docs', 'a.md'), 'a, edited\n')
+    clock += 1000
+    let list = skills()
+    await history.annotate(list, { cached: true })
+    expect(list[0].history.versions).toBe(1) // within the minute: the last walk
+    list = skills()
+    await history.annotate(list)
+    expect(list[0].history.versions).toBe(2) // opening the list: walked again
+    write(path.join(dir, 'SKILL.md'), skillMd('mine', 'edited too, longer'))
+    list = skills()
+    await history.annotate(list, { cached: true })
+    expect(list[0].history.versions).toBe(3) // SKILL.md changed: walked again
+    write(path.join(dir, 'docs', 'a.md'), 'a, edited again\n')
+    clock += 61 * 1000
+    list = skills()
+    await history.annotate(list, { cached: true })
+    expect(list[0].history.versions).toBe(4) // a minute later
+  })
+
+  it('N4. a skill with too many files is flagged as partly kept', async () => {
+    const dir = skillDir()
+    write(path.join(dir, 'SKILL.md'), skillMd('mine'))
+    for (let i = 0; i < 6; i++) write(path.join(dir, 'assets', `a${i}.txt`), `${i}\n`)
+    const history = historyAt({}, { files: 3 })
+    const skills = [{ dir, name: 'mine', managed: null, source: null }]
+    await history.annotate(skills)
+    expect(skills[0].history).toMatchObject({ partial: true, versions: 1 })
+  })
+
+  it('N5. a record is never taken for stale while its folder is being updated', async () => {
+    const { sources, history, dest, again } = await installed('helper')
+    let during
+    const trash = async (p) => {
+      fs.renameSync(p, path.join(tmp, 'bin-n5'))
+      dropStaleSources(sources) // a list at that moment
+      during = sources.get(dest)
+    }
+    const res = await installSkill({ id: await again(), replace: dest, home, env, sources, history, trash })
+    expect(during).not.toBe(null)
+    expect(res.ok).toBe(true)
+    fs.rmSync(dest, { recursive: true })
+    expect(dropStaleSources(sources)).toBe(1) // once done, a folder really gone is dropped
   })
 })

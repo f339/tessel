@@ -152,6 +152,9 @@ function noteLabel(note) {
   if (note.kind === 'install') return t('skills.history.noteInstall', 'Installed from GitHub') + at
   return ''
 }
+const partialHint = computed(() =>
+  t('skills.history.partialHint', 'Too many files (or too large) to keep all of this skill in its history: it cannot be restored, nor updated while it differs from what was installed.')
+)
 const statusLabel = (s) =>
   s === 'A' ? t('skills.history.added', 'Added') : s === 'D' ? t('skills.history.removed', 'Removed') : t('skills.history.changed', 'Changed')
 const changesTitle = (changes) =>
@@ -179,7 +182,8 @@ const originFilter = ref('all')
 async function refresh(quiet = false) {
   if (!quiet) loading.value = true
   try {
-    const res = await window.shellApi.skillsList(project.value)
+    // quiet: the main process may reuse a walk of the last minute.
+    const res = await window.shellApi.skillsList(project.value, quiet ? { quiet: true } : undefined)
     if (res && res.ok === false) say(res.error, 'error')
     else listed.value = { skills: (res && res.skills) || [], roots: (res && res.roots) || [], updates: (res && res.updates) || null }
   } catch (err) {
@@ -458,7 +462,9 @@ async function install(replaceDir = null) {
     const done = res.results.filter((r) => r.ok)
     if (done.length)
       say(
-        replace
+        replace && done.some((r) => r.trashed)
+          ? t('skills.add.updatedTrashed', 'Updated "{{name}}". The old copy is in the Recycle Bin. Agents use it from their next session.', { name: res.name })
+          : replace
           ? t('skills.add.updated', 'Updated "{{name}}". Agents use it from their next session.', { name: res.name })
           : t('skills.add.installed', 'Installed "{{name}}" for {{agents}}. Agents use it from their next session.', {
               name: res.name,
@@ -613,6 +619,7 @@ onMounted(async () => {
                   <span class="mcp-target" :title="copy.dir">{{ copy.dir }}</span>
                   <span v-if="copy.history && copy.history.versions" class="set-hint skills-history-line">
                     {{ changedLabel(copy) }}
+                    <span v-if="copy.history.partial" class="launch-tag muted skills-partial" :title="partialHint">{{ t('skills.history.partialBadge', 'Partly kept') }}</span>
                     <button type="button" class="skills-link" :aria-expanded="historyOpen === copy.id" @click="toggleHistory(copy)">
                       {{ historyOpen === copy.id ? t('skills.history.hide', 'Hide history') : t('skills.history.show', 'History') }}
                     </button>
@@ -649,6 +656,7 @@ onMounted(async () => {
                 <p v-else-if="history.error" class="mcp-error">{{ history.error }}</p>
                 <p v-else-if="!history.versions.length" class="set-hint">{{ t('skills.history.none', 'No version kept yet.') }}</p>
                 <template v-else>
+                  <p v-if="copy.history && copy.history.partial" class="mcp-about skills-warn">{{ partialHint }}</p>
                   <ul class="skills-versions">
                     <li v-for="v in history.versions" :key="v.id" class="skills-version" :class="{ on: history.selected === v.id }">
                       <button type="button" class="skills-version-pick" @click="showVersion(copy, v)">
@@ -663,7 +671,7 @@ onMounted(async () => {
                         <span v-if="v.note && noteLabel(v.note)" class="launch-tag muted">{{ noteLabel(v.note) }}</span>
                       </button>
                       <button
-                        v-if="!v.latest && copy.removable"
+                        v-if="!v.latest && copy.removable && !(copy.history && copy.history.partial)"
                         type="button"
                         class="exit-btn"
                         :disabled="!!busy"

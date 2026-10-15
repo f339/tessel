@@ -86,7 +86,8 @@
       "failed": "Échec",
       "replace": "La remplacer",
       "codexNote": "Codex la reçoit dans le dossier partagé .agents, que lisent aussi OpenCode, Copilot CLI et Gemini CLI.",
-      "installing": "Installation…"
+      "installing": "Installation…",
+      "updatedTrashed": "« {{name}} » mise à jour. L'ancienne copie est dans la Corbeille. Les agents l'utilisent dès leur prochaine session."
     },
     "setup": {
       "confirm": "Lancer l'installation de cette compétence dans un terminal ?",
@@ -153,7 +154,9 @@
       "binary": "Fichier binaire : pas de différences de texte.",
       "noLines": "Aucune ligne modifiée (fins de ligne seulement).",
       "truncated": "Les différences sont trop longues pour être affichées en entier.",
-      "notKept": "Trop volumineux pour être gardé dans l'historique : pas de différences."
+      "notKept": "Trop volumineux pour être gardé dans l'historique : pas de différences.",
+      "partialBadge": "Gardée en partie",
+      "partialHint": "Trop de fichiers (ou trop volumineux) pour garder toute cette compétence dans son historique : elle ne peut pas être restaurée, ni mise à jour tant qu'elle diffère de ce qui a été installé."
     },
     "update": {
       "changes_one": "Ce qui a changé depuis votre version ({{count}} commit)",

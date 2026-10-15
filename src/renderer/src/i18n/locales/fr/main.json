@@ -950,7 +950,9 @@
         "budget": "Trop de compétences à vérifier d'un coup ; les autres le seront la prochaine fois.",
         "offline": "Impossible de joindre GitHub : {{error}}",
         "timeout": "GitHub n'a pas répondu à temps."
-      }
+      },
+      "trashFailed": "Le dossier en place n'a pas pu être mis à la Corbeille ({{error}}) : il n'a pas été remplacé.",
+      "placeFailed": "La nouvelle copie n'a pas pu être mise en place ({{error}}). L'ancienne est dans la Corbeille."
     },
     "liveShare": {
       "tunnelStopped": "Le tunnel Cloudflare s’est arrêté (code {{code}}). Le partage est terminé.",

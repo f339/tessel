@@ -363,6 +363,44 @@ describe('Skills dialog', () => {
     other.unmount()
   })
 
+  it('a copy with too many files to keep says so, and its history offers no Restore', async () => {
+    const list = tracked()
+    list[1].history = { versions: 2, changedAt: Date.now() - 3600000, firstAt: 1, partial: true }
+    const versions = [
+      { id: 'v2', changedAt: Date.UTC(2026, 9, 14), stats: { plus: 1, minus: 0 }, first: false, latest: true, note: null, files: ['a.md'], fileCount: 1 },
+      { id: 'v1', changedAt: Date.UTC(2026, 9, 10), stats: { plus: 3, minus: 0 }, first: true, latest: false, note: null, files: ['SKILL.md'], fileCount: 1 }
+    ]
+    api({
+      skillsList: async () => ({ roots: [], skills: list }),
+      skillsHistory: async () => ({ versions }),
+      skillsHistoryDiff: async (q) => ({ id: q.id, files: [] })
+    })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    const mine = () => wrapper.findAll('.mcp-server').find((r) => r.find('.mcp-name').text() === 'mine')
+    expect(mine().find('.skills-partial').text()).toBe('Partly kept')
+    expect(mine().find('.skills-partial').attributes('title')).toContain('cannot be restored')
+    await mine().find('.skills-link').trigger('click')
+    await flushPromises()
+    expect(mine().find('.skills-history').text()).toContain('Too many files')
+    expect(mine().findAll('.skills-version .exit-btn')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('after an Update, says the old copy is in the Recycle Bin', async () => {
+    api({
+      skillsInstall: async () => ({ ok: true, name: 'pdf', results: [{ dir: '/h/.claude/skills/pdf', ok: true, trashed: true, seenBy: ['claude'] }] })
+    })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.findAll('.skills-copy')[1].findAll('.exit-btn').find((b) => b.text() === 'Update').trigger('click')
+    await flushPromises()
+    await wrapper.find('.skills-preview form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.find('.mcp-notice').text()).toBe('Updated "pdf". The old copy is in the Recycle Bin. Agents use it from their next session.')
+    wrapper.unmount()
+  })
+
   it('speaks French: origins, badges, history', async () => {
     api({ skillsList: async () => ({ roots: [], skills: tracked() }) })
     setMessages('fr', fr)

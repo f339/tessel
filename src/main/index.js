@@ -2484,10 +2484,12 @@ const knownSkill = (q) => q && isSkillPath(q.dir, { cwd: skillCwd(q.cwd) })
 const unknownSkill = () => ({ ok: false, error: t('main.skills.unknownFolder', 'This is not a skill folder Tessel knows.') })
 ipcMain.handle(
   'skills:list',
-  safe(async (cwd) => {
+  safe(async (arg) => {
+    // The project folder, or { cwd, quiet } (a list right after another one).
+    const q = arg && typeof arg === 'object' ? arg : { cwd: arg }
     dropStaleSources(skillSources)
-    const listed = await listSkills({ cwd: skillCwd(cwd), sources: skillSources.all() })
-    await skillHistory.annotate(listed.skills, { sources: skillSources })
+    const listed = await listSkills({ cwd: skillCwd(q.cwd), sources: skillSources.all() })
+    await skillHistory.annotate(listed.skills, { sources: skillSources, cached: !!q.quiet })
     skillUpdates.annotate(listed.skills)
     return { ...listed, updates: skillUpdates.status() }
   })
@@ -2527,7 +2529,9 @@ ipcMain.handle(
 )
 ipcMain.handle(
   'skills:install',
-  safe((q) => installSkill({ ...(q || {}), cwd: skillCwd(q && q.cwd), sources: skillSources, history: skillHistory }))
+  safe((q) =>
+    installSkill({ ...(q || {}), cwd: skillCwd(q && q.cwd), sources: skillSources, history: skillHistory, trash: (p) => shell.trashItem(p) })
+  )
 )
 ipcMain.handle(
   'skills:remove',

@@ -52,16 +52,25 @@ const lineCount = (text) => (text ? text.split(/\r?\n/).length - (/\r?\n$/.test(
 
 // The files of a skill folder within SKILL_CAPS, sorted, with a signature
 // of their sizes and times (when it has not moved, nothing is read again).
-// Breadth first, files before folders: the SKILL.md and the files at the
-// top are read whatever the caps. Links, and the folders a tool fills
-// (node_modules…), are left out. truncated: some files were not read.
+// Breadth first, the SKILL.md first, files before folders, and nothing more
+// read once a cap is reached (at most caps.files files looked at, and
+// caps.dirs folders): the SKILL.md and the files at the top are always in.
+// Links, and the folders a tool fills (node_modules, dist, a Python
+// environment…), are left out. truncated: some files were not read.
 export async function readSkillTree(dir, caps = SKILL_CAPS) {
   const files = []
   let total = 0
   let truncated = false
+  let folders = 0
+  const maxFolders = caps.dirs || 1000
+  const first = (e, depth) => (depth === 0 && /^skill\.md$/i.test(e.name) ? 0 : 1)
   const queue = [{ abs: dir, rel: '', depth: 0 }]
-  while (queue.length) {
+  walk: while (queue.length) {
     const { abs, rel, depth } = queue.shift()
+    if (++folders > maxFolders) {
+      truncated = true
+      break
+    }
     let entries
     try {
       entries = await fs.readdir(abs, { withFileTypes: true })
@@ -69,9 +78,13 @@ export async function readSkillTree(dir, caps = SKILL_CAPS) {
       if (rel) truncated = true
       continue
     }
-    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    entries.sort((a, b) => first(a, depth) - first(b, depth) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     for (const entry of entries) {
       if (!entry.isFile()) continue
+      if (files.length >= caps.files) {
+        truncated = true
+        break walk
+      }
       const child = path.join(abs, entry.name)
       let st
       try {
@@ -80,17 +93,19 @@ export async function readSkillTree(dir, caps = SKILL_CAPS) {
         truncated = true
         continue
       }
-      if (files.length >= caps.files || total + st.size > caps.bytes) {
+      if (total + st.size > caps.bytes) {
         truncated = true
-        continue
+        break walk
       }
       total += st.size
       files.push({ rel: rel ? `${rel}/${entry.name}` : entry.name, abs: child, size: st.size, mtimeMs: st.mtimeMs })
     }
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.isSymbolicLink() || SKIPPED_DIR.test(entry.name)) continue
+      const child = path.join(abs, entry.name)
+      if (fsSync.existsSync(path.join(child, 'pyvenv.cfg'))) continue
       if (depth >= caps.depth) truncated = true
-      else queue.push({ abs: path.join(abs, entry.name), rel: rel ? `${rel}/${entry.name}` : entry.name, depth: depth + 1 })
+      else queue.push({ abs: child, rel: rel ? `${rel}/${entry.name}` : entry.name, depth: depth + 1 })
     }
   }
   files.sort(byRel)
@@ -108,6 +123,31 @@ export function createSkillHistory(
   const blobPath = (hdir, sha) => path.join(hdir, 'blobs', sha)
   const indexFile = (hdir) => path.join(hdir, 'index.json')
   const noVersion = () => fail(t('main.skills.history.noVersion', 'This version is no longer in the history.'), 'SKILL_HISTORY_NO_VERSION')
+
+  // A quiet list (the one right after a check or a restore) reuses a
+  // folder's last walk for a minute while neither the folder nor its
+  // SKILL.md changed; opening the list, Refresh, a restore and an update
+  // always walk it again.
+  const walks = new Map() // sameKey(dir) -> { at, stamp, tree }
+  const WALK_TTL = 60 * 1000
+  async function stampOf(dir) {
+    try {
+      const top = await fs.stat(dir)
+      const md = await fs.stat(path.join(dir, 'SKILL.md')).catch(() => null)
+      return `${top.mtimeMs}:${md ? `${md.mtimeMs}:${md.size}` : '-'}`
+    } catch {
+      return null
+    }
+  }
+  async function walkOf(dir, cached) {
+    const key = sameKey(dir)
+    const stamp = await stampOf(dir)
+    const last = walks.get(key)
+    if (cached && stamp && last && last.stamp === stamp && now() - last.at < WALK_TTL) return { ...last.tree }
+    const tree = await readSkillTree(dir, skillCaps)
+    if (stamp) walks.set(key, { at: now(), stamp, tree: { ...tree } })
+    return tree
+  }
 
   // -> { index (null: none yet), from: 'file' | 'backup' | null }. A damaged
   // file falls back to its last good copy; one that cannot be read at all
@@ -197,12 +237,12 @@ export function createSkillHistory(
   // Keeps the folder's content as a new version when it changed.
   // -> summary + { saved, truncated, complete (the newest version holds all
   // of it), entries: [{ rel, abs, sha, size, text, kept }] of what is there }
-  async function snapshotNow(dir, { note = null, name = null, keep = [] } = {}) {
+  async function snapshotNow(dir, { note = null, name = null, keep = [], cached = false } = {}) {
     const hdir = folderOf(dir)
     const { index: loaded, from } = loadIndex(hdir)
     const index = loaded || { dir: path.resolve(dir), name, versions: [] }
     if (name) index.name = name
-    const tree = await readSkillTree(dir, skillCaps)
+    const tree = await walkOf(dir, cached)
     const at = now()
     const last = index.versions[index.versions.length - 1] || null
     const seenDue = () => {
@@ -327,12 +367,13 @@ export function createSkillHistory(
   // Tessel kept the installed content takes its content now as installed
   // (the record read again just before, only the hash added).
   let pruned = false
-  async function annotate(skills, { sources = null } = {}) {
+  async function annotate(skills, { sources = null, cached = false } = {}) {
     for (const skill of skills) {
       if (skill.managed) continue
       try {
-        const sum = await track(skill.dir, { name: skill.name })
-        skill.history = { versions: sum.versions, changedAt: sum.changedAt, firstAt: sum.firstAt }
+        const sum = await track(skill.dir, { name: skill.name, cached })
+        // partial: too many files to keep it all (no Restore, nor Update of an edited copy).
+        skill.history = { versions: sum.versions, changedAt: sum.changedAt, firstAt: sum.firstAt, partial: !!sum.truncated }
         skill.hash = sum.hash
         const source = (sources && sources.get(skill.dir)) || skill.source
         if (source && sum.hash) {
@@ -482,13 +523,22 @@ export function createSkillHistory(
       }),
       'SKILL_HISTORY_BLOCKED'
     )
-  // A file's name given the version's case ("skill.md" back from "SKILL.md").
+  // A file's name given the version's case ("skill.md" back from "SKILL.md"):
+  // one rename (Windows and macOS change a name's case in one step), tried
+  // again while the file is locked for a moment. Never through a temporary
+  // name, never fatal: the content is right, at worst the name keeps its case.
   async function fixCase(abs, rel) {
     const to = path.join(path.dirname(abs), path.posix.basename(rel))
     if (to === abs) return
-    const tmp = `${abs}.tessel-case-${randomBytes(4).toString('hex')}`
-    await fs.rename(abs, tmp)
-    await fs.rename(tmp, to)
+    for (let i = 0; ; i++) {
+      try {
+        await fs.rename(abs, to)
+        return
+      } catch (err) {
+        if (i >= 20 || !['EPERM', 'EBUSY', 'EACCES'].includes(err && err.code)) return
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+    }
   }
 
   // Puts a version's files back in the skill folder (one directly in a known

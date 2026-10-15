@@ -415,7 +415,7 @@ const api = {
   mcpTest: (ref) => ipcRenderer.invoke('mcp:test', ref),
   mcpCopy: (spec) => ipcRenderer.invoke('mcp:copy', spec),
   // Agent skills (src/main/skillsManager.js).
-  skillsList: (cwd) => ipcRenderer.invoke('skills:list', cwd),
+  skillsList: (cwd, opts) => ipcRenderer.invoke('skills:list', opts ? { ...opts, cwd } : cwd),
   skillsFromFolder: (dir) => ipcRenderer.invoke('skills:fromFolder', dir),
   skillsFromGithub: (q) => ipcRenderer.invoke('skills:fromGithub', q),
   skillsForUpdate: (dir) => ipcRenderer.invoke('skills:forUpdate', dir),
