@@ -959,25 +959,31 @@ export function geminiSubagents(sessionId, geminiDir = join(process.env.GEMINI_C
 // Logs an agent only appends to (Copilot's events.jsonl, Kimi's wire.jsonl),
 // where a sub-agent's start may be far from their end: read once, then only
 // what was added since (by file), each whole line that may matter (keep: a
-// quick test of its text) folded into that file's state. At most their last
-// 32 MB.
-const LOG_MAX_BYTES = 32 * 1024 * 1024
+// quick test of its text) folded into that file's state. Before their last
+// 32 MB, only the lines that start or end a sub-agent (mark), so one started
+// long ago that still runs is never lost; nothing before their last 512 MB.
+const LOG_TAIL_BYTES = 32 * 1024 * 1024
+const LOG_SCAN_BYTES = 512 * 1024 * 1024
 const LOG_CHUNK = 1024 * 1024
-// file -> { ino, born, offset, rest (a line not ended yet), cut, state }
+let logTail = LOG_TAIL_BYTES
+// file -> { ino, born, offset, rest (a line not ended yet), cut, marked (read
+// up to there with mark only), state }
 const logCache = new Map()
 
-function foldLog(file, st, keep, fold) {
+function foldLog(file, st, keep, fold, mark = keep) {
   let c = logCache.get(file)
   // Another file now, or shorter (rewritten): read again.
   if (!c || c.ino !== st.ino || c.born !== st.birthtimeMs || st.size < c.offset) {
-    const offset = Math.max(0, st.size - LOG_MAX_BYTES)
-    c = { ino: st.ino, born: st.birthtimeMs, offset, rest: Buffer.alloc(0), cut: offset > 0, state: {} }
+    const offset = Math.max(0, st.size - LOG_SCAN_BYTES)
+    c = { ino: st.ino, born: st.birthtimeMs, offset, rest: Buffer.alloc(0), cut: offset > 0, marked: st.size - logTail, state: {} }
   }
   if (st.size > c.offset) {
     const fd = fs.openSync(file, 'r')
     try {
       while (c.offset < st.size) {
-        const buf = Buffer.alloc(Math.min(st.size - c.offset, LOG_CHUNK))
+        // Up to the start of its last 32 MB, then the rest.
+        const upTo = c.offset < c.marked ? c.marked : st.size
+        const buf = Buffer.alloc(Math.min(upTo - c.offset, LOG_CHUNK))
         const n = fs.readSync(fd, buf, 0, buf.length, c.offset)
         if (n <= 0) break
         c.offset += n
@@ -988,8 +994,10 @@ function foldLog(file, st, keep, fold) {
         const lines = data.toString('utf8', 0, end).split('\n')
         if (c.cut) lines.shift() // read from the middle of a line
         c.cut = false
+        // Before its last 32 MB: its starts and ends only.
+        const test = c.offset <= c.marked ? mark : keep
         for (const l of lines) {
-          if (!keep(l)) continue
+          if (!test(l)) continue
           try {
             fold(c.state, JSON.parse(l))
           } catch {
@@ -1081,6 +1089,8 @@ function foldCopilot(s, e) {
 }
 
 const copilotLine = (l) => l.includes('"agentId"') || l.includes('"subagent.') || l.includes('"tool.execution_start"')
+// One that starts or ends a sub-agent (or sets its model and effort).
+const copilotMark = (l) => l.includes('"subagent.') || (l.includes('"tool.execution_start"') && /"toolName":\s*"task"/.test(l))
 
 export function copilotSubagents(sessionId, copilotDir = process.env.COPILOT_HOME || join(os.homedir(), '.copilot'), now = Date.now()) {
   if (!SQL_ID.test(String(sessionId))) return []
@@ -1095,7 +1105,7 @@ export function copilotSubagents(sessionId, copilotDir = process.env.COPILOT_HOM
   if (!realInside(base, join(copilotDir, 'session-state'), true) || !realInside(base, dir, true) || !realInside(base, file, false)) return []
   let s
   try {
-    s = foldLog(file, fs.statSync(file), copilotLine, foldCopilot)
+    s = foldLog(file, fs.statSync(file), copilotLine, foldCopilot, copilotMark)
   } catch {
     return []
   }
@@ -1393,6 +1403,11 @@ export function cursorSubagents(sessionId, cursorDir = join(os.homedir(), '.curs
   }
   out.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))
   return out.slice(0, MAX_AGENTS)
+}
+
+// How much of a log is read whole (its last 32 MB), smaller in tests.
+export function _setLogTailForTest(bytes = LOG_TAIL_BYTES) {
+  logTail = bytes
 }
 
 export function _clearChildCachesForTest() {
