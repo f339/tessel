@@ -221,8 +221,9 @@ describe('Update Available card', () => {
     delete window.shellApi
   })
 
-  it('only when an update is ready', () => {
-    expect(mount(UpdateCard, { props: { status: { state: 'downloading', version: '2' } } }).find('[data-test="update-card"]').exists()).toBe(false)
+  it('as soon as a new version is found: while it downloads, then ready', () => {
+    expect(mount(UpdateCard, { props: { status: { state: 'checking' } } }).find('[data-test="update-card"]').exists()).toBe(false)
+    expect(mount(UpdateCard, { props: { status: { state: 'downloading', version: '2' } } }).find('[data-test="update-card"]').exists()).toBe(true)
     expect(mount(UpdateCard, { props: { status: READY } }).find('[data-test="update-card"]').exists()).toBe(true)
   })
 

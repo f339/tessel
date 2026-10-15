@@ -13,7 +13,9 @@ import fs from 'fs'
 import { t } from './i18n'
 
 const FIRST_CHECK_MS = 15 * 1000
-const CHECK_EVERY_MS = 4 * 60 * 60 * 1000
+// Every half hour: a release published while Tessel is open is seen the
+// same hour (it was every four hours).
+const CHECK_EVERY_MS = 30 * 60 * 1000
 
 // GitHub gives release notes as HTML; the dialog shows plain text.
 export function htmlToText(html) {

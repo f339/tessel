@@ -763,6 +763,8 @@
     "updateCard": {
       "title": "Mise à jour disponible",
       "ready": "Tessel v{{version}} est prête.",
+      "downloading": "Tessel v{{version}} se télécharge… {{percent}} %",
+      "downloadingButton": "Téléchargement…",
       "sessions": "Vos panneaux se rouvriront là où ils étaient.",
       "releaseNotes": "Notes de version",
       "update": "Mettre à jour",

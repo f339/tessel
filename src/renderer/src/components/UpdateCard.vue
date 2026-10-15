@@ -43,15 +43,26 @@ const reassuranceSeen = ref(read(REASSURED_KEY) === '1')
 const exiting = ref(false)
 
 const version = computed(() => String(props.status.version || ''))
-const visible = computed(() => props.status.state === 'ready' && !!version.value && dismissed.value !== version.value)
-const readyText = computed(() => t('app.updateCard.ready', 'Tessel v{{version}} is ready.', { version: version.value }))
-const showReassurance = computed(() => visible.value && !reassuranceSeen.value)
+// Shown as soon as a new version is found: while it downloads (its
+// progress), then ready to install. Dismissed while it downloads: shown
+// again once it is ready; dismissed when ready: not again for that version.
+const ready = computed(() => props.status.state === 'ready')
+const downloading = computed(() => props.status.state === 'downloading')
+const stageKey = computed(() => (ready.value ? version.value : `${version.value}:downloading`)) // i18n-ignore
+const visible = computed(() => (ready.value || downloading.value) && !!version.value && dismissed.value !== stageKey.value && dismissed.value !== version.value)
+const percent = computed(() => Math.max(0, Math.min(100, Math.round(Number(props.status.percent) || 0))))
+const readyText = computed(() =>
+  ready.value
+    ? t('app.updateCard.ready', 'Tessel v{{version}} is ready.', { version: version.value })
+    : t('app.updateCard.downloading', 'Tessel v{{version}} is downloading… {{percent}}%', { version: version.value, percent: percent.value })
+)
+const showReassurance = computed(() => visible.value && ready.value && !reassuranceSeen.value)
 
 watch(version, () => (exiting.value = false))
 
 function dismiss() {
-  dismissed.value = version.value
-  write(DISMISSED_KEY, version.value)
+  dismissed.value = stageKey.value
+  write(DISMISSED_KEY, stageKey.value)
 }
 function dismissWithAnimation() {
   const reduce = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -116,13 +127,16 @@ function onKeydown(e) {
             <X :size="14" aria-hidden="true" />
           </button>
         </div>
-        <p class="uc-text">{{ readyText }}</p>
+        <p class="uc-text" data-test="update-card-text">{{ readyText }}</p>
+        <div v-if="downloading" class="uc-progress" role="progressbar" :aria-valuenow="percent" aria-valuemin="0" aria-valuemax="100">
+          <div class="uc-progress-bar" :style="{ width: percent + '%' }"></div>
+        </div>
         <p class="uc-note">{{ t('app.updateCard.sessions', 'Your panes reopen where they were.') }}</p>
         <button v-if="releaseUrl" type="button" class="uc-link" data-test="update-card-notes" @click="openNotes">
           {{ t('app.updateCard.releaseNotes', 'Release notes') }}
         </button>
-        <button type="button" class="uc-update" data-test="update-card-update" @click="update">
-          {{ t('app.updateCard.update', 'Update') }}
+        <button type="button" class="uc-update" data-test="update-card-update" :disabled="!ready" @click="update">
+          {{ ready ? t('app.updateCard.update', 'Update') : t('app.updateCard.downloadingButton', 'Downloading…') }}
         </button>
       </div>
     </div>
@@ -130,6 +144,22 @@ function onKeydown(e) {
 </template>
 
 <style scoped>
+.uc-progress {
+  height: 4px;
+  margin: 6px 0 2px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.uc-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+.uc-update:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
 .uc-stack {
   display: flex;
   width: 360px;
