@@ -40,7 +40,8 @@
       "fromFolder": "Dossier",
       "open": "Ouvrir le dossier",
       "update": "Mettre à jour",
-      "remove": "Retirer"
+      "remove": "Retirer",
+      "refreshHint": "Relire les dossiers de compétences et chercher des mises à jour sur GitHub"
     },
     "preview": {
       "files_one": "{{count}} fichier, {{size}}",
@@ -86,7 +87,8 @@
       "failed": "Échec",
       "replace": "La remplacer",
       "codexNote": "Codex la reçoit dans le dossier partagé .agents, que lisent aussi OpenCode, Copilot CLI et Gemini CLI.",
-      "installing": "Installation…"
+      "installing": "Installation…",
+      "updatedTrashed": "« {{name}} » mise à jour. L'ancienne copie est dans la Corbeille. Les agents l'utilisent dès leur prochaine session."
     },
     "setup": {
       "confirm": "Lancer l'installation de cette compétence dans un terminal ?",
@@ -96,6 +98,76 @@
       "title": "Elle est fournie avec une commande d'installation.",
       "body": "Tessel ne la lance pas. Si vous en avez besoin, lancez-la vous-même dans un terminal et répondez-y là.",
       "button": "Lancer son installation dans un terminal"
+    },
+    "time": {
+      "now": "à l'instant"
+    },
+    "origin": {
+      "github": "Depuis GitHub — {{repo}}",
+      "folder": "Copiée depuis un dossier",
+      "own": "Votre compétence",
+      "ownHint": "Tessel n'a aucune trace de son ajout depuis GitHub ou un dossier : créée sur cet ordinateur, ou ajoutée par un autre outil."
+    },
+    "filter": {
+      "label": "Afficher",
+      "all": "Toutes",
+      "own": "Les vôtres",
+      "github": "GitHub",
+      "folder": "Dossiers"
+    },
+    "updates": {
+      "hint": "Dernier changement : {{message}} ({{when}})",
+      "limited": "La limite de GitHub pour vérifier les mises à jour est atteinte. Prochaine vérification après {{time}}.",
+      "checking": "Recherche de mises à jour sur GitHub…",
+      "checked": "Mises à jour vérifiées {{when}}",
+      "badge": "Mise à jour disponible"
+    },
+    "modified": {
+      "hint": "Modifiée sur cet ordinateur depuis son installation.",
+      "badge": "Modifiée localement"
+    },
+    "history": {
+      "summary_one": "Modifiée {{when}} · {{count}} version",
+      "summary_other": "Modifiée {{when}} · {{count}} versions",
+      "first": "Première version gardée",
+      "files_one": "{{count}} fichier modifié",
+      "files_other": "{{count}} fichiers modifiés",
+      "noteRestore": "Restaurée depuis la version du {{when}}",
+      "noteUpdate": "Mise à jour depuis GitHub",
+      "noteFolder": "Copiée depuis un dossier",
+      "noteInstall": "Installée depuis GitHub",
+      "added": "Ajouté",
+      "removed": "Supprimé",
+      "changed": "Modifié",
+      "restoreConfirm": "Restaurer « {{name}} » à sa version du {{when}} ?",
+      "restoreText": "Ses fichiers remplacent les fichiers actuels. La version actuelle est d'abord gardée dans l'historique : vous pourrez y revenir.",
+      "restore": "Restaurer cette version",
+      "restoredKept": "« {{name}} » restaurée. Laissés en place : {{files}} (absents de cette version, et trop volumineux pour l'historique).",
+      "restored": "« {{name}} » restaurée à sa version du {{when}}.",
+      "restoreFailed": "Elle n'a pas pu être restaurée.",
+      "hide": "Masquer l'historique",
+      "show": "Historique",
+      "none": "Aucune version gardée pour l'instant.",
+      "current": "Actuelle",
+      "firstHint": "La première version gardée par Tessel, affichée en entier.",
+      "oldest": "Les versions plus anciennes ont été retirées de l'historique : celle-ci est affichée en entier.",
+      "noFiles": "Aucun fichier modifié.",
+      "binary": "Fichier binaire : pas de différences de texte.",
+      "noLines": "Aucune ligne modifiée (fins de ligne seulement).",
+      "truncated": "Les différences sont trop longues pour être affichées en entier.",
+      "notKept": "Trop volumineux pour être gardé dans l'historique : pas de différences.",
+      "partialBadge": "Gardée en partie",
+      "partialHint": "Trop de fichiers (ou trop volumineux) pour garder toute cette compétence dans son historique : elle ne peut pas être restaurée, ni mise à jour tant qu'elle diffère de ce qui a été installé."
+    },
+    "update": {
+      "changes_one": "Ce qui a changé depuis votre version ({{count}} commit)",
+      "changes_other": "Ce qui a changé depuis votre version ({{count}} commits)",
+      "confirm": "Remplacer vos modifications de « {{name}} » ?",
+      "confirmText": "Cette copie a été modifiée depuis son installation. La mise à jour la remplace ; votre version reste dans son historique (Historique, puis Restaurer cette version).",
+      "anyway": "Mettre à jour quand même",
+      "modified": "Vous avez modifié cette copie depuis son installation. La mise à jour remplace vos modifications ; elles restent dans son historique.",
+      "more": "Les commits plus anciens ne sont pas listés : seuls les 30 plus récents sont affichés.",
+      "noCommits": "Aucun nouveau commit n'a touché cette compétence depuis votre version."
     },
     "plugins": {
       "intro": "Les plugins de l'Antigravity CLI regroupent des skills, des serveurs MCP, des sous-agents, des hooks et des règles. Parcourez sa boutique avec /plugin dans un panneau Antigravity CLI, ou installez-en un ici par son nom ou depuis un dossier.",

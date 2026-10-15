@@ -415,13 +415,17 @@ const api = {
   mcpTest: (ref) => ipcRenderer.invoke('mcp:test', ref),
   mcpCopy: (spec) => ipcRenderer.invoke('mcp:copy', spec),
   // Agent skills (src/main/skillsManager.js).
-  skillsList: (cwd) => ipcRenderer.invoke('skills:list', cwd),
+  skillsList: (cwd, opts) => ipcRenderer.invoke('skills:list', opts ? { ...opts, cwd } : cwd),
   skillsFromFolder: (dir) => ipcRenderer.invoke('skills:fromFolder', dir),
   skillsFromGithub: (q) => ipcRenderer.invoke('skills:fromGithub', q),
   skillsForUpdate: (dir) => ipcRenderer.invoke('skills:forUpdate', dir),
   skillsInstall: (q) => ipcRenderer.invoke('skills:install', q),
   skillsRemove: (q) => ipcRenderer.invoke('skills:remove', q),
   skillsOpen: (q) => ipcRenderer.invoke('skills:open', q),
+  skillsCheckUpdates: (q) => ipcRenderer.invoke('skills:checkUpdates', q),
+  skillsHistory: (q) => ipcRenderer.invoke('skills:history', q),
+  skillsHistoryDiff: (q) => ipcRenderer.invoke('skills:historyDiff', q),
+  skillsRestore: (q) => ipcRenderer.invoke('skills:restore', q),
   // The Antigravity CLI's plugins (src/main/agyPlugins.js).
   agyPluginsList: () => ipcRenderer.invoke('agyPlugins:list'),
   agyPluginsSet: (q) => ipcRenderer.invoke('agyPlugins:set', q),
@@ -547,6 +551,11 @@ const api = {
     clear: () => ipcRenderer.invoke('sessionSearch:clear'),
     setHistoryDays: (days) => ipcRenderer.invoke('sessionSearch:setHistoryDays', days),
     search: (query) => ipcRenderer.invoke('sessionSearch:search', query)
+  },
+  // What you and each terminal agent said in its terminal, for the
+  // Conversations tab (src/main/chat/terminalConversations.js).
+  conversations: {
+    terminal: (q) => ipcRenderer.invoke('conversations:terminal', q)
   },
   // Read-only conversation views of terminal agents (src/main/chat/transcriptView.js).
   transcriptView: {

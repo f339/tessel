@@ -71,12 +71,15 @@ function setup(options = {}) {
   )
   // Antigravity's CLI: never this computer's agy in a test.
   const antigravityCli = { present: vi.fn(() => false), read: vi.fn(async () => ({ ok: false, reason: 'missing' })), timeoutMs: 20000 }
+  // Nor this computer's Antigravity app.
+  const antigravityPlan = { read: vi.fn(() => null) }
   const service = createExtraProviderUsage({
     sources,
     request,
     listAgents,
     clock: () => now,
     antigravityCli,
+    antigravityPlan,
     ...options
   })
   return { service, sources, request, listAgents }
@@ -362,6 +365,17 @@ describe('Antigravity quota, from the Antigravity CLI only', () => {
     expect(antigravityCli.read).toHaveBeenCalledTimes(1)
     expect(sources.auth).not.toHaveBeenCalled()
     expect(request).not.toHaveBeenCalled()
+  })
+  it("adds the plan the Antigravity app keeps; a plan it cannot read leaves it out", async () => {
+    const antigravityCli = cli({ ok: true, windows: rows, observedAt: now })
+    const plan = { read: vi.fn(() => 'Pro') }
+    const { service } = setup({ listAgents: withAntigravity, antigravityCli, antigravityPlan: plan })
+    expect(await read(service, 'antigravity')).toMatchObject({ ok: true, windows: rows, plan: 'Pro' })
+    const broken = { read: vi.fn(() => { throw new Error('locked') }) }
+    const again = setup({ listAgents: withAntigravity, antigravityCli: cli({ ok: true, windows: rows, observedAt: now }), antigravityPlan: broken })
+    const result = await read(again.service, 'antigravity')
+    expect(result.ok).toBe(true)
+    expect(result).not.toHaveProperty('plan')
   })
   it.each(['missing', 'signed-out', 'failed'])('%s: says the Antigravity CLI is needed, never Gemini', async (reason) => {
     const { service, sources, request } = setup({ listAgents: withAntigravity, antigravityCli: cli({ ok: false, reason }) })

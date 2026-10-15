@@ -109,6 +109,110 @@ export function parseUnifiedDiff(text) {
   return result
 }
 
+// Two texts compared without git (a skill's versions) -> the same shape as
+// parseUnifiedDiff, plus the lines added and removed. The common start and
+// end are set aside first; the middle is compared line by line (longest
+// common subsequence) when small enough, else shown as replaced whole.
+// maxLines: the lines kept in the hunks (truncated: true beyond).
+export function diffTexts(oldText, newText, { context = 3, maxCells = 1_000_000, maxLines = 5000 } = {}) {
+  const split = (s) => {
+    const text = String(s == null ? '' : s)
+    if (!text) return []
+    const lines = text.split(/\r?\n/)
+    if (lines[lines.length - 1] === '') lines.pop()
+    return lines
+  }
+  const a = split(oldText)
+  const b = split(newText)
+  let start = 0
+  while (start < a.length && start < b.length && a[start] === b[start]) start++
+  let endA = a.length
+  let endB = b.length
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA--
+    endB--
+  }
+  // Every line in order: { kind, text, old, new } (1-based numbers).
+  const ops = []
+  for (let i = 0; i < start; i++) ops.push({ kind: 'ctx', text: a[i], old: i + 1, new: i + 1 })
+  const n = endA - start
+  const m = endB - start
+  if (n * m <= maxCells) {
+    const width = m + 1
+    const dp = new Uint32Array((n + 1) * width)
+    for (let i = n - 1; i >= 0; i--)
+      for (let j = m - 1; j >= 0; j--)
+        dp[i * width + j] = a[start + i] === b[start + j] ? dp[(i + 1) * width + j + 1] + 1 : Math.max(dp[(i + 1) * width + j], dp[i * width + j + 1])
+    let i = 0
+    let j = 0
+    while (i < n && j < m) {
+      if (a[start + i] === b[start + j]) {
+        ops.push({ kind: 'ctx', text: a[start + i], old: start + i + 1, new: start + j + 1 })
+        i++
+        j++
+      } else if (dp[(i + 1) * width + j] >= dp[i * width + j + 1]) {
+        ops.push({ kind: 'del', text: a[start + i], old: start + i + 1, new: '' })
+        i++
+      } else {
+        ops.push({ kind: 'add', text: b[start + j], old: '', new: start + j + 1 })
+        j++
+      }
+    }
+    for (; i < n; i++) ops.push({ kind: 'del', text: a[start + i], old: start + i + 1, new: '' })
+    for (; j < m; j++) ops.push({ kind: 'add', text: b[start + j], old: '', new: start + j + 1 })
+  } else {
+    for (let i = start; i < endA; i++) ops.push({ kind: 'del', text: a[i], old: i + 1, new: '' })
+    for (let j = start; j < endB; j++) ops.push({ kind: 'add', text: b[j], old: '', new: j + 1 })
+  }
+  for (let i = endA, j = endB; i < a.length; i++, j++) ops.push({ kind: 'ctx', text: a[i], old: i + 1, new: j + 1 })
+
+  let added = 0
+  let removed = 0
+  for (const op of ops) {
+    if (op.kind === 'add') added++
+    else if (op.kind === 'del') removed++
+  }
+  // Hunks: each change with `context` lines around it, close ones merged.
+  const hunks = []
+  let kept = 0
+  let truncated = false
+  let i = 0
+  while (i < ops.length) {
+    if (ops[i].kind === 'ctx') {
+      i++
+      continue
+    }
+    const from = Math.max(0, i - context)
+    let to = i
+    let last = i
+    while (to < ops.length && to - last <= context * 2) {
+      if (ops[to].kind !== 'ctx') last = to
+      to++
+    }
+    const end = Math.min(ops.length, last + context + 1)
+    let lines = ops.slice(from, end)
+    // Past the lines allowed: this hunk cut short, and no other.
+    if (kept + lines.length > maxLines) {
+      truncated = true
+      lines = lines.slice(0, Math.max(0, maxLines - kept))
+      if (!lines.length) break
+    }
+    kept += lines.length
+    const oldLines = lines.filter((l) => l.old !== '')
+    const newLines = lines.filter((l) => l.new !== '')
+    const before = (key) => {
+      for (let k = from - 1; k >= 0; k--) if (ops[k][key] !== '') return ops[k][key]
+      return 0
+    }
+    const oldStart = oldLines.length ? oldLines[0].old : before('old')
+    const newStart = newLines.length ? newLines[0].new : before('new')
+    hunks.push({ header: `@@ -${oldStart},${oldLines.length} +${newStart},${newLines.length} @@`, lines }) // i18n-ignore diff header
+    if (truncated) break
+    i = end
+  }
+  return { binary: false, hunks, added, removed, truncated }
+}
+
 // Can the task branch be merged now? -> the reason it cannot ('' when it
 // can), for the Merge button. t: the main process's t() (review.js; English
 // without it).

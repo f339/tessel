@@ -16,10 +16,20 @@
 //             (kind 'decision'), its report on a card (kind 'report'). paneId
 //             is the speaker; toPaneId/to, the agent it addresses (else you).
 //
+// What you and an agent said in its terminal (opts.terminal of buildThreads,
+// read from the agent's own conversation file by the main process,
+// src/main/chat/terminalConversations.js): lines of your thread with it,
+// marked via: 'terminal', each with the model and effort it ran with when the
+// file says so. One that repeats what Tessel gave the agent (a message it
+// typed there, already a line of the log) or Tessel's record of its answer is
+// left out.
+//
 // A line: { key, t, kind: 'message' | 'reply' | 'notice', from: who, to: who,
 //           toAll?: [who] (a team message: every recipient, to being the first),
 //           text, preview, status, readCount?, replyKind?, taskTitle?, outcome?,
-//           wsId, teamId }
+//           wsId, teamId, sender? (who sent it, as Tessel recorded it:
+//           senderIdentity.js), via?: 'terminal', run?: { model, modelId,
+//           effort } (a terminal line: the model it ran with) }
 //   who: { kind: 'you' | 'agent' | 'tessel', label, paneId: string | null,
 //          agentId: string | null (the agent program: claude, codex, ..., for its logo) }
 // A thread: { key, kind: 'team' | 'user', teamId, paneId, wsId, title,
@@ -28,6 +38,8 @@
 //   'you:<paneId>'   everything said between you and one agent
 
 import { english } from './i18nText'
+import { cleanSender } from './senderIdentity'
+import { modelLabel } from './modelLabel'
 
 export const PREVIEW_LENGTH = 160
 export const MAX_LINES_PER_THREAD = 2000
@@ -169,6 +181,181 @@ export function conversationLines(events, opts = {}) {
 // Who a line goes to: every recipient of a team message, else its one.
 export const recipients = (line) => (line.toAll && line.toAll.length ? line.toAll : [line.to])
 
+// --- What was said in an agent's terminal ---------------------------------------------
+// entries: [{ paneId, group?, wsId, title, agentId, agentName?, sessionId?,
+//   host?: 'local' | 'ssh', hostLabel?, items: [{ role: 'user' | 'agent', t,
+//   text, model?, effort? }] }] (group: one conversation of the pane, its
+//   pane's id by default: a pane's earlier conversation has its own)
+// opts.effortLabel(effort) -> its name in the interface ("High"); opts.t.
+// A prompt goes from you to the agent, an answer from the agent to you; an
+// answer carries the agent as its sender, with the model it ran with (shown
+// like a team message's sender); a prompt, that model as run.
+export function terminalLines(entries, opts = {}) {
+  const t = opts.t || english
+  const effortName = typeof opts.effortLabel === 'function' ? opts.effortLabel : (e) => e
+  const lines = []
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!entry || typeof entry.paneId !== 'string' || !entry.paneId || !Array.isArray(entry.items)) continue
+    const seen = new Map()
+    const group = typeof entry.group === 'string' && entry.group ? entry.group : entry.paneId
+    for (const it of entry.items) {
+      if (!it || !Number.isFinite(it.t) || typeof it.text !== 'string' || !it.text.trim()) continue
+      const agent = agentWho(entry.title, entry.paneId, t, entry.agentId || null)
+      const mine = it.role === 'user'
+      const modelId = typeof it.model === 'string' ? it.model : ''
+      const effort = modelId && typeof it.effort === 'string' ? it.effort : ''
+      const run = modelId ? { model: `${modelLabel(modelId)}${effort ? ` · ${effortName(effort)}` : ''}`, modelId, ...(effort ? { effort } : {}) } : null
+      // The same time twice: the keys stay apart.
+      const base = `tm:${group}:${it.t}:${mine ? 'u' : 'a'}` // i18n-ignore
+      const n = seen.get(base) || 0
+      seen.set(base, n + 1)
+      const sender =
+        !mine && run
+          ? cleanSender({
+              paneId: entry.paneId,
+              name: agent.label,
+              agentId: entry.agentId || '',
+              agentName: entry.agentName || '',
+              model: run.model,
+              modelId: run.modelId,
+              effort: run.effort || '',
+              sessionId: entry.sessionId || '',
+              ...(entry.host === 'ssh' || entry.host === 'local' ? { host: entry.host } : {}),
+              hostLabel: entry.hostLabel || ''
+            })
+          : null
+      lines.push({
+        key: n ? `${base}:${n}` : base,
+        t: it.t,
+        wsId: entry.wsId || null,
+        teamId: null,
+        kind: mine ? 'message' : 'reply',
+        ...(mine ? {} : { replyKind: 'chat' }),
+        from: mine ? you(t) : agent,
+        to: mine ? agent : you(t),
+        text: it.text,
+        preview: preview(it.text),
+        status: 'sent',
+        scope: null,
+        via: 'terminal',
+        group,
+        ...(entry.host === 'ssh' ? { remote: true } : {}),
+        ...(run ? { run } : {}),
+        ...(sender ? { sender } : {})
+      })
+    }
+  }
+  return lines
+}
+
+// A message Tessel typed into a terminal is a line of the log (logged when it
+// was queued: it may wait hours before it is typed) and a prompt in the
+// agent's file; an answer Tessel recorded (a chat's) is in both too. Same
+// pane, same words (spaces and image marks aside: the file says "[Image #1]",
+// the log does not; the first 2000 characters: the log keeps 8000), typed
+// from just before to ECHO_AFTER_MS after it was logged: one line, the log's.
+// The closest pairs go first (a "continue" you typed at 9:00 is not the one
+// Tessel sent at 13:00), each logged message pairs once. When that message
+// was not yours (a lead's brief, a teammate's, a Tessel notice), the agent's
+// answer to it in its terminal is theirs, not yours: left out too.
+// An agent on an SSH host writes its host's clock, which may be off by a few
+// minutes: its prompt may come up to SKEW_MAX_MS before the message it
+// repeats. When at least SKEW_MATCHES of its prompts repeat Tessel's own
+// deliveries (never your messages: you may type the same words) and agree
+// within SKEW_SPREAD_MS on how far behind the host is, its lines move by that
+// (the lower middle of those gaps, SKEW_MAX_MS at most, never past now),
+// keeping their order among themselves.
+export const ECHO_BEFORE_MS = 2 * 60 * 1000
+export const ECHO_AFTER_MS = 12 * 3600 * 1000
+export const SKEW_MAX_MS = 30 * 60 * 1000
+export const SKEW_SPREAD_MS = 2 * 60 * 1000
+export const SKEW_MATCHES = 3
+const echoKey = (s) =>
+  String(s || '')
+    .replace(/\[Image #\d+\]|\[image\]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 2000)
+// opts.now: no line moves past it (Date.now() by default).
+export function withoutEchoes(terminal, logged, opts = {}) {
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now()
+  const pool = new Map() // "<u|a>|<paneId>|<words>" -> [{ at, yours, tessel, used }]
+  const add = (key, entry) => {
+    const list = pool.get(key)
+    if (list) list.push(entry)
+    else pool.set(key, [entry])
+  }
+  for (const l of logged || []) {
+    if (l.via === 'terminal') continue
+    const words = echoKey(l.text)
+    if (!words) continue
+    if (l.kind === 'reply') {
+      if (l.from.paneId) add(`a|${l.from.paneId}|${words}`, { at: l.t, yours: true, tessel: false, used: false }) // i18n-ignore
+      continue
+    }
+    if (l.status === 'skipped' || l.status === 'failed') continue
+    const yours = l.from.kind === 'you'
+    for (const w of recipients(l)) if (w.paneId) add(`u|${w.paneId}|${words}`, { at: l.t, yours, tessel: !yours, used: false }) // i18n-ignore
+  }
+  const listOf = (l) => {
+    const words = echoKey(l.text)
+    return words ? pool.get(`${l.kind === 'reply' ? 'a' : 'u'}|${l.kind === 'reply' ? l.from.paneId : l.to.paneId}|${words}`) : null // i18n-ignore
+  }
+  // Each conversation's lines, in their order.
+  const groups = new Map()
+  for (const l of terminal || []) {
+    const g = l.group || (l.kind === 'reply' ? l.from.paneId : l.to.paneId)
+    if (!groups.has(g)) groups.set(g, [])
+    groups.get(g).push(l)
+  }
+  const out = []
+  for (const lines of groups.values()) {
+    // gap: the line's time less the log's (a host's may be behind).
+    const pairs = []
+    lines.forEach((l, i) => {
+      for (const m of listOf(l) || []) {
+        const gap = l.t - m.at
+        const earliest = l.remote ? -(SKEW_MAX_MS + ECHO_BEFORE_MS) : -ECHO_BEFORE_MS
+        if (gap >= earliest && gap <= ECHO_AFTER_MS) pairs.push({ i, m, gap })
+      }
+    })
+    pairs.sort((a, b) => Math.abs(a.gap) - Math.abs(b.gap))
+    const matched = new Map() // line index -> { m, gap }
+    for (const pair of pairs) {
+      if (matched.has(pair.i) || pair.m.used) continue
+      pair.m.used = true
+      matched.set(pair.i, pair)
+    }
+    let shift = 0
+    if (lines[0].remote) {
+      const behind = [...matched.values()]
+        .filter((x) => x.m.tessel && x.gap < -ECHO_BEFORE_MS)
+        .map((x) => -x.gap)
+        .sort((a, b) => a - b)
+      for (let k = 0; k + SKEW_MATCHES <= behind.length; k++) {
+        let last = k
+        while (last + 1 < behind.length && behind[last + 1] - behind[k] <= SKEW_SPREAD_MS) last++
+        if (last - k + 1 < SKEW_MATCHES) continue
+        shift = Math.min(SKEW_MAX_MS, behind[k + Math.floor((last - k) / 2)])
+        break
+      }
+      if (shift) {
+        const latest = Math.max(...lines.map((l) => l.t))
+        shift = Math.max(0, Math.min(shift, now - latest))
+      }
+    }
+    // Its latest prompt was someone else's message: its answers go.
+    let notYours = false
+    lines.forEach((raw, i) => {
+      const hit = matched.get(i)
+      if (raw.kind !== 'reply') notYours = !!hit && !hit.m.yours
+      if (hit || (raw.kind === 'reply' && notYours)) return
+      out.push(shift ? { ...raw, t: raw.t + shift } : raw)
+    })
+  }
+  return out
+}
+
 // Which thread a line belongs to: the team's when it goes between agents in
 // a team (or is a team notice), else yours with the agent concerned.
 export function threadKeyOf(line) {
@@ -187,12 +374,19 @@ export function threadKeyOf(line) {
 //   opts.wsId      only what happened in this workspace (null: everywhere)
 //   opts.from      only lines from this time on
 //   opts.notices   keep Tessel's notices (false: left out)
+//   opts.terminal  what was said in the agents' terminals (terminalLines'
+//                  entries), merged in time with the log's lines
+//   opts.effortLabel: see terminalLines; opts.now: see withoutEchoes
 export function buildThreads(events, opts = {}) {
   const t = opts.t || english
   const panes = opts.panes || {}
   const teams = new Map((opts.teams || []).map((x) => [x.id, x]))
   const threads = new Map()
-  for (const line of conversationLines(events, { t })) {
+  const logged = conversationLines(events, { t })
+  const said = opts.terminal && opts.terminal.length ? withoutEchoes(terminalLines(opts.terminal, opts), logged, { now: opts.now }) : []
+  // Oldest first; the log's line first at the same time.
+  const all = said.length ? [...logged, ...said].sort((a, b) => a.t - b.t) : logged
+  for (const line of all) {
     if (opts.wsId && line.wsId && line.wsId !== opts.wsId) continue
     if (Number.isFinite(opts.from) && line.t < opts.from) continue
     if (line.kind === 'notice' && !opts.notices) continue
@@ -237,7 +431,8 @@ export function buildThreads(events, opts = {}) {
     } else {
       const agent = thread.lines.map((l) => (l.from.kind === 'agent' ? l.from : l.to)).find((w) => w.kind === 'agent')
       thread.agent = agent ? agent.label : t('conversations.anAgent', 'An agent')
-      thread.agentId = (agent && agent.paneId && panes[agent.paneId] && panes[agent.paneId].agentId) || null
+      // Its pane open now, else the program the lines name (a pane closed).
+      thread.agentId = (agent && agent.paneId && panes[agent.paneId] && panes[agent.paneId].agentId) || (agent && agent.agentId) || null
       thread.title = t('conversations.withAgent', 'You and {{agent}}', { agent: thread.agent })
     }
     out.push(thread)
@@ -277,6 +472,15 @@ export function participantsOf(threads) {
 // How many lines, across the threads.
 export const lineCount = (threads) => threads.reduce((n, th) => n + th.lines.length, 0)
 
+// The model a line was said with ("Opus 5.5 · High"): its sender's as Tessel
+// recorded it (a team message, an answer in a terminal), else the one a
+// terminal line ran with; '' when unknown.
+export function modelOf(line) {
+  const s = line && line.sender && typeof line.sender === 'object' ? line.sender : null
+  const r = line && line.run && typeof line.run === 'object' ? line.run : null
+  return (s && (s.model || s.modelId)) || (r && (r.model || r.modelId)) || ''
+}
+
 // A line's status as text ('' when it reached its reader normally).
 export function statusText(line, t = english) {
   switch (line.status) {
@@ -315,7 +519,15 @@ export function threadText(thread, { t = english, locale = [] } = {}) {
   }
   const head = thread.kind === 'team' ? t('conversations.export.team', 'Team "{{name}}"', { name: thread.title }) : thread.title
   const body = thread.lines.map((l) => {
-    const note = [replyText(l, t), statusText(l, t), l.taskTitle ? t('conversations.onCard', 'on "{{title}}"', { title: l.taskTitle }) : ''].filter(Boolean).join(', ')
+    const note = [
+      replyText(l, t),
+      statusText(l, t),
+      l.taskTitle ? t('conversations.onCard', 'on "{{title}}"', { title: l.taskTitle }) : '',
+      l.via === 'terminal' ? t('conversations.terminal.note', 'in its terminal') : '',
+      modelOf(l)
+    ]
+      .filter(Boolean)
+      .join(', ')
     return `[${when(l.t)}] ${l.from.label} → ${recipients(l).map((w) => w.label).join(', ')}${note ? ` (${note})` : ''}:\n${l.text}`
   })
   return [head, '', ...body].join('\n')
