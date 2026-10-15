@@ -149,6 +149,21 @@ describe('Antigravity', () => {
     expect(findAgentSession({ agent: 'antigravity', cwd: 'C:\\Proj', since: T }, home)).toBe(U1)
     expect(resumeTarget({ agent: 'antigravity', sessionId: U1 }, home)).toEqual({})
   })
+  it('over the cap, the most recent conversations are kept, whatever the folder order', () => {
+    // 405 conversations, the newest one named so it comes last in the folder.
+    const ids = Array.from({ length: 405 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`)
+    ids.forEach((id, i) => {
+      const f = `.gemini/antigravity-cli/brain/${id}/.system_generated/logs/transcript.jsonl`
+      put(f, lines({ source: 'USER', type: 'REQUEST', content: `ask ${i}`, created_at: iso(T) }))
+      const t = new Date(T + i * 1000)
+      fs.utimesSync(join(home, f), t, t)
+    })
+    const rows = antigravitySessions(home)
+    expect(rows.length).toBeLessThan(405)
+    expect(rows[0].id).toBe(ids[404])
+    expect(rows.map((r) => r.id)).toContain(ids[400])
+    expect(rows.map((r) => r.id)).not.toContain(ids[0])
+  })
   it('leaves the folder unknown when two workspaces match', () => {
     put(`.gemini/antigravity-cli/brain/${U2}/.system_generated/logs/transcript.jsonl`, lines({ source: 'USER', type: 'REQUEST', content: 'same', created_at: iso(T) }))
     put(`.gemini/antigravity-cli/history.jsonl`, lines({ display: 'same', workspace: 'C:\\A', timestamp: T }, { display: 'same', workspace: 'C:\\B', timestamp: T + 100 }))

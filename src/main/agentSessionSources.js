@@ -401,13 +401,20 @@ export function antigravitySessions(home = os.homedir(), { since = 0 } = {}) {
   let history = null // read once, only when needed
   let summaries = null
   const out = []
+  // Every conversation first (a stat each), newest first: the folder's own
+  // order is arbitrary, and the cap below must keep the most recent ones.
+  const found = []
   for (const d of entries(brain)) {
     if (!d.isDirectory() || d.isSymbolicLink() || !plainId(d.name)) continue
     const file = join(brain, d.name, '.system_generated', 'logs', 'transcript.jsonl')
     const s = stat(file)
     if (!s || !s.isFile() || s.mtimeMs < since - SLACK) continue
+    found.push({ id: d.name, file, s })
+  }
+  found.sort((a, b) => b.s.mtimeMs - a.s.mtimeMs)
+  for (const { id, file, s } of found) {
     if (summaries === null) summaries = antigravitySummaries(root)
-    const known = summaries.get(d.name) || null
+    const known = summaries.get(id) || null
     // A sub-agent's conversation: part of its parent's, never resumed alone.
     if (known && known.parent) continue
     const head = parseAntigravityHead(headIn(root, file))
@@ -418,11 +425,11 @@ export function antigravitySessions(home = os.homedir(), { since = 0 } = {}) {
         const h = join(root, 'history.jsonl')
         history = insideDir(root, h) ? readTail(h, 2 * 1024 * 1024) : ''
       }
-      cwd = antigravityWorkspace(history, head.prompt, head.promptAt, d.name)
+      cwd = antigravityWorkspace(history, head.prompt, head.promptAt, id)
     }
     out.push({
       agent: 'antigravity',
-      id: d.name,
+      id: id,
       cwd,
       started: head.started || s.birthtimeMs || s.mtimeMs,
       updated: s.mtimeMs,
