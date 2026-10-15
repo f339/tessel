@@ -31,4 +31,15 @@ jobs:
       # its Vite peer at ^7 while we run Vite 8.
       - run: npm ci
 
+      # The runner's TEMP is an 8.3 short path (C:\Users\RUNNER~1\...): specs
+      # that compare a temp folder with its real path (accounts, worktrees,
+      # review, agent state) fail there and nowhere else. A long one instead.
+      - name: Long temp path
+        shell: pwsh
+        run: |
+          $t = Join-Path $env:RUNNER_TEMP 'tmp'
+          New-Item -ItemType Directory -Force $t | Out-Null
+          "TEMP=$t" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TMP=$t" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - run: npx vitest run
