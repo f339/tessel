@@ -647,7 +647,9 @@ describe.runIf(onWindows)('the helper (tessel-askpass.exe)', () => {
         '  try { using (var c = new NamedPipeClientStream(a[1], a[0], PipeAccessRights.ReadPermissions | PipeAccessRights.ReadData, PipeOptions.None, TokenImpersonationLevel.None, System.IO.HandleInheritability.None)) {',
         '    c.Connect(3000);',
         '    Console.WriteLine(c.GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.Access | AccessControlSections.Owner));',
-        '    Console.WriteLine(WindowsIdentity.GetCurrent().User.Value); } return 0; }',
+        '    var me = WindowsIdentity.GetCurrent().User; Console.WriteLine(me.Value);',
+        // How SDDL writes this user: the built-in Administrator (RID 500) is "LA".
+        '    Console.WriteLine(new RawSecurityDescriptor(ControlFlags.None, me, null, null, null).GetSddlForm(AccessControlSections.Owner).Substring(2)); } return 0; }',
         '  catch (Exception e) { Console.WriteLine("REFUSED " + e.GetType().Name); return 1; } } }'
       ].join('\n')
     )
@@ -665,7 +667,10 @@ describe.runIf(onWindows)('the helper (tessel-askpass.exe)', () => {
     expect(env).not.toBe(null)
     const local = await runProbe(env.TESSEL_ASKPASS_PIPE, '.')
     expect(local.code).toBe(0)
-    const [sddl, me] = local.out.trim().split(/\r?\n/)
+    const [sddl, sid, me] = local.out.trim().split(/\r?\n/)
+    // This user's SID, or LA when it is this machine's built-in Administrator
+    // (GitHub's Windows runner runs as it).
+    expect(me).toBe(me === 'LA' && /^S-1-5-21-\d+-\d+-\d+-500$/.test(sid) ? 'LA' : sid)
     // Protected (no inherited entries): network logons denied, then this user only.
     expect(sddl).toBe(`O:${me}D:P(D;;0x1f019f;;;NU)(A;;0x1f019f;;;${me})`)
     expect(sddl).not.toMatch(/;;;(WD|AN|BA|SY)\)/)
