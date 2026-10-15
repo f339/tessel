@@ -682,8 +682,14 @@ function modelOf(sender) {
     max-height 120ms,
     opacity 120ms;
 }
-.cv-caption.shown,
-.cv-line:hover .cv-caption {
+/* With a note (a reply's nature, its card: a long title wraps on several
+   lines), all of it; only the time, on hover, one line. */
+.cv-caption.shown {
+  max-height: none;
+  margin-top: 2px;
+  opacity: 1;
+}
+.cv-line:hover .cv-caption:not(.shown) {
   max-height: 40px;
   margin-top: 2px;
   opacity: 1;
