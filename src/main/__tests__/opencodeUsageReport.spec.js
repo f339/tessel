@@ -125,6 +125,10 @@ describe('OpenCode usage report (local databases)', () => {
     )
     const read = report(dir)
     expect((await read({ roots: ['/work/tessel'] })).totals.input).toBe(10)
+    // Its sub-folder counts as the project when scoped to Tessel's projects.
+    expect((await read({ roots: ['/work/tessel'] })).byProject.map((p) => [p.cwd, p.label])).toEqual([
+      ['/work/tessel', 'tessel']
+    ])
     expect((await read({ from: '2026-09-25', to: '2026-09-28' })).totals.turns).toBe(0)
     expect((await read({ from: null, to: null })).allTotals.input).toBe(30)
     await expect(read({ from: 'yesterday' })).rejects.toThrow()

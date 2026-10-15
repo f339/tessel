@@ -36,7 +36,7 @@ const allLocal = computed(() =>
   t('stats.provider.scopeAll', 'All local {{name}} usage', { name: props.label })
 )
 const scopeLabel = computed(() =>
-  props.scope === 'tessel' ? t('stats.provider.scopeTessel', 'Tessel worktrees only') : allLocal.value
+  props.scope === 'tessel' ? t('stats.provider.scopeTessel', 'Tessel projects only') : allLocal.value
 )
 const na = () => t('stats.na', 'n/a')
 const summary = computed(() => props.model?.summary || {})
@@ -236,7 +236,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', outside))
                     :checked="scope === 'tessel'"
                     data-test="stats-scope-tessel"
                     @change="chooseFilter('scope', 'tessel')"
-                  />{{ t('stats.provider.scopeTessel', 'Tessel worktrees only') }}</label
+                  />{{ t('stats.provider.scopeTessel', 'Tessel projects only') }}</label
                 ><label
                   ><input
                     type="radio"

@@ -204,7 +204,7 @@
       "unsupportedProvider": "Fournisseur d'utilisation locale non pris en charge.",
       "unknownModel": "Modèle inconnu",
       "legacyClaude": "Cet ancien rapport Claude couvre sa période récente ; sa liste de conversations peut être incomplète.",
-      "scopeTessel": "Worktrees Tessel uniquement",
+      "scopeTessel": "Projets Tessel uniquement",
       "scopeClaude": "Historique Claude partagé sur cet ordinateur",
       "scopeCodex": "Historique local du compte Codex sélectionné",
       "codexTurns": "Événements d'utilisation du modèle observés ; pas les messages de l'utilisateur.",
@@ -309,7 +309,7 @@
     },
     "provider": {
       "scopeAll": "Toute l'utilisation locale de {{name}}",
-      "scopeTessel": "Worktrees Tessel uniquement",
+      "scopeTessel": "Projets Tessel uniquement",
       "inputTokens": "Tokens d'entrée",
       "outputTokens": "Tokens de sortie",
       "cacheReuse": "Taux de réutilisation du cache",
@@ -376,6 +376,7 @@
     },
     "format": {
       "na": "n.d.",
+      "billions": "{{n}} G",
       "millions": "{{n}} M",
       "thousands": "{{n}} k",
       "unknown": "Inconnu",

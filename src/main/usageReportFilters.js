@@ -25,14 +25,29 @@ function absolutePath(value) {
   )
 }
 
+const insideRoot = (key, root) => {
+  const prefix = usageProjectKey(root)
+  return key === prefix || key.startsWith(prefix === '/' ? '/' : `${prefix}/`)
+}
+
 export function matchesUsageRoots(cwd, roots) {
   if (roots === undefined) return true
   if (!absolutePath(cwd)) return false
   const key = usageProjectKey(cwd)
-  return roots.some((root) => {
-    const prefix = usageProjectKey(root)
-    return key === prefix || key.startsWith(prefix === '/' ? '/' : `${prefix}/`)
-  })
+  return roots.some((root) => insideRoot(key, root))
+}
+
+// The deepest of the roots holding cwd (a project's folder or one of its
+// worktrees), or null: a scoped report groups a project's sub-folders and
+// nested worktrees under it, as Orca groups by worktree.
+export function usageRootOf(cwd, roots) {
+  if (!Array.isArray(roots) || !absolutePath(cwd)) return null
+  const key = usageProjectKey(cwd)
+  let best = null
+  for (const root of roots)
+    if (insideRoot(key, root) && (!best || usageProjectKey(root).length > usageProjectKey(best).length))
+      best = root
+  return best
 }
 
 export function usageDayFormatter(timezone) {

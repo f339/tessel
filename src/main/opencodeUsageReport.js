@@ -13,6 +13,7 @@ import {
   usageQueryRange,
   usageProjectKey,
   matchesUsageRoots,
+  usageRootOf,
   usageScope
 } from './usageReportFilters'
 
@@ -325,7 +326,8 @@ export function createOpencodeUsageReport({
       if (!byModel.has(model)) byModel.set(model, { model, ...empty(), sessions: new Set() })
       add(byModel.get(model), e)
       byModel.get(model).sessions.add(e.sessionId)
-      const project = e.cwd || '(unknown folder)'
+      // Scoped to Tessel's projects: sub-folders and worktrees inside a project count as it.
+      const project = (range.roots && usageRootOf(e.cwd, range.roots)) || e.cwd || '(unknown folder)'
       const key = usageProjectKey(project)
       if (!byProject.has(key))
         byProject.set(key, {

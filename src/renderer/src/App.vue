@@ -111,6 +111,7 @@ import { pasteAndConfirm, turnStarting } from './deliver'
 import { createTeamDelivery } from './teamDelivery'
 import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask, addTask, deletedTaskIds, addDeletedTasks, takeDeletedToPurge, cardOnBoard, beginBoardLoad, endBoardLoad } from './taskBoardStore'
+import { usageScopeRoots } from './usageStats'
 import { taskHistory, setTaskHistory, backfillHistory, setHistoryDescriber } from './taskHistory'
 import { restoredSideTab } from './sideTabs'
 import { runSettingsTool } from './settingsTools'
@@ -296,11 +297,13 @@ function openSettingsAt(section) {
   settingsSection.value = section
   settingsOpen.value = true
 }
+// Settings > Statistics & usage, "Tessel projects" scope: every local
+// project's folder and its git worktrees, plus the task and pane copies.
 const usageWorktreePaths = computed(() => {
-  const paths = new Set(boardTasks.map(task => task.worktree?.path).filter(Boolean))
+  const extra = boardTasks.map(task => task.worktree?.path).filter(Boolean)
   for (const ws of workspaces.value)
-    forEachLeaf(ws.tree, leaf => { if (leaf.worktree?.path) paths.add(leaf.worktree.path) })
-  return [...paths]
+    forEachLeaf(ws.tree, leaf => { if (leaf.worktree?.path) extra.push(leaf.worktree.path) })
+  return usageScopeRoots({ projects: workspaces.value, worktrees: wsWorktrees, extra })
 })
 // Markdown, diagrams, tables, JSON and images open as editor tabs with
 // Orca's view toggle (Preview | Source | Changes, Table, the picture); PDFs

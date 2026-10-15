@@ -149,7 +149,7 @@ describe('Orca Stats & usage port', () => {
       'Est. API-equivalent cost'
     ])
     expect(pane.text()).toContain('$0.0042')
-    expect(pane.text()).toContain('Tessel worktrees only')
+    expect(pane.text()).toContain('Tessel projects only')
     expect(pane.text()).toContain('Last 30 days')
     expect(pane.findAll('tbody tr')).toHaveLength(10)
     expect(pane.findAll('th').map((node) => node.text())).toEqual([
@@ -162,6 +162,18 @@ describe('Orca Stats & usage port', () => {
       'Cache'
     ])
     expect(wrapper.find('[data-test="stats-overview"]').exists()).toBe(false)
+  })
+
+  it('shows billions of tokens as billions, not thousands of millions', async () => {
+    const big = { input: 116290, output: 44060107, cacheRead: 18609426875, cacheWrite: 212792150 }
+    api.claudeUsageReport.mockImplementation(async (query) =>
+      report('claude', query, { totals: { ...report('claude').totals, ...big } })
+    )
+    await open({ initialProvider: 'claude' })
+    const values = wrapper
+      .findAll('[data-test="stats-pane-claude"] [data-test="stats-provider-cards"] .su-card-value')
+      .map((node) => node.text())
+    expect(values.slice(0, 4)).toEqual(['116.3k', '44.1M', '18.6B', '212.8M'])
   })
 
   it('does not invent Codex cost or add cached/reasoning subsets twice in the daily chart', async () => {

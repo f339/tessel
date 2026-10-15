@@ -6,7 +6,8 @@ import {
   validUsageDay,
   normalizeUsageReport,
   buildUsageOverview,
-  filterUsageSessions
+  filterUsageSessions,
+  usageScopeRoots
 } from '../usageStats'
 
 const NOW = Date.parse('2026-09-28T02:30:00Z')
@@ -204,7 +205,7 @@ describe('usage report normalization', () => {
     expect(codex).toMatchObject({
       accountId: 'selected-account',
       accountScoped: true,
-      scopeLabel: 'Tessel worktrees only'
+      scopeLabel: 'Tessel projects only'
     })
     const error = normalizeUsageReport('codex', {
       ok: false,
@@ -442,5 +443,34 @@ describe('OpenCode usage report', () => {
     expect(report.label).toBe('OpenCode')
     expect(report.sessions[0]).toMatchObject({ id: 'ses_1', provider: 'opencode' })
     expect(report.byDay[0].totalTokens).toBe(425)
+  })
+})
+
+describe('Tessel projects scope', () => {
+  it('holds every local project folder with its git worktrees and the task/pane copies, never SSH paths', () => {
+    const roots = usageScopeRoots({
+      projects: [
+        { cwd: 'C:\\Tessel' },
+        { cwd: 'C:\\FiveM\\Blender' },
+        { cwd: null, remote: { hostId: 'h1', path: '/srv/app' } },
+        { cwd: '/srv/app', remote: { hostId: 'h1', path: '/srv/app' } },
+        null
+      ],
+      worktrees: {
+        'C:\\Tessel': [{ path: 'C:/Tessel', isMain: true }, { path: 'C:/Tessel-claude/t2-stats' }, { path: 'ssh://host/x' }],
+        '/srv/app': [{ path: '/srv/app-wt' }]
+      },
+      extra: ['C:\\Tessel-claude\\audit-rest', 'relative\\path', 'C:\\Tessel', 'C:/bad\npath']
+    })
+    expect(roots).toEqual([
+      'C:/Tessel',
+      'C:/Tessel-claude/t2-stats',
+      'C:\\FiveM\\Blender',
+      'C:\\Tessel',
+      'C:\\Tessel-claude\\audit-rest'
+    ])
+    // The same folders always make the same query.
+    expect(usageScopeRoots({ projects: [{ cwd: 'C:\\B' }, { cwd: 'C:\\A' }] })).toEqual(['C:\\A', 'C:\\B'])
+    expect(usageScopeRoots()).toEqual([])
   })
 })

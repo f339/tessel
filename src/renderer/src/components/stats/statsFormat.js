@@ -8,6 +8,7 @@ const number = (value, digits) =>
 
 export function tokens(value) {
   if (!Number.isFinite(value)) return na()
+  if (value >= 1e9) return t('stats.format.billions', '{{n}}B', { n: number(value / 1e9, 1) })
   if (value >= 1e6) return t('stats.format.millions', '{{n}}M', { n: number(value / 1e6, 1) })
   if (value >= 1e3) return t('stats.format.thousands', '{{n}}k', { n: number(value / 1e3, 1) })
   return value.toLocaleString(intlLocale())

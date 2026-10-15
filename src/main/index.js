@@ -2110,7 +2110,10 @@ jobCost.register(ipcMain)
 app.on('will-quit', () => void jobCost.close())
 ipcMain.handle('usage:get', safe(() => accountUsage.usage()))
 // Claude Code's usage report from its own conversation files (tokens, estimated cost).
-const claudeUsageReport = createClaudeUsageReport()
+// Its parsed turns are kept between runs (transcripts can weigh gigabytes).
+const claudeUsageReport = createClaudeUsageReport({
+  cacheFile: join(app.getPath('userData'), 'claude-usage-cache-v1.json')
+})
 ipcMain.handle('usage:claudeReport', safe((query) => claudeUsageReport(query)))
 // Codex's usage report from its own session files (tokens, requests).
 ipcMain.handle('usage:codexReport', safe((query) => accountUsage.report(query)))

@@ -40,6 +40,35 @@ export function usageLocalDay(value = Date.now(), timezone = localZone()) {
   return `${parts.year}-${parts.month}-${parts.day}`
 }
 
+// A folder the local reports accept as a root: a drive, UNC or POSIX path.
+function localRoot(value) {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 4096 &&
+    !/[\x00-\x1f]/.test(value) &&
+    (/^[a-z]:[\\/]/i.test(value) || /^(?:\\\\|\/\/)[^\\/]+[\\/][^\\/]+/.test(value) || value.startsWith('/'))
+  )
+}
+
+// The folders of the "Tessel projects" scope, like Orca's worktree scope:
+// every local project's folder and its git worktrees (`worktrees`: project
+// folder -> [{ path }]), plus the task and pane copies in `extra`. Projects
+// on an SSH host are left out: their history is not on this computer.
+// Sorted, so the same folders always make the same query.
+export function usageScopeRoots({ projects = [], worktrees = {}, extra = [] } = {}) {
+  const roots = new Set()
+  const add = (path) => localRoot(path) && roots.add(path)
+  for (const project of Array.isArray(projects) ? projects : []) {
+    if (!object(project) || project.remote || !localRoot(project.cwd)) continue
+    add(project.cwd)
+    const copies = object(worktrees) ? worktrees[project.cwd] : null
+    for (const copy of Array.isArray(copies) ? copies : []) add(copy?.path)
+  }
+  for (const path of Array.isArray(extra) ? extra : []) add(path)
+  return [...roots].sort().slice(0, 4096)
+}
+
 // Calendar arithmetic on date-only keys avoids 23/25-hour DST boundaries.
 function shiftDay(day, amount) {
   const date = new Date(`${day}T00:00:00Z`)
@@ -266,7 +295,7 @@ export function normalizeUsageReport(provider, raw, options = {}) {
     scope,
     scopeLabel:
       scope === 'tessel-worktrees'
-        ? t('usage.report.scopeTessel', 'Tessel worktrees only')
+        ? t('usage.report.scopeTessel', 'Tessel projects only')
         : provider === 'claude'
           ? t('usage.report.scopeClaude', 'Shared Claude history on this computer')
           : provider === 'opencode'
