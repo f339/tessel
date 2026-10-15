@@ -41,7 +41,7 @@ import { createSshAskpass, registerSshAskpass, askpassExePath } from './sshAskpa
 import { createAskpassPipeHost } from './askpassPipeHost'
 import { createRemoteFs, registerRemoteFs, remoteRootsOfLayout, SESSION_PREFIX as REMOTE_FS_PREFIX } from './remoteFs'
 import { createGitTrust, setGitTrust } from './gitSafety'
-import { createWorktreeList, localRootsOfLayout } from './worktreeList'
+import { createWorktreeList, localRootsOfLayout, localRepoRootsOfLayout } from './worktreeList'
 import { createWorktreeCleanup } from './worktreeCleanup'
 import { isRemotePath } from '../shared/remotePath'
 import { STATUS_PROVIDERS } from '../shared/agentStateModel'
@@ -902,8 +902,8 @@ ipcMain.on('layout:save', (_evt, data) => {
   // Its remote projects are the only remote folders Files, Changes and the
   // editor may reach (remoteFs.js).
   if (isLayout(data)) remoteFs.setRoots(remoteRootsOfLayout(data))
-  // Its local project folders are the only ones whose worktrees are listed.
-  if (isLayout(data)) worktreeList.setRoots(localRootsOfLayout(data))
+  // Its local project folders (and a group's repositories) are the only ones whose worktrees are listed.
+  if (isLayout(data)) worktreeList.setRoots(localRepoRootsOfLayout(data))
   // ...and the projects whose folder an agent may be pre-trusted in.
   if (isLayout(data)) agentFolderTrust.setRoots(localRootsOfLayout(data))
   try {
@@ -1937,7 +1937,7 @@ registerRemoteFs({ ipcMain, service: remoteFs })
 try {
   const saved = readJsonSafe(layoutFile(), isLayout)
   remoteFs.setRoots(remoteRootsOfLayout(saved && saved.data))
-  worktreeList.setRoots(localRootsOfLayout(saved && saved.data))
+  worktreeList.setRoots(localRepoRootsOfLayout(saved && saved.data))
   agentFolderTrust.setRoots(localRootsOfLayout(saved && saved.data))
 } catch {
   /* none yet: the first save brings them */
@@ -2113,6 +2113,14 @@ ipcMain.handle('usage:get', safe(() => accountUsage.usage()))
 // Its parsed turns are kept between runs (transcripts can weigh gigabytes).
 const claudeUsageReport = createClaudeUsageReport({
   cacheFile: join(app.getPath('userData'), 'claude-usage-cache-v1.json')
+})
+// What it has not saved yet, written at once (bounded: a few megabytes).
+app.on('will-quit', () => {
+  try {
+    claudeUsageReport.flushSync()
+  } catch (err) {
+    log.error('usage', err)
+  }
 })
 ipcMain.handle('usage:claudeReport', safe((query) => claudeUsageReport(query)))
 // Codex's usage report from its own session files (tokens, requests).

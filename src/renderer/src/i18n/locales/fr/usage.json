@@ -112,7 +112,7 @@
       "minutes": "{{count}} min"
     },
     "units": {
-      "billions": "{{n}} G",
+      "billions": "{{n}} Md",
       "millions": "{{n}} M",
       "thousands": "{{n}} k"
     },
@@ -376,7 +376,7 @@
     },
     "format": {
       "na": "n.d.",
-      "billions": "{{n}} G",
+      "billions": "{{n}} Md",
       "millions": "{{n}} M",
       "thousands": "{{n}} k",
       "unknown": "Inconnu",

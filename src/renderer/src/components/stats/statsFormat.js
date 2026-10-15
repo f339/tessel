@@ -6,12 +6,22 @@ const na = () => t('stats.format.na', 'n/a')
 const number = (value, digits) =>
   new Intl.NumberFormat(intlLocale(), { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value)
 
+// The unit is chosen after rounding to one decimal: 999,990,000 is 1.0B and
+// 999,960 is 1.0M, never "1,000.0M" or "1,000.0k".
+const UNITS = [1e3, 1e6, 1e9]
+export function tokenUnit(value) {
+  let i = UNITS.findLastIndex((unit) => value >= unit)
+  if (i >= 0 && i < UNITS.length - 1 && Number((value / UNITS[i]).toFixed(1)) >= 1000) i++
+  return i
+}
 export function tokens(value) {
   if (!Number.isFinite(value)) return na()
-  if (value >= 1e9) return t('stats.format.billions', '{{n}}B', { n: number(value / 1e9, 1) })
-  if (value >= 1e6) return t('stats.format.millions', '{{n}}M', { n: number(value / 1e6, 1) })
-  if (value >= 1e3) return t('stats.format.thousands', '{{n}}k', { n: number(value / 1e3, 1) })
-  return value.toLocaleString(intlLocale())
+  const i = tokenUnit(value)
+  if (i < 0) return value.toLocaleString(intlLocale())
+  const n = number(value / UNITS[i], 1)
+  if (i === 2) return t('stats.format.billions', '{{n}}B', { n })
+  if (i === 1) return t('stats.format.millions', '{{n}}M', { n })
+  return t('stats.format.thousands', '{{n}}k', { n })
 }
 export const money = (value) =>
   Number.isFinite(value)

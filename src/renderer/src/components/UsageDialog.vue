@@ -5,6 +5,7 @@
 // table): a subscription is not billed per token.
 import { ref, computed, onMounted } from 'vue'
 import { t, intlLocale } from '../i18n'
+import { tokenUnit } from './stats/statsFormat'
 
 const emit = defineEmits(['close'])
 const tab = ref('claude')
@@ -71,10 +72,12 @@ const money = (v) =>
 const decimal = (v) =>
   v.toLocaleString(intlLocale(), { minimumFractionDigits: 1, maximumFractionDigits: 1 })
 const count = (v) => v.toLocaleString(intlLocale())
+// The unit after rounding, as in the statistics (999,990,000 is 1.0B).
 function tokens(v) {
-  if (v >= 1e9) return t('usage.units.billions', '{{n}}B', { n: decimal(v / 1e9) })
-  if (v >= 1e6) return t('usage.units.millions', '{{n}}M', { n: decimal(v / 1e6) })
-  if (v >= 1e3) return t('usage.units.thousands', '{{n}}k', { n: decimal(v / 1e3) })
+  const unit = tokenUnit(v)
+  if (unit === 2) return t('usage.units.billions', '{{n}}B', { n: decimal(v / 1e9) })
+  if (unit === 1) return t('usage.units.millions', '{{n}}M', { n: decimal(v / 1e6) })
+  if (unit === 0) return t('usage.units.thousands', '{{n}}k', { n: decimal(v / 1e3) })
   return String(v)
 }
 const when = (ms) =>

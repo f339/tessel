@@ -7,7 +7,13 @@ import {
   normalizeUsageReport,
   buildUsageOverview,
   filterUsageSessions,
-  usageScopeRoots
+  usageScopeEntries,
+  usageScopeRoots,
+  rememberUsageCopies,
+  loadUsageCopies,
+  saveUsageCopies,
+  USAGE_COPIES_KEY,
+  USAGE_COPIES_MAX
 } from '../usageStats'
 
 const NOW = Date.parse('2026-09-28T02:30:00Z')
@@ -447,30 +453,98 @@ describe('OpenCode usage report', () => {
 })
 
 describe('Tessel projects scope', () => {
-  it('holds every local project folder with its git worktrees and the task/pane copies, never SSH paths', () => {
-    const roots = usageScopeRoots({
-      projects: [
-        { cwd: 'C:\\Tessel' },
-        { cwd: 'C:\\FiveM\\Blender' },
-        { cwd: null, remote: { hostId: 'h1', path: '/srv/app' } },
-        { cwd: '/srv/app', remote: { hostId: 'h1', path: '/srv/app' } },
-        null
-      ],
-      worktrees: {
-        'C:\\Tessel': [{ path: 'C:/Tessel', isMain: true }, { path: 'C:/Tessel-claude/t2-stats' }, { path: 'ssh://host/x' }],
-        '/srv/app': [{ path: '/srv/app-wt' }]
-      },
-      extra: ['C:\\Tessel-claude\\audit-rest', 'relative\\path', 'C:\\Tessel', 'C:/bad\npath']
-    })
-    expect(roots).toEqual([
-      'C:/Tessel',
-      'C:/Tessel-claude/t2-stats',
-      'C:\\FiveM\\Blender',
+  const workspaces = [
+    { cwd: 'C:\\Tessel', tree: null },
+    { cwd: 'C:\\Group', group: { repos: [{ path: 'C:\\Group\\api' }, { path: 'C:\\Group\\web' }] } },
+    { cwd: null, remote: { hostId: 'h1', path: '/srv/app' } },
+    { cwd: '/srv/app', remote: { hostId: 'h1', path: '/srv/app' } },
+    null
+  ]
+  const worktrees = {
+    'C:\\Tessel': [
+      { path: 'C:\\Tessel', isMain: true },
+      { path: 'C:\\Tessel-claude\\t2-stats' },
+      { path: 'C:\\Tessel\\.claude\\worktrees\\agent-1' },
+      { path: 'ssh://host/x' }
+    ],
+    'C:\\Group\\api': [{ path: 'C:\\Group\\api', isMain: true }, { path: 'C:\\Group\\api.worktrees\\fix' }],
+    '/srv/app': [{ path: '/srv/app-wt' }]
+  }
+  const tasks = [
+    { worktree: { path: 'C:\\Group\\web.worktrees\\task-1', root: 'C:\\Group\\web' } },
+    { worktree: { path: 'C:\\Old.worktrees\\t', root: 'C:\\Old' } }, // a project closed since
+    { worktree: { path: 'relative' } },
+    {}
+  ]
+  const panes = [
+    { path: 'C:\\Tessel.worktrees\\pane-copy', workspace: workspaces[0] },
+    { path: 'C:\\Group\\api.worktrees\\other', workspace: workspaces[1] }
+  ]
+  const entries = usageScopeEntries({ workspaces, worktrees, tasks, panes })
+
+  it('holds each local project folder (each repository of a group), and under it its worktrees and copies, never SSH paths', () => {
+    expect(usageScopeRoots(entries)).toEqual([
+      'C:\\Group\\api',
+      { path: 'C:\\Group\\api.worktrees\\fix', project: 'C:\\Group\\api' },
+      { path: 'C:\\Group\\api.worktrees\\other', project: 'C:\\Group\\api' },
+      'C:\\Group\\web',
+      { path: 'C:\\Group\\web.worktrees\\task-1', project: 'C:\\Group\\web' },
+      { path: 'C:\\Old.worktrees\\t', project: 'C:\\Old' },
       'C:\\Tessel',
-      'C:\\Tessel-claude\\audit-rest'
+      { path: 'C:\\Tessel-claude\\t2-stats', project: 'C:\\Tessel' },
+      { path: 'C:\\Tessel.worktrees\\pane-copy', project: 'C:\\Tessel' },
+      { path: 'C:\\Tessel\\.claude\\worktrees\\agent-1', project: 'C:\\Tessel' }
     ])
+    // A repository's own checkout above the project folder counts as the project too.
+    expect(
+      usageScopeRoots(usageScopeEntries({ workspaces: [{ cwd: 'C:\\Repo\\app' }], worktrees: { 'C:\\Repo\\app': [{ path: 'C:\\Repo', isMain: true }] } }))
+    ).toEqual([{ path: 'C:\\Repo', project: 'C:\\Repo\\app', main: true }, 'C:\\Repo\\app'])
     // The same folders always make the same query.
-    expect(usageScopeRoots({ projects: [{ cwd: 'C:\\B' }, { cwd: 'C:\\A' }] })).toEqual(['C:\\A', 'C:\\B'])
+    expect(usageScopeRoots(usageScopeEntries({ workspaces: [{ cwd: 'C:\\B' }, { cwd: 'C:\\A' }] }))).toEqual(['C:\\A', 'C:\\B'])
     expect(usageScopeRoots()).toEqual([])
+  })
+
+  it('remembers the copies seen, so one removed since still counts under its open project', () => {
+    const now = 1800000000000
+    const saved = rememberUsageCopies({}, entries, now)
+    expect(Object.keys(saved)).toHaveLength(7) // copies only, not the project folders
+    expect(rememberUsageCopies(saved, entries, now + 1000)).toBe(saved) // nothing new to save
+    // The task copy was merged and removed: still counted under its project...
+    const later = usageScopeRoots(usageScopeEntries({ workspaces, worktrees, tasks: [], panes }), saved)
+    expect(later).toContainEqual({ path: 'C:\\Group\\web.worktrees\\task-1', project: 'C:\\Group\\web' })
+    // ...but a project closed since is not in the scope.
+    expect(later).not.toContainEqual({ path: 'C:\\Old.worktrees\\t', project: 'C:\\Old' })
+    // Bounded: the copies seen longest ago go first.
+    let kept = {}
+    for (let i = 0; i < USAGE_COPIES_MAX + 5; i++)
+      kept = rememberUsageCopies(kept, [{ path: `C:\\P.worktrees\\c${i}`, project: 'C:\\P' }], now + i)
+    expect(Object.keys(kept)).toHaveLength(USAGE_COPIES_MAX)
+    expect(Object.values(kept).some((copy) => copy.path === 'C:\\P.worktrees\\c0')).toBe(false)
+  })
+
+  it('keeps the copies seen in storage, ignoring anything malformed', () => {
+    const store = new Map()
+    const storage = { getItem: (key) => store.get(key) ?? null, setItem: (key, value) => store.set(key, value) }
+    const saved = rememberUsageCopies({}, entries, 1800000000000)
+    saveUsageCopies(saved, storage)
+    expect(loadUsageCopies(storage)).toEqual(saved)
+    store.set(
+      USAGE_COPIES_KEY,
+      JSON.stringify({
+        x: { path: 'relative', project: 'C:\\P', at: 1 },
+        'c:/a': { path: 'C:\\A', project: 'C:\\P', at: 'no' },
+        'c:/b': { path: 'C:\\Other', project: 'C:\\P', at: 1 }
+      })
+    )
+    expect(loadUsageCopies(storage)).toEqual({})
+    store.set(USAGE_COPIES_KEY, 'not json')
+    expect(loadUsageCopies(storage)).toEqual({})
+    expect(
+      loadUsageCopies({
+        getItem() {
+          throw new Error('blocked')
+        }
+      })
+    ).toEqual({})
   })
 })

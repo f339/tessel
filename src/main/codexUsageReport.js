@@ -12,8 +12,7 @@ import { createCodexUsageScanner } from './codexUsageScan'
 import {
   usageDayFormatter as dayFormatter,
   usageQueryRange as queryRange,
-  matchesUsageRoots,
-  usageRootOf,
+  usageRootMatcher,
   usageScope
 } from './usageReportFilters'
 import { t } from './i18n'
@@ -212,6 +211,7 @@ export function aggregateCodexUsage(
 ) {
   const dayOf = dayFormatter(timezone)
   const range = queryRange(query, dayOf(now))
+  const projectIn = usageRootMatcher(range)
   const totals = emptyCounts(),
     days = new Map(),
     models = new Map(),
@@ -243,7 +243,7 @@ export function aggregateCodexUsage(
         (range.to && day > range.to) ||
         (range.cwd && projectKey(event.cwd) !== projectKey(range.cwd)) ||
         (range.model && event.model !== range.model) ||
-        !matchesUsageRoots(event.cwd, range.roots)
+        (projectIn && !projectIn(event.cwd))
       )
         continue
       sum(totals, event)
@@ -254,7 +254,7 @@ export function aggregateCodexUsage(
       sum(models.get(event.model), event)
       models.get(event.model).sessions.add(state.id)
       // Scoped to Tessel's projects: sub-folders and worktrees inside a project count as it.
-      const project = (range.roots && usageRootOf(event.cwd, range.roots)) || event.cwd
+      const project = (projectIn && projectIn(event.cwd)) || event.cwd
       const key = projectKey(project)
       if (!projects.has(key))
         projects.set(key, {

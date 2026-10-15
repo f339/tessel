@@ -18,12 +18,17 @@ import {
   usageDayFormatter,
   usageQueryRange,
   usageProjectKey,
-  usageRootOf,
+  usageRootMatcher,
   usageScope
 } from './usageReportFilters'
 
 const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0)
 const COUNTS = ['input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h']
+
+// What a turn holds and how rows of one reply merge. Bump it whenever
+// parseClaudeLine, take() or merge() change: turns saved by an older parser
+// are then read again instead of being kept as they were.
+export const PARSER_VERSION = 1
 
 // One transcript line -> a turn, or null.
 export function parseClaudeLine(line) {
@@ -203,6 +208,9 @@ async function refreshFile(file, st, c) {
 
 const CACHE_VERSION = 1
 const CACHE_LIMIT = 512 * 1024 * 1024
+const QUIT_LIMIT = 32 * 1024 * 1024 // written while quitting only up to this size
+const TEMPORARY = /^\.claude-usage-[0-9a-f-]{36}\.tmp$/
+const STALE_MS = 10 * 60 * 1000
 const count = (v) => Number.isSafeInteger(v) && v >= 0
 const hex = (v) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v)
 
@@ -277,7 +285,13 @@ function loadCache(cacheFile, dir) {
     const st = fs.lstatSync(cacheFile)
     if (!st.isFile() || st.size > CACHE_LIMIT) return cache
     const raw = JSON.parse(fs.readFileSync(cacheFile, 'utf8'))
-    if (raw?.version !== CACHE_VERSION || raw.dir !== dir || !Array.isArray(raw.files)) return cache
+    if (
+      raw?.version !== CACHE_VERSION ||
+      raw.parser !== PARSER_VERSION ||
+      raw.dir !== dir ||
+      !Array.isArray(raw.files)
+    )
+      return cache
     for (const f of raw.files) {
       const entry = unpackEntry(f, dir)
       if (entry) cache.set(f.path, entry)
@@ -288,22 +302,72 @@ function loadCache(cacheFile, dir) {
   return cache
 }
 
+// A write cut short (a crash) leaves its temporary file: removed when old.
+function removeStaleTemporaries(cacheFile, now = Date.now()) {
+  try {
+    const folder = dirname(cacheFile)
+    for (const name of fs.readdirSync(folder)) {
+      if (!TEMPORARY.test(name)) continue
+      const file = join(folder, name)
+      try {
+        const st = fs.lstatSync(file)
+        if (st.isFile() && now - st.mtimeMs > STALE_MS) fs.unlinkSync(file)
+      } catch {
+        // gone or busy: next start
+      }
+    }
+  } catch {
+    // no data folder
+  }
+}
+
+// The text to save, or null (too big, or not serializable).
+function cachePayload(dir, cache, limit) {
+  try {
+    const payload = JSON.stringify({
+      version: CACHE_VERSION,
+      parser: PARSER_VERSION,
+      dir,
+      files: [...cache].map(([path, e]) => packEntry(path, e))
+    })
+    return payload.length > limit ? null : payload
+  } catch {
+    return null
+  }
+}
+
+// -> true once saved. Into Tessel's data folder, never a folder created for it.
 async function saveCache(cacheFile, dir, cache) {
-  const payload = JSON.stringify({
-    version: CACHE_VERSION,
-    dir,
-    files: [...cache].map(([path, e]) => packEntry(path, e))
-  })
-  if (payload.length > CACHE_LIMIT) return
-  // Into Tessel's data folder, never a folder created for it.
+  const payload = cachePayload(dir, cache, CACHE_LIMIT)
+  if (payload === null) return true // never savable as it is: not tried again
   const temporary = join(dirname(cacheFile), `.claude-usage-${randomUUID()}.tmp`)
   try {
     await fs.promises.writeFile(temporary, payload, { flag: 'wx', mode: 0o600 })
     await fs.promises.rename(temporary, cacheFile)
+    return true
   } catch {
-    // not saved this time: the next change tries again
+    return false
   } finally {
     await fs.promises.unlink(temporary).catch(() => {})
+  }
+}
+
+function saveCacheNow(cacheFile, dir, cache) {
+  const payload = cachePayload(dir, cache, QUIT_LIMIT)
+  if (payload === null) return true
+  const temporary = join(dirname(cacheFile), `.claude-usage-${randomUUID()}.tmp`)
+  try {
+    fs.writeFileSync(temporary, payload, { flag: 'wx', mode: 0o600 })
+    fs.renameSync(temporary, cacheFile)
+    return true
+  } catch {
+    return false
+  } finally {
+    try {
+      fs.unlinkSync(temporary)
+    } catch {
+      // renamed
+    }
   }
 }
 
@@ -364,7 +428,16 @@ export function createClaudeUsageReport({
     if (!cacheFile || !dirty || !cache) return saving
     dirty = false
     const snapshot = new Map(cache)
-    saving = saving.then(() => saveCache(cacheFile, dir, snapshot))
+    // A failed write never stops the next one; what it missed is written then.
+    saving = saving
+      .catch(() => {})
+      .then(() => saveCache(cacheFile, dir, snapshot))
+      .then((saved) => {
+        if (!saved) dirty = true
+      })
+      .catch(() => {
+        dirty = true
+      })
     return saving
   }
   function schedule() {
@@ -374,7 +447,10 @@ export function createClaudeUsageReport({
   }
 
   async function scan() {
-    cache ??= loadCache(cacheFile, dir)
+    if (!cache) {
+      if (cacheFile) removeStaleTemporaries(cacheFile)
+      cache = loadCache(cacheFile, dir)
+    }
     const files = listJsonl(dir)
     const seen = new Set(files)
     for (const f of [...cache.keys()])
@@ -433,7 +509,7 @@ export function createClaudeUsageReport({
       }
     }
     const projectKey = memo(usageProjectKey)
-    const rootOf = memo((cwd) => usageRootOf(cwd, range.roots))
+    const projectIn = usageRootMatcher(range)
     const wantedCwd = range.cwd ? projectKey(range.cwd) : ''
 
     const totals = empty()
@@ -451,13 +527,13 @@ export function createClaudeUsageReport({
       add(allTotals, t, cost)
       if (t.sessionId) allSessions.add(t.sessionId)
       const model = modelOf(t.model)
-      const root = range.roots ? rootOf(t.cwd) : null
+      const root = projectIn ? projectIn(t.cwd) : null
       if (
         (range.from && day < range.from) ||
         (range.to && day > range.to) ||
         (wantedCwd && projectKey(t.cwd) !== wantedCwd) ||
         (range.model && t.model !== range.model && model !== range.model) ||
-        (range.roots && !root)
+        (projectIn && !root)
       )
         continue
       add(totals, t, cost)
@@ -534,7 +610,15 @@ export function createClaudeUsageReport({
     queue = run.catch(() => {})
     return run
   }
-  // Writes the parsed turns now (tests, quitting).
+  // Writes the parsed turns now (tests).
   report.flush = () => queue.then(save)
+  // Tessel is quitting: what was not saved yet is written now, at once (a
+  // few megabytes; over QUIT_LIMIT it waits for the next run's own reading).
+  report.flushSync = () => {
+    clearTimeout(timer)
+    timer = null
+    if (!cacheFile || !dirty || !cache) return
+    if (saveCacheNow(cacheFile, dir, cache)) dirty = false
+  }
   return report
 }

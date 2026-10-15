@@ -1,10 +1,11 @@
 // The git worktrees of a project (the other checkouts of its repository),
 // for the left sidebar. Read-only: one `git worktree list --porcelain`, with
 // the repository's own program-running settings off (gitSafety.js), and only
-// for a folder that is an open project (the layout's local project folders:
+// for a folder that is an open project (the layout's local project folders
+// and the repositories of a folder imported as a group:
 // the renderer's word alone is never enough to run git somewhere).
 import fs from 'fs'
-import { isAbsolute, resolve } from 'path'
+import { isAbsolute, resolve, sep } from 'path'
 import { run as defaultRun } from './agentTools'
 import { localGitArgs as defaultGitArgs } from './gitSafety'
 
@@ -64,11 +65,32 @@ export function localRootsOfLayout(data) {
   return out
 }
 
+// The folders whose worktrees may be listed: the local project folders and
+// the repositories of a folder imported as a group (inside that folder).
+export function localRepoRootsOfLayout(data) {
+  const out = localRootsOfLayout(data)
+  const list = data && typeof data === 'object' && Array.isArray(data.workspaces) ? data.workspaces : []
+  for (const w of list.slice(0, MAX_ROOTS)) {
+    const cwd = w && !w.remote ? w.cwd : null
+    const repos = w && w.group && Array.isArray(w.group.repos) ? w.group.repos : []
+    if (typeof cwd !== 'string' || !cwd || !isAbsolute(cwd)) continue
+    const parent = norm(cwd)
+    for (const repo of repos.slice(0, MAX_ROOTS)) {
+      const path = repo && repo.path
+      if (typeof path !== 'string' || !path || path.length > MAX_PATH || !isAbsolute(path)) continue
+      const key = norm(path)
+      const inside = key.startsWith(parent.endsWith(sep) ? parent : parent + sep)
+      if (inside && !out.includes(key) && out.length < MAX_ROOTS * 2) out.push(key)
+    }
+  }
+  return out
+}
+
 export function createWorktreeList({ run = defaultRun, gitArgs = defaultGitArgs, exists = fs.existsSync } = {}) {
   let roots = []
   return {
     setRoots(list) {
-      roots = Array.isArray(list) ? list.slice(0, MAX_ROOTS) : []
+      roots = Array.isArray(list) ? list.slice(0, MAX_ROOTS * 2) : []
     },
     // -> { ok: true, worktrees } | { ok: false, error: 'invalid' | 'unknown-folder' | 'not-repo' | 'failed' }
     async list(cwd) {
