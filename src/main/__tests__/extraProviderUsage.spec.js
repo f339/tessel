@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi } from 'vitest'
-import { createExtraProviderUsage, USAGE_URLS } from '../extraProviderUsage'
+import { createExtraProviderUsage, USAGE_URLS, geminiUnsupported } from '../extraProviderUsage'
 import { ProviderReadError } from '../usageProviderSources'
 import {
   mapGemini,
@@ -83,6 +83,35 @@ function setup(options = {}) {
 }
 const read = (service, provider) => service.read({ provider, accountId: null })
 describe('explicit additional quota collectors', () => {
+  it("Gemini CLI on a personal account Google no longer serves: says so, never a failed read", async () => {
+    const { service, request } = setup()
+    request.mockImplementation(async (url) =>
+      new Response(
+        JSON.stringify(
+          url === USAGE_URLS.geminiProject
+            ? {
+                allowedTiers: [{ id: 'standard-tier', isDefault: true, userDefinedCloudaicompanionProject: true }],
+                ineligibleTiers: [{ tierId: 'free-tier', reasonCode: 'UNSUPPORTED_CLIENT', reasonMessage: 'This client is no longer supported.' }]
+              }
+            : {}
+        )
+      )
+    )
+    const res = await read(service, 'gemini')
+    expect(res).toMatchObject({ ok: false, provider: 'gemini', code: 'unsupported' })
+    expect(res.error).toMatch(/no longer supports Gemini CLI for personal accounts/)
+    expect(res.error).toMatch(/Antigravity/)
+    // Only the tier question was asked: no quota read for a project it has not got.
+    expect(request.mock.calls.map(([url]) => url)).toEqual([USAGE_URLS.geminiProject])
+  })
+
+  it('geminiUnsupported: only UNSUPPORTED_CLIENT among the refused tiers', () => {
+    expect(geminiUnsupported({ ineligibleTiers: [{ reasonCode: 'UNSUPPORTED_CLIENT' }] })).toBe(true)
+    expect(geminiUnsupported({ ineligibleTiers: [{ reasonCode: 'INELIGIBLE_ACCOUNT' }] })).toBe(false)
+    expect(geminiUnsupported({})).toBe(false)
+    expect(geminiUnsupported(null)).toBe(false)
+  })
+
   it('detects installed configured capabilities without reading credentials or requesting usage', async () => {
     const { service, sources, request } = setup()
     sources.present.mockImplementation(async (id) => id !== 'kimi')

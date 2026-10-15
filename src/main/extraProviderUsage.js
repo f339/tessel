@@ -49,6 +49,12 @@ const SUB_REQUESTS = ['geminiProject', 'cursorLegacy', 'grokMonthly', 'opencodeW
 // Providers read from their own CLI instead of a web endpoint: Antigravity's
 // `agy /usage` (antigravityCliUsage.js).
 const CLI_PROVIDERS = ['antigravity']
+// loadCodeAssist's answer for an account with no tier: one of its refused
+// tiers says the client itself is no longer supported (UNSUPPORTED_CLIENT).
+export function geminiUnsupported(answer) {
+  const refused = Array.isArray(answer?.ineligibleTiers) ? answer.ineligibleTiers : []
+  return refused.some((tier) => tier && tier.reasonCode === 'UNSUPPORTED_CLIENT')
+}
 export function createExtraProviderUsage({
   listAgents,
   // Settings' saved usage credentials (providerCredentials.js).
@@ -295,6 +301,11 @@ export function createExtraProviderUsage({
           const project = await fetch('geminiProject', {
             metadata: { ideType: 'GEMINI_CLI', pluginType: 'GEMINI' }
           })
+          // No tier for this account, and Google says why: personal accounts
+          // are no longer served through Gemini CLI (Google points them to
+          // Antigravity). Said as it is, not as a read that failed.
+          if (!project?.cloudaicompanionProject && geminiUnsupported(project))
+            refuse('unsupported', t('main.usage.geminiUnsupported', 'Google no longer supports Gemini CLI for personal accounts (Gemini Code Assist for individuals): use Antigravity instead. A paid plan with a Google Cloud project still works.'))
           if (
             typeof project?.cloudaicompanionProject !== 'string' ||
             !project.cloudaicompanionProject

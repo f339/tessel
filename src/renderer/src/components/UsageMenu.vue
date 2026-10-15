@@ -1055,6 +1055,8 @@ const emptyTitle = () => t('usage.menu.buttonTitleEmpty', "Usage of your agents'
                 ? t('usage.menu.loading', 'Loading usage…')
                 : a.unlimited
                   ? t('usage.menu.unlimited', 'Unlimited')
+                  : providerErrorCodes[a.id] === 'unsupported'
+                    ? t('usage.menu.unsupported', 'No longer supported')
                   : errorAction(a.id) === 'signIn'
                     ? t('usage.menu.signInAgain', 'Sign in again')
                     : errorAction(a.id) === 'retry'
