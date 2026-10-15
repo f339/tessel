@@ -10,6 +10,12 @@ Checked on 2026-09-29. No prompts or paid turns were sent.
   mappings remain; new IDs get no guessed effort suffixes.
 - Antigravity: `agy models`, current `id<TAB>label` rows only. The old human-name
   format is deliberately ignored to preserve strict shell-safe model values.
+  Checked with agy 1.3.5 on 2026-10-15 (print-mode `/model` and `/effort`,
+  no turn): each effort is its own row (`gemini-4-argon-high`), so the pickers
+  group the variants into one model with the efforts it lists
+  (`antigravityModels.js`); `--model <base> --effort <level>` picks the
+  variant, while a variant id with another `--effort`, or an effort the model
+  lacks, is refused at launch. A model listed once has no effort option.
 - Amp: reference fixed modes smart/rush/large/deep, `--mode`; `--effort` only on
   large/deep. Availability and these flags could not be checked locally.
 - Kimi: installed `kimi --help` confirms `-m`/`--model`, but does not advertise
@@ -21,7 +27,7 @@ Checked on 2026-09-29. No prompts or paid turns were sent.
   not an account entitlement check. Both effort aliases override the picker,
   as documented in the [CLI reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference).
 
-Pi, Cursor, Antigravity and Amp were absent from PATH. Their probe formats and
+Pi, Cursor and Amp were absent from PATH (Antigravity was checked later, above). Their probe formats and
 flags are covered by synthetic fixtures derived from the reference sources,
 not represented as recordings of locally installed CLIs. No unverified
 mid-session command is added for Amp or Kimi. Untouched pickers add no flags.

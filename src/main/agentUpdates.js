@@ -57,9 +57,12 @@ const OTHER_HINTS = {
   aider: () => t('main.agentUpdate.hintAider', 'Run aider-install again to update it.')
 }
 // Installed by the vendor's own script (agentInstalls.js).
-for (const id of ['cursor', 'grok', 'antigravity', 'hermes', 'devin', 'omp', 'muse', 'qoder']) {
+for (const id of ['cursor', 'grok', 'hermes', 'devin', 'omp', 'muse', 'qoder']) {
   OTHER_HINTS[id] = () => t('main.agentUpdate.hintInstaller', 'Run its installer again to update it.')
 }
+// The Antigravity CLI checks for updates itself when it starts, and has its
+// own command for it.
+OTHER_HINTS.antigravity = () => t('main.agentUpdate.hintAntigravity', 'The Antigravity CLI updates itself when it starts (or run: agy update).')
 
 export function npmUpdateSteps(id) {
   const pkg = NPM_PACKAGES[id]

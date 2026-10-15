@@ -15,8 +15,9 @@
 // The CLI may use its own sign-in and network to answer, so Tessel runs a
 // probe only when asked (Settings > Agents > Refresh models) and keeps the
 // answer (agentModelList.js).
-import { createClaudeCatalogOptions, createCodexCatalogOptions, createPiCatalogOptions, ANTIGRAVITY_SESSION_OPTION_CATALOG } from './agentSessionOptions'
+import { createClaudeCatalogOptions, createCodexCatalogOptions, createPiCatalogOptions, createAntigravityCatalogOptions } from './agentSessionOptions'
 import { groupCursorModels } from './cursorModels'
+import { groupAntigravityModels } from './antigravityModels'
 
 // Why (Orca): the Claude CLI has no model-listing subcommand (`claude models`
 // starts a chat session). CLIs that predate the request answer
@@ -269,6 +270,17 @@ export function listedToCatalogModels(agent, rows) {
   // Cursor lists each effort / Fast / Thinking variant as its own id: one
   // row per base model, those as its options (cursorModels.js).
   if (agent === 'cursor') return groupCursorModels(rows)
+  // Antigravity lists each effort variant as its own id too: one row per
+  // model, its efforts as its option (antigravityModels.js).
+  if (agent === 'antigravity')
+    return groupAntigravityModels(rows).map(({ efforts, ...row }) => ({
+      id: row.id,
+      label: row.label,
+      ...(row.description ? { description: row.description } : {}),
+      ...(row.isDefault ? { isDefault: true } : {}),
+      options: createAntigravityCatalogOptions(efforts),
+      ...(efforts ? { efforts } : {})
+    }))
   return rows.map((row) => {
     const base = { id: row.id, label: row.label, ...(row.description ? { description: row.description } : {}), ...(row.isDefault ? { isDefault: true } : {}) }
     if (agent === 'claude')
@@ -276,7 +288,6 @@ export function listedToCatalogModels(agent, rows) {
     if (agent === 'codex')
       return { ...base, options: row.effortLevels && row.effortLevels.length ? createCodexCatalogOptions({ effortLevelIds: row.effortLevels, defaultEffort: row.defaultEffort }) : [] }
     if (agent === 'pi') return { ...base, options: createPiCatalogOptions(row.effortLevels || []) }
-    if (agent === 'antigravity') return { ...base, options: ANTIGRAVITY_SESSION_OPTION_CATALOG.unknownModelOptions }
     return { ...base, options: [] }
   })
 }

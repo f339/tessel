@@ -17,6 +17,7 @@
 //   OpenCode     ~/.config/opencode/skills   .opencode/skills  (and the Claude and .agents folders)
 //   Copilot CLI  ~/.copilot/skills           .github/skills    (and the Claude and .agents folders)
 //   Gemini CLI   ~/.gemini/skills            .gemini/skills    (and the .agents folders)
+//   Antigravity  ~/.gemini/config/skills     .agents/skills    (agy, checked with its /skills)
 import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import path from 'node:path'
@@ -27,7 +28,7 @@ import { skillFrontmatter } from './chat/skills.js'
 import { readTar, gunzipCapped } from './skillsTar'
 import { writeFileAtomic } from './safeJson'
 
-export const SKILL_AGENTS = ['claude', 'codex', 'opencode', 'copilot', 'gemini']
+export const SKILL_AGENTS = ['claude', 'codex', 'opencode', 'copilot', 'gemini', 'antigravity']
 
 export const SKILL_CAPS = {
   files: 1000, // files in one skill
@@ -86,13 +87,15 @@ export function skillRoots({ home = os.homedir(), env = process.env, cwd = null 
     { scope: 'user', path: path.join(codexHome, 'skills'), seenBy: ['codex'], installFor: [] },
     { scope: 'user', path: path.join(config, 'opencode', 'skills'), seenBy: ['opencode'], installFor: ['opencode'] },
     { scope: 'user', path: path.join(home, '.copilot', 'skills'), seenBy: ['copilot'], installFor: ['copilot'] },
-    { scope: 'user', path: path.join(home, '.gemini', 'skills'), seenBy: ['gemini'], installFor: ['gemini'] }
+    { scope: 'user', path: path.join(home, '.gemini', 'skills'), seenBy: ['gemini'], installFor: ['gemini'] },
+    // The Antigravity CLI's own (not Gemini CLI's ~/.gemini/skills).
+    { scope: 'user', path: path.join(home, '.gemini', 'config', 'skills'), seenBy: ['antigravity'], installFor: ['antigravity'] }
   ]
   if (typeof cwd === 'string' && path.isAbsolute(cwd)) {
     const at = (...parts) => path.join(cwd, ...parts)
     roots.push(
       { scope: 'project', path: at('.claude', 'skills'), seenBy: ['claude', 'opencode', 'copilot'], installFor: ['claude'] },
-      { scope: 'project', path: at('.agents', 'skills'), seenBy: ['codex', 'opencode', 'copilot', 'gemini'], installFor: ['codex'] },
+      { scope: 'project', path: at('.agents', 'skills'), seenBy: ['codex', 'opencode', 'copilot', 'gemini', 'antigravity'], installFor: ['codex', 'antigravity'] },
       { scope: 'project', path: at('.codex', 'skills'), seenBy: ['codex'], installFor: [] },
       { scope: 'project', path: at('.opencode', 'skills'), seenBy: ['opencode'], installFor: ['opencode'] },
       { scope: 'project', path: at('.github', 'skills'), seenBy: ['copilot'], installFor: ['copilot'] },

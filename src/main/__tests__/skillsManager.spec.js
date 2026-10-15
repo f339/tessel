@@ -133,6 +133,18 @@ describe('skill folders per agent and scope', () => {
     ])
     expect(targetRoots(['nope'], 'user', { home, env })).toEqual([])
   })
+
+  it('the Antigravity CLI: ~/.gemini/config/skills and the project .agents/skills (what its /skills lists)', () => {
+    const roots = skillRoots({ home, env, cwd })
+    const at = (p) => roots.find((r) => r.path === path.resolve(p))
+    expect(at(path.join(home, '.gemini', 'config', 'skills'))).toMatchObject({ scope: 'user', seenBy: ['antigravity'], installFor: ['antigravity'] })
+    expect(at(path.join(cwd, '.agents', 'skills')).seenBy).toContain('antigravity')
+    // Not Gemini CLI's folder, nor the user's ~/.agents/skills.
+    expect(at(path.join(home, '.gemini', 'skills')).seenBy).not.toContain('antigravity')
+    expect(at(path.join(home, '.agents', 'skills')).seenBy).not.toContain('antigravity')
+    expect(targetRoots(['antigravity'], 'user', { home, env, cwd }).map((r) => r.path)).toEqual([path.join(home, '.gemini', 'config', 'skills')])
+    expect(targetRoots(['codex', 'antigravity'], 'project', { home, env, cwd }).map((r) => r.path)).toEqual([path.join(cwd, '.agents', 'skills')])
+  })
 })
 
 describe('listing', () => {

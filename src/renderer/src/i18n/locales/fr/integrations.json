@@ -35,7 +35,8 @@
       "command": "commande",
       "signIn": "Se connecter",
       "test": "Tester",
-      "notInstalled": "Non installé"
+      "notInstalled": "Non installé",
+      "turnedOff": "Désactivé"
     },
     "test": {
       "testing": "Test…",

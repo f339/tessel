@@ -457,4 +457,71 @@ describe('Skills dialog', () => {
     expect(wrapper.emitted('close')).toBeUndefined()
     wrapper.unmount()
   })
+
+  it('Antigravity plugins: only with the Antigravity CLI installed; listed, turned off, uninstalled, installed in a pane', async () => {
+    const calls = api()
+    calls.set = []
+    calls.rm = []
+    let list = [
+      { name: 'figma', enabled: true, version: '1.2.0', source: 'antigravity-plugins-official', counts: { skills: 2, mcpServers: 1 } },
+      { name: 'old-kit', enabled: false, version: '', source: 'antigravity', counts: {} }
+    ]
+    Object.assign(window.shellApi, {
+      agyPluginsList: async () => ({ plugins: list }),
+      agyPluginsSet: async (q) => {
+        calls.set.push(q)
+        list = list.map((p) => (p.name === q.name ? { ...p, enabled: q.enabled } : p))
+        return { ok: true }
+      },
+      agyPluginsRemove: async (q) => {
+        calls.rm.push(q)
+        list = list.filter((p) => p.name !== q.name)
+        return { ok: true }
+      }
+    })
+    const without = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    expect(without.find('[data-test="skills-tab-plugins"]').exists()).toBe(false)
+    without.unmount()
+
+    const agents = [{ id: 'claude', available: true }, { id: 'antigravity', available: true }]
+    const wrapper = mount(SkillsDialog, { props: { agents }, attachTo: document.body, global: { provide: { askConfirm: () => Promise.resolve(true) } } })
+    await flushPromises()
+    await wrapper.get('[data-test="skills-tab-plugins"]').trigger('click')
+    await flushPromises()
+    const figma = wrapper.get('[data-test="agy-plugin-figma"]')
+    expect(figma.text()).toContain('1.2.0')
+    expect(figma.text()).toContain('2 skills · 1 MCP server')
+    expect(wrapper.get('[data-test="agy-plugin-old-kit"]').text()).toContain('Turned off')
+    await figma.findAll('button')[0].trigger('click')
+    await flushPromises()
+    expect(calls.set).toEqual([{ name: 'figma', enabled: false }])
+    expect(wrapper.get('[data-test="agy-plugin-figma"]').text()).toContain('Turned off')
+    await wrapper.get('[data-test="agy-plugin-old-kit"]').find('button.danger').trigger('click')
+    await flushPromises()
+    expect(calls.rm).toEqual([{ name: 'old-kit' }])
+    expect(wrapper.find('[data-test="agy-plugin-old-kit"]').exists()).toBe(false)
+    // Installing runs in a pane the user sees; nothing a shell would read as more.
+    await wrapper.get('[data-test="agy-plugin-target"]').setValue('figma@antigravity-plugins-official')
+    await wrapper.get('form.mcp-toolbar').trigger('submit')
+    expect(wrapper.emitted('run').at(-1)[0].command).toBe('agy plugin install "figma@antigravity-plugins-official"')
+    await wrapper.get('[data-test="agy-plugin-target"]').setValue('x; rm -rf /')
+    await wrapper.get('form.mcp-toolbar').trigger('submit')
+    expect(wrapper.emitted('run')).toHaveLength(1)
+    expect(wrapper.text()).toContain('Enter a plugin name')
+    wrapper.unmount()
+  })
+
+  it('Antigravity plugins: French', async () => {
+    api({ agyPluginsList: async () => ({ plugins: [{ name: 'figma', enabled: false, version: '1.0.0', source: 'x', counts: { skills: 1 } }] }), agyPluginsSet: async () => ({ ok: true }), agyPluginsRemove: async () => ({ ok: true }) })
+    setMessages('fr', fr)
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'antigravity', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    expect(wrapper.get('[data-test="skills-tab-plugins"]').text()).toBe('Plugins Antigravity')
+    await wrapper.get('[data-test="skills-tab-plugins"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="agy-plugin-figma"]').text()).toContain('Désactivé')
+    expect(wrapper.get('[data-test="agy-plugin-figma"]').text()).toContain('1 skill')
+    wrapper.unmount()
+  })
 })

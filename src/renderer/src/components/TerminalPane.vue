@@ -53,6 +53,7 @@ import { isViewed } from '../../../shared/fileKinds'
 import { effectiveAgent, launchSignature, launchSessionValues, inYoloFolder, YOLO_ARGS, YOLO_ENV } from '../../../shared/agentPrefs'
 import { getAgentSessionOptionCatalog, modelOptions, resolveSessionOptionDefaults, composedModelId, listedModelValues, valuesOnListedRow } from '../../../shared/agentSessionOptions'
 import { cursorContextOnScreen, cursorModelOnScreen, cursorPickerFilter, cursorPickerShown } from '../../../shared/cursorModels'
+import { antigravityListed, antigravityModelOnScreen } from '../../../shared/antigravityModels'
 import { paneModels } from '../paneModels'
 import { modelsFor, refreshIfStale } from '../agentModels'
 import { CLAUDE_PRICING } from '../../../shared/claudePricing'
@@ -244,6 +245,15 @@ function newestClaudeOf(family) {
 }
 let modelBusy = false
 let modelAgain = false // asked while a check ran: one more after it
+// The terminal, once it exists (the first check runs while the pane is set
+// up, before it is declared further down).
+function termNow() {
+  try {
+    return term
+  } catch {
+    return null
+  }
+}
 // Whether the pane is off screen now (paneOnScreen is set up further down:
 // before that, it counts as shown).
 function paneOffScreenNow() {
@@ -285,6 +295,16 @@ async function refreshModel() {
         return
       }
     }
+    // Antigravity CLI: its footer ends with the model this session runs
+    // ("Gemini 4 Argon · high"), a /model or /effort in it included.
+    if (n.agentId === 'antigravity' && termNow()) {
+      const seen = antigravityModelOnScreen(screenText(6).split('\n'), modelsFor('antigravity'))
+      if (seen) {
+        delete n.modelChoice
+        agentModel.value = { model: seen.model, name: seen.name, effort: seen.effort, source: 'screen' }
+        return
+      }
+    }
     let res = await window.shellApi.agentModel({
       agentId: n.agentId,
       sessionId: n.sessionId,
@@ -306,6 +326,12 @@ async function refreshModel() {
     })
     // Its account could not be read (removed meanwhile): what it showed stays.
     if (res && res.keep) return
+    // Antigravity CLI: the id or label it reports, as its model list names it
+    // (a variant id "gemini-4-argon-high" -> Gemini 4 Argon, high).
+    if (n.agentId === 'antigravity' && res && res.model) {
+      const listed = antigravityListed(modelsFor('antigravity'), res.model, res.effort)
+      if (listed) res = { ...res, ...listed }
+    }
     if ((!res || !res.model) && !n.modelChoice) {
       const seen = modelOnScreen()
       // The effort its settings give still shows (res.chosenEffort).

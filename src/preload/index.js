@@ -426,6 +426,10 @@ const api = {
   skillsHistory: (q) => ipcRenderer.invoke('skills:history', q),
   skillsHistoryDiff: (q) => ipcRenderer.invoke('skills:historyDiff', q),
   skillsRestore: (q) => ipcRenderer.invoke('skills:restore', q),
+  // The Antigravity CLI's plugins (src/main/agyPlugins.js).
+  agyPluginsList: () => ipcRenderer.invoke('agyPlugins:list'),
+  agyPluginsSet: (q) => ipcRenderer.invoke('agyPlugins:set', q),
+  agyPluginsRemove: (q) => ipcRenderer.invoke('agyPlugins:remove', q),
   notify: (payload) => ipcRenderer.send('app:notify', payload),
   // The language the interface shows ('en', 'fr'): the main process uses it
   // for its dialogs, notifications and messages (src/main/i18n.js).

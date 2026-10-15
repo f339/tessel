@@ -30,13 +30,14 @@ const props = defineProps({
 const emit = defineEmits(['close', 'run'])
 
 // The agents that read skills (same ids as Settings > Agents).
-const ALL_AGENTS = ['claude', 'codex', 'opencode', 'copilot', 'gemini']
+const ALL_AGENTS = ['claude', 'codex', 'opencode', 'copilot', 'gemini', 'antigravity']
 const AGENT_NAME = {
   claude: 'Claude Code', // i18n-ignore
   codex: 'Codex', // i18n-ignore
   opencode: 'OpenCode', // i18n-ignore
   copilot: 'Copilot CLI', // i18n-ignore
-  gemini: 'Gemini CLI' // i18n-ignore
+  gemini: 'Gemini CLI', // i18n-ignore
+  antigravity: 'Antigravity CLI' // i18n-ignore
 }
 const installed = computed(() =>
   Object.fromEntries(ALL_AGENTS.map((id) => [id, !!props.agents.find((a) => a.id === id && a.available)]))
@@ -491,6 +492,109 @@ async function runSetup(command) {
   emit('run', { label: t('skills.setup.pane', 'Skill setup: {{name}}', { name: preview.value ? preview.value.name : '' }), command })
 }
 
+// ---------------------------------------------------------------- Plugins
+// The Antigravity CLI's plugins (bundles of skills, MCP servers, hooks and
+// rules): listed, turned on or off and uninstalled with agy's own commands
+// (src/main/agyPlugins.js). Installing one can ask questions (a plugin's
+// settings form): it runs in a pane the user sees.
+const showPlugins = computed(() => installed.value.antigravity && !!window.shellApi.agyPluginsList)
+const plugins = ref([])
+const pluginsLoading = ref(false)
+const pluginsError = ref('')
+const pluginTarget = ref('')
+async function loadPlugins() {
+  if (!showPlugins.value) return
+  pluginsLoading.value = true
+  pluginsError.value = ''
+  try {
+    const res = await window.shellApi.agyPluginsList()
+    if (res && res.ok === false) pluginsError.value = res.error
+    else {
+      plugins.value = (res && res.plugins) || []
+      if (res && res.error) pluginsError.value = res.error
+    }
+  } catch (err) {
+    pluginsError.value = (err && err.message) || String(err)
+  } finally {
+    pluginsLoading.value = false
+  }
+}
+function openPlugins() {
+  tab.value = 'plugins'
+  loadPlugins()
+}
+// "2 skills · 1 MCP server": what a plugin bundles.
+function pluginParts(p) {
+  const c = p.counts || {}
+  const parts = []
+  if (c.skills) parts.push(c.skills === 1 ? t('skills.plugins.skillOne', '1 skill') : t('skills.plugins.skillMany', '{{count}} skills', { count: c.skills }))
+  if (c.mcpServers) parts.push(c.mcpServers === 1 ? t('skills.plugins.mcpOne', '1 MCP server') : t('skills.plugins.mcpMany', '{{count}} MCP servers', { count: c.mcpServers }))
+  if (c.agents) parts.push(c.agents === 1 ? t('skills.plugins.agentOne', '1 subagent') : t('skills.plugins.agentMany', '{{count}} subagents', { count: c.agents }))
+  if (c.hooks) parts.push(t('skills.plugins.hooks', 'hooks'))
+  if (c.rules) parts.push(t('skills.plugins.rules', 'rules'))
+  if (c.commands) parts.push(c.commands === 1 ? t('skills.plugins.commandOne', '1 command') : t('skills.plugins.commandMany', '{{count}} commands', { count: c.commands }))
+  return parts.join(' · ') || (p.source ? t('skills.plugins.from', 'From {{source}}', { source: p.source }) : '')
+}
+async function togglePlugin(p) {
+  busy.value = `plugin:${p.name}` // i18n-ignore
+  try {
+    const res = await window.shellApi.agyPluginsSet({ name: p.name, enabled: !p.enabled })
+    if (res && res.ok)
+      say(p.enabled ? t('skills.plugins.turnedOff', 'Turned off "{{name}}". Antigravity CLI panes use the change from their next start.', { name: p.name }) : t('skills.plugins.turnedOn', 'Turned on "{{name}}". Antigravity CLI panes use the change from their next start.', { name: p.name }))
+    else say((res && res.error) || t('skills.plugins.failed', 'The Antigravity CLI could not change it.'), 'error')
+  } finally {
+    busy.value = ''
+  }
+  loadPlugins()
+}
+async function removePlugin(p) {
+  const ok = await askConfirm({
+    title: t('skills.plugins.removeConfirm', 'Uninstall the plugin "{{name}}"?', { name: p.name }),
+    text: t('skills.plugins.removeText', 'The Antigravity CLI deletes its folder, with the skills, MCP servers and hooks it brought.'),
+    confirmLabel: t('skills.plugins.uninstall', 'Uninstall'),
+    danger: true
+  })
+  if (ok !== true) return
+  busy.value = `plugin:${p.name}` // i18n-ignore
+  try {
+    const res = await window.shellApi.agyPluginsRemove({ name: p.name })
+    if (res && res.ok) say(t('skills.plugins.removed', 'Uninstalled "{{name}}".', { name: p.name }))
+    else say((res && res.error) || t('skills.plugins.failed', 'The Antigravity CLI could not change it.'), 'error')
+  } finally {
+    busy.value = ''
+  }
+  loadPlugins()
+}
+// A marketplace name (name@antigravity-plugins-official) or a folder: the
+// install runs in a pane the user sees. Only a name or a plain path goes on
+// the command line (nothing a shell would read as more).
+const PLUGIN_TARGET = /^[A-Za-z0-9][A-Za-z0-9._@/-]{0,150}$/
+const PLUGIN_FOLDER = /^[A-Za-z]:\\[^"'`$;&|<>%\r\n]{1,250}$/
+function runPluginInstall(target) {
+  emit('run', { label: t('skills.plugins.installPane', 'Antigravity plugin: {{name}}', { name: target }), command: `agy plugin install "${target}"` }) // i18n-ignore
+}
+function installPlugin() {
+  const target = pluginTarget.value.trim()
+  if (!PLUGIN_TARGET.test(target) && !PLUGIN_FOLDER.test(target)) {
+    pluginsError.value = t('skills.plugins.badTarget', 'Enter a plugin name (name@marketplace) or a folder path.')
+    return
+  }
+  pluginsError.value = ''
+  runPluginInstall(target)
+  say(t('skills.plugins.installing', 'Installing in a terminal. Refresh this list when it is done.'))
+}
+async function installPluginFolder() {
+  const dir = await window.shellApi.pickFolder({ title: t('skills.plugins.pickTitle', 'Choose a plugin folder (with a plugin.json)') })
+  if (!dir) return
+  if (!PLUGIN_FOLDER.test(dir)) {
+    pluginsError.value = t('skills.plugins.badFolder', 'This folder path has characters Tessel cannot pass on a command line.')
+    return
+  }
+  pluginsError.value = ''
+  runPluginInstall(dir)
+  say(t('skills.plugins.installing', 'Installing in a terminal. Refresh this list when it is done.'))
+}
+
 // Escape closes the window; embedded in Settings, Settings handles it.
 function onEscape(e) {
   if (props.embedded) return
@@ -538,6 +642,9 @@ onMounted(async () => {
           </button>
           <button class="launch-seg-btn" :class="{ on: tab === 'add' }" @click="tab = 'add'">
             {{ t('skills.tab.add', 'Add') }}
+          </button>
+          <button v-if="showPlugins" class="launch-seg-btn" :class="{ on: tab === 'plugins' }" data-test="skills-tab-plugins" @click="openPlugins">
+            {{ t('skills.tab.plugins', 'Antigravity plugins') }}
           </button>
         </div>
       </div>
@@ -726,6 +833,57 @@ onMounted(async () => {
         </div>
       </template>
 
+      <!-- ================= Antigravity plugins ================= -->
+      <template v-else-if="tab === 'plugins'">
+        <p class="set-hint skills-plugins-intro">
+          {{
+            t('skills.plugins.intro', 'Antigravity CLI plugins bundle skills, MCP servers, subagents, hooks and rules. Browse its marketplace with /plugin in an Antigravity CLI pane, or install one here by name or from a folder.')
+          }}
+        </p>
+        <form class="mcp-toolbar" @submit.prevent="installPlugin">
+          <input
+            v-model="pluginTarget"
+            class="set-number skills-search"
+            :placeholder="t('skills.plugins.placeholder', 'name@antigravity-plugins-official')"
+            spellcheck="false"
+            data-test="agy-plugin-target"
+          />
+          <button class="exit-btn" type="submit" :disabled="!pluginTarget.trim()">{{ t('skills.plugins.install', 'Install') }}</button>
+          <button class="exit-btn" type="button" @click="installPluginFolder">{{ t('skills.plugins.fromFolder', 'From a folder…') }}</button>
+          <span class="set-hint">
+            <template v-if="pluginsLoading">{{ t('skills.loading', 'Loading…') }}</template>
+          </span>
+          <button class="exit-btn" type="button" :disabled="pluginsLoading" @click="loadPlugins">{{ t('skills.installed.refresh', 'Refresh') }}</button>
+        </form>
+        <p v-if="pluginsError" class="mcp-error">{{ pluginsError }}</p>
+        <div v-if="!pluginsLoading && !plugins.length && !pluginsError" class="mcp-empty">
+          {{ t('skills.plugins.empty', 'No Antigravity CLI plugins installed.') }}
+        </div>
+        <div v-for="p in plugins" :key="p.name" class="mcp-server" :data-test="'agy-plugin-' + p.name">
+          <div class="mcp-server-head">
+            <BrandIcon :kind="'plugin-' + p.name" accent="#8a93a6" :label="p.name" :size="22" />
+            <div class="mcp-row-main">
+              <span class="mcp-name">
+                {{ p.name }}
+                <span v-if="p.version" class="mcp-scope">{{ p.version }}</span>
+                <span v-if="!p.enabled" class="launch-tag muted">{{ t('skills.plugins.off', 'Turned off') }}</span>
+              </span>
+              <span class="set-hint skills-desc">{{ pluginParts(p) }}</span>
+            </div>
+            <span class="mcp-agent-actions">
+              <button class="exit-btn" :disabled="!!busy" @click="togglePlugin(p)">
+                {{ p.enabled ? t('skills.plugins.turnOff', 'Turn off') : t('skills.plugins.turnOn', 'Turn on') }}
+              </button>
+              <button class="ws-icon-btn small danger" :title="t('skills.plugins.uninstall', 'Uninstall')" :disabled="!!busy" @click="removePlugin(p)">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                </svg>
+              </button>
+            </span>
+          </div>
+        </div>
+      </template>
+
       <!-- ================= Add ================= -->
       <template v-else>
         <template v-if="!updating">
@@ -884,6 +1042,9 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.skills-plugins-intro {
+  margin: 0 0 8px;
+}
 .skills-search {
   flex: 1 1 auto;
   max-width: 260px;
