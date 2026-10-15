@@ -161,7 +161,10 @@ async function loadProvider(id, { refresh = false } = {}) {
   const query = {
     ...dates,
     timezone,
-    ...(selectedScope === 'tessel' ? { roots: [...props.worktreePaths] } : {})
+    // Where task copies go (Settings > General): their folder counts too.
+    ...(selectedScope === 'tessel'
+      ? { roots: [...props.worktreePaths], workspaceDir: settings.workspaceDir || '' }
+      : {})
   }
   const signature = JSON.stringify(query)
   const target = reports

@@ -1,24 +1,34 @@
 // Claude Code usage report, read from its own conversation files on this
 // computer (~/.claude/projects/**/*.jsonl; nothing is sent anywhere, no
 // sign-in used): tokens and estimated cost by day, model, project and
-// conversation. Each file is parsed again only when it changed. Parsing
-// follows Orca's (github.com/stablyai/orca, src/main/claude-usage, MIT):
-// Claude Code writes a reply's usage several times, so rows sharing a message
-// id and request id are one turn, keeping the largest counts.
+// conversation. Parsing follows Orca's (github.com/stablyai/orca,
+// src/main/claude-usage, MIT): Claude Code writes a reply's usage several
+// times, so rows sharing a message id and request id are one turn, keeping
+// the largest counts.
+// Transcripts only grow, and there can be gigabytes of them: a file is read
+// again only from where the last read stopped (whole again when its start
+// changed), and the parsed turns are kept in Tessel's data folder, so a
+// restart does not read everything again.
 import fs from 'fs'
 import os from 'os'
-import { join } from 'path'
-import { createInterface } from 'readline'
+import { dirname, join, resolve, sep } from 'path'
+import { createHash, randomUUID } from 'crypto'
 import { turnCostUsd, pricingModel } from '../shared/claudePricing'
 import {
   usageDayFormatter,
   usageQueryRange,
   usageProjectKey,
-  matchesUsageRoots,
+  usageRootMatcher,
   usageScope
 } from './usageReportFilters'
 
 const n = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0)
+const COUNTS = ['input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h']
+
+// What a turn holds and how rows of one reply merge. Bump it whenever
+// parseClaudeLine, take() or merge() change: turns saved by an older parser
+// are then read again instead of being kept as they were.
+export const PARSER_VERSION = 1
 
 // One transcript line -> a turn, or null.
 export function parseClaudeLine(line) {
@@ -49,26 +59,6 @@ export function parseClaudeLine(line) {
   }
 }
 
-async function parseFile(file) {
-  const turns = new Map() // key -> turn (keyless turns get their own key)
-  let anon = 0
-  const rl = createInterface({
-    input: fs.createReadStream(file, { encoding: 'utf8' }),
-    crlfDelay: Infinity
-  })
-  for await (const line of rl) {
-    const t = parseClaudeLine(line)
-    if (!t || !t.model || t.model === '<synthetic>') continue
-    const key = t.key || `${file}#${anon++}`
-    const had = turns.get(key)
-    if (!had) turns.set(key, t)
-    else
-      for (const f of ['input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h'])
-        had[f] = Math.max(had[f], t[f])
-  }
-  return turns
-}
-
 export function claudeProjectsDir(home = os.homedir(), env = process.env) {
   const base =
     env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR.trim()
@@ -94,8 +84,294 @@ function listJsonl(dir) {
       else if (e.isFile() && e.name.endsWith('.jsonl')) out.push(full)
     }
   }
-  return out
+  // A fixed order: the file that owns a turn copied into another stays the same.
+  return out.sort()
 }
+
+// --- Reading a transcript ---------------------------------------------------
+
+const CHUNK = 1024 * 1024
+const PRINT = 4096 // bytes compared at a file's start and before the read offset
+const USAGE = Buffer.from('"usage"')
+const PARALLEL = 4
+// Day and price of a turn, worked out once (dropped when its counts change).
+const derived = new WeakMap()
+
+function merge(turns, key, t) {
+  const had = turns.get(key)
+  if (!had) return void turns.set(key, t)
+  for (const f of COUNTS) if (t[f] > had[f]) had[f] = t[f]
+  derived.delete(had)
+}
+
+function take(entry, file, buf, start, end, at) {
+  const t = parseClaudeLine(buf.toString('utf8', start, end))
+  if (!t || !t.model || t.model === '<synthetic>') return
+  // A turn without ids is keyed by where its line starts: reading the line
+  // again (a last line read before it ended) finds the same turn.
+  merge(entry.turns, t.key || `${file}#${at}`, t)
+}
+
+// Reads [entry.offset, size) into entry.turns. Complete lines move
+// entry.offset; a last line not ended yet is read too, and read again next
+// time (the same turn: its largest counts are kept).
+async function readTurns(file, entry, size) {
+  const handle = await fs.promises.open(file, 'r')
+  try {
+    let pos = entry.offset
+    let parts = [] // a line spanning chunks
+    let partsStart = pos
+    while (pos < size) {
+      const length = Math.min(CHUNK, size - pos)
+      const buf = Buffer.allocUnsafe(length)
+      const { bytesRead } = await handle.read(buf, 0, length, pos)
+      if (bytesRead <= 0) break
+      const chunk = buf.subarray(0, bytesRead)
+      const chunkStart = pos
+      pos += bytesRead
+      let lineStart = 0
+      let next = -1 // the next '"usage"' in this chunk (Infinity: none left)
+      for (;;) {
+        const nl = chunk.indexOf(10, lineStart)
+        if (nl < 0) break
+        if (parts.length) {
+          const line = Buffer.concat([...parts, chunk.subarray(0, nl)])
+          if (line.indexOf(USAGE) >= 0) take(entry, file, line, 0, line.length, partsStart)
+          parts = []
+        } else {
+          if (next < lineStart) {
+            next = chunk.indexOf(USAGE, lineStart)
+            if (next < 0) next = Infinity
+          }
+          if (next < nl) take(entry, file, chunk, lineStart, nl, chunkStart + lineStart)
+        }
+        lineStart = nl + 1
+        entry.offset = chunkStart + lineStart
+      }
+      if (lineStart < chunk.length) {
+        if (!parts.length) partsStart = chunkStart + lineStart
+        parts.push(chunk.subarray(lineStart))
+      }
+    }
+    if (parts.length) {
+      const line = Buffer.concat(parts)
+      if (line.indexOf(USAGE) >= 0) take(entry, file, line, 0, line.length, partsStart)
+    }
+  } finally {
+    await handle.close().catch(() => {})
+  }
+}
+
+async function hashRange(file, start, length) {
+  const hash = createHash('sha256')
+  if (length > 0) {
+    const handle = await fs.promises.open(file, 'r')
+    try {
+      const buf = Buffer.alloc(length)
+      const { bytesRead } = await handle.read(buf, 0, length, start)
+      hash.update(buf.subarray(0, bytesRead))
+    } finally {
+      await handle.close().catch(() => {})
+    }
+  }
+  return hash.digest('hex')
+}
+
+async function prints(file, entry, size) {
+  const headLength = Math.min(PRINT, size)
+  const tailStart = Math.max(0, entry.offset - PRINT)
+  return {
+    head: [headLength, await hashRange(file, 0, headLength)],
+    tail: [tailStart, entry.offset - tailStart, await hashRange(file, tailStart, entry.offset - tailStart)]
+  }
+}
+
+// The file still starts with what was read and only grew: read on from there.
+async function onlyGrew(file, c, size) {
+  if (size < c.offset || size < c.head[0]) return false
+  return (
+    (await hashRange(file, 0, c.head[0])) === c.head[1] &&
+    (await hashRange(file, c.tail[0], c.tail[1])) === c.tail[2]
+  )
+}
+
+async function refreshFile(file, st, c) {
+  const grew = c ? await onlyGrew(file, c, st.size).catch(() => false) : false
+  const entry = grew
+    ? { size: st.size, mtimeMs: st.mtimeMs, offset: c.offset, turns: c.turns }
+    : { size: st.size, mtimeMs: st.mtimeMs, offset: 0, turns: new Map() }
+  await readTurns(file, entry, st.size)
+  return { ...entry, ...(await prints(file, entry, st.size)) }
+}
+
+// --- The parsed turns on disk -------------------------------------------------
+
+const CACHE_VERSION = 1
+const CACHE_LIMIT = 512 * 1024 * 1024
+const QUIT_LIMIT = 32 * 1024 * 1024 // written while quitting only up to this size
+const TEMPORARY = /^\.claude-usage-[0-9a-f-]{36}\.tmp$/
+const STALE_MS = 10 * 60 * 1000
+const count = (v) => Number.isSafeInteger(v) && v >= 0
+const hex = (v) => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v)
+
+function packEntry(path, e) {
+  const strings = []
+  const index = new Map()
+  const ref = (s) => {
+    if (s === null || s === undefined) return -1
+    if (!index.has(s)) index.set(s, strings.push(s) - 1)
+    return index.get(s)
+  }
+  const turns = []
+  for (const [key, t] of e.turns)
+    turns.push([
+      key,
+      ref(t.sessionId),
+      t.time,
+      ref(t.model),
+      ref(t.cwd),
+      ref(t.branch),
+      t.sidechain ? 1 : 0,
+      t.input,
+      t.output,
+      t.cacheRead,
+      t.cacheWrite,
+      t.cacheWrite1h
+    ])
+  return { path, size: e.size, mtimeMs: e.mtimeMs, offset: e.offset, head: e.head, tail: e.tail, strings, turns }
+}
+
+function unpackEntry(raw, dir) {
+  if (!raw || typeof raw !== 'object' || typeof raw.path !== 'string') return null
+  const inside = resolve(raw.path).startsWith(resolve(dir) + sep) && raw.path.endsWith('.jsonl')
+  if (
+    !inside ||
+    !count(raw.size) ||
+    !(typeof raw.mtimeMs === 'number' && Number.isFinite(raw.mtimeMs)) ||
+    !count(raw.offset) ||
+    raw.offset > raw.size ||
+    !Array.isArray(raw.head) ||
+    !(count(raw.head[0]) && raw.head[0] <= raw.size && hex(raw.head[1])) ||
+    !Array.isArray(raw.tail) ||
+    !(count(raw.tail[0]) && count(raw.tail[1]) && raw.tail[0] + raw.tail[1] === raw.offset && hex(raw.tail[2])) ||
+    !Array.isArray(raw.strings) ||
+    !raw.strings.every((s) => typeof s === 'string') ||
+    !Array.isArray(raw.turns)
+  )
+    return null
+  const str = (i) => (i === -1 ? null : Number.isSafeInteger(i) && i >= 0 && i < raw.strings.length ? raw.strings[i] : undefined)
+  const turns = new Map()
+  for (const row of raw.turns) {
+    if (!Array.isArray(row) || row.length !== 12 || typeof row[0] !== 'string' || !row[0]) return null
+    const [key, s, time, m, c, b, side, ...values] = row
+    const t = { key, sessionId: str(s), time, model: str(m), cwd: str(c), branch: str(b), sidechain: side === 1 }
+    if (
+      [t.sessionId, t.model, t.cwd, t.branch].includes(undefined) ||
+      !t.model ||
+      !(typeof time === 'number' && Number.isFinite(time) && time >= 0) ||
+      !values.every(count)
+    )
+      return null
+    COUNTS.forEach((f, i) => (t[f] = values[i]))
+    turns.set(key, t)
+  }
+  return { size: raw.size, mtimeMs: raw.mtimeMs, offset: raw.offset, head: raw.head, tail: raw.tail, turns }
+}
+
+function loadCache(cacheFile, dir) {
+  const cache = new Map()
+  if (!cacheFile) return cache
+  try {
+    const st = fs.lstatSync(cacheFile)
+    if (!st.isFile() || st.size > CACHE_LIMIT) return cache
+    const raw = JSON.parse(fs.readFileSync(cacheFile, 'utf8'))
+    if (
+      raw?.version !== CACHE_VERSION ||
+      raw.parser !== PARSER_VERSION ||
+      raw.dir !== dir ||
+      !Array.isArray(raw.files)
+    )
+      return cache
+    for (const f of raw.files) {
+      const entry = unpackEntry(f, dir)
+      if (entry) cache.set(f.path, entry)
+    }
+  } catch {
+    // missing or unreadable: everything is read again
+  }
+  return cache
+}
+
+// A write cut short (a crash) leaves its temporary file: removed when old.
+function removeStaleTemporaries(cacheFile, now = Date.now()) {
+  try {
+    const folder = dirname(cacheFile)
+    for (const name of fs.readdirSync(folder)) {
+      if (!TEMPORARY.test(name)) continue
+      const file = join(folder, name)
+      try {
+        const st = fs.lstatSync(file)
+        if (st.isFile() && now - st.mtimeMs > STALE_MS) fs.unlinkSync(file)
+      } catch {
+        // gone or busy: next start
+      }
+    }
+  } catch {
+    // no data folder
+  }
+}
+
+// The text to save, or null (too big, or not serializable).
+function cachePayload(dir, cache, limit) {
+  try {
+    const payload = JSON.stringify({
+      version: CACHE_VERSION,
+      parser: PARSER_VERSION,
+      dir,
+      files: [...cache].map(([path, e]) => packEntry(path, e))
+    })
+    return payload.length > limit ? null : payload
+  } catch {
+    return null
+  }
+}
+
+// -> true once saved. Into Tessel's data folder, never a folder created for it.
+async function saveCache(cacheFile, dir, cache) {
+  const payload = cachePayload(dir, cache, CACHE_LIMIT)
+  if (payload === null) return true // never savable as it is: not tried again
+  const temporary = join(dirname(cacheFile), `.claude-usage-${randomUUID()}.tmp`)
+  try {
+    await fs.promises.writeFile(temporary, payload, { flag: 'wx', mode: 0o600 })
+    await fs.promises.rename(temporary, cacheFile)
+    return true
+  } catch {
+    return false
+  } finally {
+    await fs.promises.unlink(temporary).catch(() => {})
+  }
+}
+
+function saveCacheNow(cacheFile, dir, cache) {
+  const payload = cachePayload(dir, cache, QUIT_LIMIT)
+  if (payload === null) return true
+  const temporary = join(dirname(cacheFile), `.claude-usage-${randomUUID()}.tmp`)
+  try {
+    fs.writeFileSync(temporary, payload, { flag: 'wx', mode: 0o600 })
+    fs.renameSync(temporary, cacheFile)
+    return true
+  } catch {
+    return false
+  } finally {
+    try {
+      fs.unlinkSync(temporary)
+    } catch {
+      // renamed
+    }
+  }
+}
+
+// --- The report -------------------------------------------------------------
 
 const empty = () => ({
   turns: 0,
@@ -119,23 +395,70 @@ function add(acc, t, cost) {
   if (cost === null) acc.unpriced++
   else acc.cost += cost
 }
-// A reader that keeps parsed files between calls (parses a file again only
-// when its size or time changed). Filtering never changes deduplication ownership.
+const memo = (fn) => {
+  const values = new Map()
+  return (key) => {
+    if (!values.has(key)) values.set(key, fn(key))
+    return values.get(key)
+  }
+}
+
+// A reader that keeps parsed files between calls (a changed file is read on
+// from where it stopped) and, with cacheFile, between runs of Tessel.
+// Filtering never changes deduplication ownership.
 export function createClaudeUsageReport({
   dir = claudeProjectsDir(),
   days = 30,
   now = Date.now,
-  timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  timezone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+  cacheFile = null,
+  saveDelay = 3000
 } = {}) {
-  const cache = new Map() // file -> { size, mtimeMs, turns }
+  let cache = null // file -> { size, mtimeMs, offset, head, tail, turns }
+  let dirty = false
+  let timer = null
+  let saving = Promise.resolve()
+  let queue = Promise.resolve()
   const dayOf = usageDayFormatter(timezone)
-  return async function report(query = {}) {
-    const time = now()
-    // Reject malformed renderer filters before touching any log file.
-    const range = usageQueryRange(query, dayOf(time), days)
+  const modelOf = memo((model) => pricingModel(model) || model)
+
+  function save() {
+    clearTimeout(timer)
+    timer = null
+    if (!cacheFile || !dirty || !cache) return saving
+    dirty = false
+    const snapshot = new Map(cache)
+    // A failed write never stops the next one; what it missed is written then.
+    saving = saving
+      .catch(() => {})
+      .then(() => saveCache(cacheFile, dir, snapshot))
+      .then((saved) => {
+        if (!saved) dirty = true
+      })
+      .catch(() => {
+        dirty = true
+      })
+    return saving
+  }
+  function schedule() {
+    if (!cacheFile || timer) return
+    timer = setTimeout(save, saveDelay)
+    timer.unref?.()
+  }
+
+  async function scan() {
+    if (!cache) {
+      if (cacheFile) removeStaleTemporaries(cacheFile)
+      cache = loadCache(cacheFile, dir)
+    }
     const files = listJsonl(dir)
     const seen = new Set(files)
-    for (const f of [...cache.keys()]) if (!seen.has(f)) cache.delete(f)
+    for (const f of [...cache.keys()])
+      if (!seen.has(f)) {
+        cache.delete(f)
+        dirty = true
+      }
+    const changed = []
     for (const f of files) {
       let st
       try {
@@ -144,18 +467,50 @@ export function createClaudeUsageReport({
         continue
       }
       const c = cache.get(f)
-      if (c && c.size === st.size && c.mtimeMs === st.mtimeMs) continue
-      try {
-        cache.set(f, { size: st.size, mtimeMs: st.mtimeMs, turns: await parseFile(f) })
-      } catch {
-        // unreadable right now: left out this time
+      if (!c || c.size !== st.size || c.mtimeMs !== st.mtimeMs) changed.push([f, st, c])
+    }
+    let next = 0
+    const worker = async () => {
+      while (next < changed.length) {
+        const [f, st, c] = changed[next++]
+        try {
+          cache.set(f, await refreshFile(f, st, c))
+          dirty = true
+        } catch {
+          // unreadable right now: its last reading (if any) is kept
+        }
       }
     }
+    await Promise.all(Array.from({ length: Math.min(PARALLEL, changed.length) }, worker))
+    if (dirty) schedule()
+    return files
+  }
+
+  async function build(query) {
+    const time = now()
+    // Reject malformed renderer filters before touching any log file.
+    const range = usageQueryRange(query, dayOf(time), days)
+    const files = await scan()
     // One turn once across files (a resumed or forked conversation copies
-    // earlier turns into its new file).
+    // earlier turns into its new file): the first file, in path order, owns
+    // it, with the largest counts of its copies (a copy can stop mid-reply).
     const all = new Map()
-    for (const { turns } of cache.values())
-      for (const [k, t] of turns) if (!all.has(k)) all.set(k, t)
+    for (const f of files) {
+      const entry = cache.get(f)
+      if (!entry) continue
+      for (const [k, t] of entry.turns) {
+        const had = all.get(k)
+        if (!had) all.set(k, t)
+        else if (COUNTS.some((c) => t[c] > had[c])) {
+          const fuller = { ...had }
+          for (const c of COUNTS) fuller[c] = Math.max(had[c], t[c])
+          all.set(k, fuller)
+        }
+      }
+    }
+    const projectKey = memo(usageProjectKey)
+    const projectIn = usageRootMatcher(range)
+    const wantedCwd = range.cwd ? projectKey(range.cwd) : ''
 
     const totals = empty()
     const allTotals = empty()
@@ -165,17 +520,20 @@ export function createClaudeUsageReport({
     const byProject = new Map()
     const bySession = new Map()
     for (const t of all.values()) {
-      const cost = turnCostUsd(t.model, t)
+      let d = derived.get(t)
+      if (!d || d.timezone !== timezone)
+        derived.set(t, (d = { timezone, day: dayOf(t.time), cost: turnCostUsd(t.model, t) }))
+      const { day, cost } = d
       add(allTotals, t, cost)
       if (t.sessionId) allSessions.add(t.sessionId)
-      const day = dayOf(t.time)
-      const model = pricingModel(t.model) || t.model
+      const model = modelOf(t.model)
+      const root = projectIn ? projectIn(t.cwd) : null
       if (
         (range.from && day < range.from) ||
         (range.to && day > range.to) ||
-        (range.cwd && usageProjectKey(t.cwd) !== usageProjectKey(range.cwd)) ||
+        (wantedCwd && projectKey(t.cwd) !== wantedCwd) ||
         (range.model && t.model !== range.model && model !== range.model) ||
-        !matchesUsageRoots(t.cwd, range.roots)
+        (projectIn && !root)
       )
         continue
       add(totals, t, cost)
@@ -184,17 +542,19 @@ export function createClaudeUsageReport({
       if (!byModel.has(model)) byModel.set(model, { model, ...empty(), sessions: new Set() })
       add(byModel.get(model), t, cost)
       if (t.sessionId) byModel.get(model).sessions.add(t.sessionId)
-      const project = t.cwd || '(unknown folder)'
-      const projectKey = usageProjectKey(project)
-      if (!byProject.has(projectKey))
-        byProject.set(projectKey, {
+      // Scoped to Tessel's projects: a project's sub-folders and worktrees
+      // inside it count as that project.
+      const project = root || t.cwd || '(unknown folder)'
+      const key = projectKey(project)
+      if (!byProject.has(key))
+        byProject.set(key, {
           cwd: project,
           label: project.split(/[\\/]/).filter(Boolean).at(-1) || project,
           ...empty(),
           sessions: new Set()
         })
-      add(byProject.get(projectKey), t, cost)
-      if (t.sessionId) byProject.get(projectKey).sessions.add(t.sessionId)
+      add(byProject.get(key), t, cost)
+      if (t.sessionId) byProject.get(key).sessions.add(t.sessionId)
       if (t.sessionId) {
         if (!bySession.has(t.sessionId))
           bySession.set(t.sessionId, {
@@ -242,4 +602,23 @@ export function createClaudeUsageReport({
       sessions: [...bySession.values()].sort((a, b) => b.last - a.last || a.id.localeCompare(b.id))
     }
   }
+
+  // One scan at a time: the Overview and a provider pane asking together
+  // read each changed file once.
+  function report(query = {}) {
+    const run = queue.then(() => build(query))
+    queue = run.catch(() => {})
+    return run
+  }
+  // Writes the parsed turns now (tests).
+  report.flush = () => queue.then(save)
+  // Tessel is quitting: what was not saved yet is written now, at once (a
+  // few megabytes; over QUIT_LIMIT it waits for the next run's own reading).
+  report.flushSync = () => {
+    clearTimeout(timer)
+    timer = null
+    if (!cacheFile || !dirty || !cache) return
+    if (saveCacheNow(cacheFile, dir, cache)) dirty = false
+  }
+  return report
 }

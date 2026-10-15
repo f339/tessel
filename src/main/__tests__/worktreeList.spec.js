@@ -4,7 +4,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'fs'
 import { join, resolve } from 'path'
-import { parseWorktreeList, localRootsOfLayout, createWorktreeList, MAX_WORKTREES } from '../worktreeList'
+import { parseWorktreeList, localRootsOfLayout, localRepoRootsOfLayout, createWorktreeList, MAX_WORKTREES } from '../worktreeList'
 
 const ROOT = resolve('/repo')
 const OTHER = resolve('/elsewhere')
@@ -68,6 +68,26 @@ describe('the folders it may be asked for', () => {
     expect(localRootsOfLayout(null)).toEqual([])
     expect(localRootsOfLayout({ workspaces: 'x' })).toEqual([])
   })
+
+  it('also the repositories of a folder imported as a group, only those inside it', async () => {
+    const inside = join(ROOT, 'api')
+    const layout = {
+      workspaces: [
+        { id: 'g', cwd: ROOT, group: { repos: [{ path: inside }, { path: OTHER }, { path: 'relative' }, null] } },
+        { id: 'r', cwd: null, remote: { hostId: 'h', path: '/srv' }, group: { repos: [{ path: join(OTHER, 'x') }] } }
+      ]
+    }
+    const roots = localRepoRootsOfLayout(layout)
+    expect(roots).toHaveLength(2)
+    expect(localRootsOfLayout(layout)).toHaveLength(1) // what agents may be trusted in is unchanged
+    const run = vi.fn(async (_file, args) =>
+      args.includes('rev-parse') ? { ok: true, stdout: `${inside}\n` } : { ok: true, stdout: `worktree ${inside}\n` }
+    )
+    const list = createWorktreeList({ run, gitArgs: async () => [], exists: () => true })
+    list.setRoots(roots)
+    expect((await list.list(inside)).ok).toBe(true)
+    expect((await list.list(OTHER)).error).toBe('unknown-folder')
+  })
 })
 
 describe('listing', () => {
@@ -125,8 +145,8 @@ describe('wiring', () => {
   const preload = readFileSync(join(__dirname, '..', '..', 'preload', 'index.js'), 'utf8')
   it('the channel is registered after the IPC guard, fed by the saved layout, and in the preload', () => {
     expect(main.indexOf("'git:worktrees'")).toBeGreaterThan(main.indexOf('guardIpc(ipcMain'))
-    expect(main).toContain('worktreeList.setRoots(localRootsOfLayout(data))')
-    expect(main).toContain('worktreeList.setRoots(localRootsOfLayout(saved && saved.data))')
+    expect(main).toContain('worktreeList.setRoots(localRepoRootsOfLayout(data))')
+    expect(main).toContain('worktreeList.setRoots(localRepoRootsOfLayout(saved && saved.data))')
     expect(preload).toContain("gitWorktrees: (cwd) => ipcRenderer.invoke('git:worktrees', cwd)")
   })
 })

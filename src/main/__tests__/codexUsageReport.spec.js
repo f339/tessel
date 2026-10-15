@@ -284,6 +284,11 @@ describe('report projections and filters', () => {
       scope: 'tessel-worktrees',
       totals: { input: 20, turns: 2, sessions: 2 }
     })
+    // A project's sub-folder counts as the project when scoped to Tessel's projects.
+    expect(
+      aggregate(files, { roots: ['C:\\repo\\TREE\\'] }).byProject.map((p) => [p.cwd, p.label, p.turns, p.sessions])
+    ).toEqual([['C:\\repo\\TREE\\', 'TREE', 2, 2]])
+    expect(aggregate(files).byProject.length).toBeGreaterThan(1)
     expect(aggregate(files, { roots: ['C:/Repo/tree'], cwd: 'c:/repo/TREE' }).totals.input).toBe(10)
     expect(aggregate(files, { roots: ['C:/Repo/tree'], model: 'other' }).totals.input).toBe(0)
     expect(aggregate(files, { roots: ['/work/Repo'] }).totals.input).toBe(10)

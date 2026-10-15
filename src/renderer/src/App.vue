@@ -1,7 +1,7 @@
 <script setup>
 import { sidebarMaxWidth } from './layoutLimits'
 import { ensureAgentNames, renameAgentName, resolveAgentAddress, agentProgramLabel } from '../../shared/agentNames'
-import { ref, reactive, provide, watch, computed, nextTick, onMounted, onBeforeUnmount, toRaw } from 'vue'
+import { ref, shallowRef, reactive, provide, watch, computed, nextTick, onMounted, onBeforeUnmount, toRaw } from 'vue'
 import SplitNode from './components/SplitNode.vue'
 import ViewTabs from './components/ViewTabs.vue'
 import FloatingTerminal from './components/FloatingTerminal.vue'
@@ -113,6 +113,7 @@ import { pasteAndConfirm, turnStarting } from './deliver'
 import { createTeamDelivery } from './teamDelivery'
 import { dropBuffer, seedBuffer } from './ptyStore'
 import { tasks as boardTasks, setTasks, updateTask, removeTask, addTask, deletedTaskIds, addDeletedTasks, takeDeletedToPurge, cardOnBoard, beginBoardLoad, endBoardLoad } from './taskBoardStore'
+import { usageScopeEntries, usageScopeRoots, rememberUsageCopies, loadUsageCopies, saveUsageCopies } from './usageStats'
 import { taskHistory, setTaskHistory, backfillHistory, setHistoryDescriber } from './taskHistory'
 import { restoredSideTab } from './sideTabs'
 import { runSettingsTool } from './settingsTools'
@@ -298,12 +299,6 @@ function openSettingsAt(section) {
   settingsSection.value = section
   settingsOpen.value = true
 }
-const usageWorktreePaths = computed(() => {
-  const paths = new Set(boardTasks.map(task => task.worktree?.path).filter(Boolean))
-  for (const ws of workspaces.value)
-    forEachLeaf(ws.tree, leaf => { if (leaf.worktree?.path) paths.add(leaf.worktree.path) })
-  return [...paths]
-})
 // Markdown, diagrams, tables, JSON and images open as editor tabs with
 // Orca's view toggle (Preview | Source | Changes, Table, the picture); PDFs
 // in their own window (Chromium's viewer). The modal viewer (FileViewer.vue)
@@ -5415,6 +5410,31 @@ const projectWorktrees = createProjectWorktrees({
 function onVisibleWorktrees() {
   projectWorktrees.shown()
 }
+
+// Settings > Statistics & usage, "Tessel projects" scope: every local
+// project's folder (each repository of a group), its git worktrees and the
+// task and pane copies, each counted under its project. The copies seen are
+// remembered (usageStats.js): one merged and removed since still counts.
+const usageScopeNow = computed(() => {
+  const panes = []
+  for (const ws of workspaces.value)
+    forEachLeaf(ws.tree, (leaf) => {
+      if (leaf.worktree?.path) panes.push({ path: leaf.worktree.path, workspace: ws })
+    })
+  return usageScopeEntries({ workspaces: workspaces.value, worktrees: wsWorktrees, tasks: boardTasks, panes })
+})
+const usageCopiesSeen = shallowRef(loadUsageCopies())
+watch(
+  usageScopeNow,
+  (entries) => {
+    const next = rememberUsageCopies(usageCopiesSeen.value, entries)
+    if (next === usageCopiesSeen.value) return
+    usageCopiesSeen.value = next
+    saveUsageCopies(next)
+  },
+  { immediate: true }
+)
+const usageWorktreePaths = computed(() => usageScopeRoots(usageScopeNow.value, usageCopiesSeen.value))
 document.addEventListener('visibilitychange', onVisibleWorktrees)
 onBeforeUnmount(() => document.removeEventListener('visibilitychange', onVisibleWorktrees))
 // A host that signs in (a remote project's Files, a terminal, Add a
@@ -5700,7 +5720,11 @@ function onRemoteToolsMissing(msg, tries = 0) {
 async function refreshBranches() {
   const cwds = [...new Set(workspaces.value.map((w) => w.cwd).filter(Boolean))]
   const remotes = [...new Set(workspaces.value.filter((w) => w.remote).map(gitKeyOf).filter(Boolean))]
-  projectWorktrees.refresh([...cwds, ...remotes])
+  // A group's repositories too (each one's copies, for the usage statistics).
+  const repos = workspaces.value.flatMap((w) =>
+    !w.remote && w.group && Array.isArray(w.group.repos) ? w.group.repos.map((r) => r && r.path).filter((p) => typeof p === 'string' && p) : []
+  )
+  projectWorktrees.refresh([...new Set([...cwds, ...repos]), ...remotes])
   for (const key of Object.keys(wsBranches)) if (isRemotePath(key) && !remotes.includes(key)) delete wsBranches[key]
   if (!window.shellApi.gitInfo) return
   for (const cwd of cwds) {

@@ -1,8 +1,10 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import { join, resolve, sep } from 'path'
-import { createClaudeUsageReport, parseClaudeLine } from '../claudeUsageReport'
+import { randomUUID } from 'crypto'
+import { createClaudeUsageReport, parseClaudeLine, PARSER_VERSION } from '../claudeUsageReport'
+import { usageQueryRange, usageRootMatcher } from '../usageReportFilters'
 import { turnCostUsd, pricingModel } from '../../shared/claudePricing'
 
 let dir
@@ -106,6 +108,238 @@ describe('Claude usage report', () => {
 
   it('ignores lines without usage', () => {
     expect(parseClaudeLine('{"type":"user"}')).toBe(null)
+  })
+
+  it('counts a turn copied into another file once, with its fullest counts, whatever the file order', async () => {
+    for (const [partial, full] of [
+      ['a.jsonl', 'b.jsonl'],
+      ['b.jsonl', 'a.jsonl']
+    ]) {
+      dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-claude-usage-'))
+      fs.mkdirSync(join(dir, 'C--Proj'))
+      // A copy that stopped mid-reply, and the reply's last row.
+      fs.writeFileSync(join(dir, 'C--Proj', partial), row({ id: 'm1', req: 'r1', input: 3, output: 5 }) + '\n')
+      fs.writeFileSync(join(dir, 'C--Proj', full), row({ id: 'm1', req: 'r1', input: 3, output: 500 }) + '\n')
+      const r = await createClaudeUsageReport({ dir })({ from: null, to: null })
+      expect(r.totals).toMatchObject({ turns: 1, input: 3, output: 500 })
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+    dir = undefined
+  })
+})
+
+describe('Claude transcripts read from where they stopped, and kept on disk', () => {
+  const ALL = { from: null, to: null }
+  const keyless = (input) =>
+    JSON.stringify({
+      type: 'assistant',
+      sessionId: 's1',
+      timestamp: new Date().toISOString(),
+      cwd: 'C:\\Proj',
+      message: { model: 'claude-opus-5-5', usage: { input_tokens: input, output_tokens: 1 } }
+    })
+  const counts = (r) => ({ turns: r.totals.turns, input: r.totals.input, output: r.totals.output })
+
+  it('reads appended lines once: a last line still being written, and turns without ids', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-claude-usage-'))
+    const file = join(dir, 'a.jsonl')
+    const second = row({ id: 'm2', req: 'r2', input: 20, output: 2 })
+    // A complete turn, a turn without ids still unended, then half a line.
+    fs.writeFileSync(file, `${row({ id: 'm1', req: 'r1', input: 10, output: 1 })}\n${keyless(7)}`)
+    const read = createClaudeUsageReport({ dir })
+    expect(counts(await read(ALL))).toEqual({ turns: 2, input: 17, output: 2 })
+    fs.appendFileSync(file, `\n${second.slice(0, 40)}`)
+    expect(counts(await read(ALL))).toEqual({ turns: 2, input: 17, output: 2 })
+    fs.appendFileSync(file, `${second.slice(40)}\n${keyless(5)}\n`)
+    expect(counts(await read(ALL))).toEqual({ turns: 4, input: 42, output: 5 })
+    // The same as reading the whole file afresh.
+    expect(counts(await createClaudeUsageReport({ dir })(ALL))).toEqual({ turns: 4, input: 42, output: 5 })
+  })
+
+  it('reads a file again from its start when it was rewritten, not only appended to', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-claude-usage-'))
+    const file = join(dir, 'a.jsonl')
+    fs.writeFileSync(file, row({ id: 'm1', req: 'r1', input: 10 }) + '\n')
+    const read = createClaudeUsageReport({ dir })
+    expect((await read(ALL)).totals.input).toBe(10)
+    // Longer, with a different start: the old turn is gone.
+    fs.writeFileSync(
+      file,
+      `${row({ id: 'x1', req: 'y1', input: 300, cwd: 'C:\\Other' })}\n${row({ id: 'x2', req: 'y2', input: 4000 })}\n`
+    )
+    expect(counts(await read(ALL))).toEqual({ turns: 2, input: 4300, output: 0 })
+    // Shorter: read again too.
+    fs.writeFileSync(file, row({ id: 'z1', req: 'z1', input: 5 }) + '\n')
+    expect(counts(await read(ALL))).toEqual({ turns: 1, input: 5, output: 0 })
+  })
+
+  it('keeps parsed turns on disk: after a restart an unchanged file is not read again, a bad cache is ignored', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-claude-usage-'))
+    const projects = join(dir, 'projects')
+    fs.mkdirSync(join(projects, 'C--Proj'), { recursive: true })
+    const file = join(projects, 'C--Proj', 'a.jsonl')
+    fs.mkdirSync(join(dir, 'data'))
+    const cacheFile = join(dir, 'data', 'claude-usage-cache-v1.json')
+    const stamp = 1790000000 // whole seconds: the same mtime on every file system
+    const at = '2026-10-01T12:00:00.000Z'
+    const filler = Array.from({ length: 60 }, () => JSON.stringify({ type: 'user', message: { content: 'x'.repeat(80) } }))
+    const last = keyless(4)
+    // A turn in the middle, far from the file's start and end (which are compared).
+    const content = (middle) =>
+      [row({ id: 'm1', req: 'r1', input: 10, at }), ...filler, row({ id: 'm2', req: 'r2', input: middle, at }), ...filler, last].join('\n') + '\n'
+    fs.writeFileSync(file, content(10))
+    fs.utimesSync(file, stamp, stamp)
+    const first = createClaudeUsageReport({ dir: projects, cacheFile })
+    expect(counts(await first(ALL))).toEqual({ turns: 3, input: 24, output: 1 })
+    await first.flush()
+    expect(fs.existsSync(cacheFile)).toBe(true)
+    // Same size and time but another count: a restart takes the saved turns.
+    fs.writeFileSync(file, content(90))
+    fs.utimesSync(file, stamp, stamp)
+    const restarted = createClaudeUsageReport({ dir: projects, cacheFile })
+    expect(counts(await restarted(ALL))).toEqual({ turns: 3, input: 24, output: 1 })
+    // Appended after the restart: only the new line is read (the middle turn
+    // keeps its saved count) and the saved keyless turn is still one turn.
+    fs.appendFileSync(file, row({ id: 'm3', req: 'r3', input: 100, at }) + '\n')
+    expect(counts(await restarted(ALL))).toEqual({ turns: 4, input: 124, output: 1 })
+    await restarted.flush()
+    for (const bad of [
+      'not json',
+      JSON.stringify({ version: 1, parser: PARSER_VERSION, dir: projects, files: [{ path: 'C:\\elsewhere.jsonl' }] })
+    ]) {
+      fs.writeFileSync(cacheFile, bad)
+      const fresh = createClaudeUsageReport({ dir: projects, cacheFile })
+      expect(counts(await fresh(ALL))).toEqual({ turns: 4, input: 204, output: 1 })
+      await fresh.flush()
+    }
+    // Nothing left behind but the cache itself.
+    expect(fs.readdirSync(join(dir, 'data'))).toEqual(['claude-usage-cache-v1.json'])
+  })
+
+  it('groups a project’s sub-folders and nested worktrees under it when scoped to Tessel’s projects', async () => {
+    const match = usageRootMatcher(
+      usageQueryRange(
+        { roots: ['C:/Repo', { path: 'c:/repo/.claude/worktrees/A1', project: 'C:/Repo' }, 'C:/Repo/nested-own'] },
+        '2026-10-15'
+      )
+    )
+    // A worktree git lists under the project counts as it; a deeper project stays its own.
+    expect(match('C:\\Repo\\.claude\\worktrees\\a1\\src')).toBe('C:/Repo')
+    expect(match('c:\\repo\\NESTED-OWN\\x')).toBe('C:/Repo/nested-own')
+    expect(match('C:\\Repo.worktrees\\fix')).toBe('C:/Repo') // its copies folder
+    expect(match('C:/Repo-wt')).toBe(null)
+    expect(match('relative')).toBe(null)
+    expect(usageRootMatcher(usageQueryRange({}, '2026-10-15'))).toBe(null)
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-claude-usage-'))
+    fs.writeFileSync(
+      join(dir, 'a.jsonl'),
+      ['C:\\Repo', 'C:\\Repo\\src\\main', 'c:/repo/.claude/worktrees/agent-1', 'C:\\Repo-wt', 'C:\\Elsewhere']
+        .map((cwd, i) => row({ id: `m${i}`, req: `r${i}`, session: `s${i}`, cwd, input: 10 ** i }))
+        .join('\n')
+    )
+    const read = createClaudeUsageReport({ dir })
+    const scoped = await read({ from: null, to: null, roots: ['C:\\Repo', 'C:\\Repo-wt'] })
+    expect(scoped.totals.input).toBe(1111)
+    expect(scoped.byProject.map((p) => [p.cwd, p.label, p.turns, p.sessions])).toEqual([
+      ['C:\\Repo-wt', 'Repo-wt', 1, 1],
+      ['C:\\Repo', 'Repo', 3, 3]
+    ])
+    // Sessions keep their own folder; the unscoped report keeps every folder.
+    expect(scoped.sessions.map((s) => s.cwd)).toContain('C:\\Repo\\src\\main')
+    expect((await read({ from: null, to: null })).byProject).toHaveLength(5)
+  })
+
+  it('counts a project’s copies folder, its listed worktrees and its copies under the project', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-claude-usage-'))
+    const cwds = [
+      'C:\\Repo',
+      'C:\\Repo.worktrees\\fix-a', // a task copy merged and removed since
+      'c:/repo/.claude/worktrees/agent-1',
+      'C:\\Repo-wt',
+      'D:\\wt\\Repo\\task',
+      'C:\\Elsewhere',
+      'C:\\Repo\\src'
+    ]
+    fs.writeFileSync(
+      join(dir, 'a.jsonl'),
+      cwds.map((cwd, i) => row({ id: `m${i}`, req: `r${i}`, session: `s${i}`, cwd, input: 10 ** i })).join('\n')
+    )
+    const read = createClaudeUsageReport({ dir })
+    const roots = [
+      'C:\\Repo',
+      { path: 'C:\\Repo-wt', project: 'C:\\Repo' },
+      { path: 'c:/repo/.claude/worktrees/agent-1', project: 'C:\\Repo' }
+    ]
+    const scoped = await read({ ...ALL, roots })
+    expect(scoped.totals.input).toBe(1001111)
+    expect(scoped.byProject.map((p) => [p.cwd, p.label, p.turns, p.sessions])).toEqual([['C:\\Repo', 'Repo', 5, 5]])
+    // Settings > General, Workspace Directory: copies go there instead.
+    expect((await read({ ...ALL, roots, workspaceDir: 'D:\\wt' })).totals.input).toBe(1011101)
+    for (const bad of [[{ path: 'relative' }], [{ path: 'C:\\A', project: 'rel' }], [{ path: 'C:\\A', main: 'yes' }]])
+      await expect(read({ ...ALL, roots: bad })).rejects.toThrow()
+  })
+
+  it('reads again the turns a cache saved with another parser version', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-claude-usage-'))
+    fs.mkdirSync(join(dir, 'projects'))
+    const file = join(dir, 'projects', 'a.jsonl')
+    const cacheFile = join(dir, 'cache.json')
+    const stamp = 1790000000
+    const at = '2026-10-01T12:00:00.000Z'
+    fs.writeFileSync(file, row({ id: 'm1', req: 'r1', input: 10, at }) + '\n')
+    fs.utimesSync(file, stamp, stamp)
+    const first = createClaudeUsageReport({ dir: join(dir, 'projects'), cacheFile })
+    await first(ALL)
+    await first.flush()
+    expect(JSON.parse(fs.readFileSync(cacheFile, 'utf8')).parser).toBe(PARSER_VERSION)
+    // Same size and time, another count: the saved turn is used...
+    fs.writeFileSync(file, row({ id: 'm1', req: 'r1', input: 90, at }) + '\n')
+    fs.utimesSync(file, stamp, stamp)
+    expect((await createClaudeUsageReport({ dir: join(dir, 'projects'), cacheFile })(ALL)).totals.input).toBe(10)
+    // ...unless another parser saved it.
+    const saved = JSON.parse(fs.readFileSync(cacheFile, 'utf8'))
+    fs.writeFileSync(cacheFile, JSON.stringify({ ...saved, parser: PARSER_VERSION + 1 }))
+    expect((await createClaudeUsageReport({ dir: join(dir, 'projects'), cacheFile })(ALL)).totals.input).toBe(90)
+  })
+
+  it('tries a failed save again, survives a cache that cannot be written, writes at once on quit, removes old temporaries', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-claude-usage-'))
+    fs.mkdirSync(join(dir, 'projects'))
+    const file = join(dir, 'projects', 'a.jsonl')
+    const data = join(dir, 'data')
+    const cacheFile = join(data, 'cache.json')
+    const turnsSaved = () => JSON.parse(fs.readFileSync(cacheFile, 'utf8')).files[0].turns.length
+    fs.writeFileSync(file, row({ id: 'm1', req: 'r1', input: 1 }) + '\n')
+    const read = createClaudeUsageReport({ dir: join(dir, 'projects'), cacheFile })
+    await read(ALL)
+    await read.flush() // no data folder yet: not written
+    expect(fs.existsSync(cacheFile)).toBe(false)
+    fs.mkdirSync(data)
+    await read.flush() // tried again without any new change
+    expect(turnsSaved()).toBe(1)
+    fs.appendFileSync(file, row({ id: 'm2', req: 'r2', input: 2 }) + '\n')
+    await read(ALL)
+    const stringify = vi.spyOn(JSON, 'stringify').mockImplementationOnce(() => {
+      throw new Error('not serializable')
+    })
+    await expect(read.flush()).resolves.toBeUndefined()
+    stringify.mockRestore()
+    fs.appendFileSync(file, row({ id: 'm3', req: 'r3', input: 3 }) + '\n')
+    await read(ALL)
+    await read.flush() // later saves still work
+    expect(turnsSaved()).toBe(3)
+    fs.appendFileSync(file, row({ id: 'm4', req: 'r4', input: 4 }) + '\n')
+    await read(ALL)
+    read.flushSync() // quitting: written before it returns
+    expect(turnsSaved()).toBe(4)
+    // A write cut short long ago leaves a temporary file: removed at the next start.
+    const old = join(data, `.claude-usage-${randomUUID()}.tmp`)
+    const recent = join(data, `.claude-usage-${randomUUID()}.tmp`)
+    fs.writeFileSync(old, 'x')
+    fs.utimesSync(old, 1790000000, 1790000000)
+    fs.writeFileSync(recent, 'x')
+    await createClaudeUsageReport({ dir: join(dir, 'projects'), cacheFile })(ALL)
+    expect([fs.existsSync(old), fs.existsSync(recent)]).toEqual([false, true])
   })
 })
 
