@@ -2591,14 +2591,30 @@ function startTaskResize(e) {
     return
   }
   taskResizeLastDown = now
-  const right = e.currentTarget.parentElement.getBoundingClientRect().right
+  const aside = e.currentTarget.parentElement
+  const right = aside.getBoundingClientRect().right
   taskResizing.value = true
   document.body.classList.add('ws-resizing')
-  const move = (ev) => {
-    taskPanelWidth.value = clampTaskPanel(right - ev.clientX)
+  // The panel follows the pointer through its own style, once a frame; its
+  // width (which redraws Tessel's whole window) is set when it is let go.
+  // Setting it on every pointer move (up to 250 a second) redrew the window
+  // each time, and the page beside it lagged behind.
+  let pending = null
+  let frame = 0
+  const apply = () => {
+    frame = 0
+    if (pending == null) return
+    aside.style.flexBasis = `${pending}px`
     window.dispatchEvent(new Event('terminal-layout-change'))
   }
+  const move = (ev) => {
+    pending = clampTaskPanel(right - ev.clientX)
+    if (!frame) frame = requestAnimationFrame(apply)
+  }
   const up = () => {
+    if (frame) cancelAnimationFrame(frame)
+    apply()
+    if (pending != null) taskPanelWidth.value = pending
     taskResizing.value = false
     document.body.classList.remove('ws-resizing')
     refitSoon()
@@ -5298,9 +5314,18 @@ function cycleWorkspace(step) {
 
 // Live resize: the terminal area shrinks/grows with the sidebar, so ask panes
 // to refit (same event a divider drag sends).
+// Once a frame at most while it is dragged (a pointer moves up to 250 times
+// a second; each width redraws the window).
+let sidebarFrame = 0
+let sidebarPending = null
 function resizeSidebar(w) {
-  sidebarWidth.value = w
-  window.dispatchEvent(new Event('terminal-layout-change'))
+  sidebarPending = w
+  if (sidebarFrame) return
+  sidebarFrame = requestAnimationFrame(() => {
+    sidebarFrame = 0
+    sidebarWidth.value = sidebarPending
+    window.dispatchEvent(new Event('terminal-layout-change'))
+  })
 }
 
 function toggleSidebar() {
