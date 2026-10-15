@@ -322,6 +322,24 @@ function goToWorktree(key) {
   portsOpen.value = false
   emit('activate-card', key)
 }
+
+// Opened from elsewhere (Settings' "Windows and tools"): above its indicator,
+// or above the bar's right end when that indicator is hidden.
+const resourceTrigger = ref(null)
+const portsTrigger = ref(null)
+const anchorOf = (el) => (el || barEl.value)?.getBoundingClientRect() || null
+function openResources() {
+  resourceAnchor.value = anchorOf(resourceTrigger.value)
+  portsOpen.value = false
+  resourcesOpen.value = true
+}
+function openPorts() {
+  portsAnchor.value = anchorOf(portsTrigger.value)
+  resourcesOpen.value = false
+  portsOpen.value = true
+  emit('refresh-ports')
+}
+defineExpose({ openResources, openPorts })
 </script>
 
 <template>
@@ -367,6 +385,7 @@ function goToWorktree(key) {
       <!-- Resource Manager: memory · terminals -->
       <button
         v-if="shows('resource-usage')"
+        ref="resourceTrigger"
         type="button"
         class="sb-trigger"
         :aria-label="resourceAriaLabel"
@@ -389,6 +408,7 @@ function goToWorktree(key) {
       <!-- Ports -->
       <button
         v-if="shows('ports')"
+        ref="portsTrigger"
         type="button"
         class="sb-trigger"
         :aria-label="portsLabel"

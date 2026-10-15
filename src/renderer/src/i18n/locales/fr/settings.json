@@ -33,6 +33,14 @@
         "title": "Comptes de fournisseurs d'IA",
         "desc": "Vos connexions et clés d'usage pour chaque fournisseur d'IA. Les clés et les cookies restent chiffrés sur cet ordinateur."
       },
+      "skills": {
+        "title": "Skills",
+        "desc": "Voir, ajouter, mettre à jour et retirer les compétences de vos agents."
+      },
+      "mcp": {
+        "title": "Serveurs MCP",
+        "desc": "Donnez des outils de plus à vos agents : installez, activez ou désactivez et connectez des serveurs MCP."
+      },
       "orchestration": {
         "title": "Orchestration",
         "desc": "Des agents qui travaillent en équipe, suivis sur le tableau des tâches."
@@ -825,8 +833,6 @@
       "title": "Fenêtres et outils",
       "open": "Ouvrir…",
       "show": "Afficher",
-      "mcpHint": "Donnez des outils de plus à vos agents : installez, activez ou désactivez et connectez des serveurs MCP.",
-      "skillsHint": "Voir, ajouter, mettre à jour et retirer les skills de vos agents.",
       "toolsHint": "Installer des agents, Git, Node.js et plus, et ajouter vos propres agents.",
       "dashboard": "Tableau de bord des agents",
       "sessionHistory": "Historique des sessions des agents",
@@ -841,7 +847,22 @@
       "helpHint": "Tous les raccourcis de Tessel (F1).",
       "logsHint": "Les fichiers journaux de Tessel, pour examiner un problème.",
       "noProject": "Ouvrez d'abord un projet.",
-      "cleanupNeedsProject": "Ouvrez d'abord un projet sur cet ordinateur : les worktrees se nettoient un projet à la fois."
+      "cleanupNeedsProject": "Ouvrez d'abord un projet sur cet ordinateur : les worktrees se nettoient un projet à la fois.",
+      "liveShareHint": "Laissez d'autres personnes suivre en direct les projets que vous partagez, ou rejoignez ceux de quelqu'un d'autre avec un code d'invitation.",
+      "portsHint": "Les ports qu'écoutent les programmes de vos terminaux, par espace de travail : ouvrez-les, copiez-les ou arrêtez-les (barre d'état).",
+      "explorer": "Explorateur de fichiers",
+      "explorerHint": "Les fichiers du projet, avec leur état git (Ctrl+Shift+X).",
+      "resourcesHint": "Mémoire et processeur de Tessel et des terminaux de chaque espace de travail (barre d'état)."
+    },
+    "skills": {
+      "installed": "Compétences installées",
+      "installedHint": "Chaque compétence, les agents qui la voient et son emplacement ; ajoutez-en une depuis GitHub ou un dossier.",
+      "open": "Ouvrir Skills"
+    },
+    "mcp": {
+      "installed": "Serveurs installés",
+      "installedHint": "Tous les serveurs MCP de vos agents, le catalogue, vos propres serveurs et les connexions d'équipe.",
+      "open": "Ouvrir Serveurs MCP"
     }
   },
   "accounts": {

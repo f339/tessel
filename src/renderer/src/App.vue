@@ -823,10 +823,6 @@ function runQuickCommand(id, q) {
   focusPane(id)
 }
 const mcpOpen = ref(false)
-const mcpTab = ref('installed') // the tab it opens on
-watch(mcpOpen, (open) => {
-  if (!open) mcpTab.value = 'installed'
-})
 // The Skills window (SkillsDialog.vue): agent skills, listed, added, removed.
 const skillsOpen = ref(false)
 const toolsOpen = ref(false)
@@ -4087,14 +4083,18 @@ function closeSettings() {
   settingsSection.value = null
 }
 
+// The status bar (its Resource Manager and Ports popovers open from Settings).
+const statusBarRef = ref(null)
+// Runs fn with the status bar, shown first when it is hidden (the popovers
+// open above it).
+function withStatusBar(fn) {
+  if (!settings.statusBarVisible) settings.statusBarVisible = true
+  nextTick(() => statusBarRef.value && fn(statusBarRef.value))
+}
+
 // Settings' "Windows and tools" rows (settingsTools.js): Settings closes,
 // then the window, panel or tool opens, as from the palette or the toolbar.
 const settingsToolActions = {
-  mcp: () => {
-    mcpTab.value = 'installed'
-    mcpOpen.value = true
-  },
-  skills: () => (skillsOpen.value = true),
   tools: () => openTools(),
   sessions: () => openSessions(),
   dashboard: () => showSideTab('dashboard'),
@@ -4108,6 +4108,9 @@ const settingsToolActions = {
     if (currentWs.value) openNotesView(currentWs.value.id)
     else showToast(t('settings.tools.noProject', 'Open a project first.'), { kind: 'error' })
   },
+  conversations: () => showSideTab('conversations'),
+  liveShare: () => openLiveShare(),
+  files: () => showSideTab('files'),
   cleanupWorktrees: () => {
     const ws = currentWs.value
     if (ws && ws.cwd && !ws.remote && window.shellApi.worktreeCleanupScan) openWorktreeCleanup(ws.id)
@@ -4118,13 +4121,21 @@ const settingsToolActions = {
   floating: () => {
     if (!floating.state.open) toggleFloating()
   },
+  ports: () => withStatusBar((bar) => bar.openPorts()),
   browser: () => openInBrowser({ newPane: true, focusAddress: true }),
   help: () => (helpOpen.value = true),
-  logs: () => openLogs()
+  logs: () => openLogs(),
+  resources: () => withStatusBar((bar) => bar.openResources())
 }
 function openFromSettings(id) {
   closeSettings()
   runSettingsTool(id, settingsToolActions)
+}
+// A command of Settings' Skills or MCP servers page (a skill's setup, a
+// server's sign-in): Settings closes so its new pane is seen.
+function runFromSettings(job) {
+  closeSettings()
+  runInPane(job)
 }
 
 function setDefaultShell(id) {
@@ -12663,6 +12674,7 @@ onBeforeUnmount(() => {
 
     <StatusBar
       v-if="settings.statusBarVisible"
+      ref="statusBarRef"
       :info="statusInfo"
       :keep-awake-active="wantAwake"
       :terminals="statusTerminals"
@@ -12748,7 +12760,6 @@ onBeforeUnmount(() => {
 
     <McpDialog
       v-if="mcpOpen"
-      :initial-tab="mcpTab"
       :cwd="currentWs ? currentWs.cwd : null"
       :agents="agents"
       @run="
@@ -12928,6 +12939,7 @@ onBeforeUnmount(() => {
       :section="settingsSection"
       :agents="agents"
       :worktree-paths="usageWorktreePaths"
+      :project-cwd="currentWs ? currentWs.cwd : null"
       :agent-updates="agentUpdateInfo"
       :agent-update-jobs="agentUpdateJobs"
       :agent-update-queue="updateQueue"
@@ -12942,7 +12954,7 @@ onBeforeUnmount(() => {
       @cancel-agent-update="cancelAgentUpdate"
       @open-cookie-import="(((settingsOpen = false)), (cookieImportOpen = true))"
       @open-tool="openFromSettings"
-      @open-connections="((settingsOpen = false), (mcpTab = 'connections'), (mcpOpen = true))"
+      @run-job="runFromSettings"
       @check-updates="checkForUpdates"
       @open-update="((settingsOpen = false), (updateOpen = true))"
       @set-default-shell="setDefaultShell"

@@ -66,4 +66,34 @@ describe('MCP servers dialog', () => {
     expect(wrapper.emitted('run')[0][0].command).toBe('codex mcp login context7')
     wrapper.unmount()
   })
+
+  it('as a window, Escape and the backdrop close it; embedded (a Settings page), nothing does', async () => {
+    previousApi = window.shellApi
+    window.shellApi = {
+      mcpList: async () => ({ claude: [{ name: 'context7', scope: 'user', type: 'http', target: 'https://x' }], codex: [], others: {} }),
+      checkTools: async () => ({})
+    }
+    const agents = [{ id: 'claude', available: true }]
+    const modal = mount(McpDialog, { props: { agents }, attachTo: document.body })
+    await flushPromises()
+    expect(modal.find('.help-head').exists()).toBe(true)
+    await modal.get('[role="dialog"]').trigger('keydown', { key: 'Escape' })
+    await modal.trigger('pointerdown')
+    expect(modal.emitted('close')).toHaveLength(2)
+    modal.unmount()
+
+    const page = mount(McpDialog, { props: { agents, embedded: true, initialTab: 'connections' }, attachTo: document.body })
+    await flushPromises()
+    for (const sel of ['.help-backdrop', '.help-card', '.help-head', '[role="dialog"]']) expect(page.find(sel).exists(), sel).toBe(false)
+    expect(page.find('.mcp-intro').exists()).toBe(true)
+    expect(page.get('.launch-seg-btn.on').text()).toBe('Team connections')
+    await page.findAll('.launch-seg-btn').find((b) => b.text().startsWith('Installed')).trigger('click')
+    expect(page.text()).toContain('context7')
+    await page.get('.mcp-embedded-body').trigger('keydown', { key: 'Escape' })
+    await page.trigger('pointerdown')
+    expect(page.emitted('close')).toBeUndefined()
+    await page.get('.mcp-skills-link').trigger('click')
+    expect(page.emitted('skills')).toHaveLength(1)
+    page.unmount()
+  })
 })

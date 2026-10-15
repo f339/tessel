@@ -166,6 +166,22 @@ describe('status bar', () => {
     expect(settings.statusBarItems).toEqual(['ssh', 'resource-usage'])
     expect(w.findAll('.sb-trigger')).toHaveLength(3)
   })
+
+  it('Settings opens the Resource Manager and the Ports popovers, even with their indicators hidden', async () => {
+    settings.statusBarItems = ['ssh']
+    const w = mountBar()
+    await flushPromises()
+    expect(window.shellApi.resourceSnapshot).not.toHaveBeenCalled()
+    w.vm.openResources()
+    await flushPromises()
+    expect(window.shellApi.resourceSnapshot).toHaveBeenCalled()
+    expect(document.querySelector('.sb-resources').textContent).toContain('1.44 GB')
+    w.vm.openPorts()
+    await flushPromises()
+    expect(document.querySelector('.sb-resources')).toBeNull()
+    expect(document.querySelector('.sb-ports').textContent).toContain('5173')
+    expect(w.emitted('refresh-ports')).toHaveLength(1)
+  })
 })
 
 describe('Resource Manager keeps up on its own', () => {

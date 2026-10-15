@@ -16,6 +16,8 @@ import AutomationsPage from './AutomationsPage.vue'
 import CliSettings from './CliSettings.vue'
 import AgentTerminalSettings from './AgentTerminalSettings.vue'
 import SettingsToolRows from './SettingsToolRows.vue'
+import SkillsDialog from './SkillsDialog.vue'
+import McpDialog from './McpDialog.vue'
 import { BarChart3, Cable, LoaderCircle } from 'lucide-vue-next'
 import { updateFailureText, updateKindLabel } from '../agentUpdateErrors'
 import { settings, FONT_FAMILIES, resetSettings, clamp, MAX_LEFT_SIDEBAR_TINT_OPACITY, limitNumber, DEFAULT_SETTINGS, LIMITS, USAGE_REFRESH_MINUTES } from '../settings'
@@ -52,6 +54,8 @@ const props = defineProps({
   // Built-in and your own agents, with `available` (found on the PATH).
   agents: { type: Array, default: () => [] },
   worktreePaths: { type: Array, default: () => [] },
+  // The current workspace's project folder (the Skills and MCP servers pages).
+  projectCwd: { type: String, default: null },
   defaultShell: { type: String, default: null },
   updateStatus: { type: Object, default: () => ({ state: 'disabled' }) },
   // Open on this page, e.g. 'quick-commands', 'accounts', 'agents'.
@@ -98,6 +102,26 @@ const PAGES = {
       return t('settings.pages.accounts.desc', 'Your sign-ins and usage keys for each AI provider. Keys and cookies stay encrypted on this computer.')
     },
     icon: 'M8 8a2.75 2.75 0 100-5.5A2.75 2.75 0 008 8zM2.75 13.5c.7-2.3 2.8-3.75 5.25-3.75s4.55 1.45 5.25 3.75'
+  },
+  // The Skills and MCP servers windows, shown in the page (SkillsDialog.vue
+  // and McpDialog.vue, embedded).
+  skills: {
+    get title() {
+      return t('settings.pages.skills.title', 'Skills')
+    },
+    get desc() {
+      return t('settings.pages.skills.desc', 'See, add, update and remove the skills of your agents.')
+    },
+    icon: 'M8 4.5C6.8 3.6 5 3 2.5 3v9.5c2.5 0 4.3.6 5.5 1.5 1.2-.9 3-1.5 5.5-1.5V3C11 3 9.2 3.6 8 4.5zM8 4.5V14'
+  },
+  mcp: {
+    get title() {
+      return t('settings.pages.mcp.title', 'MCP servers')
+    },
+    get desc() {
+      return t('settings.pages.mcp.desc', 'Give your agents extra tools: install, turn on or off and connect MCP servers.')
+    },
+    icon: 'M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 01-7 0zM8 11v3'
   },
   orchestration: {
     get title() {
@@ -234,7 +258,7 @@ const GROUPS = [
     get title() {
       return t('settings.groups.ai', 'AI capabilities')
     },
-    pages: ['agents', 'accounts', 'orchestration', 'voice']
+    pages: ['agents', 'accounts', 'skills', 'mcp', 'orchestration', 'voice']
   },
   {
     id: 'configure',
@@ -277,6 +301,8 @@ const PAGE_TITLES_EN = {
   stats: 'Stats & Usage', // i18n-ignore
   agents: 'Agents', // i18n-ignore
   accounts: 'AI provider accounts', // i18n-ignore
+  skills: 'Skills', // i18n-ignore
+  mcp: 'MCP servers', // i18n-ignore
   orchestration: 'Orchestration', // i18n-ignore
   voice: 'Voice typing', // i18n-ignore
   general: 'General', // i18n-ignore
@@ -308,9 +334,13 @@ const searching = computed(() => !!query.value.trim())
 const matched = ref([]) // the pages with a match for the search
 const mainEl = ref(null)
 const searchEl = ref(null)
+// The tab the MCP servers page opens on: 'connections' from Orchestration's
+// Details, else 'installed'.
+const mcpTab = ref('installed')
 
 function go(id) {
   if (!PAGES[id]) return
+  if (id !== 'mcp') mcpTab.value = 'installed'
   page.value = id
   query.value = ''
   try {
@@ -324,6 +354,10 @@ watch(
   () => props.section,
   (s) => s && go(s)
 )
+function openMcpTab(tab) {
+  go('mcp')
+  mcpTab.value = tab
+}
 function shown(id) {
   return searching.value ? matched.value.includes(id) : page.value === id
 }
@@ -421,7 +455,6 @@ const emit = defineEmits([
   'check-updates',
   'open-update',
   'detect-agents',
-  'open-connections',
   'check-agent-updates',
   'update-agent',
   'update-all-agents',
@@ -434,7 +467,10 @@ const emit = defineEmits([
   'agent-install-page',
   'open-cookie-import',
   // A window, panel or tool to open (settingsTools.js ids), Settings closed first.
-  'open-tool'
+  'open-tool',
+  // A command of the Skills or MCP servers page ({ label, command }), to run
+  // in a new pane once Settings is closed.
+  'run-job'
 ])
 
 const browserApi = typeof window !== 'undefined' && window.shellApi ? window.shellApi.browser : null
@@ -1807,6 +1843,52 @@ function previewSound() {
           </div>
         </section>
 
+        <!-- ============ Skills ============ -->
+        <section id="set-skills" class="set-page" data-page="skills" :hidden="!shown('skills')" aria-labelledby="set-skills-title">
+          <header class="set-page-head">
+            <h2 id="set-skills-title">{{ PAGES.skills.title }}</h2>
+            <p class="set-page-desc">{{ PAGES.skills.desc }}</p>
+          </header>
+          <div class="set-group">
+            <div v-if="page === 'skills' && !searching" class="set-card set-card-pad">
+              <SkillsDialog embedded :cwd="projectCwd" :agents="agents" @run="emit('run-job', $event)" />
+            </div>
+            <div v-else class="set-row">
+              <div class="set-label">{{ t('settings.skills.installed', 'Installed skills') }}
+                <span class="set-hint">{{ t('settings.skills.installedHint', 'Each skill, which agents see it and where it is; add one from GitHub or a folder.') }}</span>
+              </div>
+              <button type="button" class="exit-btn" @click="go('skills')">{{ t('settings.skills.open', 'Open Skills') }}</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ MCP servers ============ -->
+        <section id="set-mcp" class="set-page" data-page="mcp" :hidden="!shown('mcp')" aria-labelledby="set-mcp-title">
+          <header class="set-page-head">
+            <h2 id="set-mcp-title">{{ PAGES.mcp.title }}</h2>
+            <p class="set-page-desc">{{ PAGES.mcp.desc }}</p>
+          </header>
+          <div class="set-group">
+            <div v-if="page === 'mcp' && !searching" class="set-card set-card-pad">
+              <McpDialog
+                embedded
+                :cwd="projectCwd"
+                :agents="agents"
+                :initial-tab="mcpTab"
+                @run="emit('run-job', $event)"
+                @tools="emit('open-tool', 'tools')"
+                @skills="go('skills')"
+              />
+            </div>
+            <div v-else class="set-row">
+              <div class="set-label">{{ t('settings.mcp.installed', 'Installed servers') }}
+                <span class="set-hint">{{ t('settings.mcp.installedHint', 'Every MCP server of your agents, the catalog, your own servers and the team connections.') }}</span>
+              </div>
+              <button type="button" class="exit-btn" @click="go('mcp')">{{ t('settings.mcp.open', 'Open MCP servers') }}</button>
+            </div>
+          </div>
+        </section>
+
         <!-- ============ Orchestration ============ -->
         <section
           id="set-orchestration"
@@ -1829,7 +1911,7 @@ function previewSound() {
                 <span class="set-hint">{{ coverageSummary }}</span>
                 <span class="agent-set-actions">
                   <button class="exit-btn" type="button" @click="loadCoverage">{{ t('settings.orchestration.checkAgain', 'Check again') }}</button>
-                  <button class="exit-btn" type="button" @click="emit('open-connections')">{{ t('settings.orchestration.details', 'Details') }}</button>
+                  <button class="exit-btn" type="button" @click="openMcpTab('connections')">{{ t('settings.orchestration.details', 'Details') }}</button>
                 </span>
               </div>
               <div v-if="Array.isArray(coverage) && coverage.length" class="orch-coverage">
@@ -3207,6 +3289,7 @@ function previewSound() {
 
             </div>
           </div>
+          <SettingsToolRows page="editor" @open="emit('open-tool', $event)" />
         </section>
 
         <!-- ============ Browser ============ -->

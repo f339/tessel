@@ -20,7 +20,9 @@ const props = defineProps({
   cwd: { type: String, default: null }, // current workspace's project folder
   agents: { type: Array, default: () => [] },
   // Open on this tab ('connections' from Settings > Orchestration).
-  initialTab: { type: String, default: 'installed' }
+  initialTab: { type: String, default: 'installed' },
+  // Shown as a Settings page: no backdrop, card, title bar or Escape to close.
+  embedded: { type: Boolean, default: false }
 })
 const emit = defineEmits(['close', 'run', 'tools', 'skills'])
 
@@ -535,8 +537,16 @@ async function reinstallHooks() {
   }
 }
 
+// Escape closes the window; embedded in Settings, Settings handles it.
+function onEscape(e) {
+  if (props.embedded) return
+  e.preventDefault()
+  e.stopPropagation()
+  emit('close')
+}
+
 onMounted(async () => {
-  if (cardEl.value) cardEl.value.focus()
+  if (cardEl.value && !props.embedded) cardEl.value.focus()
   refresh()
   loadHooks()
   if (window.shellApi.checkTools) {
@@ -546,16 +556,16 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="help-backdrop" @pointerdown.self="emit('close')">
+  <div :class="embedded ? 'mcp-embedded' : 'help-backdrop'" @pointerdown.self="embedded || emit('close')">
     <div
       ref="cardEl"
-      class="help-card mcp-card"
-      role="dialog"
-      :aria-label="t('mcp.title', 'MCP servers')"
-      tabindex="-1"
-      @keydown.escape.prevent.stop="emit('close')"
+      :class="embedded ? 'mcp-embedded-body' : 'help-card mcp-card'"
+      :role="embedded ? undefined : 'dialog'"
+      :aria-label="embedded ? undefined : t('mcp.title', 'MCP servers')"
+      :tabindex="embedded ? undefined : -1"
+      @keydown.escape="onEscape"
     >
-      <div class="help-head">
+      <div v-if="!embedded" class="help-head">
         <span>{{ t('mcp.title', 'MCP servers') }}</span>
         <button class="tb-icon" :title="t('mcp.close', 'Close (Esc)')" @click="emit('close')">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
