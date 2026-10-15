@@ -169,6 +169,11 @@ export function createSkillSources(file) {
   }
 }
 
+// Folders a tool fills inside a skill (packages, environments, git): not
+// the skill's content. Never read for its history, never touched by it.
+export const SKIPPED_DIR = /^(\.git|node_modules|\.venv|venv|__pycache__|\.mypy_cache|\.pytest_cache|\.tox)$/i
+export const isSkippedRel = (rel) => String(rel).split('/').slice(0, -1).some((part) => SKIPPED_DIR.test(part))
+
 // A skill's content as one hash: each file's path and the hash of its bytes,
 // in path order. The same for a package in memory ({ rel, data }) and a
 // folder read from disk ({ rel, sha }), so an edited copy is noticed.
@@ -176,8 +181,45 @@ const byRel = (x, y) => (x.rel < y.rel ? -1 : x.rel > y.rel ? 1 : 0)
 export const sha256 = (data) => createHash('sha256').update(data).digest('hex')
 export function contentHash(files) {
   const h = createHash('sha256')
-  for (const f of files.map((f) => ({ rel: f.rel, sha: f.sha || sha256(f.data) })).sort(byRel)) h.update(`${f.rel}\0${f.sha}\n`)
+  const list = files.filter((f) => !isSkippedRel(f.rel)).map((f) => ({ rel: f.rel, sha: f.sha || sha256(f.data) }))
+  for (const f of list.sort(byRel)) h.update(`${f.rel}\0${f.sha}\n`)
   return h.digest('hex')
+}
+
+// Deletes a folder and everything in it without ever following a link: a
+// link or a Windows junction inside is removed itself, never what it points
+// to (Electron's recursive fs.rm can follow junctions).
+export async function removeTree(target) {
+  const st = await fs.lstat(target).catch(() => null)
+  if (!st) return
+  if (st.isSymbolicLink()) {
+    try {
+      await fs.unlink(target)
+    } catch {
+      await fs.rmdir(target)
+    }
+  } else if (st.isDirectory()) {
+    for (const name of await fs.readdir(target)) await removeTree(path.join(target, name))
+    await fs.rmdir(target)
+  } else await fs.unlink(target)
+}
+
+// Records of skills whose folder is gone (deleted, a removed worktree) are
+// dropped: never checked for updates again, never given to a new folder of
+// the same name. One on a drive that is not there now is kept.
+export function dropStaleSources(sources) {
+  let dropped = 0
+  for (const dir of Object.keys(sources ? sources.all() : {})) {
+    try {
+      fsSync.statSync(dir)
+    } catch (err) {
+      if (err && err.code === 'ENOENT' && fsSync.existsSync(path.parse(path.resolve(dir)).root)) {
+        sources.remove(dir)
+        dropped++
+      }
+    }
+  }
+  return dropped
 }
 
 // Where a copy comes from: 'github' or 'folder' when Tessel recorded adding
@@ -588,7 +630,9 @@ async function writeTree(dest, files) {
 // skill of that name is kept (exists: true) unless `replace` names its folder
 // (Update): then the new copy takes its place, the old one is removed after.
 // history (skillHistory.js): the copy being replaced is kept as a version
-// first, and the new content is noted as installed or updated.
+// first, and the new content is noted as installed or updated. A copy that
+// cannot be kept whole (and is not exactly what was installed) is never
+// replaced.
 export async function installSkill({ id, agents = [], scope = 'user', cwd = null, replace = null, home = os.homedir(), env = process.env, sources = null, history = null } = {}) {
   const pkg = getPackage(id)
   if (!pkg) throw fail(t('main.skills.expired', 'This preview has expired. Look the skill up again.'), 'SKILL_EXPIRED')
@@ -618,7 +662,17 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
         continue
       }
       if (replace && existing && (existing.isSymbolicLink() || !existing.isDirectory())) throw linkRefused(path.basename(dest))
-      if (existing && history) await history.track(dest).catch(() => {})
+      if (existing && history) {
+        // A failed snapshot stops here: the old copy is untouched.
+        const snap = await history.track(dest)
+        const recorded = sources ? sources.get(dest) : null
+        const asInstalled = !snap.truncated && !!(recorded && recorded.hash) && snap.hash === recorded.hash
+        if (!snap.saved || !(snap.complete || asInstalled))
+          throw fail(
+            t('main.skills.history.notKeptUpdate', 'The copy there could not be kept whole in its history (too many files, or a file too large), so it was not replaced. Remove it first to install the new one.'),
+            'SKILL_HISTORY_INCOMPLETE'
+          )
+      }
       await fs.mkdir(root.path, { recursive: true })
       await writeTree(tmp, pkg.files)
       if (existing) {
@@ -630,7 +684,7 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
           await fs.rename(old, dest).catch(() => {})
           throw err
         }
-        await fs.rm(old, { recursive: true, force: true }).catch(() => {})
+        await removeTree(old).catch(() => {})
       } else await fs.rename(tmp, dest)
       if (sources) sources.set(dest, { ...pkg.source, name: pkg.name, installedAt: Date.now(), hash })
       if (history) {
@@ -639,7 +693,7 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
       }
       results.push({ ...result, ok: true })
     } catch (err) {
-      await fs.rm(tmp, { recursive: true, force: true }).catch(() => {})
+      await removeTree(tmp).catch(() => {})
       results.push({ ...result, ok: false, error: (err && err.message) || String(err) })
     }
   }
@@ -665,7 +719,7 @@ export async function checkRemovable(dir, opts) {
 export async function removeSkill({ dir, mode = 'trash', cwd = null, home = os.homedir(), env = process.env, trash = null, sources = null } = {}) {
   await checkRemovable(dir, { home, env, cwd })
   const target = path.resolve(dir)
-  if (mode === 'delete') await fs.rm(target, { recursive: true })
+  if (mode === 'delete') await removeTree(target)
   else {
     if (!trash) throw fail(t('main.skills.noTrash', 'The Recycle Bin is not available.'))
     await trash(target)

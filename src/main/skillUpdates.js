@@ -7,27 +7,34 @@
 //     only when its repository moved past the installed commit;
 //   - an answer about a fixed commit never changes: kept, never asked again;
 //   - a few requests left in the hour are not used, and once GitHub says the
-//     limit is reached (403/429), nothing is asked until the time it gives.
-// State (answers, ETags, when) in one JSON file in Tessel's data folder.
+//     limit is reached (403 with none left, or 429), nothing is asked until
+//     the time it gives;
+//   - a repository that fails (blocked, offline) does not stop the others,
+//     and a check that failed is not tried again for an hour unless asked.
+// Before an update, only that skill's repository is asked. Records of skills
+// whose folder is gone are dropped. State (answers, ETags, when) in one JSON
+// file in Tessel's data folder.
 import fsSync from 'node:fs'
 import path from 'node:path'
 import { t } from './i18n'
 import { writeFileAtomic } from './safeJson'
-import { parseGithubSpec } from './skillsManager'
+import { parseGithubSpec, dropStaleSources } from './skillsManager'
 
 export const UPDATE_CHECK = {
   every: 20 * 3600 * 1000, // about once a day
+  retry: 3600 * 1000, // after a failed check, the next one on its own
   minGap: 60 * 1000, // a check asked for again within a minute: the last one
   perPage: 30, // commits listed since the installed one
   maxRequests: 40, // in one check
   keepRemaining: 5, // requests of the hour left for everything else
-  timeout: 20000
+  timeout: 20000 // one request, its answer read whole
 }
 
 const API = 'https://api.github.com' // i18n-ignore URL
 const SHA = /^[0-9a-f]{40}$/i
 const fail = (message, code, extra) => Object.assign(new Error(message), code ? { code } : {}, extra || {})
 const limited = (until) => fail('GitHub rate limit', 'SKILL_UPDATE_LIMIT', { until }) // i18n-ignore internal
+const STOPS = ['SKILL_UPDATE_LIMIT', 'SKILL_UPDATE_BUDGET']
 
 // One commit from the API -> { sha, message (first line), date (ms), author }.
 export function mapCommit(c) {
@@ -67,23 +74,42 @@ export function createSkillUpdates(file, { sources, fetchFn = (...args) => fetch
 
   const repoKey = (s) => `${s.owner}/${s.repo}`.toLowerCase() + `@${s.ref || ''}`
   const listKey = (s, sha, p) => `${s.owner}/${s.repo}`.toLowerCase() + `@${String(sha).toLowerCase()}:${p || ''}`
-  const githubSources = () =>
-    Object.values(sources ? sources.all() : {}).filter(
-      (s) => s && s.kind === 'github' && parseGithubSpec(`${s.owner}/${s.repo}`) && (s.ref == null || /^[A-Za-z0-9._/-]{1,200}$/.test(s.ref))
-    )
+  const isGithub = (s) => !!s && s.kind === 'github' && !!parseGithubSpec(`${s.owner}/${s.repo}`) && (s.ref == null || /^[A-Za-z0-9._/-]{1,200}$/.test(s.ref))
+
+  // One check at a time (a full one, or one skill before its update).
+  let chain = Promise.resolve()
+  const queue = (fn) => {
+    const run = chain.then(fn, fn)
+    chain = run.catch(() => {})
+    return run
+  }
 
   let requests = 0
+  // The request and its answer, read whole, within the timeout.
   async function api(query, etag = null) {
     const st = load()
     if (st.limit && st.limit.remaining <= opts.keepRemaining && st.limit.reset > now()) throw limited(st.limit.reset)
     if (requests >= opts.maxRequests) throw fail(t('main.skills.updates.budget', 'Too many skills to check at once; the rest are checked next time.'), 'SKILL_UPDATE_BUDGET')
     requests++
     const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), opts.timeout)
+    let timer
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        ctrl.abort()
+        reject(fail(t('main.skills.updates.timeout', 'GitHub did not answer in time.'), 'SKILL_UPDATE_TIMEOUT'))
+      }, opts.timeout)
+    })
+    try {
+      return await Promise.race([ask(st, query, etag, ctrl.signal), timeout])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  async function ask(st, query, etag, signal) {
     let res
     try {
       res = await fetchFn(API + query, {
-        signal: ctrl.signal,
+        signal,
         headers: {
           Accept: 'application/vnd.github+json',
           'User-Agent': 'Tessel',
@@ -93,16 +119,17 @@ export function createSkillUpdates(file, { sources, fetchFn = (...args) => fetch
       })
     } catch (err) {
       throw fail(t('main.skills.updates.offline', 'Could not reach GitHub: {{error}}', { error: (err && err.message) || String(err) }))
-    } finally {
-      clearTimeout(timer)
     }
     const header = (name) => (res.headers && typeof res.headers.get === 'function' ? res.headers.get(name) : null)
     const remainingText = header('x-ratelimit-remaining')
     const reset = Number(header('x-ratelimit-reset'))
-    if (remainingText != null && Number.isFinite(Number(remainingText)))
+    if (remainingText != null && remainingText !== '' && Number.isFinite(Number(remainingText)))
       st.limit = { remaining: Number(remainingText), reset: Number.isFinite(reset) && reset > 0 ? reset * 1000 : now() + 3600 * 1000 }
     if (res.status === 304) return { notModified: true }
-    const retry = Number(header('retry-after'))
+    // Rate limited: 429, or 403 with none left or a Retry-After (any other
+    // 403 is this repository's: blocked, and the others go on).
+    const retryText = header('retry-after')
+    const retry = retryText != null && retryText !== '' ? Number(retryText) : NaN
     if (res.status === 429 || (res.status === 403 && (remainingText === '0' || Number.isFinite(retry)))) {
       throw limited(Number.isFinite(retry) && retry > 0 ? now() + retry * 1000 : st.limit && st.limit.reset > now() ? st.limit.reset : now() + 3600 * 1000)
     }
@@ -120,8 +147,8 @@ export function createSkillUpdates(file, { sources, fetchFn = (...args) => fetch
     const prev = st.heads[key]
     const ref = g.ref ? `&sha=${encodeURIComponent(g.ref)}` : ''
     const r = await api(`/repos/${g.owner}/${g.repo}/commits?per_page=1${ref}`, prev && prev.sha ? prev.etag : null)
-    if (r.notModified && prev) {
-      prev.at = now()
+    if (r.notModified && prev && prev.sha) {
+      st.heads[key] = { sha: prev.sha, etag: prev.etag, at: now() }
       return prev.sha
     }
     if (r.missing) {
@@ -158,58 +185,98 @@ export function createSkillUpdates(file, { sources, fetchFn = (...args) => fetch
     return st.at[key]
   }
 
+  // One repository and its skills. used: the answers still needed.
+  async function checkGroup(g, used) {
+    if (used) used.heads.add(repoKey(g))
+    const head = await headOf(g)
+    if (!head) return
+    const done = new Set()
+    for (const s of g.copies) {
+      // Up to date, or installed before Tessel kept the commit: nothing to ask.
+      if (!s.commit || !SHA.test(s.commit) || s.commit.toLowerCase() === head.toLowerCase()) continue
+      const folder = s.path || ''
+      if (used) {
+        used.lists.add(listKey(g, head, folder))
+        used.at.add(listKey(g, s.commit, folder))
+      }
+      if (done.has(`${s.commit}:${folder}`)) continue // i18n-ignore key
+      done.add(`${s.commit}:${folder}`) // i18n-ignore key
+      await commitsAt(g, head, folder)
+      await installedAt(g, s.commit, folder)
+    }
+  }
+
   async function run(force) {
     const st = load()
     const start = now()
     if (st.until && start < st.until) return { ok: false, checked: false, rateLimited: true, until: st.until }
-    if (st.checkedAt && start - st.checkedAt < (force ? opts.minGap : opts.every)) return { ok: true, checked: false, checkedAt: st.checkedAt }
+    const idle = { ok: true, checked: false, checkedAt: st.checkedAt || null }
+    if (force) {
+      if (st.attemptAt && start - st.attemptAt < opts.minGap) return idle
+    } else if ((st.checkedAt && start - st.checkedAt < opts.every) || (st.failedAt && start - st.failedAt < opts.retry)) return idle
+    st.attemptAt = start
     requests = 0
+    dropStaleSources(sources)
     const groups = new Map()
-    for (const s of githubSources()) {
+    for (const s of Object.values(sources ? sources.all() : {})) {
+      if (!isGithub(s)) continue
       const key = repoKey(s)
       if (!groups.has(key)) groups.set(key, { owner: s.owner, repo: s.repo, ref: s.ref || null, copies: [] })
       groups.get(key).copies.push(s)
     }
     const used = { heads: new Set(), lists: new Set(), at: new Set() }
-    let failure = null
-    try {
-      for (const [key, g] of groups) {
-        used.heads.add(key)
-        const head = await headOf(g)
-        if (!head) continue
-        const done = new Set()
-        for (const s of g.copies) {
-          // Up to date, or installed before Tessel kept the commit: nothing to ask.
-          if (!s.commit || !SHA.test(s.commit) || s.commit.toLowerCase() === head.toLowerCase()) continue
-          const folder = s.path || ''
-          used.lists.add(listKey(g, head, folder))
-          used.at.add(listKey(g, s.commit, folder))
-          if (done.has(`${s.commit}:${folder}`)) continue // i18n-ignore key
-          done.add(`${s.commit}:${folder}`) // i18n-ignore key
-          await commitsAt(g, head, folder)
-          await installedAt(g, s.commit, folder)
+    const errors = []
+    let stop = null
+    for (const [key, g] of groups) {
+      try {
+        await checkGroup(g, used)
+      } catch (err) {
+        if (err && STOPS.includes(err.code)) {
+          stop = err
+          break
         }
+        // This repository only: its last answers stay, the others go on.
+        errors.push((err && err.message) || String(err))
+        st.heads[key] = { ...(st.heads[key] || {}), error: (err && err.message) || String(err) }
       }
-      st.checkedAt = start
-      delete st.until
-      // Answers no skill needs any more are dropped.
-      for (const name of ['heads', 'lists', 'at']) for (const key of Object.keys(st[name])) if (!used[name].has(key)) delete st[name][key]
-    } catch (err) {
-      if (err && err.code === 'SKILL_UPDATE_LIMIT') {
-        st.until = err.until
-        failure = { rateLimited: true, until: err.until }
-      } else failure = { error: (err && err.message) || String(err) }
     }
+    if (stop && stop.code === 'SKILL_UPDATE_LIMIT') st.until = stop.until
+    else delete st.until
+    if (!stop && (!groups.size || errors.length < groups.size)) {
+      st.checkedAt = start
+      delete st.failedAt
+    } else st.failedAt = start
+    // Answers no skill needs any more are dropped (after a full check only).
+    if (!stop && !errors.length)
+      for (const name of ['heads', 'lists', 'at']) for (const key of Object.keys(st[name])) if (!used[name].has(key)) delete st[name][key]
     save()
-    return failure ? { ok: false, checked: true, ...failure } : { ok: true, checked: true, checkedAt: st.checkedAt }
+    if (stop && stop.code === 'SKILL_UPDATE_LIMIT') return { ok: false, checked: true, rateLimited: true, until: stop.until }
+    if (stop) return { ok: false, checked: true, error: stop.message }
+    if (errors.length) return { ok: false, checked: true, error: errors[0], checkedAt: st.checkedAt || null }
+    return { ok: true, checked: true, checkedAt: st.checkedAt }
   }
 
   let running = null
   // force: asked by the user (still never within a minute, nor while GitHub's
   // limit lasts). -> { ok, checked, checkedAt?, rateLimited?, until?, error? }
   function check({ force = false } = {}) {
-    if (!running) running = run(force).finally(() => (running = null))
+    if (!running) running = queue(() => run(force)).finally(() => (running = null))
     return running
+  }
+
+  // One skill's repository only (before its update).
+  function checkSource(source) {
+    return queue(async () => {
+      const st = load()
+      if (!isGithub(source) || (st.until && now() < st.until)) return
+      requests = 0
+      try {
+        await checkGroup({ owner: source.owner, repo: source.repo, ref: source.ref || null, copies: [source] }, null)
+      } catch (err) {
+        if (err && err.code === 'SKILL_UPDATE_LIMIT') st.until = err.until
+      }
+      save()
+    })
   }
 
   // What the last check says about a copy added from GitHub (null: not
@@ -239,11 +306,12 @@ export function createSkillUpdates(file, { sources, fetchFn = (...args) => fetch
     return skills
   }
 
-  // Before an update: a fresh check (cached answers mostly), then what
-  // changed since the installed copy.
+  // Before an update: that skill's repository asked again (ETag: mostly a
+  // 304), then what changed since the installed copy.
   async function changesFor(dir) {
-    await check({ force: true }).catch(() => null)
-    return infoFor(sources ? sources.get(dir) : null)
+    const source = sources ? sources.get(dir) : null
+    await checkSource(source).catch(() => null)
+    return infoFor(source)
   }
 
   const status = () => {

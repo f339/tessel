@@ -118,7 +118,8 @@ import {
   installSkill,
   removeSkill,
   isSkillPath,
-  createSkillSources
+  createSkillSources,
+  dropStaleSources
 } from './skillsManager'
 import { createSkillHistory } from './skillHistory'
 import { createSkillUpdates } from './skillUpdates'
@@ -2484,6 +2485,7 @@ const unknownSkill = () => ({ ok: false, error: t('main.skills.unknownFolder', '
 ipcMain.handle(
   'skills:list',
   safe(async (cwd) => {
+    dropStaleSources(skillSources)
     const listed = await listSkills({ cwd: skillCwd(cwd), sources: skillSources.all() })
     await skillHistory.annotate(listed.skills, { sources: skillSources })
     skillUpdates.annotate(listed.skills)
@@ -2517,7 +2519,8 @@ ipcMain.handle(
 ipcMain.handle(
   'skills:forUpdate',
   safe(async (dir) => {
-    // The new version and, from the GitHub API, what changed since the installed one.
+    // The new version and, from the GitHub API (that repository only), what
+    // changed since the installed one.
     const [pkg, changes] = await Promise.all([packageForUpdate(dir, skillSources), skillUpdates.changesFor(dir).catch(() => null)])
     return pkg && !pkg.candidates ? { ...pkg, changes } : pkg
   })

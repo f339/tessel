@@ -245,7 +245,8 @@ describe('Skills dialog', () => {
               truncated: false,
               hunks: [{ header: '@@ -1,2 +1,2 @@', lines: [{ kind: 'ctx', text: '# pdf', old: 1, new: 1 }, { kind: 'del', text: 'Old rule.', old: 2, new: '' }, { kind: 'add', text: 'New rule.', old: '', new: 2 }] }]
             },
-            { path: 'logo.png', status: 'A', binary: true, added: 0, removed: 0, hunks: [] }
+            { path: 'logo.png', status: 'A', binary: true, added: 0, removed: 0, hunks: [] },
+            { path: 'video.mp4', status: 'A', binary: true, notKept: true, added: 0, removed: 0, hunks: [] }
           ]
         }
       },
@@ -276,7 +277,8 @@ describe('Skills dialog', () => {
     const diff = pdf().find('.skills-diff')
     expect(diff.findAll('.rv-line.del').map((l) => l.text())).toEqual(['2−Old rule.'])
     expect(diff.findAll('.rv-line.add').map((l) => l.text())).toEqual(['2+New rule.'])
-    expect(diff.text()).toContain('Binary or large file')
+    expect(diff.text()).toContain('Binary file: no text diff.')
+    expect(diff.text()).toContain('Too large to keep in the history')
     await items[2].find('.skills-version-pick').trigger('click')
     await flushPromises()
     expect(got.diff[1]).toMatchObject({ id: 'v1' })

@@ -337,7 +337,7 @@ async function restoreVersion(copy, v) {
     if (res && res.ok)
       say(
         res.kept && res.kept.length
-          ? t('skills.history.restoredKept', 'Restored "{{name}}". Kept {{files}}: not in that version and not in the history (binary or large).', { name: copy.name, files: res.kept.slice(0, 3).join(', ') })
+          ? t('skills.history.restoredKept', 'Restored "{{name}}". Left in place: {{files}} (not in that version, and too large to keep in the history).', { name: copy.name, files: res.kept.slice(0, 3).join(', ') })
           : t('skills.history.restored', 'Restored "{{name}}" to its version of {{when}}.', { name: copy.name, when: dateTime(v.changedAt) })
       )
     else say((res && res.error) || t('skills.history.restoreFailed', 'It could not be restored.'), 'error')
@@ -688,11 +688,12 @@ onMounted(async () => {
                         <div class="rv-diff-head">
                           <span class="rv-path">{{ f.path }}</span>
                           <span class="launch-tag muted">{{ statusLabel(f.status) }}</span>
-                          <span v-if="!f.binary" class="set-hint">
+                          <span v-if="!f.binary && !f.notKept" class="set-hint">
                             <span class="skills-plus">+{{ f.added }}</span> <span class="skills-minus">−{{ f.removed }}</span>
                           </span>
                         </div>
-                        <p v-if="f.binary" class="act-none">{{ t('skills.history.binary', 'Binary or large file: not kept, no text diff.') }}</p>
+                        <p v-if="f.notKept" class="act-none">{{ t('skills.history.notKept', 'Too large to keep in the history: no diff.') }}</p>
+                        <p v-else-if="f.binary" class="act-none">{{ t('skills.history.binary', 'Binary file: no text diff.') }}</p>
                         <p v-else-if="!f.hunks.length && !f.truncated" class="act-none">{{ t('skills.history.noLines', 'No line changed (line endings only).') }}</p>
                         <table v-else class="rv-table">
                           <tbody v-for="(h, hi) in f.hunks" :key="hi">
