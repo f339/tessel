@@ -8666,6 +8666,9 @@ body.explorer-sash-dragging * {
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
+  /* A message longer than the section (a narrow panel, a long translation)
+     scrolls in it, never under what is below (the status bar). */
+  overflow-y: auto;
 }
 .explorer-pane-tree {
   flex: 1 1 auto;
@@ -8685,7 +8688,8 @@ body.explorer-sash-dragging * {
 }
 /* VS Code's view message ("The active editor cannot provide…"). */
 .explorer-pane-message {
-  padding: 10px 22px 0;
+  /* Two lines fit the section at its smallest (44 px). */
+  padding: 4px 22px 4px;
   color: var(--text);
   font-size: 13px;
   line-height: 1.4;
