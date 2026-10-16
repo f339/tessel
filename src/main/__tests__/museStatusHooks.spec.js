@@ -99,7 +99,31 @@ describe("Muse Code's managed hooks file", () => {
     expect(removeStatusHooks('muse', { home, env: {} })).toEqual({ changed: true })
     expect(fs.existsSync(hooksFile())).toBe(false)
     expect(fs.existsSync(`${settingsFile()}.before-tessel`)).toBe(false)
+    expect(fs.existsSync(join(home, '.config', 'muse', 'tessel-status-hooks.added.json'))).toBe(false)
     expect(read(settingsFile())).toEqual(user)
+  })
+
+  it('only what Tessel added is taken out again: a variable name or a pointer that was there before stays', () => {
+    // The user already pointed Muse at Tessel's file and named TESSEL_REMOTE (any case).
+    const user = { schema_version: 1, managed_hooks_path: resolve(hooksFile()), managed_hooks_env_vars: ['tessel_remote', 'CI_TOKEN'] }
+    put(settingsFile(), user)
+    expect(installStatusHooks('muse', scriptPath, { home, env: {}, node: NODE })).toEqual({ changed: true })
+    const saved = read(settingsFile())
+    expect(saved.managed_hooks_env_vars).toEqual(['tessel_remote', 'CI_TOKEN', ...MUSE_HOOK_ENV.filter((n) => n !== 'TESSEL_REMOTE')])
+    expect(read(join(home, '.config', 'muse', 'tessel-status-hooks.added.json'))).toEqual({ pointer: false, envVars: MUSE_HOOK_ENV.filter((n) => n !== 'TESSEL_REMOTE') })
+    // Installed again (Tessel restarted): still only its own names noted.
+    expect(installStatusHooks('muse', scriptPath, { home, env: {}, node: NODE })).toEqual({ changed: false })
+    expect(read(join(home, '.config', 'muse', 'tessel-status-hooks.added.json')).envVars).not.toContain('TESSEL_REMOTE')
+    expect(removeStatusHooks('muse', { home, env: {} })).toEqual({ changed: true })
+    expect(read(settingsFile())).toEqual(user)
+  })
+
+  it('a name the user adds after Tessel installed is theirs to keep', () => {
+    expect(installStatusHooks('muse', scriptPath, { home, env: {}, node: NODE })).toEqual({ changed: true })
+    const saved = read(settingsFile())
+    put(settingsFile(), { ...saved, managed_hooks_env_vars: [...saved.managed_hooks_env_vars, 'MY_VAR'] })
+    expect(removeStatusHooks('muse', { home, env: {} })).toEqual({ changed: true })
+    expect(read(settingsFile())).toEqual({ schema_version: 1, managed_hooks_env_vars: ['MY_VAR'] })
   })
 
   it('a new settings file gets the schema_version Muse needs to start', () => {
