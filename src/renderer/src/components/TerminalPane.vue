@@ -44,7 +44,7 @@ import { promptShowsPlaceholder } from '../promptCheck'
 import { detectTaskDone } from '../agentLimit'
 import { modelLabel } from '../../../shared/modelLabel'
 import { paneAccount, accountChoices } from '../accountChoices'
-import { HOST_ACCOUNT_AGENTS, hostAccountChoices, hostPaneAccount, refreshHostAccounts, unwatchHostAccounts, watchHostAccounts } from '../hostAccounts'
+import { HOST_ACCOUNT_AGENTS, hostAccountChoices, hostEntry, hostPaneAccount, isDefaultHostAccount, recheckAfterTurn, refreshHostAccounts, unwatchHostAccounts, watchHostAccounts } from '../hostAccounts'
 import { modelFromScreen, modelFromSwitchLine } from '../../../shared/screenModel'
 import { findFileRefs } from '../../../shared/fileLinks'
 import { osc52Text } from '../../../shared/osc52'
@@ -57,6 +57,7 @@ import { effectiveAgent, launchSignature, launchSessionValues, inYoloFolder, YOL
 import { getAgentSessionOptionCatalog, modelOptions, resolveSessionOptionDefaults, composedModelId, listedModelValues, valuesOnListedRow } from '../../../shared/agentSessionOptions'
 import { cursorContextOnScreen, cursorModelOnScreen, cursorPickerFilter, cursorPickerShown } from '../../../shared/cursorModels'
 import { antigravityListed, antigravityModelOnScreen } from '../../../shared/antigravityModels'
+import { codexModelOnScreen } from '../../../shared/codexScreen'
 import { paneModels } from '../paneModels'
 import { modelsFor, refreshIfStale } from '../agentModels'
 import { CLAUDE_PRICING } from '../../../shared/claudePricing'
@@ -90,6 +91,7 @@ import { readText as readScreenText, createShellIntegration, createTerminalAdapt
 import { terminalControl, terminalLog } from '../agentTerminal/agentTerminalState'
 import { nativeChatSessionChoiceLabel } from '../chat/orca/native-chat-session-option-labels'
 import { liveShareFit, liveShareOffset, LS_TEXT_SIZES } from '../liveShareFit'
+import { layoutDragging } from '../layoutDrag'
 
 const props = defineProps({
   node: { type: Object, required: true }
@@ -143,7 +145,24 @@ const accountInfo = computed(() => {
   if (props.node.remoteHostId) return hostPaneAccount(props.node.remoteHostId, props.node.agentId, props.node.hostAccount, remoteHostName.value)
   return paneAccount(props.node.agentId, props.node.accountId)
 })
-const accountChipLabel = computed(() => (accountInfo.value ? t('pane.account.chip', 'Account: {{account}}', { account: accountInfo.value.title }) : ''))
+// On an SSH host: whether this pane's account is the one new panes use there.
+const onHostDefault = computed(() => {
+  const n = props.node
+  return isAgent.value && !!n.remoteHostId && HOST_ACCOUNT_AGENTS.includes(n.agentId) && isDefaultHostAccount(n.remoteHostId, n.agentId, n.hostAccount)
+})
+// What is said under its account (hover card, chip title): "Default on this
+// host", and Check again when its account is not known yet (the hover card
+// has its own Check again button: hint left out there).
+function accountNotesOf(withCheckHint) {
+  const info = accountInfo.value
+  if (!info) return []
+  const lines = []
+  if (props.node.remoteHostId && onHostDefault.value && typeof props.node.hostAccount === 'string') lines.push(t('pane.account.hostDefault', 'Default on this host'))
+  if (withCheckHint && (info.unknown || info.signedIn === false)) lines.push(t('pane.account.checkAgainHint', 'Pane menu > Check account again'))
+  return lines
+}
+const accountTitle = computed(() => (accountInfo.value ? [accountInfo.value.title, ...accountNotesOf(true)].join('\n') : ''))
+const accountChipLabel = computed(() => (accountInfo.value ? t('pane.account.chip', 'Account: {{account}}', { account: accountTitle.value }) : ''))
 // An agent on an SSH host follows its accounts there: read when it opens and
 // after a restart; then the host's one timer (hostAccounts.js: every minute,
 // sooner while a pane waits for a sign-in in its account folder).
@@ -168,8 +187,26 @@ watch(
     if (watchedHost) refreshHostAccounts(watchedHost)
   }
 )
+// Which config folder its agent really runs on: checked once it has had time
+// to start (a pane restored, reattached, or started before account folders
+// may not be on the folder its layout names), and on Check again. A new
+// launch ends the notice about the last one.
+let verifyTimer = null
+watch(
+  () => [props.node.kind, props.node.remoteHostId, props.node.launchedAt, !!props.node.notConnected],
+  ([kind, hostId, launchedAt, notConnected], before) => {
+    clearTimeout(verifyTimer)
+    if (before && before[2] !== launchedAt) delete props.node.hostAccountMismatch
+    if (kind !== 'agent' || !hostId || notConnected || !ctx.verifyHostAccount || !HOST_ACCOUNT_AGENTS.includes(props.node.agentId)) return
+    verifyTimer = setTimeout(() => ctx.verifyHostAccount(props.node.id), 8000)
+  },
+  { immediate: true }
+)
+let afterTurnTimer = null
 onBeforeUnmount(() => {
   if (watchedHost) unwatchHostAccounts(watchedHost, props.node.id)
+  clearTimeout(verifyTimer)
+  clearTimeout(afterTurnTimer)
 })
 // An agent pane asks for its model list (missing or a day old) once it
 // opens: its pickers (header, chat view, Settings) all list from it, not
@@ -362,6 +399,17 @@ async function refreshModel() {
       if (seen) {
         delete n.modelChoice
         agentModel.value = { model: seen.model, name: seen.name, effort: seen.effort, source: 'screen' }
+        return
+      }
+    }
+    // Codex: the line under its input box names the model and effort it runs
+    // now ("GPT-6-Luna medium fast"), a /model or a "switch model?" answer
+    // included, before its rollout says so.
+    if (n.agentId === 'codex' && termNow()) {
+      const seen = codexModelOnScreen(screenText(12).split('\n'), modelsFor('codex'))
+      if (seen) {
+        delete n.modelChoice
+        agentModel.value = { model: seen.model, ...(seen.name ? { name: seen.name } : {}), effort: seen.effort, source: 'screen' }
         return
       }
     }
@@ -738,6 +786,18 @@ watch(
 // Hook observations own supported launches. Older panes and other providers
 // retain their explicitly estimated output-based display.
 const agentStatus = ref(managedAgentStatus(props.node) ? 'unknown' : 'idle')
+// A /login, or the first answer after one: when its turn ends and its
+// account is not fully known (not signed in, or no email yet), the host is
+// asked again a few seconds later (hostAccounts.js recheckAfterTurn).
+watch(
+  () => agentStatus.value,
+  (now, before) => {
+    const n = props.node
+    if (before !== 'busy' || now === 'busy' || !n.remoteHostId) return
+    clearTimeout(afterTurnTimer)
+    afterTurnTimer = recheckAfterTurn(n.remoteHostId, n.agentId, n.hostAccount)
+  }
+)
 let pendingScreenWrites = 0
 let hasLiveScreen = false
 const observedState = computed(() => managedAgentStatus(props.node) ? getAgentState(props.node.id, props.node.agentLaunchToken) : null)
@@ -1461,6 +1521,25 @@ function retryRemoteTools() {
   delete props.node.remoteToolsNote
   if (ctx.restartLeaf) ctx.restartLeaf(props.node.id)
 }
+// Its agent on an SSH host runs on another account than the pane's (App.vue
+// verifyHostAccount): the pane asks, Update (the pane's account becomes that
+// one) or Keep (its next restart starts on the saved one).
+function hostAccountName(id) {
+  const n = props.node
+  const l = hostPaneAccount(n.remoteHostId, n.agentId, id ?? undefined, remoteHostName.value)
+  return (l && l.name) || (id ? t('pane.account.otherFolder', 'another account folder') : t('pane.account.ownSignIn', 'the host’s own sign-in'))
+}
+const accountMismatch = computed(() => {
+  const n = props.node
+  const m = n.hostAccountMismatch
+  if (!m || !n.remoteHostId) return null
+  return { runs: hostAccountName(m.runs), saved: hostAccountName(typeof n.hostAccount === 'string' ? n.hostAccount : null) }
+})
+// Below the other notes shown above it.
+const accountNoteTop = computed(() => 36 + 44 * ((props.node.remoteToolsNote ? 1 : 0) + (props.node.rootNoYoloNote ? 1 : 0)))
+function resolveAccountMismatch(update) {
+  if (ctx.resolveHostAccountMismatch) ctx.resolveHostAccountMismatch(props.node.id, update)
+}
 
 // The header's hover card (Orca's hover card, like the sidebar's agent rows)
 // instead of native tooltips on the number, icon, title and state badge.
@@ -1514,6 +1593,9 @@ const hoverInfo = computed(() => {
     accent: showsAgent.value ? n.accent : null,
     model: agent ? modelText.value : guestRuns.value ? guestInfo.value.model || '' : '',
     account: accountInfo.value ? accountInfo.value.title : '',
+    // On an SSH host: its notes and Check again (Restart on… is the menu's).
+    accountNotes: accountNotesOf(!canCheckHostAccount.value),
+    accountCheck: canCheckHostAccount.value,
     conversation: autoTitle.value,
     branch: n.worktree ? n.worktree.branch : guestInfo.value && guestInfo.value.copy ? guestInfo.value.copy.branch : '',
     state: headerState.value,
@@ -1790,10 +1872,32 @@ watch(liveShareViewOnly, (viewOnly) => {
   if (term) term.options.disableStdin = viewOnly
 })
 
+let idleFit = 0
+function cancelIdleFit() {
+  if (idleFit && typeof cancelIdleCallback === 'function') cancelIdleCallback(idleFit)
+  idleFit = 0
+}
 function scheduleFit() {
   if (fitTimer) clearTimeout(fitTimer)
+  cancelIdleFit()
   fitTimer = setTimeout(() => {
     fitTimer = 0
+    // The sidebar's or the right panel's edge is being dragged: fitted once,
+    // when it is let go (layoutDrag.js sends the layout change then).
+    if (layoutDragging()) return
+    // Out of sight (a hidden project, another tab): fitted when the window
+    // has a moment, within a second. Every project's terminals reflowing at
+    // once held the frames right after a sidebar was let go.
+    if (!onScreen && typeof requestIdleCallback === 'function') {
+      idleFit = requestIdleCallback(
+        () => {
+          idleFit = 0
+          doFit()
+        },
+        { timeout: 1000 }
+      )
+      return
+    }
     doFit()
   }, RESIZE_SETTLE_MS)
 }
@@ -2479,7 +2583,7 @@ const accountRestartChoices = computed(() => {
     const fresh = n.agentId === 'codex'
     return hostAccountChoices(n.remoteHostId, n.agentId, remoteHostName.value)
       .filter((c) => c.id !== (n.hostAccount ?? null))
-      .map((c) => ({ ...c, hint: fresh ? t('pane.menu.restartOnHostAccountNew', 'Restart Codex on {{account}}: same pane, a new conversation (a Codex conversation stays with its account)', { account: c.title }) : t('pane.menu.restartOnAccountHint', 'Restart this agent on {{account}}: same pane, its conversation resumed', { account: c.title }) }))
+      .map((c) => ({ ...c, name: c.isDefault ? t('pane.menu.defaultAccount', '{{account}} (default)', { account: c.name }) : c.name, hint: fresh ? t('pane.menu.restartOnHostAccountNew', 'Restart Codex on {{account}}: same pane, a new conversation (a Codex conversation stays with its account)', { account: c.title }) : t('pane.menu.restartOnAccountHint', 'Restart this agent on {{account}}: same pane, its conversation resumed', { account: c.title }) }))
   }
   if (n.agentId !== 'claude') return []
   return accountChoices('claude').filter((c) => c.id !== (n.accountId ?? null))
@@ -2492,6 +2596,32 @@ const canSignInOnHost = computed(() => {
 function menuSignInOnHost() {
   closeCtxMenu()
   ctx.signInOnHost(props.node.id)
+}
+// Pane menu > Check account again / Copy account details / Make this the
+// default on <host> (App: checkHostAccount, copyAccountDetails, setHostAccountDefault).
+const canCheckHostAccount = computed(() => canSignInOnHost.value && !!ctx.checkHostAccount)
+function menuCheckHostAccount() {
+  closeCtxMenu()
+  ctx.checkHostAccount(props.node.id)
+}
+// The hover card's own button (it closes once the pointer leaves it).
+function hoverCheckAccount() {
+  if (canCheckHostAccount.value) ctx.checkHostAccount(props.node.id)
+}
+function menuCopyAccountDetails() {
+  closeCtxMenu()
+  ctx.copyAccountDetails(props.node.id)
+}
+const canMakeHostDefault = computed(() => {
+  const n = props.node
+  if (!canSignInOnHost.value || !ctx.setHostAccountDefault || onHostDefault.value) return false
+  // Only an account that is there: a folder signed in, or the host's own.
+  const e = hostEntry(n.remoteHostId, n.agentId, n.hostAccount)
+  return typeof n.hostAccount !== 'string' || (!!e && e.state === 'signed-in')
+})
+function menuMakeHostDefault() {
+  closeCtxMenu()
+  ctx.setHostAccountDefault(props.node.id)
 }
 function menuRestartOnAccount(accountId) {
   closeCtxMenu()
@@ -3198,6 +3328,7 @@ onBeforeUnmount(() => {
   if (screenObserver) screenObserver.disconnect()
   clearTimeout(releaseTimer)
   if (fitTimer) clearTimeout(fitTimer)
+  cancelIdleFit()
   window.removeEventListener('resize', onLayoutChange)
   window.removeEventListener('terminal-layout-change', onLayoutChange)
   window.removeEventListener('pointerdown', onDocPointerDownMenu, true)
@@ -3275,8 +3406,13 @@ const paneMenuBindings = computed(() => ({
   menuRestartOnAccount: unref(menuRestartOnAccount),
   canSignInOnHost: unref(canSignInOnHost),
   menuSignInOnHost: unref(menuSignInOnHost),
+  canCheckHostAccount: unref(canCheckHostAccount),
+  menuCheckHostAccount: unref(menuCheckHostAccount),
+  menuCopyAccountDetails: unref(menuCopyAccountDetails),
+  canMakeHostDefault: unref(canMakeHostDefault),
+  menuMakeHostDefault: unref(menuMakeHostDefault),
   hostName: unref(remoteHostName),
-  accountInfo: unref(accountInfo),
+  accountInfo: accountInfo.value ? { ...accountInfo.value, title: accountTitle.value } : null,
   canViewTranscript: unref(canViewTranscript),
   menuViewTranscript: unref(menuViewTranscript),
   transcriptOpen: unref(transcriptOpen),
@@ -3440,7 +3576,7 @@ const paneMenuBindings = computed(() => ({
         </span>
       </div>
       <HoverCardContent :hc="headerHover" side="bottom" align="start" :side-offset="6" class="pane-hover-card" data-test="pane-hover-card">
-        <PaneHoverDetails :info="hoverInfo" />
+        <PaneHoverDetails :info="hoverInfo" @check-account="hoverCheckAccount" />
       </HoverCardContent>
       <!-- An agent typing in this terminal (its terminal tools): who, what
            it ran, and Stop. -->
@@ -3671,6 +3807,12 @@ const paneMenuBindings = computed(() => ({
           <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
         </svg>
       </button>
+    </div>
+
+    <div v-if="accountMismatch && !node.failed" class="root-note account-note" :style="{ top: `${accountNoteTop}px` }" data-test="host-account-mismatch" role="status" @mousedown.stop>
+      <span class="root-note-text" v-text="t('pane.account.mismatch', 'This pane is running on {{runs}}, not {{saved}}.', accountMismatch)"></span>
+      <button class="exit-btn primary" data-test="host-account-update" :title="t('pane.account.updateHint', 'The pane’s account becomes {{runs}}: its restarts start there', accountMismatch)" @click="resolveAccountMismatch(true)">{{ t('pane.account.update', 'Update') }}</button>
+      <button class="exit-btn" data-test="host-account-keep" :title="t('pane.account.keepHint', 'Keeps {{saved}}: its next restart starts there', accountMismatch)" @click="resolveAccountMismatch(false)">{{ t('pane.account.keep', 'Keep') }}</button>
     </div>
 
     <div v-if="findOpen" class="find-bar" @mousedown.stop>

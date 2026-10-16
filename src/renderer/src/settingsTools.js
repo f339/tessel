@@ -20,6 +20,7 @@ const row = (id, title, hint, button) => ({
 })
 const open = () => t('settings.tools.open', 'Open…')
 const show = () => t('settings.tools.show', 'Show')
+const copy = () => t('settings.tools.copy', 'Copy')
 
 // Page id -> its rows, in the order shown.
 export const SETTINGS_TOOLS = {
@@ -57,6 +58,7 @@ export const SETTINGS_TOOLS = {
   general: [
     row('help', () => t('app.cmd.help', 'Keyboard shortcuts and help'), () => t('settings.tools.helpHint', 'Every shortcut of Tessel (F1).'), open),
     row('logs', () => t('app.cmd.openLogs', 'Open the logs folder'), () => t('settings.tools.logsHint', "Tessel's log files, to look into a problem."), open),
+    row('diagnostics', () => t('app.cmd.copyDiagnostics', 'Copy diagnostics'), () => t('settings.tools.diagnosticsHint', 'Versions and the recent log, to paste into a bug report.'), copy),
     row('resources', () => t('statusBar.resources.title', 'Resource Manager'), () => t('settings.tools.resourcesHint', "Memory and CPU of Tessel and of each workspace's terminals (status bar)."), show)
   ]
 }

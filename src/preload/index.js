@@ -311,11 +311,15 @@ const api = {
   remoteAccounts: {
     detect: (hostId, opts) => ipcRenderer.invoke('remoteAccounts:detect', { hostId, fresh: !!(opts && opts.fresh === true), relogin: !!(opts && opts.relogin === true) }),
     create: (hostId, agent) => ipcRenderer.invoke('remoteAccounts:create', { hostId, agent }),
-    launchEnv: (hostId, agent, id) => ipcRenderer.invoke('remoteAccounts:launchEnv', { hostId, agent, id }),
+    // opts.signedIn: only a folder signed in (a new pane on the host's default account).
+    launchEnv: (hostId, agent, id, opts) => ipcRenderer.invoke('remoteAccounts:launchEnv', { hostId, agent, id, signedIn: !!(opts && opts.signedIn === true) }),
     // opts.panes: the panes still on that login (main stops them after your yes).
     remove: (hostId, agent, id, opts) => ipcRenderer.invoke('remoteAccounts:remove', { hostId, agent, id, panes: (opts && Array.isArray(opts.panes) && opts.panes) || [], orphan: !!(opts && opts.orphan === true) }),
     signOut: (hostId, agent, opts) => ipcRenderer.invoke('remoteAccounts:signOut', { hostId, agent, panes: (opts && Array.isArray(opts.panes) && opts.panes) || [] }),
-    copyPolicy: (agent) => ipcRenderer.invoke('remoteAccounts:copyPolicy', agent)
+    copyPolicy: (agent) => ipcRenderer.invoke('remoteAccounts:copyPolicy', agent),
+    // The config folder a pane's agent really runs on there; presence-only details.
+    paneFolders: (hostId, list) => ipcRenderer.invoke('remoteAccounts:paneFolders', { hostId, list }),
+    diagnose: (hostId, agent, id, paneId) => ipcRenderer.invoke('remoteAccounts:diagnose', { hostId, agent, id, paneId })
   },
   // "Where you're signed in" (src/main/signedInPlaces.js): this PC, its WSL
   // distros and the saved SSH hosts; scan(id) checks one of them.
@@ -432,6 +436,8 @@ const api = {
   mcpAdd: (spec) => ipcRenderer.invoke('mcp:add', spec),
   mcpRemove: (spec) => ipcRenderer.invoke('mcp:remove', spec),
   mcpTest: (ref) => ipcRenderer.invoke('mcp:test', ref),
+  // A custom server's form, tested before it is added (nothing written).
+  mcpTestSpec: (spec) => ipcRenderer.invoke('mcp:testSpec', spec),
   mcpCopy: (spec) => ipcRenderer.invoke('mcp:copy', spec),
   // Settings > Context and the token tags (src/main/contextCost): token counts
   // of what each agent loads; Measure starts an MCP server, on click only.
@@ -462,6 +468,10 @@ const api = {
   agyPluginsList: () => ipcRenderer.invoke('agyPlugins:list'),
   agyPluginsSet: (q) => ipcRenderer.invoke('agyPlugins:set', q),
   agyPluginsRemove: (q) => ipcRenderer.invoke('agyPlugins:remove', q),
+  // Muse Code's plugins (src/main/musePlugins.js).
+  musePluginsList: () => ipcRenderer.invoke('musePlugins:list'),
+  musePluginsSet: (q) => ipcRenderer.invoke('musePlugins:set', q),
+  musePluginsRemove: (q) => ipcRenderer.invoke('musePlugins:remove', q),
   notify: (payload) => ipcRenderer.send('app:notify', payload),
   // The language the interface shows ('en', 'fr'): the main process uses it
   // for its dialogs, notifications and messages (src/main/i18n.js).

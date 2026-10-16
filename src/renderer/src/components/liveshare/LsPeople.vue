@@ -6,13 +6,16 @@
 // themselves, with what you leave them). A trusted person's boxes change
 // what is kept for next time. Trust makes a guest trusted (their Tessel has
 // an identity key); Remove takes them out (a trusted one: they stop being
-// trusted too, unless you untick it).
+// trusted too, unless you untick it). A guest waiting for your answer can be
+// let in (Let in… brings up their prompt, with the code to check and what
+// their invitation offers) or refused from here.
 import { ref, computed, nextTick, inject } from 'vue'
-import { ShieldCheck, UserX, Eye } from 'lucide-vue-next'
+import { ShieldCheck, UserX, Eye, UserCheck } from 'lucide-vue-next'
 import ProjectChecks from './ProjectChecks.vue'
 import RightsChecks from './RightsChecks.vue'
 import LsAvatars from './LsAvatars.vue'
 import { joinedGuests, waitingGuests, offlinePeople, personName, viaName } from '../../liveShareAccess'
+import { cleanRights } from '../../../../shared/liveShareRights'
 import { t } from '../../i18n'
 
 const ctx = inject('lsDialog')
@@ -72,6 +75,11 @@ async function remove(p) {
   removing.value = null
   if (r && r.ok) ctx.notice(untrust ? t('liveShare.people.removedUntrusted', '{{name}} was removed and is no longer trusted.', { name: personName(p) }) : t('liveShare.people.removed', '{{name}} was removed.', { name: personName(p) }))
 }
+// A no: main turns them away (their prompt goes with it).
+async function refuse(g) {
+  const r = await ctx.run(`${g.id}:answer`, () => ctx.api.approve({ guestId: g.id, yes: false, projects: [], rights: cleanRights(null), trust: false })) // i18n-ignore
+  if (r && r.ok) ctx.notice(t('liveShare.people.refused', '{{name}} was turned away.', { name: personName(g) }))
+}
 const waitingText = (g) => (g.code ? t('liveShare.share.guestWaitingCode', 'Waiting for your answer (code {{code}})', { code: g.code }) : t('liveShare.share.guestWaiting', 'Waiting for your answer'))
 </script>
 
@@ -87,6 +95,12 @@ const waitingText = (g) => (g.code ? t('liveShare.share.guestWaitingCode', 'Wait
           <span class="lsd-badge warn">{{ waitingText(g) }}</span>
         </div>
         <div v-if="g.invite" class="lsd-meta" v-text="t('liveShare.people.via', 'Came with {{invite}}', { invite: viaName(g.invite) })"></div>
+        <div class="lsd-actions start">
+          <button type="button" class="confirm-btn ls-small primary" :disabled="ctx.busy(g.id + ':answer')" :data-test="'ls-waiting-letin-' + g.id" @click="ctx.review(g.id)">
+            <UserCheck :size="12" aria-hidden="true" /> {{ t('liveShare.people.letIn', 'Let in…') }}
+          </button>
+          <button type="button" class="confirm-btn ls-small danger" :disabled="ctx.busy(g.id + ':answer')" :data-test="'ls-waiting-refuse-' + g.id" @click="refuse(g)">{{ t('liveShare.people.refuse', 'Refuse') }}</button>
+        </div>
       </li>
     </ul>
 

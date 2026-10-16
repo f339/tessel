@@ -36,12 +36,13 @@ afterEach(() => {
 })
 
 describe('ConversationsPanel.vue', () => {
-  it('shows this workspace, the last 7 days, latest thread first and newest message first, notices left out', () => {
+  it('shows this workspace, the last 7 days, latest thread first and its messages in the order said, notices left out', () => {
     const w = make()
     expect(threadKeys(w)).toEqual(['you:p2', 'team:team1', 'you:p1'])
     expect(w.find('[data-test="cv-thread-team:team1"] .sh-group-label').text()).toBe('Team "Team 2"')
     expect(w.find('[data-test="cv-thread-you:p1"] .sh-group-label').text()).toBe('You and Ada')
-    expect(texts(w)).toEqual(['Merge now or wait?', 'Can you review the API?', 'Done: the tab is there.', 'Please add the tab', 'Three days ago'])
+    // A thread reads like a chat: oldest at the top, the latest at the bottom.
+    expect(texts(w)).toEqual(['Merge now or wait?', 'Can you review the API?', 'Three days ago', 'Please add the tab', 'Done: the tab is there.'])
     expect(w.find('[data-test="cv-count"]').text()).toBe('3 conversations · 5 messages')
     // A decision asked of you, a message not read yet: said.
     const notes = w.findAll('[data-test="cv-note"]').map((x) => x.text())
@@ -54,14 +55,14 @@ describe('ConversationsPanel.vue', () => {
     const ada1 = w.find('[data-test="cv-thread-you:p1"]')
     expect(ada1.findAll('[data-test="cv-line"]')[1].classes()).toContain('from-you')
     expect(ada1.findAll('[data-test="cv-line"]')[1].find('[data-test="cv-from"]').exists()).toBe(false)
-    expect(ada1.findAll('[data-test="cv-line"]')[0].classes()).toContain('from-agent')
-    expect(ada1.findAll('[data-test="cv-line"]')[0].find('[data-test="cv-from"]').text()).toBe('Ada · Claude Code')
-    expect(ada1.findAll('[data-test="cv-line"]')[0].find('[data-test="cv-to"]').exists()).toBe(false)
+    expect(ada1.findAll('[data-test="cv-line"]')[2].classes()).toContain('from-agent')
+    expect(ada1.findAll('[data-test="cv-line"]')[2].find('[data-test="cv-from"]').text()).toBe('Ada · Claude Code')
+    expect(ada1.findAll('[data-test="cv-line"]')[2].find('[data-test="cv-to"]').exists()).toBe(false)
     // The sender's logo beside its name, also for a team message whose
     // sender is known by name only (Ada's pane is p1, a Claude Code).
     expect(team.find('[data-test="cv-from"] [data-test="cv-logo"]').exists()).toBe(true)
     expect(team.find('[data-test="cv-from"] [data-test="cv-program"]').text()).toBe('· Claude Code')
-    expect(ada1.findAll('[data-test="cv-line"]')[0].find('[data-test="cv-logo"]').exists()).toBe(true)
+    expect(ada1.findAll('[data-test="cv-line"]')[2].find('[data-test="cv-logo"]').exists()).toBe(true)
     // Each agent's name has a color of its own.
     const color = (el) => el.attributes('style')
     expect(color(team.find('[data-test="cv-from"]'))).toMatch(/color:/)
@@ -78,9 +79,12 @@ describe('ConversationsPanel.vue', () => {
     expect(texts(w)).not.toContain('Three days ago')
     await setSelectValue(w.find('[data-test="cv-period"]'), '30d')
     expect(texts(w)).toContain('Three days ago')
-    await w.find('[data-test="cv-notices"]').setValue(true)
-    expect(w.find('[data-test="cv-thread-team:team1"]').findAll('[data-test="cv-text"]').map((x) => x.text())).toEqual(['Bob joined your team.', 'Can you review the API?'])
-    expect(w.find('[data-test="cv-thread-team:team1"]').findAll('[data-test="cv-from"]')[0].text()).toBe('Tessel')
+    // Tessel notices: a chip that is on or off (no checkbox).
+    expect(w.find('[data-test="cv-notices"]').element.tagName).toBe('BUTTON')
+    await w.find('[data-test="cv-notices"]').trigger('click')
+    expect(w.find('[data-test="cv-notices"]').attributes('aria-pressed')).toBe('true')
+    expect(w.find('[data-test="cv-thread-team:team1"]').findAll('[data-test="cv-text"]').map((x) => x.text())).toEqual(['Can you review the API?', 'Bob joined your team.'])
+    expect(w.find('[data-test="cv-thread-team:team1"]').findAll('[data-test="cv-from"]')[1].text()).toBe('Tessel')
     w.unmount()
   })
 
@@ -110,9 +114,24 @@ describe('ConversationsPanel.vue', () => {
     w.unmount()
   })
 
-  it('empty: says what shows up here', () => {
+  it("one speaker's messages to different people: each bubble names its recipients", () => {
+    const carl = { title: 'Carl', agentId: 'gemini' }
+    const said = (ago, paneId, agent, text) => msg(ago, paneId, agent, { source: 'agent', from: 'Ada', fromPaneId: 'p1', fromAgentId: 'claude', scope: 'team-chat', status: 'read', teamId: 'team1', text })
+    // Ada to Bob, then to Carl a minute later, then to Carl again: Bob's and
+    // Carl's bubbles each say who they went to; Carl's two share one head.
+    const w = make({ events: [said(20 * MIN, 'p2', bob, 'Bob: the API'), said(19 * MIN, 'p3', carl, 'Carl: the docs'), said(18 * MIN, 'p3', carl, 'Carl: and the tests')] })
+    const lines = w.find('[data-test="cv-thread-team:team1"]').findAll('[data-test="cv-line"]')
+    expect(lines.map((l) => l.find('[data-test="cv-text"]').text())).toEqual(['Bob: the API', 'Carl: the docs', 'Carl: and the tests'])
+    expect(lines[0].findAll('[data-test="cv-to"]').map((x) => x.text())).toEqual(['Bob'])
+    expect(lines[1].findAll('[data-test="cv-to"]').map((x) => x.text())).toEqual(['Carl'])
+    expect(lines[2].find('[data-test="cv-to"]').exists()).toBe(false)
+    expect(lines.map((l) => l.classes().find((c) => c.startsWith('shape-')))).toEqual(['shape-single', 'shape-first', 'shape-last'])
+    w.unmount()
+  })
+
+  it('empty: says what shows up here, in one short sentence', () => {
     const w = make({ events: [] })
-    expect(w.find('[data-test="cv-empty"]').exists()).toBe(true)
+    expect(w.find('[data-test="cv-empty"]').text()).toBe('Nothing said yet. Team messages and your chats with agents show up here.')
     expect(w.find('[data-test="cv-count"]').text()).toBe('0 conversations · 0 messages')
     w.unmount()
   })
@@ -126,10 +145,10 @@ describe('ConversationsPanel.vue', () => {
     await w.find('[data-test="cv-toggle-you:p1"]').trigger('click')
     expect(ada1().findAll('[data-test="cv-line"]')).toHaveLength(4)
     // Ada's pane is open: her name is a button; Bob's is not.
-    await ada1().findAll('[data-test="cv-line"]')[0].find('[data-test="cv-from"]').trigger('click')
+    await ada1().findAll('[data-test="cv-line"]')[2].find('[data-test="cv-from"]').trigger('click')
     expect(w.emitted('focus-pane')).toEqual([['p1']])
     expect(w.find('[data-test="cv-thread-you:p2"] [data-test="cv-from"]').element.tagName).toBe('SPAN')
-    const longLine = ada1().findAll('[data-test="cv-line"]')[0]
+    const longLine = ada1().findAll('[data-test="cv-line"]')[3]
     expect(longLine.find('[data-test="cv-text"]').classes()).toContain('clamp4')
     await longLine.find('.cv-more').trigger('click')
     expect(longLine.find('[data-test="cv-text"]').classes()).not.toContain('clamp4')
@@ -141,12 +160,14 @@ describe('ConversationsPanel.vue', () => {
     w.unmount()
   })
 
-  it('a long thread shows its latest lines, newest at the top, then all of them', async () => {
+  it('a long thread shows its latest lines, the newest at the bottom, Show earlier above them', async () => {
     const many = Array.from({ length: 35 }, (_, i) => msg((100 - i) * MIN, 'p1', ada, { text: `m${i}` }))
     const w = make({ events: many })
     expect(w.findAll('[data-test="cv-line"]')).toHaveLength(30)
-    expect(texts(w)[0]).toBe('m34')
-    expect(texts(w)[29]).toBe('m5')
+    expect(texts(w)[0]).toBe('m5')
+    expect(texts(w)[29]).toBe('m34')
+    const lines = w.find('.cv-lines').element.children
+    expect(lines[0].getAttribute('data-test')).toBe('cv-earlier-you:p1')
     expect(w.find('[data-test="cv-earlier-you:p1"]').text()).toBe('Show the 5 earlier messages')
     await w.find('[data-test="cv-earlier-you:p1"]').trigger('click')
     expect(w.findAll('[data-test="cv-line"]')).toHaveLength(35)

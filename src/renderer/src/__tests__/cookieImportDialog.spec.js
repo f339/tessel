@@ -115,7 +115,7 @@ describe('CookieImportDialog', () => {
       const wrapper = await open()
       const last = wrapper.findAll('[data-test="cookie-last-import"]')
       expect(last).toHaveLength(1)
-      expect(last[0].text()).toMatch(/^Imported on .*2026 · 2180 cookies$/)
+      expect(last[0].text()).toMatch(/^Imported on .*2026 · 2,180 cookies$/)
     } finally {
       delete SOURCES[1].profiles[1].lastImport
     }
@@ -140,9 +140,10 @@ describe('CookieImportDialog', () => {
     await wrapper.find('[data-test="cookie-import"]').trigger('click')
     await flushPromises()
     const text = wrapper.find('[data-test="cookie-result-text"]').text()
-    expect(text).toMatch(/^Already imported on .*2026\. This time: 12 new, 3 updated, 2165 unchanged\./)
-    expect(text).toContain('Skipped 89 Google cookies')
-    expect(text).toContain('skipped 1048 others')
+    expect(text).toMatch(/^Already imported on .*2026\. This time: 12 new, 3 updated, 2,165 unchanged\./)
+    // The sentence says how many; the reasons are in the Details only.
+    expect(text).toContain('1,137 skipped.')
+    expect(text).not.toContain('Google cookies')
     const details = wrapper.find('[data-test="cookie-details"]')
     expect(details.find('summary').text()).toBe('Details')
     const rows = Object.fromEntries(details.findAll('li').map((li) => [li.attributes('data-reason'), li.text()]))
@@ -156,6 +157,21 @@ describe('CookieImportDialog', () => {
     await flushPromises()
     expect(wrapper.find('[data-test="cookie-result-text"]').text()).toBe('Imported 2 cookies: 2 new, 0 updated, 0 unchanged.')
     expect(wrapper.find('[data-test="cookie-details"]').exists()).toBe(false)
+  })
+
+  it('after an import, Done is the main button; the close is an icon button with a label', async () => {
+    const wrapper = await open()
+    const close = wrapper.find('.help-head .tb-icon')
+    expect(close.attributes('aria-label')).toBe('Close (Esc)')
+    expect(close.find('svg').exists()).toBe(true)
+    expect(wrapper.find('[data-test="cookie-import"]').classes()).toContain('primary')
+    await wrapper.find('[data-test="cookie-import"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="cookie-import"]').classes()).not.toContain('primary')
+    expect(wrapper.find('[data-test="cookie-import"]').text()).toBe('Import again')
+    expect(wrapper.find('[data-test="cookie-done"]').classes()).toContain('primary')
+    await wrapper.find('[data-test="cookie-done"]').trigger('click')
+    expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
   it('does not touch the setting when the import fails', async () => {

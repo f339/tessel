@@ -113,16 +113,18 @@ describe('the Context summary', () => {
 
 describe('MCP Measure: the server starts on the click only', () => {
   it('never starts a server for the summary or the kept counts; Measure does, and its count is kept', async () => {
-    const { svc, testMcp } = service()
+    const { svc, testMcp, listMcp } = service()
     await svc.summary({ cwd: project, agents: [{ id: 'claude' }, { id: 'codex' }], remote: true })
-    expect(await svc.mcpMeasures({ cwd: project })).toEqual({})
+    expect(await svc.mcpMeasures({ cwd: project, servers: [{ agent: 'claude', scope: 'user', name: 'fs' }] })).toEqual({})
     expect(testMcp).not.toHaveBeenCalled()
     const measured = await svc.measureMcp({ agent: 'claude', name: 'fs', scope: 'user', cwd: project })
     expect(testMcp).toHaveBeenCalledTimes(1)
     expect(testMcp.mock.calls[0]).toEqual([{ agent: 'claude', name: 'fs', scope: 'user', cwd: project }, { defs: true }])
     expect(measured).toMatchObject({ ok: true, tools: 1, result: { exact: true, source: 'api', tokens: 100 } })
-    const kept = await svc.mcpMeasures({ cwd: project })
+    const listCalls = listMcp.mock.calls.length
+    const kept = await svc.mcpMeasures({ cwd: project, servers: [{ agent: 'claude', scope: 'user', name: 'fs' }] })
     expect(kept['claude:user:fs']).toMatchObject({ tools: 1, result: { tokens: 100 } })
+    expect(listMcp.mock.calls.length).toBe(listCalls) // read only: no server list read again
     const again = await svc.summary({ cwd: project, agents: [{ id: 'claude' }] })
     expect(again.agents[0].items.find((i) => i.label === 'fs')).toMatchObject({ toolCount: 1, result: { tokens: 100, exact: true } })
     expect(testMcp).toHaveBeenCalledTimes(1)
@@ -218,9 +220,21 @@ describe('kept MCP measurements age out', () => {
     const dir = join(userData, 'context-cost', 'mcp')
     expect(fs.readdirSync(dir)).toHaveLength(1)
     now += MCP_RECORD_MAX_AGE_MS + 1000
-    expect(await svc.mcpMeasures({ cwd: project })).toEqual({})
+    expect(await svc.mcpMeasures({ cwd: project, servers: [{ agent: 'claude', scope: 'user', name: 'fs' }] })).toEqual({})
     await svc.summary({ cwd: project, agents: [{ id: 'claude' }], remote: true })
     await new Promise((r) => setTimeout(r, 50))
     expect(fs.readdirSync(dir)).toHaveLength(0)
+  })
+})
+
+describe('a server whose command changed since its measurement', () => {
+  it('is shown as not measured', async () => {
+    let target = 'npx fs'
+    const listMcp = vi.fn(async () => ({ claude: [{ name: 'fs', scope: 'user', target }], codex: [], others: {} }))
+    const { svc } = service({ listMcp })
+    await svc.measureMcp({ agent: 'claude', name: 'fs', scope: 'user', cwd: project })
+    expect((await svc.summary({ cwd: project, agents: [{ id: 'claude' }], remote: true })).agents[0].items.find((i) => i.label === 'fs').toolCount).toBe(1)
+    target = 'npx other-fs'
+    expect((await svc.summary({ cwd: project, agents: [{ id: 'claude' }], remote: true })).agents[0].items.find((i) => i.label === 'fs').note).toBe('notMeasured')
   })
 })

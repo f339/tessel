@@ -137,8 +137,8 @@ export function counterText(counter) {
 
 // ---------------------------------------------------------------- Shared counts
 // The Skills page's and MCP page's counts, read once for all their tags.
-export const contextCounts = reactive({ skills: {}, skillsCwd: undefined, skillsLoading: false, mcp: {}, mcpCwd: undefined, mcpLoading: false, measuring: {} })
-const pending = { skills: null, mcp: null }
+export const contextCounts = reactive({ skills: {}, skillsCwd: undefined, skillsLoading: false, mcp: {}, measuring: {} })
+const pending = { skills: null }
 const api = () => (typeof window !== 'undefined' && window.shellApi && window.shellApi.context) || null
 export const mcpKey = (agent, scope, name) => `${agent}:${scope || 'user'}:${name}`
 
@@ -166,28 +166,37 @@ export function loadSkillCounts(cwd = null, { force = false } = {}) {
   return pending.skills
 }
 
-// The MCP servers already measured (no server is started).
-export function loadMcpCounts(cwd = null, { force = false } = {}) {
+// The kept measurement of each MCP server a tag shows (no server started,
+// no list read, no count API asked): the tags of one page are asked for
+// together, in one request, and each once per project folder.
+const mcpAsked = new Set() // `${cwd}|${key}` already asked
+let mcpBatch = null // { cwd, servers: [] } waiting for the next tick
+export function loadMcpCount({ agent, scope = 'user', name, cwd = null }) {
   const ctx = api()
-  if (!ctx || !ctx.mcpMeasures) return Promise.resolve(contextCounts.mcp)
-  if (!force && contextCounts.mcpCwd === cwd) return Promise.resolve(contextCounts.mcp)
-  if (pending.mcp && !force) return pending.mcp
-  contextCounts.mcpLoading = true
-  pending.mcp = ctx
-    .mcpMeasures({ cwd, ...signIns() })
-    .then((res) => {
-      if (res && res.ok !== false) {
-        contextCounts.mcp = res
-        contextCounts.mcpCwd = cwd
-      }
-      return contextCounts.mcp
+  if (!ctx || !ctx.mcpMeasures || !agent || !name) return Promise.resolve(null)
+  const key = mcpKey(agent, scope, name)
+  if (mcpAsked.has(`${cwd}|${key}`)) return Promise.resolve(contextCounts.mcp[key] || null)
+  mcpAsked.add(`${cwd}|${key}`)
+  if (!mcpBatch || mcpBatch.cwd !== cwd) {
+    const batch = { cwd, servers: [] }
+    mcpBatch = batch
+    batch.done = Promise.resolve().then(() => {
+      if (mcpBatch === batch) mcpBatch = null
+      return ctx
+        .mcpMeasures({ cwd, servers: batch.servers, ...signIns() })
+        .then((res) => {
+          if (res && res.ok !== false) contextCounts.mcp = { ...contextCounts.mcp, ...res }
+        })
+        .catch(() => {})
     })
-    .catch(() => contextCounts.mcp)
-    .finally(() => {
-      contextCounts.mcpLoading = false
-      pending.mcp = null
-    })
-  return pending.mcp
+  }
+  mcpBatch.servers.push({ agent, scope, name })
+  return mcpBatch.done.then(() => contextCounts.mcp[key] || null)
+}
+// Forget what was asked (a test, or a page that wants fresh kept counts).
+export function forgetMcpCounts() {
+  mcpAsked.clear()
+  mcpBatch = null
 }
 
 // Measure: starts the server (or connects to it), on this click only.

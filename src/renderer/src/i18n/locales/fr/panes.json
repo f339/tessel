@@ -15,7 +15,6 @@
     },
     "resources": {
       "memoryUnavailable": "mémoire indisponible",
-      "private": "Privée",
       "tooltip_one": "Gestionnaire de ressources - {{memory}} - {{count}} session de terminal",
       "tooltip_other": "Gestionnaire de ressources - {{memory}} - {{count}} sessions de terminal",
       "grouped": "Les sessions de terminal sont regroupées par espace de travail.",
@@ -36,22 +35,31 @@
       "terminals": "Terminaux",
       "main": "Principal",
       "renderer": "Rendu",
-      "other": "Autre"
+      "other": "Autre",
+      "memory": "Mémoire",
+      "memoryLower": "mémoire",
+      "privateLower": "privée"
     },
     "ports": {
       "ariaLabel_one": "Ports, {{count}} port d'espace de travail",
       "ariaLabel_other": "Ports, {{count}} ports d'espace de travail",
       "title_one": "Ports — {{count}} port d'espace de travail",
       "title_other": "Ports — {{count}} ports d'espace de travail",
-      "externalSuffix": " · {{count}} externe(s)",
       "name": "Ports",
-      "counts": "{{workspace}} espace de travail · {{external}} externe(s)",
       "unavailable": "Scan des ports indisponible sur cet ordinateur : {{reason}}",
       "goToWorktree": "Aller au worktree",
       "scanning": "Recherche des ports de l'espace de travail...",
       "none": "Aucun port d'espace de travail détecté",
       "external": "Ports externes",
-      "noExternal": "Aucun port externe détecté"
+      "noExternal": "Aucun port externe détecté",
+      "externalSuffix_one": " · {{count}} externe",
+      "externalSuffix_other": " · {{count}} externes",
+      "workspaceCount_one": "{{count}} port d'espace de travail",
+      "workspaceCount_other": "{{count}} ports d'espace de travail",
+      "externalCount_one": "{{count}} externe",
+      "externalCount_other": "{{count}} externes",
+      "refresh": "Chercher de nouveau",
+      "noneHint": "Un programme lancé dans l'un de vos terminaux qui écoute sur un port (un serveur de développement, par exemple) s'affiche ici."
     },
     "hosts": {
       "title": "Hôtes distants",
@@ -66,8 +74,7 @@
     "units": {
       "kb": "{{value}} Ko",
       "mb": "{{value}} Mo",
-      "gb": "{{value}} Go",
-      "percent": "{{value}} %"
+      "gb": "{{value}} Go"
     },
     "agentUpdate": {
       "one": "Mise à jour de {{name}}…",
@@ -567,7 +574,14 @@
       "continueOnHostHint": "Arrêter cet agent du terminal et poursuivre la même conversation dans un panneau de chat qui tourne sur l’hôte SSH",
       "restartOnHostAccountNew": "Redémarrer Codex sur {{account}} : même panneau, nouvelle conversation (une conversation Codex reste avec son compte)",
       "signInOnHost": "Se connecter à un autre compte sur {{host}}…",
-      "signInOnHostHint": "Ouvre cet agent à côté de ce panneau dans un nouveau dossier de compte sur {{host}}, où vous vous connectez avec sa propre connexion. Votre connexion reste sur l’hôte ; rien n’est copié depuis ce PC."
+      "signInOnHostHint": "Ouvre cet agent à côté de ce panneau dans un nouveau dossier de compte sur {{host}}, où vous vous connectez avec sa propre connexion. Votre connexion reste sur l’hôte ; rien n’est copié depuis ce PC.",
+      "defaultAccount": "{{account}} (par défaut)",
+      "makeHostDefault": "En faire le compte par défaut sur {{host}}",
+      "makeHostDefaultHint": "Les nouveaux panneaux de cet agent sur {{host}} démarrent sur le compte de ce panneau (les panneaux déjà sur un autre compte gardent le leur)",
+      "checkHostAccount": "Vérifier le compte de nouveau",
+      "checkHostAccountHint": "Demande maintenant à {{host}} avec quel compte cet agent est connecté, et sur quel dossier il tourne vraiment",
+      "copyAccountDetails": "Copier les détails du compte",
+      "copyAccountDetailsHint": "Copie quels fichiers de connexion existent sur l’hôte et comment cet agent a été démarré : oui / non seulement, jamais un jeton ni un courriel"
     },
     "badge": {
       "quiet": "silencieux depuis {{minutes}} min",
@@ -779,7 +793,17 @@
       "yolo": "Yolo, sans demander"
     },
     "account": {
-      "chip": "Compte : {{account}}"
+      "chip": "Compte : {{account}}",
+      "hostDefault": "Par défaut sur cet hôte",
+      "checkAgainHint": "Menu du panneau > Vérifier le compte de nouveau",
+      "checkAgain": "Vérifier de nouveau",
+      "otherFolder": "un autre dossier de compte",
+      "ownSignIn": "la connexion propre de l’hôte",
+      "mismatch": "Ce panneau tourne sur {{runs}}, et non sur {{saved}}.",
+      "update": "Mettre à jour",
+      "updateHint": "Le compte du panneau devient {{runs}} : ses redémarrages partent de là",
+      "keep": "Garder",
+      "keepHint": "Garde {{saved}} : son prochain redémarrage part de là"
     }
   },
   "floating": {
@@ -803,6 +827,10 @@
       "token": "un jeton de connexion",
       "gateway": "une adresse de passerelle"
     },
-    "overrideNote": "Attention : {{what}} défini sur l’hôte est utilisé à la place de cette connexion (settings.json ou le shell de connexion)."
+    "overrideNote": "Attention : {{what}} défini sur l’hôte est utilisé à la place de cette connexion (settings.json ou le shell de connexion).",
+    "signedInShort": "connecté",
+    "onHostShort": "sur {{host}}",
+    "unknownAccount": "{{what}} : connecté, compte inconnu (son courriel n’est pas encore connu). Vérifiez de nouveau une fois que l’agent a répondu.",
+    "linkedNote": "Son fichier de connexion est un lien vers un autre dossier (créé en dehors de Tessel) : aucun agent n’y est démarré."
   }
 }

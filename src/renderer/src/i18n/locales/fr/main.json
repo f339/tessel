@@ -213,7 +213,9 @@
       "pluginNotManaged": "Ce fichier n'est pas géré par Tessel ; il n'a pas été modifié : {{file}}",
       "noNode": "Node.js (node.exe) est introuvable dans les dossiers du PATH : Tessel n'a donc pas installé ses hooks d'agents. Installez Node.js, puis redémarrez Tessel.",
       "notList": "{{file}} a un réglage pour {{event}} qui n'est pas une liste de hooks : Tessel ne l'a pas modifié.",
-      "dshFlowList": "{{file}} est écrit sous forme de liste [...] : réécrivez-le avec une entrée « - » par ligne pour que Tessel puisse y ajouter ses hooks."
+      "dshFlowList": "{{file}} est écrit sous forme de liste [...] : réécrivez-le avec une entrée « - » par ligne pour que Tessel puisse y ajouter ses hooks.",
+      "museManagedTaken": "{{file}} indique déjà un autre fichier de hooks géré ({{other}}) : Tessel ne l'a pas remplacé. Retirez son managed_hooks_path pour que Tessel puisse lire l'état de Muse Code.",
+      "museEnvList": "{{file}} contient un managed_hooks_env_vars qui n'est pas une liste de noms : Tessel ne l'a pas modifié."
     },
     "jsonAgents": {
       "kimiNotObject": "mcpServers de Kimi n'est pas un objet ; le fichier existant n'a pas été modifié.",
@@ -221,7 +223,8 @@
       "notPlainJson": "{{file}} contient des commentaires ou n'est pas du JSON simple : Tessel ne le réécrit pas. Modifiez-le à la main.",
       "readFailed": "Impossible de lire {{file}} : {{error}}",
       "unknownAgent": "Agent inconnu.",
-      "writeFailed": "Impossible d'écrire {{file}} : {{error}}"
+      "writeFailed": "Impossible d'écrire {{file}} : {{error}}",
+      "museBothKeys": "{{file}} contient à la fois mcpServers et mcp_servers : Muse Code désactive alors ses serveurs MCP. Gardez-en un seul ; Tessel n'a pas modifié le fichier."
     },
     "kimi": {
       "changedDuring": "La configuration de Kimi a changé pendant la validation. Réessayez.",
@@ -258,7 +261,8 @@
       "codexRejectedEntry": "Codex n'a pas pu lire le nouveau serveur, Tessel a donc laissé ses paramètres tels quels.",
       "codexNoSse": "Codex se connecte uniquement aux serveurs HTTP streamable, pas aux serveurs SSE.",
       "envVarInvalid": "Utilisez des lettres, des chiffres et _ pour le nom de la variable.",
-      "antigravityNoSse": "L'Antigravity CLI se connecte uniquement aux serveurs HTTP streamable, pas aux serveurs SSE."
+      "antigravityNoSse": "L'Antigravity CLI se connecte uniquement aux serveurs HTTP streamable, pas aux serveurs SSE.",
+      "museNoSse": "Muse Code se connecte uniquement aux serveurs HTTP streamable, pas aux serveurs SSE."
     },
     "needs": {
       "agentName": "Un agent IA",
@@ -615,7 +619,13 @@
       "minimaxKeyExpired": "La clé API MiniMax a expiré. Remplacez-la dans les Paramètres.",
       "minimaxNoModel": "Les données d'usage MiniMax du modèle configuré sont introuvables.",
       "openCodeNoWorkspace": "Aucun espace de travail trouvé pour ce cookie. Ajoutez une clé API OpenCode Go (ou lancez /connect dans OpenCode), ou indiquez un identifiant d'espace de travail.",
-      "claudeExpired": "Cette connexion Claude a expiré. Lancez Claude avec ce compte pour la renouveler."
+      "claudeExpired": "Cette connexion Claude a expiré. Lancez Claude avec ce compte pour la renouveler.",
+      "museNeedsCli": "L’utilisation de Muse Code demande la CLI Muse Code (muse) installée.",
+      "museNeverRun": "Lancez Muse Code une première fois (et connectez-vous) pour que Tessel puisse lire son utilisation.",
+      "museSignedOut": "Muse Code n’est pas connecté : lancez muse, puis /login.",
+      "museApiKey": "Muse Code est connecté avec une clé API : il est facturé au jeton, sans quota d’abonnement à afficher.",
+      "museNothingYet": "Muse Code n’a pas encore vu l’utilisation de votre abonnement. Envoyez-lui une demande, puis actualisez.",
+      "museConfig": "Muse Code n’a pas pu charger ses réglages ou sa connexion. Lancez muse pour voir pourquoi."
     },
     "reset": {
       "notSaved": "Le résultat de la réinitialisation n'a pas pu être enregistré dans l'historique local.",
@@ -1023,6 +1033,7 @@
       "invalid": "Ce compte ne peut pas être utilisé sur cet hôte.",
       "createFailed": "Tessel n’a pas pu créer le dossier du compte sur {{host}}.",
       "gone": "Le dossier de ce compte n’est plus sur {{host}}. Démarrez l’agent sur un autre compte.",
+      "signedOutFolder": "Ce compte est déconnecté sur {{host}}.",
       "unusable": "Le dossier de ce compte sur {{host}} ne peut pas être utilisé sans risque (il a été modifié en dehors de Tessel).",
       "removeFailed": "Tessel n’a pas pu retirer le dossier de ce compte de {{host}} : il n’a pas été créé par Tessel, ou il a été modifié depuis.",
       "signOutFailed": "Tessel n’a pas pu déconnecter {{agent}} sur {{host}}.",
@@ -1060,6 +1071,14 @@
       "downloadTimeout": "Le téléchargement a pris trop de temps.",
       "downloadHost": "Le téléchargement a été redirigé hors de Hugging Face ; il a été arrêté.",
       "removeFailed": "Le dossier du tokenizer n’a pas pu être supprimé."
+    },
+    "musePlugins": {
+      "notInstalled": "Muse Code n'est pas installé.",
+      "badName": "Nom de plugin invalide.",
+      "listFailed": "Impossible de lister les plugins de Muse Code.",
+      "listUnreadable": "Impossible de lire la liste des plugins de Muse Code.",
+      "setFailed": "Muse Code n'a pas pu modifier ce plugin.",
+      "removeFailed": "Muse Code n'a pas pu désinstaller ce plugin."
     }
   },
   "main.chat.image.tooLarge": "Cette image dépasse {{mb}} Mo.",

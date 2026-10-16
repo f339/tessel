@@ -4,7 +4,7 @@ import { ref } from 'vue'
 import PaneContextMenu from './PaneContextMenu.vue'
 import BrandIcon from './BrandIcon.vue'
 import { t } from '../i18n'
-const props = defineProps(["ctxMenu","paneTitle","closeCtxMenuAndRefocus","node","team","teamFactTitle","isLead","isAgent","yoloTitle","statusTitle","exited","asksApproval","limit","limitState","agentStatus","estimatedState","needsYou","stuck","track","cache","cacheTitle","cacheLeft","unsent","launchStale","menuResolveUnsent","applyTitle","menuRestartApply","menuCopy","menuPaste","menuCopyOutput","menuClear","menuResetTerminal","menuCopySession","menuFind","hasModelChoice","modelTitle","menuModel","modelText","sessionPillLabel","paneModelList","paneValues","ctx","menuVoice","settings","menuPickVoice","lsTextSize","menuLsTextSize","otherPanes","menuSendSelection","menuAskReview","closeCtxMenu","leadToggleText","leaveTeamText","startEditTitle","isMaximized","menuOpenHere","menuSplit","menuRestart","accountRestartChoices","menuRestartOnAccount","canSignInOnHost","menuSignInOnHost","hostName","accountInfo","canViewTranscript","menuViewTranscript","transcriptOpen","canOpenAsChat","menuOpenAsChat","chatViewAvailable","canContinueOnHost","continueOnHostReason","menuContinueOnHost","canSwitchYolo","menuSwitchYolo","yoloFolder","yoloFolderOn","menuYoloFolder","folderName","menuClose","isChat","disabledReasons"])
+const props = defineProps(["ctxMenu","paneTitle","closeCtxMenuAndRefocus","node","team","teamFactTitle","isLead","isAgent","yoloTitle","statusTitle","exited","asksApproval","limit","limitState","agentStatus","estimatedState","needsYou","stuck","track","cache","cacheTitle","cacheLeft","unsent","launchStale","menuResolveUnsent","applyTitle","menuRestartApply","menuCopy","menuPaste","menuCopyOutput","menuClear","menuResetTerminal","menuCopySession","menuFind","hasModelChoice","modelTitle","menuModel","modelText","sessionPillLabel","paneModelList","paneValues","ctx","menuVoice","settings","menuPickVoice","lsTextSize","menuLsTextSize","otherPanes","menuSendSelection","menuAskReview","closeCtxMenu","leadToggleText","leaveTeamText","startEditTitle","isMaximized","menuOpenHere","menuSplit","menuRestart","accountRestartChoices","menuRestartOnAccount","canSignInOnHost","menuSignInOnHost","hostName","accountInfo","canCheckHostAccount","menuCheckHostAccount","menuCopyAccountDetails","canMakeHostDefault","menuMakeHostDefault","canViewTranscript","menuViewTranscript","transcriptOpen","canOpenAsChat","menuOpenAsChat","chatViewAvailable","canContinueOnHost","continueOnHostReason","menuContinueOnHost","canSwitchYolo","menuSwitchYolo","yoloFolder","yoloFolderOn","menuYoloFolder","folderName","menuClose","isChat","disabledReasons"])
 const unavailable = name => props.disabledReasons?.[name] || ''
 const menuRef = ref(null)
 defineExpose({ focus: options => menuRef.value?.focus(options), contains: target => menuRef.value?.contains(target), getBoundingClientRect: () => menuRef.value.getBoundingClientRect() })
@@ -206,6 +206,32 @@ defineExpose({ focus: options => menuRef.value?.focus(options), contains: target
         @click="menuSignInOnHost"
         v-text="t('pane.menu.signInOnHost', 'Sign in to another account on {{host}}…', { host: hostName })"
       ></button>
+      <button
+        v-if="canMakeHostDefault"
+        class="ctx-menu-item"
+        data-test="menu-host-default"
+        :title="t('pane.menu.makeHostDefaultHint', 'New panes of this agent on {{host}} start on this pane’s account (panes already on another account keep theirs)', { host: hostName })"
+        @click="menuMakeHostDefault"
+        v-text="t('pane.menu.makeHostDefault', 'Make this the default on {{host}}', { host: hostName })"
+      ></button>
+      <button
+        v-if="canCheckHostAccount"
+        class="ctx-menu-item"
+        data-test="menu-check-host-account"
+        :title="t('pane.menu.checkHostAccountHint', 'Asks {{host}} now which account this agent is signed in with, and which folder it really runs on', { host: hostName })"
+        @click="menuCheckHostAccount"
+      >
+        {{ t('pane.menu.checkHostAccount', 'Check account again') }}
+      </button>
+      <button
+        v-if="canCheckHostAccount"
+        class="ctx-menu-item"
+        data-test="menu-copy-account-details"
+        :title="t('pane.menu.copyAccountDetailsHint', 'Copies which sign-in files exist on the host and how this agent was started: yes / no only, never a token or an email')"
+        @click="menuCopyAccountDetails"
+      >
+        {{ t('pane.menu.copyAccountDetails', 'Copy account details') }}
+      </button>
       <button
         v-if="canViewTranscript"
         class="ctx-menu-item"

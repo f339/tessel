@@ -28,6 +28,7 @@
     { "id": "approval-allow-url", "why": "Antigravity's title: \"Allow access to this URL?\".", "kind": "approval", "regex": "Allow access to this URL\\?", "ignoreCase": true },
     { "id": "approval-allow-tool", "why": "Antigravity's title: \"Allow calling this tool?\".", "kind": "approval", "regex": "Allow calling this tool\\?", "ignoreCase": true },
     { "id": "approval-approve-action", "why": "Antigravity's title: \"Approve this action?\".", "kind": "approval", "regex": "Approve this action\\?", "ignoreCase": true },
+    { "id": "approval-always-workspace", "why": "Muse Code's approval choices: \"Allow once\", \"Always allow in this workspace\", \"Reject\".", "kind": "approval", "regex": "Always allow in this workspace", "ignoreCase": true },
     { "id": "busy-esc", "why": "A working agent's footer: \"esc to interrupt\", or an approval's \"esc to cancel\" (read in the screen's last 8 lines).", "kind": "busy-footer", "regex": "\\besc(?:ape)?\\s+(?:to\\s+)?(?:interrupt|cancel)\\b", "ignoreCase": true },
     { "id": "running-esc", "why": "Running, not an approval: only \"esc to interrupt\".", "kind": "running-footer", "regex": "\\besc(?:ape)?\\s+(?:to\\s+)?interrupt\\b", "ignoreCase": true }
   ]

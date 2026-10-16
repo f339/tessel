@@ -20,14 +20,14 @@ import { t } from '../i18n'
 import shellSource from './remoteAccounts.sh?raw'
 
 // The functions the host's session may run for this (remoteShell.js FUNCTIONS).
-export const ACCOUNT_FUNCTIONS = ['__t_accts', '__t_acctmk', '__t_acctrm', '__t_acctout']
+export const ACCOUNT_FUNCTIONS = ['__t_accts', '__t_acctmk', '__t_acctrm', '__t_acctout', '__t_acctpane', '__t_acctdiag']
 // Their definitions, for the prelude (a checkout with CRLF line ends must not
 // reach a POSIX sh).
 export const ACCOUNTS_SHELL = String(shellSource).replace(/\r/g, '')
 
 // The agents whose identity is read, and the ones Tessel can run on a folder
 // of their own (the variable that names it).
-export const ACCOUNT_AGENTS = ['claude', 'codex', 'gemini', 'copilot', 'grok', 'cursor', 'kimi', 'qwen', 'opencode']
+export const ACCOUNT_AGENTS = ['claude', 'codex', 'gemini', 'copilot', 'grok', 'cursor', 'kimi', 'qwen', 'opencode', 'muse']
 export const FOLDER_ENV = Object.freeze({ claude: 'CLAUDE_CONFIG_DIR', codex: 'CODEX_HOME' })
 export const FOLDER_AGENTS = Object.keys(FOLDER_ENV)
 const SCOPES = new Set(['default', 'env', 'tessel', 'orphan'])
@@ -89,7 +89,11 @@ const FIELDS = {
   method: (v) => (v === 'apikey' ? v : null),
   cred: (v) => (v === 'file' ? v : null),
   login: (v) => (/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(v) ? notSecret(v) : null),
-  site: (v) => (/^https?:\/\/[A-Za-z0-9.-]{1,100}(?::\d{1,5})?\/?$/.test(v) ? v : null)
+  site: (v) => (/^https?:\/\/[A-Za-z0-9.-]{1,100}(?::\d{1,5})?\/?$/.test(v) ? v : null),
+  // Claude Code's own name for the plan ("Claude Max").
+  planName: (v) => (/^[A-Za-z][A-Za-z0-9 .+-]{0,39}$/.test(v) ? notSecret(v) : null),
+  // A folder of Tessel's whose sign-in file is a link (no agent starts on it).
+  linked: (v) => (v === 'yes' ? true : null)
 }
 
 // The host's answer (remoteAccounts.sh) -> { os, home, entries, loginEnv,
@@ -171,6 +175,68 @@ export function entryState(e) {
   if (e.cred === 'file' || e.method === 'apikey' || e.login || (e.providers && e.providers.length)) return 'signed-in'
   if (e.email || e.account) return 'profile'
   return 'empty'
+}
+
+// What __t_acctpane printed: { home, panes: { [paneId]: { found, dir } } }
+// found: 'yes' | 'none' (no agent process of it) | 'unknown' | 'mixed' (its
+// agent processes are on different folders); dir: the CLAUDE_CONFIG_DIR /
+// CODEX_HOME in its agent's environment, null when it has none. A folder
+// that is no plain absolute path is unknown, never "none" (that would be
+// the host's own sign-in). Never throws.
+export function parsePaneProcesses(text) {
+  const out = { home: null, panes: {} }
+  for (const raw of String(text || '').split('\n').slice(0, 200)) {
+    const line = raw.replace(/\r$/, '')
+    const h = /^@h \S* (.*)$/.exec(line)
+    if (h) {
+      out.home = POSIX_DIR.test(h[1]) ? h[1].replace(/\/+$/, '') || null : null
+      continue
+    }
+    const m = /^@p (pane-[\w-]{1,80}) (?:(none|unknown|mixed)|(\d{1,10}) (.*))$/.exec(line)
+    if (!m || Object.hasOwn(out.panes, m[1])) continue
+    if (m[2]) out.panes[m[1]] = { found: m[2], dir: null }
+    else if (m[4] === '-') out.panes[m[1]] = { found: 'yes', dir: null }
+    else out.panes[m[1]] = POSIX_DIR.test(m[4]) ? { found: 'yes', dir: m[4] } : { found: 'unknown', dir: null }
+  }
+  return out
+}
+// The folder id of a Tessel account folder of that home
+// (<home>/.tessel-server/accounts/<agent>/<id>), or null: one elsewhere is
+// not Tessel's, whatever its name.
+export function folderIdOf(agent, dir, home) {
+  if (typeof dir !== 'string' || typeof home !== 'string' || !home.startsWith('/') || !FOLDER_AGENTS.includes(agent)) return null
+  const base = `${home.replace(/\/+$/, '')}/.tessel-server/accounts/${agent}/`
+  if (!dir.startsWith(base)) return null
+  const id = dir.slice(base.length).replace(/\/$/, '')
+  return ID.test(id) ? id : null
+}
+// Whether a pane's agent runs on the host's own sign-in: no folder set, the
+// agent's own folder, or the one the login shell names (a plain pane's).
+export function ownFolder(agent, dir, home, loginDir = null) {
+  if (dir === null) return true
+  if (typeof dir !== 'string' || typeof home !== 'string' || !home.startsWith('/')) return false
+  const d = dir.replace(/\/+$/, '')
+  if (d === `${home.replace(/\/+$/, '')}/${agent === 'codex' ? '.codex' : '.claude'}`) return true
+  return typeof loginDir === 'string' && loginDir.startsWith('/') && d === loginDir.replace(/\/+$/, '')
+}
+
+// "Copy account details": presence flags only. Known keys, yes / no / none /
+// unknown / mixed (and the host's system name), nothing else.
+export const DIAG_KEYS = [
+  'os',
+  'home.credentials', 'home.config', 'home.legacyConfig', 'home.oauthAccount', 'home.email',
+  'folder.exists', 'folder.marker', 'folder.credentials', 'folder.credentialsLink', 'folder.configLink', 'folder.config', 'folder.legacyConfig', 'folder.oauthAccount', 'folder.email', 'folder.plan', 'folder.projectsLink', 'folder.settingsLink', 'folder.apiKey',
+  'process.found', 'process.configDirSet', 'process.onFolder', 'process.keyEnv', 'process.dbus',
+  'keyring.secretTool'
+]
+export function parseDiag(text) {
+  const out = {}
+  for (const raw of String(text || '').split('\n').slice(0, 200)) {
+    const m = /^d ([\w.]+) (\S+)$/.exec(raw.replace(/\r$/, ''))
+    if (!m || !DIAG_KEYS.includes(m[1]) || Object.hasOwn(out, m[1])) continue
+    if (m[1] === 'os' ? /^[\w.-]{1,40}$/.test(m[2]) : ['yes', 'no', 'none', 'unknown', 'mixed'].includes(m[2])) out[m[1]] = m[2]
+  }
+  return out
 }
 
 // Copying a sign-in from this PC to a host is not offered. Claude Code and
@@ -378,14 +444,17 @@ export function createRemoteAccounts({
   }
 
   // The folder an agent starts on (made whole again first: its links, its
-  // marker checked). -> { ok, prefix, dir, name } | { ok: false, missing?, error }
-  async function launchEnv(hostId, agent, id) {
+  // marker checked). signedIn: only when it holds a sign-in (a new pane on
+  // the host's default account, checked there as it starts).
+  // -> { ok, prefix, dir, name } | { ok: false, missing?, signedOut?, error }
+  async function launchEnv(hostId, agent, id, { signedIn = false } = {}) {
     if (!validHost(hostId) || !validAgent(agent) || typeof id !== 'string' || !ID.test(id)) return invalid()
     if (!rate('launch', hostId, limits.launches, limits.launchWindowMs))
       return { ok: false, error: t('main.remoteAccounts.launchTooFast', 'Too many agents started on account folders of {{host}} in a minute: try again in a moment.', { host: hostName(hostId) }) }
-    const res = await run(hostId, '__t_acctmk', [agent, id], { cap: 8192, timeoutMs: 20_000, user: true })
+    const res = await run(hostId, '__t_acctmk', signedIn === true ? [agent, id, 'signed'] : [agent, id], { cap: 8192, timeoutMs: 20_000, user: true })
     if (!res || res.error || res.notConnected || typeof res.rc !== 'number') return failed(hostId, res)
     if (res.rc === 91) return { ok: false, missing: true, error: t('main.remoteAccounts.gone', 'This account’s folder is no longer on {{host}}. Start the agent on another account.', { host: hostName(hostId) }) }
+    if (res.rc === 92) return { ok: false, signedOut: true, error: t('main.remoteAccounts.signedOutFolder', 'This account is signed out on {{host}}.', { host: hostName(hostId) }) }
     const found = res.rc === 0 ? folderOf(res, agent, id) : {}
     if (found.unsafe) return unsafeHome(hostId)
     const dir = found.dir
@@ -455,12 +524,53 @@ export function createRemoteAccounts({
     return { ok: true, ...(keychain ? { keychain: true } : {}) }
   }
 
+  // Which config folder the agent of each pane really runs on (its
+  // process's CLAUDE_CONFIG_DIR / CODEX_HOME, Linux), one pass over the
+  // host's processes for all of them. panes: [{ paneId, agent }] (at most 50)
+  // -> { ok, panes: { [paneId]: { found, dir, folderId, own } } }
+  // found: 'yes' | 'none' (no such process now) | 'unknown' (no /proc) |
+  // 'mixed' (processes on different folders: not taken for either);
+  // folderId: a Tessel folder of that home; own: on the host's own sign-in.
+  // Neither: a folder Tessel does not know.
+  async function paneFolders(hostId, panes) {
+    const seen = new Set()
+    const list = (Array.isArray(panes) ? panes : []).filter((p) => p && typeof p.paneId === 'string' && PANE_ID.test(p.paneId) && validAgent(p.agent) && !seen.has(p.paneId) && seen.add(p.paneId)).slice(0, 50)
+    if (!validHost(hostId) || !list.length) return invalid()
+    const res = await run(hostId, '__t_acctpane', list.flatMap((p) => [p.paneId, p.agent]), { cap: 64 * 1024, timeoutMs: 20_000 })
+    if (!res || res.error || res.notConnected || res.skipped || typeof res.rc !== 'number') return failed(hostId, res)
+    if (res.rc !== 0) return failed(hostId, null)
+    const parsed = parsePaneProcesses(outText(res))
+    const login = logins.get(hostId) || {}
+    const out = {}
+    for (const { paneId, agent } of list) {
+      const p = parsed.panes[paneId] || { found: 'unknown', dir: null }
+      const known = p.found === 'yes' && !!parsed.home
+      const folderId = known ? folderIdOf(agent, p.dir, parsed.home) : null
+      out[paneId] = { found: known ? 'yes' : p.found === 'yes' ? 'unknown' : p.found, dir: p.dir, folderId, own: known && !folderId && ownFolder(agent, p.dir, parsed.home, login[agent]) }
+    }
+    return { ok: true, panes: out }
+  }
+
+  // "Copy account details": presence flags of the agent's own folder, the
+  // pane's account folder and the pane's process. -> { ok, flags }
+  async function diagnose(hostId, agent, id, paneId) {
+    if (!validHost(hostId) || !validAgent(agent)) return invalid()
+    const folder = typeof id === 'string' && ID.test(id) ? id : '-'
+    const pane = typeof paneId === 'string' && PANE_ID.test(paneId) ? paneId : '-'
+    const res = await run(hostId, '__t_acctdiag', [agent, folder, pane], { cap: 16 * 1024, timeoutMs: 20_000 })
+    if (!res || res.error || res.notConnected || res.skipped || typeof res.rc !== 'number') return failed(hostId, res)
+    if (res.rc !== 0) return failed(hostId, null)
+    return { ok: true, flags: parseDiag(outText(res)) }
+  }
+
   return {
     detect,
     create,
     launchEnv,
     remove,
     signOut,
+    paneFolders,
+    diagnose,
     copyPolicy,
     cached: (hostId) => (cache.get(hostId) || {}).value || null,
     forget: (hostId) => {
@@ -491,7 +601,7 @@ export function publicDetection(value) {
     envOverrides: { claude: over(value.envOverrides && value.envOverrides.claude), codex: over(value.envOverrides && value.envOverrides.codex) }
   }
 }
-const ENTRY_KEYS = ['agent', 'scope', 'id', 'dir', 'mtimeMs', 'email', 'org', 'orgId', 'account', 'name', 'plan', 'tier', 'billing', 'mode', 'method', 'cred', 'login', 'site']
+const ENTRY_KEYS = ['agent', 'scope', 'id', 'dir', 'mtimeMs', 'email', 'org', 'orgId', 'account', 'name', 'plan', 'planName', 'tier', 'billing', 'mode', 'method', 'cred', 'login', 'site', 'linked']
 export function publicEntry(e) {
   const out = {}
   for (const k of ENTRY_KEYS) if (e[k] !== undefined) out[k] = e[k]

@@ -12,10 +12,13 @@
 // - Codex: `codex debug models` renders its model catalog as JSON.
 // - Grok: `grok models` prints its listing.
 // - OpenCode: `opencode models` prints one provider/model id per line.
+// - Muse Code: `muse serve` answers model/list (its session protocol, a
+//   query: no session, no turn) with each model, its efforts and its default
+//   (src/main/museServe.js).
 // The CLI may use its own sign-in and network to answer, so Tessel runs a
 // probe only when asked (Settings > Agents > Refresh models) and keeps the
 // answer (agentModelList.js).
-import { createClaudeCatalogOptions, createCodexCatalogOptions, createPiCatalogOptions, createAntigravityCatalogOptions } from './agentSessionOptions'
+import { createClaudeCatalogOptions, createCodexCatalogOptions, createPiCatalogOptions, createAntigravityCatalogOptions, createMuseCatalogOptions } from './agentSessionOptions'
 import { groupCursorModels } from './cursorModels'
 import { groupAntigravityModels } from './antigravityModels'
 
@@ -232,7 +235,39 @@ export function parseAntigravityModelList(stdout) {
   })
 }
 
+// Muse Code's model/list answer (JSON): { models: [{ modelId, displayLabel,
+// description, isDefault, variants: [efforts] | 'unknown',
+// defaultReasoningEffort }] }, newest first.
+const MUSE_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+export function parseMuseModelList(stdout) {
+  let data
+  try {
+    data = JSON.parse(String(stdout || ''))
+  } catch {
+    return []
+  }
+  const rows = data && Array.isArray(data.models) ? data.models : []
+  const out = []
+  const seen = new Set()
+  for (const m of rows.slice(0, 300)) {
+    const id = m && typeof m.modelId === 'string' ? m.modelId.trim() : ''
+    if (!PROBED_MODEL_ID.test(id) || seen.has(id)) continue
+    seen.add(id)
+    const label = typeof m.displayLabel === 'string' && m.displayLabel.trim() ? m.displayLabel.trim().slice(0, 120) : labelFromModelId(id)
+    const described = Array.isArray(m.reasoningEffortVariants) ? m.reasoningEffortVariants.map((v) => v && v.tier) : []
+    const levels = (Array.isArray(m.variants) ? m.variants : described).filter((e) => MUSE_EFFORTS.includes(e))
+    const row = { id, label }
+    if (typeof m.description === 'string' && m.description.trim()) row.description = m.description.trim().slice(0, 300)
+    if (levels.length) row.effortLevels = levels
+    if (MUSE_EFFORTS.includes(m.defaultReasoningEffort)) row.defaultEffort = m.defaultReasoningEffort
+    if (m.isDefault === true) row.isDefault = true
+    out.push(row)
+  }
+  return out
+}
+
 // How each agent is asked: its program, arguments, what goes on stdin.
+// msp: asked over the agent's own protocol (that method), not by its output.
 export const MODEL_PROBES = {
   claude: { exe: 'claude', args: CLAUDE_MODEL_LIST_ARGS, stdin: CLAUDE_MODEL_LIST_STDIN, parse: parseClaudeModelList },
   codex: { exe: 'codex', args: CODEX_MODEL_LIST_ARGS, stdin: null, parse: parseCodexModelList },
@@ -240,7 +275,8 @@ export const MODEL_PROBES = {
   opencode: { exe: 'opencode', args: OPENCODE_MODEL_LIST_ARGS, stdin: null, parse: parseOpenCodeModelList },
   pi: { exe: 'pi', args: PI_MODEL_LIST_ARGS, stdin: null, parse: parsePiModelList },
   cursor: { exe: 'cursor-agent', args: CURSOR_MODEL_LIST_ARGS, stdin: null, parse: parseCursorModelList },
-  antigravity: { exe: 'agy', args: ANTIGRAVITY_MODEL_LIST_ARGS, stdin: null, parse: parseAntigravityModelList }
+  antigravity: { exe: 'agy', args: ANTIGRAVITY_MODEL_LIST_ARGS, stdin: null, parse: parseAntigravityModelList },
+  muse: { exe: 'muse', args: ['serve'], stdin: null, msp: 'model/list', parse: parseMuseModelList }
 }
 
 export function canProbeModels(agent) {
@@ -288,6 +324,7 @@ export function listedToCatalogModels(agent, rows) {
     if (agent === 'codex')
       return { ...base, options: row.effortLevels && row.effortLevels.length ? createCodexCatalogOptions({ effortLevelIds: row.effortLevels, defaultEffort: row.defaultEffort }) : [] }
     if (agent === 'pi') return { ...base, options: createPiCatalogOptions(row.effortLevels || []) }
+    if (agent === 'muse') return { ...base, options: createMuseCatalogOptions(row.effortLevels || [], row.defaultEffort) }
     return { ...base, options: [] }
   })
 }

@@ -9,9 +9,11 @@
 //   Cursor CLI   ~/.cursor/mcp.json              "mcpServers": { name: { command, args, env | url, headers } }
 //   Antigravity  ~/.gemini/config/mcp_config.json "mcpServers": { name: { command, args, env | serverUrl, headers, disabled } }
 //                (the format `agy mcp add` writes; agy reads url too)
+//   Muse Code    ~/.config/muse/settings.json    "mcpServers" (or its older "mcp_servers"): { name: { command, args, env | url, headers, enabled } }
+//                (its settings: "schema_version": 1 is kept, and added to a new file)
 // HTTP servers are streamable HTTP unless `sse` is set (an SSE endpoint):
 // Gemini/Qwen httpUrl vs url, Copilot/Cline/Kimi their type, OpenCode and
-// Cursor find out by themselves. Antigravity only speaks streamable HTTP.
+// Cursor find out by themselves. Antigravity and Muse only speak streamable HTTP.
 // Only the server entries are read or changed; everything else in the file is
 // kept as it is. A file that cannot be read as JSON (comments in a .jsonc,
 // say) is never rewritten: the change is refused with a clear error.
@@ -21,8 +23,9 @@ import { join, dirname } from 'path'
 import { writeFileAtomic } from './safeJson'
 import { t } from './i18n'
 import { findNode } from './nodePath'
+import { museSettingsFile } from './museSessions'
 
-export const JSON_AGENTS = ['gemini', 'qwen', 'copilot', 'opencode', 'cline', 'kimi', 'cursor', 'antigravity']
+export const JSON_AGENTS = ['gemini', 'qwen', 'copilot', 'opencode', 'cline', 'kimi', 'cursor', 'antigravity', 'muse']
 
 function settingsFile(agent, home = os.homedir()) {
   if (agent === 'gemini') return join(home, '.gemini', 'settings.json')
@@ -31,6 +34,8 @@ function settingsFile(agent, home = os.homedir()) {
   if (agent === 'cursor') return join(home, '.cursor', 'mcp.json')
   // The Antigravity CLI's own servers (not Gemini CLI's ~/.gemini/settings.json).
   if (agent === 'antigravity') return join(home, '.gemini', 'config', 'mcp_config.json')
+  // Muse Code's servers are in its settings, beside its hooks and the rest.
+  if (agent === 'muse') return museSettingsFile(home)
   if (agent === 'kimi') return join(process.env.KIMI_CODE_HOME || join(home, '.kimi-code'), 'mcp.json')
   if (agent === 'cline') {
     // Cline's own overrides first (CLINE_MCP_SETTINGS_PATH, CLINE_DATA_DIR, CLINE_DIR).
@@ -54,7 +59,19 @@ export function clineDataDir(home = os.homedir()) {
   return join(dir, 'data')
 }
 
-const KEY = { gemini: 'mcpServers', qwen: 'mcpServers', copilot: 'mcpServers', opencode: 'mcp', cline: 'mcpServers', kimi: 'mcpServers', cursor: 'mcpServers', antigravity: 'mcpServers' }
+const KEY = { gemini: 'mcpServers', qwen: 'mcpServers', copilot: 'mcpServers', opencode: 'mcp', cline: 'mcpServers', kimi: 'mcpServers', cursor: 'mcpServers', antigravity: 'mcpServers', muse: 'mcpServers' }
+
+// The key an agent's file keeps its servers under. Muse also reads its older
+// "mcp_servers": the one the file has is kept; with both, Muse turns MCP off
+// for the session, and Tessel refuses to pick one. -> { key } or { error }
+function serversKey(agent, data, file) {
+  if (agent !== 'muse' || !data) return { key: KEY[agent] }
+  const canonical = Object.hasOwn(data, 'mcpServers')
+  const legacy = Object.hasOwn(data, 'mcp_servers')
+  if (canonical && legacy)
+    return { error: t('main.jsonAgents.museBothKeys', '{{file}} has both mcpServers and mcp_servers, so Muse Code turns its MCP servers off. Keep one of them; Tessel did not change the file.', { file }) }
+  return { key: legacy ? 'mcp_servers' : 'mcpServers' }
+}
 
 // -> { data } (null data: no file yet) or { error }
 function readSettings(file) {
@@ -144,6 +161,18 @@ export function configToEntry(agent, cfg, extra = {}) {
     if (cfg.env && Object.keys(cfg.env).length) e.env = cfg.env
     return e
   }
+  // Muse Code: the fields its own rewrite of its settings keeps (no type: an
+  // entry with url is streamable HTTP; no SSE, refused before this).
+  if (agent === 'muse') {
+    if (cfg.transport === 'http') {
+      const e = { url: cfg.url }
+      if (cfg.headers && Object.keys(cfg.headers).length) e.headers = cfg.headers
+      return e
+    }
+    const e = { command: cfg.command, args: cfg.args || [] }
+    if (cfg.env && Object.keys(cfg.env).length) e.env = cfg.env
+    return e
+  }
   // Antigravity: what `agy mcp add` writes (serverUrl for HTTP). It has no
   // SSE transport: an SSE endpoint is refused before this (addMcp, copyMcp).
   if (agent === 'antigravity') {
@@ -177,21 +206,37 @@ export function configToEntry(agent, cfg, extra = {}) {
   return { ...e, ...extra }
 }
 
-// -> { servers: [{ name, type, target }], error }
+// { envKeys, headerKeys }: the names of a server's environment variables and
+// headers, never their values; each only when there is one.
+export function secretNames(cfg = {}) {
+  const names = (o) => (o && typeof o === 'object' && !Array.isArray(o) ? Object.keys(o).filter(Boolean) : [])
+  const out = {}
+  const envKeys = names(cfg.env)
+  const headerKeys = names(cfg.headers)
+  if (envKeys.length) out.envKeys = envKeys
+  if (headerKeys.length) out.headerKeys = headerKeys
+  return out
+}
+
+// -> { servers: [{ name, type, target, envKeys?, headerKeys? }], error }
 export function listJsonAgent(agent, home) {
   const file = settingsFile(agent, home)
   if (!file) return { servers: [], error: t('main.jsonAgents.unknownAgent', 'Unknown agent.') }
   const r = readSettings(file)
   if (r.error) return { servers: [], error: r.error }
-  const map = (r.data && r.data[KEY[agent]]) || {}
+  const k = serversKey(agent, r.data, file)
+  if (k.error) return { servers: [], error: k.error }
+  const map = (r.data && r.data[k.key]) || {}
   const servers = []
   for (const [name, e] of Object.entries(map)) {
     const cfg = entryToConfig(agent, e)
     if (!cfg) continue
     const target = cfg.transport === 'http' ? cfg.url : [cfg.command, ...cfg.args].filter(Boolean).join(' ')
     // Never expose env values or headers (usually secrets). Antigravity's
-    // `agy mcp disable` keeps a server with "disabled": true.
-    servers.push({ name, scope: 'user', type: cfg.transport === 'http' ? 'http' : 'stdio', target, ...(agent === 'antigravity' && e && e.disabled === true ? { enabled: false } : {}) })
+    // `agy mcp disable` keeps a server with "disabled": true, Muse's with
+    // "enabled": false.
+    const off = (agent === 'antigravity' && e && e.disabled === true) || (agent === 'muse' && e && e.enabled === false)
+    servers.push({ name, scope: 'user', type: cfg.transport === 'http' ? 'http' : 'stdio', target, ...(off ? { enabled: false } : {}), ...secretNames(cfg) })
   }
   return { servers, error: null }
 }
@@ -200,7 +245,9 @@ export function jsonAgentConfig(agent, name, home) {
   const file = settingsFile(agent, home)
   const r = file ? readSettings(file) : { error: t('main.jsonAgents.unknownAgent', 'Unknown agent.') }
   if (r.error || !r.data) return null
-  const e = (r.data[KEY[agent]] || {})[name]
+  const k = serversKey(agent, r.data, file)
+  if (k.error) return null
+  const e = (r.data[k.key] || {})[name]
   return e ? entryToConfig(agent, e) : null
 }
 
@@ -211,7 +258,11 @@ export function setJsonAgentServer(agent, name, entry, home) {
   const r = readSettings(file)
   if (r.error) return { ok: false, error: r.error }
   const data = r.data || (agent === 'opencode' ? { $schema: 'https://opencode.ai/config.json' } : {})
-  const key = KEY[agent]
+  const k = serversKey(agent, data, file)
+  if (k.error) return { ok: false, error: k.error }
+  const key = k.key
+  // Muse refuses to start on a settings file without it.
+  if (agent === 'muse' && data.schema_version === undefined) data.schema_version = 1
   if (agent === 'kimi' && Object.hasOwn(data, key) && (!data[key] || typeof data[key] !== 'object' || Array.isArray(data[key])))
     return { ok: false, error: t('main.jsonAgents.kimiNotObject', 'Kimi mcpServers is not an object; the existing file was left unchanged.') }
   if (!data[key] || typeof data[key] !== 'object' || Array.isArray(data[key])) data[key] = {}
@@ -230,7 +281,9 @@ export function removeJsonAgentServer(agent, name, home) {
   if (!file) return { ok: false, error: t('main.jsonAgents.unknownAgent', 'Unknown agent.') }
   const r = readSettings(file)
   if (r.error) return { ok: false, error: r.error }
-  const map = r.data && r.data[KEY[agent]]
+  const k = serversKey(agent, r.data, file)
+  if (k.error) return { ok: false, error: k.error }
+  const map = r.data && r.data[k.key]
   if (!map || !(name in map)) return { ok: true, changed: false }
   delete map[name]
   try {
@@ -258,6 +311,14 @@ export function teamToolsEntry(agent, scriptPath, node = findNode()) {
   // values (a "$TESSEL_PANE_ID" would reach the server as it is), so none is
   // written.
   if (agent === 'copilot' || agent === 'cline' || agent === 'kimi' || agent === 'antigravity') return configToEntry(agent, stdio)
+  // Muse Code starts a server with a cleared environment: the pane's
+  // variables go through env, expanded by Muse (${NAME}). ":-" makes a missing
+  // one empty (a Muse run outside Tessel): Muse would turn every server off
+  // for a variable it cannot expand.
+  if (agent === 'muse') {
+    const names = ['TESSEL_PANE_ID', 'TESSEL_TEAM_SECRET', 'TESSEL_PROJECT_DIR', 'TESSEL_RUNTIME_DIR', 'APPDATA']
+    return configToEntry(agent, { ...stdio, env: Object.fromEntries(names.map((n) => [n, `\${${n}:-}`])) })
+  }
   // Gemini CLI / Qwen Code: variables expanded from the environment; trusted,
   // so its tools run without asking each time (like Codex's "approve").
   return configToEntry(

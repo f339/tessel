@@ -14,7 +14,7 @@ import { recentProjectSessions } from '../projectLauncher'
 import { agentLabel, timeAgo } from '../sessionHistory'
 import { t } from '../i18n'
 import { accountChoices, defaultAccountChoice, refreshAccountChoices } from '../accountChoices'
-import { hostAccountChoices, refreshHostAccounts } from '../hostAccounts'
+import { defaultHostAccount, hostAccountChoices, refreshHostAccounts, setDefaultHostAccount } from '../hostAccounts'
 
 const props = defineProps({
   name: { type: String, default: '' },
@@ -126,9 +126,25 @@ function accountValue(a) {
   const choices = accountsOf(a)
   const key = chosenAccount[a.id]
   if (choices.some((c) => accountKey(c.id) === key)) return key
-  if (props.remote) return accountKey(choices.some((c) => c.id === null) ? null : choices[0] ? choices[0].id : null)
+  if (props.remote) {
+    // The host's default for that agent (Settings), else its own sign-in.
+    const d = defaultHostAccount(props.remote.hostId, a.id)
+    if (d && choices.some((c) => c.id === d)) return accountKey(d)
+    return accountKey(choices.some((c) => c.id === null) ? null : choices[0] ? choices[0].id : null)
+  }
   const fallback = defaultAccountChoice(a.id)
   return accountKey(fallback === undefined ? null : fallback)
+}
+// On an SSH host: an account's name in the picker ("(default)" for the one
+// new panes use there), and Make default for the one chosen.
+const choiceLabel = (c) => (props.remote && c.isDefault ? t('launcher.defaultAccount', '{{account}} (default)', { account: c.name }) : c.name)
+function chosenIsDefault(a) {
+  const key = accountValue(a)
+  return (defaultHostAccount(props.remote.hostId, a.id) ?? null) === (key === 'system' ? null : key)
+}
+function makeDefault(a) {
+  const key = accountValue(a)
+  setDefaultHostAccount(props.remote.hostId, a.id, key === 'system' ? null : key)
 }
 // A connected host: its accounts read once the launcher shows.
 watch(
@@ -148,7 +164,12 @@ function pick(item) {
   // Missing on the host: its install (asked first), never started as if ready.
   if (item.kind === 'agent' && item.agent.missing) emit('pick', { kind: 'install', id: item.agent.id }, { remember: false })
   else if (item.kind === 'agent') {
-    const key = accountsOf(item.agent).length ? accountValue(item.agent) : undefined
+    // On an SSH host with a default account for this agent and nothing picked
+    // here: none sent, the pane starts on the default (checked as it starts;
+    // gone or signed out: the host's own sign-in, said).
+    const picked = chosenAccount[item.agent.id]
+    const onDefault = !!props.remote && !!defaultHostAccount(props.remote.hostId, item.agent.id) && !accountsOf(item.agent).some((c) => accountKey(c.id) === picked)
+    const key = !onDefault && accountsOf(item.agent).length ? accountValue(item.agent) : undefined
     const account = key === undefined ? {} : { accountId: key === 'system' ? null : key }
     emit('pick', { kind: 'agent', id: item.agent.id, ...account }, { remember: remember.value })
   }
@@ -249,8 +270,18 @@ const terminalHint = computed(() =>
               :aria-label="accountLabelOf(item.agent)"
               @update:model-value="(v) => (chosenAccount[item.agent.id] = v)"
             >
-              <option v-for="c in accountsOf(item.agent)" :key="accountKey(c.id)" :value="accountKey(c.id)">{{ c.name }}</option>
+              <option v-for="c in accountsOf(item.agent)" :key="accountKey(c.id)" :value="accountKey(c.id)">{{ choiceLabel(c) }}</option>
             </ThemedSelect>
+            <button
+              v-if="remote && !chosenIsDefault(item.agent)"
+              type="button"
+              class="pl-make-default"
+              :data-test="`launcher-account-default-${item.agent.id}`"
+              :title="t('launcher.makeDefaultHint', 'New panes of this agent on this host start on the account chosen here')"
+              @click="makeDefault(item.agent)"
+            >
+              {{ t('launcher.makeDefault', 'Make default') }}
+            </button>
           </div>
           <button
             v-else
@@ -500,5 +531,15 @@ const terminalHint = computed(() =>
   gap: 6px;
   cursor: pointer;
   color: var(--text);
+}
+.pl-make-default {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0 4px;
+  white-space: nowrap;
 }
 </style>

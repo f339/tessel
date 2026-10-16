@@ -116,11 +116,13 @@ import {
   addMcp,
   removeMcp,
   testMcp,
+  testMcpSpec,
   copyMcp,
   hklFromTip,
   runAgentCommand
 } from './agentTools'
 import { listAgyPlugins, setAgyPlugin, removeAgyPlugin } from './agyPlugins'
+import { createMusePlugins } from './musePlugins'
 import {
   listSkills,
   packageFromFolder,
@@ -1353,8 +1355,10 @@ const chatSessions = createChatSessions({
     readAgentFile: (hostId, q) => remoteFs.readAgentFile(hostId, q),
     // A chat on an account folder of the host (remoteAccounts.js): that
     // folder, made whole and checked there. -> { ok, name, dir } | { ok: false, error }
-    accountFolder: async ({ hostId, agent, id }) => {
-      const res = await remoteAccounts.launchEnv(hostId, agent, id)
+    // signedIn: the host's default account (only a folder signed in, else
+    // the chat says so and starts on the host's own sign-in).
+    accountFolder: async ({ hostId, agent, id, signedIn = false }) => {
+      const res = await remoteAccounts.launchEnv(hostId, agent, id, { signedIn: signedIn === true })
       return res.ok ? { ok: true, name: res.name, dir: res.dir } : { ok: false, error: res.error }
     },
     // Claude's skills there (~/.claude/skills, the project's): listed over
@@ -2134,11 +2138,12 @@ ipcMain.handle('remoteAccounts:create', async (_evt, q) => {
   return res.ok ? { ok: true, id: res.id } : { ok: false, error: res.error, ...(res.notConnected ? { notConnected: true } : {}) }
 })
 // The words typed before the agent's command on the host (its folder).
+// signedIn: only a folder signed in (a new pane on the host's default account).
 ipcMain.handle('remoteAccounts:launchEnv', async (_evt, q) => {
   const { hostId, agent, id } = remoteAccountArgs(q)
   if (!hostId) return noHost()
-  const res = await remoteAccounts.launchEnv(hostId, agent, id)
-  return res.ok ? { ok: true, prefix: res.prefix } : { ok: false, error: res.error, ...(res.missing ? { missing: true } : {}) }
+  const res = await remoteAccounts.launchEnv(hostId, agent, id, { signedIn: !!(q && q.signedIn === true) })
+  return res.ok ? { ok: true, prefix: res.prefix } : { ok: false, error: res.error, ...(res.missing ? { missing: true } : {}), ...(res.signedOut ? { signedOut: true } : {}) }
 })
 // panes: the window's panes still on that login (stopped first, after the yes).
 ipcMain.handle('remoteAccounts:remove', async (_evt, q) => {
@@ -2150,6 +2155,21 @@ ipcMain.handle('remoteAccounts:signOut', async (_evt, q) => {
   const { hostId, agent, panes } = remoteAccountArgs(q)
   if (!hostId) return noHost()
   return remoteAccounts.signOut(hostId, agent, { panes })
+})
+// Which config folder each pane's agent really runs on there (its process's
+// CLAUDE_CONFIG_DIR / CODEX_HOME, nothing else read), one pass for all the
+// panes asked. ({ hostId, list: [{ paneId, agent }] })
+ipcMain.handle('remoteAccounts:paneFolders', async (_evt, q) => {
+  const { hostId } = remoteAccountArgs(q)
+  if (!hostId) return noHost()
+  const list = q && Array.isArray(q.list) ? q.list.slice(0, 50).map((p) => ({ paneId: p && typeof p.paneId === 'string' ? p.paneId : '', agent: p && typeof p.agent === 'string' ? p.agent : '' })) : []
+  return remoteAccounts.paneFolders(hostId, list)
+})
+// "Copy account details": presence flags only. ({ hostId, agent, id, paneId })
+ipcMain.handle('remoteAccounts:diagnose', async (_evt, q) => {
+  const { hostId, agent, id } = remoteAccountArgs(q)
+  if (!hostId) return noHost()
+  return remoteAccounts.diagnose(hostId, agent, id, q && typeof q.paneId === 'string' ? q.paneId : null)
 })
 // Why a sign-in is never copied from this PC to a host (the sign-in dialog says it).
 ipcMain.handle('remoteAccounts:copyPolicy', (_evt, agent) => copyRemotePolicy(agent))
@@ -2295,7 +2315,7 @@ const sessionLister = createSessionLister({
   log
 })
 app.on('will-quit', () => sessionLister.close())
-const accountSessions = createAccountSessions({ accounts, listSessions: sessionLister.list })
+const accountSessions = createAccountSessions({ accounts, listSessions: sessionLister.list, sessionsDir })
 const accountUsage = createAccountUsage({ accounts, userData: app.getPath('userData') })
 // Tokens, time and estimated cost of each job (task card) and pane session,
 // from the agents' session files in every account's folder (jobCost.js).
@@ -2716,6 +2736,10 @@ ipcMain.handle(
   safe((ref) => testMcp(ref, freshEnv()))
 )
 ipcMain.handle(
+  'mcp:testSpec',
+  safe((spec) => testMcpSpec(spec, freshEnv()))
+)
+ipcMain.handle(
   'mcp:copy',
   safe((spec) => copyMcp(spec))
 )
@@ -2766,7 +2790,13 @@ ipcMain.handle(
 )
 ipcMain.handle(
   'skills:fromGithub',
-  safe((q) => packageFromGithub((q && q.input) || '', { pick: q && typeof q.pick === 'string' ? q.pick : null }))
+  safe((q) =>
+    packageFromGithub((q && q.input) || '', {
+      pick: q && typeof q.pick === 'string' ? q.pick : null,
+      // The commit the list of skills was read at (one picked from it).
+      commit: q && typeof q.commit === 'string' ? q.commit : null
+    })
+  )
 )
 ipcMain.handle(
   'skills:forUpdate',
@@ -2921,6 +2951,22 @@ ipcMain.handle(
 ipcMain.handle(
   'agyPlugins:remove',
   safe((q) => removeAgyPlugin({ name: q && q.name }, runAgentCommand))
+)
+
+// Muse Code's plugins, the same way with its own commands (musePlugins.js):
+// its binary started directly, with Tessel's fresh PATH.
+const musePlugins = createMusePlugins({ env: () => freshEnv() })
+ipcMain.handle(
+  'musePlugins:list',
+  safe(() => musePlugins.list())
+)
+ipcMain.handle(
+  'musePlugins:set',
+  safe((q) => musePlugins.set({ name: q && q.name, enabled: !!(q && q.enabled) }))
+)
+ipcMain.handle(
+  'musePlugins:remove',
+  safe((q) => musePlugins.remove({ name: q && q.name }))
 )
 
 // "An agent needs you": native notification + taskbar flash. Clicking the

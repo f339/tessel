@@ -7,24 +7,35 @@
 // then the page counts what is missing, with each model's own tokenizer or
 // its provider's count API: each number says whether it is exact (and from
 // where) or an estimate, and why. Everything listed is optional, with a link
-// to where it is turned off.
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+// to where it is turned off. A page of the Settings shell (README.md): the
+// counting runs only while the page is open.
+import { ref, reactive, computed, watch, inject } from 'vue'
 import BrandIcon from '../BrandIcon.vue'
-import McpTokenTag from '../context/McpTokenTag.vue'
+import McpTokenTag from '../mcp/McpTokenTag.vue'
 import { t, intlLocale } from '../../i18n'
 import { settings } from '../../settings'
 import { TOKENIZERS } from '../../../../shared/tokenCounters'
+import { PAGES } from './settingsPages'
+import { useSettingsShell } from './settingsShell'
 import { AGENT_LABELS, agentLabel, tokensText, compactTokens, sourceTitle, signIns, reasonText, retryable, counterText } from '../../contextCost'
 
 const props = defineProps({
   // The current workspace's project folder (its project files and servers).
-  cwd: { type: String, default: null },
+  projectCwd: { type: String, default: null },
   // Built-in and custom agents, with `available` (found on the PATH).
   agents: { type: Array, default: () => [] }
 })
-// go: a Settings page to show; open-file: a rules file to open in Tessel's
-// own editor (text only, never run).
-const emit = defineEmits(['go', 'open-file'])
+const { page, searching, shown, go, emit } = useSettingsShell()
+const open = computed(() => page.value === 'context' && !searching.value)
+// Open: a rules file in Tessel's own editor (text, never run), Settings
+// closed to show it; without the editor (a test), its folder.
+const panelCtx = inject('panelCtx', null)
+function openFile(file) {
+  if (panelCtx && typeof panelCtx.openInEditor === 'function') {
+    panelCtx.openInEditor({ file, preview: false })
+    emit('close')
+  } else window.shellApi.chatFiles?.reveal?.(file)
+}
 
 const GROUPS = ['rules', 'skills', 'mcp', 'tessel']
 const groupTitle = (g) =>
@@ -44,7 +55,7 @@ const groupLink = (g) =>
     tessel: { page: 'orchestration', label: t('context.link.tessel', 'Orchestration settings') }
   })[g] || null
 
-const shown = computed(() => props.agents.filter((a) => a && a.available && AGENT_LABELS[a.id]).map((a) => ({ id: a.id, name: a.name || agentLabel(a.id) })))
+const shownAgents = computed(() => props.agents.filter((a) => a && a.available && AGENT_LABELS[a.id]).map((a) => ({ id: a.id, name: a.name || agentLabel(a.id) })))
 const data = ref(null) // { agents: [...] }
 const loading = ref(false)
 const counting = ref(false)
@@ -55,8 +66,8 @@ const busy = reactive({}) // tokenizer id -> 'download' | 'remove'
 const tokenizerErrors = reactive({})
 
 const query = (remote) => ({
-  cwd: props.cwd,
-  agents: shown.value.map((a) => ({ id: a.id })),
+  cwd: props.projectCwd,
+  agents: shownAgents.value.map((a) => ({ id: a.id })),
   remote,
   ...signIns()
 })
@@ -100,11 +111,17 @@ async function loadTokenizers() {
     tokenizers.value = {}
   }
 }
-onMounted(() => {
-  refresh()
-  loadTokenizers()
-})
-watch(() => [props.cwd, shown.value.map((a) => a.id).join(',')], () => refresh())
+// Read when the page opens (and again when the project or the agents change
+// while it is open).
+watch(
+  () => [open.value, props.projectCwd, shownAgents.value.map((a) => a.id).join(',')],
+  ([isOpen]) => {
+    if (!isOpen) return
+    refresh()
+    loadTokenizers()
+  },
+  { immediate: true }
+)
 
 async function retry() {
   await window.shellApi.context.retry()
@@ -143,7 +160,7 @@ const megabytes = (bytes) => {
 }
 const sizeText = (bytes) => t('context.tokenizer.size', '{{mb}} MB', { mb: megabytes(bytes || 0) })
 const toggle = (id) => (openId.value = openId.value === id ? null : id)
-const nameOf = (id) => (shown.value.find((a) => a.id === id) || {}).name || agentLabel(id)
+const nameOf = (id) => (shownAgents.value.find((a) => a.id === id) || {}).name || agentLabel(id)
 const totalText = (a) => (a.summary.pending && !a.summary.total ? '' : tokensText({ tokens: a.summary.total, exact: a.summary.exact === 'all' }))
 const exactText = (a) =>
   a.summary.exact === 'all'
@@ -216,16 +233,30 @@ const shortPath = (p) => {
   const parts = String(p || '').split(/[\\/]/).filter(Boolean)
   return parts.length > 3 ? `…${p.includes('\\') ? '\\' : '/'}${parts.slice(-3).join(p.includes('\\') ? '\\' : '/')}` : p // i18n-ignore
 }
-const openFile = (file) => emit('open-file', file)
 </script>
 
 <template>
-  <div class="ctx-page">
+  <section id="set-context" class="set-page ctx-page" data-page="context" :hidden="!shown('context')" aria-labelledby="set-context-title">
+    <header class="set-page-head">
+      <h2 id="set-context-title">{{ PAGES.context.title }}</h2>
+      <p class="set-page-desc">{{ PAGES.context.desc }}</p>
+    </header>
+    <div v-if="!open" class="set-group">
+      <div class="set-card">
+        <div class="set-row">
+          <div class="set-label">{{ t('settings.context.summary', 'Context cost') }}
+            <span class="set-hint">{{ t('settings.context.summaryHint', 'Tokens each agent loads up front: rules files, skills, MCP tools and Tessel’s team tools.') }}</span>
+          </div>
+          <button type="button" class="exit-btn" @click="go('context')">{{ t('settings.context.open', 'Open Context') }}</button>
+        </div>
+      </div>
+    </div>
+    <template v-else>
     <div class="set-group">
       <div class="ctx-group-head">
         <div class="set-group-title">{{ t('context.agents.title', 'Per agent') }}</div>
         <span v-if="counting" class="ctx-dim" role="status">{{ t('context.counting', 'Counting…') }}</span>
-        <button type="button" class="exit-btn ctx-small" :disabled="loading || counting" @click="refresh()">{{ t('context.recount', 'Count again') }}</button>
+        <button type="button" class="exit-btn small" :disabled="loading || counting" @click="refresh()">{{ t('context.recount', 'Count again') }}</button>
       </div>
       <p class="ctx-group-desc">
         {{ t('context.agents.desc', "Not counted: each agent's own system prompt and built-in tools. A struck-through item loads only when relevant.") }}
@@ -233,7 +264,7 @@ const openFile = (file) => emit('open-file', file)
       <div class="set-card set-card-pad">
         <p v-if="error" class="ctx-callout warn" role="alert">{{ error }}</p>
         <div v-if="loading" class="ctx-dim ctx-empty">{{ t('context.loading', 'Reading what each agent loads…') }}</div>
-        <div v-else-if="!shown.length" class="ctx-dim ctx-empty">{{ t('context.noAgents', 'No agent that Tessel can measure is installed.') }}</div>
+        <div v-else-if="!shownAgents.length" class="ctx-dim ctx-empty">{{ t('context.noAgents', 'No agent that Tessel can measure is installed.') }}</div>
         <ul v-else-if="data && data.agents" class="ctx-list" :aria-label="t('context.agents.title', 'Per agent')">
           <li v-for="a in data.agents" :key="a.id" class="ctx-item" :class="{ open: openId === a.id }" :data-agent="a.id">
             <button type="button" class="ctx-row" :aria-expanded="openId === a.id" @click="toggle(a.id)">
@@ -261,7 +292,7 @@ const openFile = (file) => emit('open-file', file)
             <div v-if="openId === a.id" class="ctx-details">
               <p v-if="missingTokenizer(a)" class="ctx-callout info">
                 {{ needTokenizerText(a) }}
-                <button type="button" class="exit-btn ctx-small" :disabled="!!busy[missingTokenizer(a)]" @click="download(missingTokenizer(a))">
+                <button type="button" class="exit-btn small" :disabled="!!busy[missingTokenizer(a)]" @click="download(missingTokenizer(a))">
                   {{ busy[missingTokenizer(a)] ? t('context.tokenizer.downloading', 'Downloading…') : t('context.tokenizer.download', 'Download') }}
                 </button>
               </p>
@@ -274,7 +305,7 @@ const openFile = (file) => emit('open-file', file)
               </p>
               <p v-if="retryReason(a)" class="ctx-callout warn">
                 {{ someEstimatesText(a) }}
-                <button type="button" class="exit-btn ctx-small" :disabled="counting" @click="retry">{{ t('context.retry', 'Retry') }}</button>
+                <button type="button" class="exit-btn small" :disabled="counting" @click="retry">{{ t('context.retry', 'Retry') }}</button>
               </p>
 
               <template v-for="g in GROUPS" :key="g">
@@ -283,7 +314,7 @@ const openFile = (file) => emit('open-file', file)
                     <span class="ctx-swatch" :class="'g-' + g" aria-hidden="true" />
                     <span>{{ groupTitle(g) }}</span>
                     <span class="ctx-section-total">{{ compactTokens(groupTokens(a, g)) }}</span>
-                    <button v-if="groupLink(g)" type="button" class="ctx-link" @click="emit('go', groupLink(g).page)">{{ groupLink(g).label }}</button>
+                    <button v-if="groupLink(g)" type="button" class="ctx-link" @click="go(groupLink(g).page)">{{ groupLink(g).label }}</button>
                   </div>
                   <ul class="ctx-lines">
                     <li v-for="item in itemsOf(a, g)" :key="item.key" class="ctx-line" :class="{ off: !item.loaded }">
@@ -298,9 +329,11 @@ const openFile = (file) => emit('open-file', file)
                       <span class="ctx-line-cost">
                         <McpTokenTag
                           v-if="item.type === 'mcp' && item.ref && item.note !== 'off'"
-                          :server="{ name: item.ref.name, scope: item.ref.scope }"
+                          :server="item.ref.name"
                           :agent="item.ref.agent"
-                          :cwd="cwd"
+                          :scope="item.ref.scope"
+                          :cwd="projectCwd"
+                          variant="details"
                           @measured="refresh(true)"
                         />
                         <span v-else-if="item.result" class="ctx-num" :class="{ estimate: !item.result.exact }" :title="sourceTitle(item.result)">{{ tokensText(item.result) }}</span>
@@ -318,6 +351,8 @@ const openFile = (file) => emit('open-file', file)
         </ul>
       </div>
     </div>
+
+    </template>
 
     <div class="set-group">
       <div class="set-group-title">{{ t('context.howTitle', 'How tokens are counted') }}</div>
@@ -353,7 +388,7 @@ const openFile = (file) => emit('open-file', file)
                 <span class="ctx-tag ok">{{ t('context.tokenizer.ready', 'Downloaded') }}</span>
                 <button type="button" class="ctx-link" :disabled="!!busy[row.id]" @click="removeTokenizer(row.id)">{{ t('context.tokenizer.remove', 'Remove') }}</button>
               </template>
-              <button v-else type="button" class="exit-btn ctx-small" :disabled="!!busy[row.id]" @click="download(row.id)">
+              <button v-else type="button" class="exit-btn small" :disabled="!!busy[row.id]" @click="download(row.id)">
                 {{ busy[row.id] === 'download' ? t('context.tokenizer.downloading', 'Downloading…') : t('context.tokenizer.download', 'Download') }}
               </button>
             </span>
@@ -361,7 +396,7 @@ const openFile = (file) => emit('open-file', file)
         </ul>
       </div>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped>
@@ -384,11 +419,6 @@ const openFile = (file) => emit('open-file', file)
 }
 .ctx-empty {
   padding: 14px 4px;
-}
-.ctx-small {
-  height: 24px;
-  padding: 0 9px;
-  font-size: 11.5px;
 }
 .ctx-list {
   margin: 0;

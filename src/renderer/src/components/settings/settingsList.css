@@ -1,0 +1,269 @@
+/* Settings lists: one row per item (a skill, a server, an agent…), its
+   details opening under it. Shared by the Settings pages (README.md here);
+   first drawn for Settings > Skills. SettingsListItem.vue writes the markup:
+
+     ul.sl-list
+       li.sl-item(.open)
+         button.sl-row            icon, name + tags, one-line description,
+           .sl-row-icon           meta on the right, chevron
+           .sl-row-main > .sl-row-top > .sl-row-name + .tag…
+                        > .sl-row-desc
+           .sl-row-meta, .sl-chevron
+         .sl-details              in line with the name
+           .sl-section-head       a small heading, with an action on the right
+           ul.sl-subs > li.sl-sub one sub-card per copy, agent, target…
+             .sl-sub-line         its title and tags
+             .sl-sub-foot         .sl-sub-path (.sl-path + copy) and .sl-actions
+
+   The list follows its own width (a narrow page, or zoomed in): below
+   460 px the meta goes under the name and the details lose their indent. */
+.sl-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+  container-type: inline-size;
+}
+.sl-item {
+  border-bottom: 1px solid var(--border);
+}
+.sl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sl-row:hover,
+.sl-item.open > .sl-row {
+  background: var(--surface-3);
+}
+.sl-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.sl-row-icon {
+  flex: 0 0 auto;
+}
+.sl-row-main {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sl-row-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+}
+.sl-row-name {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sl-row-desc {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sl-row-meta {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+/* A few small icons side by side (the agents that see an item). */
+.sl-icons {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+.sl-chevron {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  transition: transform 0.12s ease;
+}
+.sl-item.open .sl-chevron {
+  transform: rotate(90deg);
+}
+
+/* Placeholder rows while the list loads the first time. */
+.sl-skeleton {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 5px 8px;
+}
+.sl-skel-icon,
+.sl-skel-lines span {
+  border-radius: 4px;
+  background: var(--surface-3);
+  opacity: 0.6;
+}
+.sl-skel-icon {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+}
+.sl-skel-lines {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
+}
+.sl-skel-lines span {
+  height: 9px;
+}
+.sl-skel-lines span:first-child {
+  width: 30%;
+}
+.sl-skel-lines span:last-child {
+  width: 70%;
+}
+
+/* An item's details, under its row, in line with its name. */
+.sl-details {
+  padding: 6px 8px 12px 38px;
+}
+.sl-details-desc {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.sl-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin: 4px 0;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.sl-section-head .exit-btn.small {
+  margin-left: auto;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.sl-subs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sl-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.sl-sub-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+/* The path and the actions: one line while both fit, else the actions
+   (kept together) go under it. */
+.sl-sub-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.sl-sub-path {
+  display: flex;
+  flex: 1 1 160px;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+/* A path or a command: one monospace line, cut with an ellipsis (give it a
+   title with the whole text, and a copy button beside it). */
+.sl-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+.sl-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+/* A text button that reads as a link (Show history, Choose…). */
+.sl-link {
+  flex: 0 0 auto;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sl-link:hover {
+  text-decoration: underline;
+}
+.sl-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@container (max-width: 460px) {
+  .sl-row {
+    flex-wrap: wrap;
+    row-gap: 3px;
+  }
+  .sl-row-meta {
+    order: 3;
+    flex-basis: 100%;
+    padding-left: 30px;
+  }
+  .sl-chevron {
+    order: 2;
+  }
+  .sl-details {
+    padding-left: 8px;
+  }
+}

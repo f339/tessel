@@ -129,6 +129,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // nativeChatSessionOptions): { [agent id]: { model?, valuesByModel:
   // { [model]: { effort } } } }. No model = the agent's own default, no flag.
   agentSessionOptions: {},
+  // The account new panes of an agent use on an SSH host (hostAccounts.js):
+  // { [host id]: { [agent]: <account folder id> } }; none: the host's own
+  // sign-in. A pane started on an account keeps it.
+  hostAccountDefaults: {},
   // The agent a new pane starts (Ctrl+Shift+T): '' = the default shell.
   defaultAgent: '',
   // 'manual' (agents ask before acting) or 'yolo' (each agent's own
@@ -354,6 +358,7 @@ const fresh = () => ({
   quickCommands: [],
   agentPrefs: {},
   agentSessionOptions: {},
+  hostAccountDefaults: {},
   yoloFolders: [],
   agentTerminalRules: {},
   agentTerminalWorkspaceRules: {},
@@ -390,6 +395,10 @@ export function loadSettings(saved) {
     }
     if (key === 'agentSessionOptions') {
       settings.agentSessionOptions = validSessionOptionSettings(v)
+      continue
+    }
+    if (key === 'hostAccountDefaults') {
+      settings.hostAccountDefaults = validHostAccountDefaults(v)
       continue
     }
     if (key === 'yoloFolders') {
@@ -517,7 +526,8 @@ export function resetSettings() {
     customAgents: settings.customAgents,
     quickCommands: settings.quickCommands,
     agentPrefs: settings.agentPrefs,
-    agentSessionOptions: settings.agentSessionOptions
+    agentSessionOptions: settings.agentSessionOptions,
+    hostAccountDefaults: settings.hostAccountDefaults
   }
   Object.assign(settings, fresh(), keep)
 }
@@ -532,6 +542,19 @@ export function validShownWorktrees(v) {
     if (key.length > 200 || !Array.isArray(paths)) continue
     const list = [...new Set(paths.filter((p) => typeof p === 'string' && p && p.length <= 1024))].slice(0, 500)
     if (list.length) out[key] = list
+  }
+  return out
+}
+
+// { [host id]: { claude?, codex?: <account folder id> } } from storage.
+export function validHostAccountDefaults(v) {
+  const out = {}
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return out
+  for (const [hostId, agents] of Object.entries(v).slice(0, 200)) {
+    if (!/^[\w-]{1,80}$/.test(hostId) || !agents || typeof agents !== 'object' || Array.isArray(agents)) continue
+    const e = {}
+    for (const agent of ['claude', 'codex']) if (typeof agents[agent] === 'string' && /^[0-9a-z]{1,40}$/.test(agents[agent])) e[agent] = agents[agent]
+    if (Object.keys(e).length) out[hostId] = e
   }
   return out
 }

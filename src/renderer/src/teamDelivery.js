@@ -1,5 +1,5 @@
 // Team mail for terminal agents: a short pointer typed into the agent's
-// terminal ("You have N new team messages: read them with team_inbox."),
+// terminal ("You have new team messages: read them with team_inbox."),
 // never the messages themselves (they stay in the team channel, the agent
 // pulls them with its team tools).
 //
@@ -43,14 +43,15 @@ export const POINTER = {
   maxRetries: 3
 }
 
-export function pointerText(count) {
-  const n = Math.max(1, count | 0)
-  return `[Tessel] You have ${n} new team message${n > 1 ? 's' : ''}: read ${n > 1 ? 'them' : 'it'} with team_inbox.` // i18n-ignore
+// No count and no digit in it: typed while a menu was open in the agent
+// (Codex's "switch to a smaller model? 1. Yes 2. No"), a "1" answered it.
+export function pointerText() {
+  return '[Tessel] You have new team messages: read them with team_inbox.' // i18n-ignore
 }
 
 // The pointer, whitespace removed (a TUI wraps its input box itself, with
 // its own indentation, so the words can be cut anywhere on screen).
-const POINTER_SQUASHED = /\[Tessel\]Youhave\d+newteammessages?:read(?:it|them)withteam_inbox\./
+const POINTER_SQUASHED = /\[Tessel\]Youhave(?:\d+)?newteammessages?:read(?:it|them)withteam_inbox\./
 
 // A pointer is still typed in the agent's input box (not sent). The screen
 // cannot always tell the input box from the transcript: an input line shown
@@ -156,15 +157,23 @@ export function createTeamDelivery(deps) {
       if (deps.now() - s.lastAt < cfg.retryMs) return
       retry = true
     }
-    const why = deps.blocked(id, { retry, phase: 'write' }) || ''
+    let why = deps.blocked(id, { retry, phase: 'write' }) || ''
+    const pane = why ? null : deps.getPane(id)
+    if (!why && !pane) return
+    // An agent whose input box Tessel can read (Codex): typed only into it
+    // shown empty, or Enter on a pointer still in it. A menu or a question
+    // drawn over it ("switch to a smaller model? 1. Yes") would take the
+    // pointer's keys as its answer.
+    if (!why && deps.inputEmpty) {
+      const empty = deps.inputEmpty(id)
+      if (empty === false && !(s.outstanding && pointerStillTyped(pane, empty))) why = 'its input box is not shown empty (a menu, a question or a draft may be open)'
+    }
     if (why) {
       if (s.why !== why) log('info', id, `pointer waits: ${why}`) // i18n-ignore
       s.why = why
       return
     }
     s.why = ''
-    const pane = deps.getPane(id)
-    if (!pane) return
     s.flying = true
     try {
       await flight(id, s, pane, mail, retry, gen)

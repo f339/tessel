@@ -143,6 +143,38 @@ server.cjs runs with cwd = the pane env's `TESSEL_PROJECT_DIR` (when absolute).
   into it) and deleted. A folder there without its marker that still holds
   a sign-in (an agent wrote it again) is listed as `orphan` and removed only
   as such (`__t_acctrm <agent> <id> orphan`).
+- Where Claude Code keeps an account with `CLAUDE_CONFIG_DIR`: its login in
+  `<folder>/.credentials.json` (the macOS Keychain, one entry per folder, on
+  a Mac), its profile (`oauthAccount`: email, organization) in
+  `<folder>/.claude.json`, or `<folder>/.config.json` when that older file
+  is there. `oauthAccount` holds nested objects: read with a brace-matching
+  reader, never a flat pattern.
+- A folder's sign-in files are never links (only its settings and
+  conversations are): one that is a link (made outside Tessel) is listed
+  `linked`, and `__t_acctmk` refuses it (rc 98), so no agent runs on another
+  folder's login or writes that one's renewed token.
+- The host's default account per agent (Settings `hostAccountDefaults`): a
+  new pane, a team worker, the launcher and a restart without an account of
+  its own start on it, through `launchEnv(..., { signedIn: true })`
+  (`__t_acctmk <agent> <id> signed`: rc 92 when the folder holds no sign-in);
+  gone or signed out, the pane starts on the host's own sign-in and says so.
+- The folder a pane's agent really runs on (`__t_acctpane <pane> <agent>
+  [<pane> <agent>...]`, Linux): one pass over the user's own processes
+  (`[ -O /proc/<pid> ]`; as root, another user's could pass for a pane) for
+  all the panes of a host asked together (the window waits 1.5 s for the
+  others, 6 s at most). An environment is read as whole NUL-separated
+  entries (one awk with RS NUL; BusyBox: `tr` first), the first
+  `TESSEL_PANE_ID` / `CLAUDE_CONFIG_DIR` / `CODEX_HOME` entry as getenv
+  sees it, nothing else of it printed. Every agent process of a pane is
+  compared: on different folders (an older session's agent still running)
+  it answers `mixed` and none is taken. A folder counts as Tessel's only
+  under the home the same run prints (`@h`). Asked 8 s after a launch and
+  on Check again, never per poll. A pane whose agent runs elsewhere than
+  its layout says is changed only when that is sure and the saved account
+  is not signed in there; otherwise the pane asks (Update / Keep).
+- "Copy account details" (`__t_acctdiag`): presence flags only (yes / no),
+  never a value, an email or a token (a key in the process's environment is
+  tested with `grep -q '^NAME=.'`, never read into the shell).
 
 ## Parts
 1. Shim (`src/main/remoteAgent/tessel-shim.cjs` + tests) – Gauss.

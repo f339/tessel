@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import SkillTokenTag from '../components/context/SkillTokenTag.vue'
-import McpTokenTag from '../components/context/McpTokenTag.vue'
+import { ref } from 'vue'
+import McpTokenTag from '../components/mcp/McpTokenTag.vue'
+import { SETTINGS_SHELL } from '../components/settings/settingsShell'
 import SettingsContext from '../components/settings/SettingsContext.vue'
-import { tokensText, sourceLabel, reasonText, sourceTitle, compactTokens, contextCounts } from '../contextCost'
+import { tokensText, sourceLabel, reasonText, sourceTitle, compactTokens, contextCounts, forgetMcpCounts } from '../contextCost'
 import { settings } from '../settings'
 
 let previousApi
@@ -12,7 +14,7 @@ beforeEach(() => {
   contextCounts.skills = {}
   contextCounts.skillsCwd = undefined
   contextCounts.mcp = {}
-  contextCounts.mcpCwd = undefined
+  forgetMcpCounts()
 })
 afterEach(() => {
   window.shellApi = previousApi
@@ -72,10 +74,28 @@ describe('SkillTokenTag', () => {
 })
 
 describe('McpTokenTag', () => {
-  it('starts nothing on its own: Measure starts the server on the click only', async () => {
+  it('in a row: a read-only tag from one request for every row, nothing clickable', async () => {
+    const mcpMeasures = vi.fn(async () => ({ 'claude:user:fs': { tools: 14, result: { tokens: 8600, exact: true, source: 'api', api: 'anthropic', model: 'claude-opus-5-5' } } }))
+    const mcpMeasure = vi.fn()
+    window.shellApi = { mcpMeasure, context: { mcpMeasures } }
+    const a = mount(McpTokenTag, { props: { server: 'fs', agent: 'claude', scope: 'user', cwd: '/p', variant: 'row' } })
+    const b = mount(McpTokenTag, { props: { server: 'linear', agent: 'claude', scope: 'user', cwd: '/p', variant: 'row' } })
+    await flushPromises()
+    expect(mcpMeasures).toHaveBeenCalledTimes(1)
+    expect(mcpMeasures.mock.calls[0][0]).toMatchObject({ cwd: '/p', servers: [{ agent: 'claude', scope: 'user', name: 'fs' }, { agent: 'claude', scope: 'user', name: 'linear' }] })
+    expect(mcpMeasures.mock.calls[0][0].remote).toBeUndefined()
+    expect(a.text()).toBe('8.6k tokens')
+    expect(a.find('button').exists()).toBe(false)
+    expect(b.text()).toBe('')
+    expect(mcpMeasure).not.toHaveBeenCalled()
+    a.unmount()
+    b.unmount()
+  })
+
+  it('in the details: Measure starts the server on the click only', async () => {
     const mcpMeasure = vi.fn(async () => ({ ok: true, tools: 14, at: 1, counter: {}, result: { tokens: 8600, exact: true, source: 'api', api: 'anthropic', model: 'claude-opus-5-5' } }))
     window.shellApi = { mcpMeasure, context: { mcpMeasures: async () => ({}) } }
-    const w = mount(McpTokenTag, { props: { server: { name: 'fs', scope: 'user' }, agent: 'claude', cwd: '/p' } })
+    const w = mount(McpTokenTag, { props: { server: 'fs', agent: 'claude', scope: 'user', cwd: '/p', variant: 'details' } })
     await flushPromises()
     expect(mcpMeasure).not.toHaveBeenCalled()
     expect(w.find('button').text()).toBe('Measure')
@@ -92,7 +112,7 @@ describe('McpTokenTag', () => {
   it('shows a kept measurement without starting the server, and a failure', async () => {
     const mcpMeasure = vi.fn(async () => ({ ok: false, error: 'Command not found: npx' }))
     window.shellApi = { mcpMeasure, context: { mcpMeasures: async () => ({ 'codex:user:fs': { tools: 3, result: { tokens: 900, exact: true, source: 'local', tokenizer: 'o200k_base' } } }) } }
-    const w = mount(McpTokenTag, { props: { server: { name: 'fs' }, agent: 'codex' } })
+    const w = mount(McpTokenTag, { props: { server: 'fs', agent: 'codex', variant: 'details' } })
     await flushPromises()
     expect(w.text()).toContain('900 tokens · 3 tools')
     expect(mcpMeasure).not.toHaveBeenCalled()
@@ -110,7 +130,7 @@ describe('McpTokenTag: a project server Claude Code was not allowed to start', (
     const answers = [false, true]
     const asked = []
     const askConfirm = (o) => (asked.push(o), Promise.resolve(answers.shift()))
-    const w = mount(McpTokenTag, { props: { server: { name: 'evil', scope: 'project' }, agent: 'claude' }, global: { provide: { askConfirm } } })
+    const w = mount(McpTokenTag, { props: { server: 'evil', scope: 'project', agent: 'claude', variant: 'details' }, global: { provide: { askConfirm } } })
     await flushPromises()
     await w.find('button').trigger('click')
     await flushPromises()
@@ -124,6 +144,12 @@ describe('McpTokenTag: a project server Claude Code was not allowed to start', (
     w.unmount()
   })
 })
+
+// The Settings shell around a page (settingsShell.js), opened on Context.
+function shellFor(extra = {}) {
+  return { page: ref('context'), searching: ref(false), shown: () => true, go: vi.fn(), emit: vi.fn(), openMcpTab: vi.fn(), mcpTab: ref('installed'), refreshSearch: () => {}, ...extra }
+}
+const mountPage = (props, shell = shellFor(), provide = {}) => mount(SettingsContext, { props, global: { provide: { [SETTINGS_SHELL]: shell, ...provide } } })
 
 describe('Settings > Context', () => {
   const agentRow = (over = {}) => ({
@@ -148,7 +174,8 @@ describe('Settings > Context', () => {
       mcpMeasure: vi.fn(),
       context: { summary, tokenizers: async () => ({ qwen3: { name: 'Qwen 3', bytes: 7 * 1048576, licence: 'Apache-2.0', ready: false } }), downloadTokenizer: vi.fn(async () => ({ ok: true })), mcpMeasures: async () => ({}), retry: vi.fn() }
     }
-    const w = mount(SettingsContext, { props: { cwd: '/p', agents: [{ id: 'claude', name: 'Claude Code', available: true }, { id: 'zsh', available: true }] } })
+    const shell = shellFor()
+    const w = mountPage({ projectCwd: '/p', agents: [{ id: 'claude', name: 'Claude Code', available: true }, { id: 'zsh', available: true }] }, shell)
     await flushPromises()
     expect(summary).toHaveBeenCalledTimes(2)
     expect(summary.mock.calls[0][0]).toMatchObject({ cwd: '/p', remote: false, agents: [{ id: 'claude' }] })
@@ -163,7 +190,7 @@ describe('Settings > Context', () => {
     expect(w.find('[data-test="mcp-token-tag"]').exists()).toBe(true)
     expect(window.shellApi.mcpMeasure).not.toHaveBeenCalled()
     await w.findAll('button').find((b) => b.text() === 'Manage skills').trigger('click')
-    expect(w.emitted('go')[0]).toEqual(['skills'])
+    expect(shell.go).toHaveBeenCalledWith('skills')
     // The tokenizers: a download is a click.
     expect(w.text()).toContain('Qwen 3')
     expect(w.text()).toContain('7 MB')
@@ -181,7 +208,7 @@ describe('Settings > Context', () => {
     const retry = vi.fn(async () => ({ ok: true }))
     window.shellApi = { openFile: vi.fn(), context: { summary: async () => ({ agents: [row] }), tokenizers: async () => ({}), retry } }
     settings.contextGeminiSignIn = false
-    const w = mount(SettingsContext, { props: { agents: [{ id: 'claude', available: true }] } })
+    const w = mountPage({ agents: [{ id: 'claude', available: true }] })
     await flushPromises()
     expect(w.find('[data-test="agent-total"]').text()).toBe('≈ 3.1k tokens')
     expect(w.text()).toContain('estimate')
@@ -193,7 +220,22 @@ describe('Settings > Context', () => {
     w.unmount()
   })
 
-  it('opens a rules file in Tessel’s editor (an event), never a not-followed import; sends both sign-in switches', async () => {
+  it('reads nothing until the page is open, and shows a row the search finds', async () => {
+    const summary = vi.fn(async () => ({ agents: [] }))
+    window.shellApi = { context: { summary, tokenizers: async () => ({}) } }
+    const shell = shellFor({ page: ref('general') })
+    const w = mountPage({ agents: [{ id: 'claude', available: true }] }, shell)
+    await flushPromises()
+    expect(summary).not.toHaveBeenCalled()
+    expect(w.text()).toContain('Context cost')
+    expect(w.text()).toContain('Count with my Claude sign-in') // the switches stay searchable
+    shell.page.value = 'context'
+    await flushPromises()
+    expect(summary).toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('opens a rules file in Tessel’s editor, never a not-followed import; sends both sign-in switches', async () => {
     const row = agentRow({
       items: [
         { key: 'r', group: 'rules', type: 'file', label: 'CLAUDE.md', path: String.raw`C:\p\CLAUDE.md`, loaded: true, result: { tokens: 10, exact: true, source: 'local', tokenizer: 'o200k_base' } },
@@ -205,14 +247,17 @@ describe('Settings > Context', () => {
     const summary = vi.fn(async () => ({ agents: [row] }))
     const openFile = vi.fn()
     window.shellApi = { openFile, context: { summary, tokenizers: async () => ({}) } }
-    const w = mount(SettingsContext, { props: { agents: [{ id: 'claude', available: true }] } })
+    const shell = shellFor()
+    const openInEditor = vi.fn()
+    const w = mountPage({ agents: [{ id: 'claude', available: true }] }, shell, { panelCtx: { openInEditor } })
     await flushPromises()
     expect(summary.mock.calls[0][0]).toMatchObject({ claudeSignIn: false, geminiSignIn: true })
     expect(w.text()).toContain('not followed (outside the project)')
     const opens = w.findAll('button').filter((b) => b.text() === 'Open')
     expect(opens).toHaveLength(1)
     await opens[0].trigger('click')
-    expect(w.emitted('open-file')[0]).toEqual([String.raw`C:\p\CLAUDE.md`])
+    expect(openInEditor).toHaveBeenCalledWith({ file: String.raw`C:\p\CLAUDE.md`, preview: false })
+    expect(shell.emit).toHaveBeenCalledWith('close')
     expect(openFile).not.toHaveBeenCalled()
     expect(w.text()).toContain('Count with my Gemini CLI sign-in')
     expect(w.text()).toContain('Uses your Claude Code sign-in')

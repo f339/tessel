@@ -5,6 +5,10 @@
 // worktree that failed (it stays listed, to try again). After Orca's
 // WorkspaceCleanupDialog and its candidate rows and confirm step, MIT,
 // Copyright (c) 2026 Lovecast Inc.
+// A row says each fact once, in two lines: the branch with what makes it
+// safe or risky (a green "Safe to remove", or one warning chip per risk),
+// then its folder (shortened, whole on hover), its last activity and its
+// last commit.
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { AlertTriangle, Check, GitBranch, Loader2, X } from 'lucide-vue-next'
 import { t } from '../../i18n'
@@ -173,11 +177,13 @@ function onEscape() {
   else close()
 }
 
-function aheadBehind(row) {
-  const parts = []
-  if (row.ahead) parts.push(t('cleanup.ahead', '{{count}} ahead', { count: row.ahead }))
-  if (row.behind) parts.push(t('cleanup.behind', '{{count}} behind', { count: row.behind }))
-  return parts.join(' · ')
+// The folder's last two names (…\tessel.worktrees\t2-muse): what tells the
+// rows apart; the whole path is in its tooltip.
+function shortPath(path) {
+  const parts = String(path || '').split(/[\\/]/).filter(Boolean)
+  if (parts.length <= 2) return String(path || '')
+  const sep = String(path).includes('\\') ? '\\' : '/'
+  return `…${sep}${parts.slice(-2).join(sep)}`
 }
 function ago(ts) {
   return ts ? t('cleanup.ago', '{{time}} ago', { time: formatShortTimeAgo(ts, props.now) }) : t('cleanup.never', 'never')
@@ -188,10 +194,9 @@ const L = {
   confirm: (count) => t('cleanup.confirm', 'Remove {{count}} worktrees? Their folders and their branches are deleted.', { count }),
   removeN: (count) => t('cleanup.removeN', 'Remove {{count}} worktrees', { count }),
   removeNDots: (count) => t('cleanup.removeNDots', 'Remove {{count}} worktrees…', { count }),
-  openChip: (row) =>
-    row.agents ? t('cleanup.agentsChip', '{{count}} agents open', { count: row.agents }) : t('cleanup.panesChip', '{{count}} panes open', { count: row.panes }),
   lastCommit: (row) => t('cleanup.lastCommit', 'Last commit {{time}}: {{subject}}', { time: ago(row.lastCommitAt), subject: row.lastCommitSubject }),
   lastActivity: (row) => t('cleanup.lastActivity', 'Last activity {{time}}', { time: ago(row.activityAt) }),
+  safeTitle: () => t('cleanup.safeTitle', 'Merged into {{branch}}, nothing uncommitted: removing it loses no work.', { branch: (result.value && result.value.defaultBranch) || 'main' }),
   failed: (error) => t('cleanup.failed', 'Not removed: {{error}}', { error }),
   emptyHidden: (count) => t('cleanup.emptyHidden', '{{count}} active worktrees are hidden: Show active worktrees too lists them.', { count })
 }
@@ -221,20 +226,16 @@ onUnmounted(() => {
       @focusin.stop
       @keydown.escape.prevent.stop="onEscape"
     >
-      <div class="hwt-head">
-        <div class="hwt-head-text">
-          <h2 id="wcl-title" class="hwt-title">{{ t('cleanup.title', 'Clean up worktrees') }}</h2>
-          <p class="hwt-sub">
-            <span>{{ project.name }}</span>
-            <span v-if="result && result.defaultBranch">
-              · {{ L.sub(result.defaultBranch) }}</span
-            >
-          </p>
-        </div>
-        <button type="button" class="hwt-close" :disabled="phase === 'removing'" :aria-label="t('cleanup.close', 'Close')" @click="close">
+      <div class="help-head">
+        <span id="wcl-title">{{ t('cleanup.title', 'Clean up worktrees') }}</span>
+        <button type="button" class="tb-icon" :disabled="phase === 'removing'" :title="t('cleanup.close', 'Close')" :aria-label="t('cleanup.close', 'Close')" @click="close">
           <X :size="14" aria-hidden="true" />
         </button>
       </div>
+      <p class="wcl-sub">
+        <span>{{ project.name }}</span>
+        <span v-if="result && result.defaultBranch"> · {{ L.sub(result.defaultBranch) }}</span>
+      </p>
 
       <div v-if="phase === 'scanning'" class="wcl-note" data-test="cleanup-scanning">
         <Loader2 :size="14" class="wcl-spin" aria-hidden="true" /> {{ t('cleanup.scanning', 'Reading the worktrees…') }}
@@ -276,10 +277,18 @@ onUnmounted(() => {
       <template v-else>
         <div v-if="summary" class="wcl-note" data-test="cleanup-summary">{{ summary }}</div>
         <div class="wcl-toolbar">
-          <label class="wcl-showall">
-            <input v-model="showAll" type="checkbox" data-test="cleanup-show-all" :disabled="phase === 'removing'" />
+          <button
+            type="button"
+            class="wcl-toggle"
+            :class="{ on: showAll }"
+            :aria-pressed="showAll ? 'true' : 'false'"
+            :disabled="phase === 'removing'"
+            data-test="cleanup-show-all"
+            @click="showAll = !showAll"
+          >
+            <Check v-if="showAll" :size="11" aria-hidden="true" />
             {{ t('cleanup.showAll', 'Show active worktrees too') }}
-          </label>
+          </button>
           <span class="wcl-spacer"></span>
           <button type="button" class="osb-link" :disabled="phase === 'removing'" data-test="cleanup-select-safe" @click="selectSafe">
             {{ t('cleanup.selectSafe', 'Select safe ones') }}
@@ -307,29 +316,19 @@ onUnmounted(() => {
               @change="toggle(row)"
             />
             <div class="hwt-row-text">
-              <div class="hwt-name"><GitBranch :size="12" aria-hidden="true" /> {{ row.label }}</div>
-              <!-- Cut at the start: the folder name at the end tells the rows apart. -->
-              <div class="hwt-path wcl-path" :title="row.path"><bdi>{{ row.path }}</bdi></div>
-              <div class="wcl-chips">
+              <div class="wcl-line1">
+                <span class="hwt-name"><GitBranch :size="12" aria-hidden="true" /> {{ row.label }}</span>
+                <span v-if="row.blocker" class="wcl-chip" data-test="cleanup-blocker">{{ blockerLabel(row.blocker) }}</span>
+                <template v-else-if="row.risks.length">
+                  <span v-for="r in row.risks" :key="r" class="wcl-chip bad" data-test="cleanup-risk">{{ riskLabel(r, row) }}</span>
+                </template>
+                <span v-else class="wcl-chip ok" :title="L.safeTitle()" data-test="cleanup-safe">{{ t('cleanup.safe', 'Safe to remove') }}</span>
                 <span v-if="row.missing" class="wcl-chip">{{ t('cleanup.missing', 'Folder gone') }}</span>
-                <span v-else-if="row.dirty === false" class="wcl-chip ok">{{ t('cleanup.clean', 'Clean') }}</span>
-                <span v-else-if="row.dirty" class="wcl-chip bad">{{ t('cleanup.dirtyChip', 'Dirty') }}</span>
-                <span v-if="row.merged === true" class="wcl-chip ok">{{ t('cleanup.merged', 'Merged') }}</span>
-                <span v-else-if="row.merged === false" class="wcl-chip bad">{{ t('cleanup.notMerged', 'Not merged') }}</span>
-                <span v-if="aheadBehind(row)" class="wcl-chip">{{ aheadBehind(row) }}</span>
-                <span v-if="row.panes" class="wcl-chip">{{
-                  L.openChip(row)
-                }}</span>
               </div>
               <div class="wcl-meta">
-                <span v-if="row.lastCommitAt" :title="row.lastCommitSubject">{{
-                  L.lastCommit(row)
-                }}</span>
+                <span class="wcl-path" :title="row.path">{{ shortPath(row.path) }}</span>
                 <span>{{ L.lastActivity(row) }}</span>
-              </div>
-              <div v-if="row.blocker" class="wcl-reason" data-test="cleanup-blocker">{{ blockerLabel(row.blocker) }}</div>
-              <div v-else-if="row.risks.length" class="wcl-reason wcl-risk" data-test="cleanup-risk">
-                <AlertTriangle :size="12" aria-hidden="true" /> {{ row.risks.map((r) => riskLabel(r, row)).join(' · ') }}
+                <span v-if="row.lastCommitAt && row.lastCommitSubject" class="wcl-subject" :title="L.lastCommit(row)">{{ row.lastCommitSubject }}</span>
               </div>
               <div v-if="stateOf(row)?.state === 'failed'" class="wcl-reason wcl-error" data-test="cleanup-row-error">
                 {{ L.failed(stateOf(row).error) }}

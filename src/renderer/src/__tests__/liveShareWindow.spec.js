@@ -455,6 +455,29 @@ describe('Live Share in the window, as the host', () => {
     expect(t.toasts.filter((x) => /Bea/.test(x)).length).toBe(2)
   })
 
+  it("People's Let in… puts that guest's prompt first, or makes it again from the status", async () => {
+    twoProjects()
+    sharingNow(['ws-1', 'ws-2'], {
+      guests: [
+        { id: 'g1', name: 'Alex', state: 'waiting' },
+        { id: 'g2', name: 'Bea', state: 'waiting', code: '42', invite: { id: 'iv-aaaaaaaaaa', label: 'Team' } }
+      ],
+      invites: [{ id: 'iv-aaaaaaaaaa', label: 'Team', projects: ['ws-2', 'ws-9'], rights: { open: true } }]
+    })
+    t.listeners.onAsk({ guestId: 'g1', name: 'Alex' })
+    t.listeners.onAsk({ guestId: 'g2', name: 'Bea' })
+    expect(t.ls.showAsk('g2')).toBe(true)
+    expect(t.ls.state.asks.map((a) => a.key)).toEqual(['g2', 'g1'])
+    // One this window lost (answered elsewhere, a reload): made again, first,
+    // with what its invitation offers now.
+    t.ls.state.asks.splice(0, 1)
+    expect(t.ls.showAsk('g2')).toBe(true)
+    expect(t.ls.state.asks[0]).toMatchObject({ key: 'g2', name: 'Bea', code: '42', offer: { projects: ['ws-2'], rights: { open: true } } })
+    expect(t.ls.state.asks.map((a) => a.key)).toEqual(['g2', 'g1'])
+    // Someone no longer waiting: nothing.
+    expect(t.ls.showAsk('g9')).toBe(false)
+  })
+
   it('the prompt comes with the invitation, its offer and whether to trust; the answer carries the rights and trust', async () => {
     twoProjects()
     sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g1', name: 'Alex', state: 'waiting' }, { id: 'g2', name: 'Bea', state: 'waiting' }] })

@@ -7,10 +7,13 @@
 //
 // One timer per host, whatever the number of its panes: every minute, and
 // sooner (15 s, then slower) while one of its panes waits for a sign-in in
-// its account folder; that wait ends once the folder is signed in, or gone.
+// its account folder, or for the name of an account signed in (Claude Code
+// writes the email once it has its profile); that wait ends once the folder
+// is signed in and named, or gone.
 import { reactive } from 'vue'
 import { t } from './i18n'
 import { shortAccount } from './accountChoices'
+import { settings } from './settings'
 
 // The agents Tessel can run on an account folder of a host.
 export const HOST_ACCOUNT_AGENTS = ['claude', 'codex']
@@ -75,15 +78,20 @@ export function hostAccountsOf(hostId) {
 const watchers = new Map() // hostId -> { panes: Map(paneId -> { agentId, hostAccount }), timer, wait }
 const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden'
 
-// A pane waits for a sign-in while its account folder is there and not
-// signed in yet (a folder that is gone, or signed in, is no wait).
+// Signed in with its login file, the account not named yet (no API key:
+// that one never has an email).
+export function unnamedEntry(e) {
+  return !!e && e.state === 'signed-in' && e.cred === 'file' && !e.email && e.method !== 'apikey'
+}
+// A pane waits while its account folder is there and not signed in yet, or
+// while the account it runs on (a folder, or the host's own) is signed in
+// but not named yet (a folder that is gone is no wait).
 function waiting(hostId) {
   const w = watchers.get(hostId)
   if (!w) return false
   for (const p of w.panes.values()) {
-    if (typeof p.hostAccount !== 'string') continue
     const e = hostEntry(hostId, p.agentId, p.hostAccount)
-    if (e && e.state !== 'signed-in') return true
+    if (unnamedEntry(e) || (typeof p.hostAccount === 'string' && e && e.state !== 'signed-in')) return true
   }
   return false
 }
@@ -113,6 +121,7 @@ export function watchHostAccounts(hostId, paneId, { agentId, hostAccount } = {})
   w.panes.set(paneId, { agentId, hostAccount: typeof hostAccount === 'string' ? hostAccount : undefined })
   // A pane that starts waiting begins its back-off afresh.
   if (!before || before.hostAccount !== hostAccount) w.wait = 0
+  hookFocus()
   refreshHostAccounts(hostId)
     .catch(() => null)
     .then(() => watchers.get(hostId) === w && schedule(hostId))
@@ -126,6 +135,107 @@ export function unwatchHostAccounts(hostId, paneId) {
     watchers.delete(hostId)
   }
 }
+// Check again (the pane's account menu, its hover card): the host asked now,
+// past the last answer and the back-off.
+export function checkHostAccountsNow(hostId) {
+  const w = watchers.get(hostId)
+  if (w) w.wait = 0
+  return refreshHostAccounts(hostId, { fresh: true }).then((r) => {
+    if (watchers.get(hostId) === w && w) schedule(hostId)
+    return r
+  })
+}
+
+// Back in Tessel (after a sign-in finished in the browser, say): each host
+// where a pane waits is asked at once (at most every MIN_GAP_MS), its
+// back-off begun afresh. A listener, not a timer.
+let focusHooked = false
+function onFocusBack() {
+  for (const hostId of watchers.keys()) {
+    const cur = state.hosts[hostId]
+    if (!waiting(hostId) || pending.has(hostId) || (cur && cur.at && Date.now() - cur.at < MIN_GAP_MS)) continue
+    checkHostAccountsNow(hostId).catch(() => null)
+  }
+}
+function hookFocus() {
+  if (focusHooked || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
+  focusHooked = true
+  window.addEventListener('focus', onFocusBack)
+}
+
+// A turn of an agent on this host ended (a /login, its first answer): its
+// account not fully known yet (not signed in, or no email), the host is
+// asked again a few seconds later (Claude Code writes the email once it has
+// fetched its profile), never sooner than the gap after its last answer,
+// and at most TURN_TRIES times while that account stays as it is. Not for
+// what a turn cannot change: an account known by its profile only (macOS
+// keeps Claude Code's login in the Keychain, no file to see), or none there
+// (a key in the environment, a folder removed). -> the timer to clear, or null
+const TURN_TRIES = 3
+const turnTries = new Map() // host\nagent\naccount -> { state, n }
+export function recheckAfterTurn(hostId, agentId, hostAccount, delayMs = 4000) {
+  if (typeof hostId !== 'string' || !hostId || !HOST_ACCOUNT_AGENTS.includes(agentId)) return null
+  const e = hostEntry(hostId, agentId, hostAccount)
+  const key = `${hostId}\n${agentId}\n${typeof hostAccount === 'string' ? hostAccount : ''}`
+  if (!e || e.state === 'profile' || (e.state === 'signed-in' && (e.email || e.method === 'apikey'))) {
+    // Known (or past knowing): a later sign-out there starts its tries afresh.
+    turnTries.delete(key)
+    return null
+  }
+  const seen = turnTries.get(key)
+  const n = seen && seen.state === e.state ? seen.n : 0
+  if (n >= TURN_TRIES) return null
+  turnTries.set(key, { state: e.state, n: n + 1 })
+  const last = (hostAccountsOf(hostId) || {}).at || 0
+  return setTimeout(
+    () => {
+      // Asked meanwhile (its timer, another pane): that answer is the one.
+      const at = (hostAccountsOf(hostId) || {}).at || 0
+      if (at > last && Date.now() - at < MIN_GAP_MS) return
+      checkHostAccountsNow(hostId).catch(() => null)
+    },
+    Math.max(delayMs, last ? MIN_GAP_MS - (Date.now() - last) : 0)
+  )
+}
+
+// Which config folder each pane's agent really runs on (main's
+// paneFolders): the panes of one host asked together, in one pass over its
+// processes there. Panes restored or started together wait for each other
+// (PANE_BATCH_MS after the last one asked, PANE_BATCH_MAX_MS at most).
+// -> { ok, found, dir, folderId, own } for that pane, or main's failure
+export const PANE_BATCH_MS = 1500
+const PANE_BATCH_MAX_MS = 6000
+const paneAsks = new Map() // hostId -> { panes: Map(paneId -> { agent, waiters }), first, timer }
+export function hostPaneFolder(hostId, agentId, paneId) {
+  const a = api()
+  if (!a || !a.paneFolders || typeof hostId !== 'string' || !hostId || !HOST_ACCOUNT_AGENTS.includes(agentId) || typeof paneId !== 'string') return Promise.resolve(null)
+  let b = paneAsks.get(hostId)
+  if (!b) {
+    b = { panes: new Map(), first: Date.now(), timer: null }
+    paneAsks.set(hostId, b)
+  }
+  return new Promise((resolve) => {
+    const cur = b.panes.get(paneId)
+    if (cur) cur.waiters.push(resolve)
+    else b.panes.set(paneId, { agent: agentId, waiters: [resolve] })
+    clearTimeout(b.timer)
+    b.timer = setTimeout(() => askPaneFolders(hostId, b), Math.min(PANE_BATCH_MS, Math.max(0, b.first + PANE_BATCH_MAX_MS - Date.now())))
+  })
+}
+function askPaneFolders(hostId, b) {
+  if (paneAsks.get(hostId) === b) paneAsks.delete(hostId)
+  const list = [...b.panes].map(([paneId, p]) => ({ paneId, agent: p.agent }))
+  Promise.resolve()
+    .then(() => api().paneFolders(hostId, list))
+    .catch(() => null)
+    .then((res) => {
+      for (const [paneId, p] of b.panes) {
+        const one = res && res.ok ? (res.panes && res.panes[paneId] ? { ok: true, ...res.panes[paneId] } : { ok: true, found: 'unknown', dir: null, folderId: null, own: false }) : res
+        for (const w of p.waiters) w(one)
+      }
+    })
+}
+
 // For tests: the hosts followed, their panes and their next wait.
 export function hostWatchers() {
   return [...watchers].map(([hostId, w]) => ({ hostId, panes: w.panes.size, wait: w.wait }))
@@ -167,24 +277,36 @@ export function overrideText(list) {
 
 // What a header has room for, and the whole of it.
 // envOverrides: the host's login shell exports ({ claude: [...], codex: [...] }).
-// -> { name, title, signedIn, override } or null when nothing names the account.
+// -> { name, title, signedIn, override, unknown } or null when nothing names
+// the account. unknown: signed in, but the account's email is not known yet
+// (Claude Code writes it once it has fetched its profile).
 export function entryLabel(e, hostLabel = '', envOverrides = null) {
   if (!e) return null
   const plan = planName(e.plan) || (e.method === 'apikey' ? t('hostAccounts.apiKey', 'API key') : '')
   const who = e.email || (e.login ? `@${e.login}` : '') || (Array.isArray(e.providers) && e.providers.length ? e.providers.map((p) => p.name).join(', ') : '')
   const signedIn = e.state === 'signed-in'
   const override = [...new Set([...(Array.isArray(e.override) ? e.override : []), ...(envOverrides && Array.isArray(envOverrides[e.agent]) ? envOverrides[e.agent] : [])])]
+  if (!who && signedIn) {
+    // Signed in (its login is there), the account not named yet: its plan.
+    const name = (plan || t('hostAccounts.signedInShort', 'signed in')) + (override.length || e.linked ? ' ⚠' : '')
+    const what = [e.planName || plan, hostLabel ? t('hostAccounts.onHostShort', 'on {{host}}', { host: hostLabel }) : ''].filter(Boolean).join(' ')
+    let title = t('hostAccounts.unknownAccount', '{{what}}: signed in, account unknown (its email is not known yet). Check again once the agent has answered.', { what: what || t('hostAccounts.signedInShort', 'signed in') })
+    if (override.length) title += `\n${t('hostAccounts.overrideNote', 'Note: {{what}} set on the host is used instead of this sign-in (settings.json or the login shell).', { what: overrideText(override) })}`
+    if (e.linked) title += `\n${t('hostAccounts.linkedNote', 'Its sign-in file is a link to another folder (made outside Tessel): agents are not started on it.')}`
+    return { name, title, signedIn: true, override, unknown: true }
+  }
   if (!who && !plan) {
     if (e.scope !== 'tessel') return null
     const name = t('hostAccounts.notSignedIn', 'not signed in yet')
     return { name, title: hostLabel ? t('hostAccounts.folderOn', 'A new account folder on {{host}}: not signed in yet', { host: hostLabel }) : name, signedIn: false, override }
   }
   const short = e.email ? shortAccount(e.email) : who
-  const name = [short, plan].filter(Boolean).join(' · ') + (override.length ? ' ⚠' : '')
-  const parts = [who, plan, e.org && e.org !== who ? e.org : ''].filter(Boolean).join(' · ')
+  const name = [short, plan].filter(Boolean).join(' · ') + (override.length || e.linked ? ' ⚠' : '')
+  const parts = [who, e.planName || plan, e.org && e.org !== who ? e.org : ''].filter(Boolean).join(' · ')
   const where = hostLabel ? t('hostAccounts.onHost', '{{account}}, on {{host}}', { account: parts, host: hostLabel }) : parts
   let title = signedIn ? where : t('hostAccounts.signedOut', '{{account}} (signed out there)', { account: where })
   if (override.length) title += `\n${t('hostAccounts.overrideNote', 'Note: {{what}} set on the host is used instead of this sign-in (settings.json or the login shell).', { what: overrideText(override) })}`
+  if (e.linked) title += `\n${t('hostAccounts.linkedNote', 'Its sign-in file is a link to another folder (made outside Tessel): agents are not started on it.')}`
   return { name, title, signedIn, override }
 }
 
@@ -194,9 +316,32 @@ export function hostPaneAccount(hostId, agentId, hostAccount, hostLabel = '') {
   return entryLabel(hostEntry(hostId, agentId, hostAccount), hostLabel, host && host.envOverrides)
 }
 
+// The account new panes of this agent use on this host (Settings, saved per
+// host and agent): a folder id, or undefined (the host's own sign-in).
+export function defaultHostAccount(hostId, agentId) {
+  const d = settings.hostAccountDefaults && settings.hostAccountDefaults[hostId]
+  return d && typeof d[agentId] === 'string' && HOST_ACCOUNT_ID.test(d[agentId]) ? d[agentId] : undefined
+}
+// id: a folder id, or null: the host's own sign-in (no default kept).
+export function setDefaultHostAccount(hostId, agentId, id) {
+  if (typeof hostId !== 'string' || !/^[\w-]{1,80}$/.test(hostId) || !HOST_ACCOUNT_AGENTS.includes(agentId)) return
+  const all = { ...(settings.hostAccountDefaults || {}) }
+  const mine = { ...(all[hostId] || {}) }
+  if (typeof id === 'string' && HOST_ACCOUNT_ID.test(id)) mine[agentId] = id
+  else delete mine[agentId]
+  if (Object.keys(mine).length) all[hostId] = mine
+  else delete all[hostId]
+  settings.hostAccountDefaults = all
+}
+// Whether this account (a folder id, or null: the host's own) is the one
+// new panes of this agent use on this host.
+export function isDefaultHostAccount(hostId, agentId, id) {
+  return (defaultHostAccount(hostId, agentId) ?? null) === (typeof id === 'string' ? id : null)
+}
+
 // The accounts a pane of this agent on this host can run on: the agent's
 // own sign-in there and each account folder signed in. [{ id: null | id,
-// name, title }], the pane's own left out by the caller.
+// name, title, isDefault }], the pane's own left out by the caller.
 export function hostAccountChoices(hostId, agentId, hostLabel = '') {
   if (!HOST_ACCOUNT_AGENTS.includes(agentId)) return []
   const host = hostAccountsOf(hostId)
@@ -208,12 +353,13 @@ export function hostAccountChoices(hostId, agentId, hostLabel = '') {
     if (l) out.push({ id: null, name: l.name, title: t('hostAccounts.ownTitle', 'The host’s own sign-in: {{account}}', { account: l.title }) })
   }
   for (const e of host.entries) {
-    if (e.agent !== agentId || e.scope !== 'tessel' || e.state !== 'signed-in' || !HOST_ACCOUNT_ID.test(String(e.id || ''))) continue
+    if (e.agent !== agentId || e.scope !== 'tessel' || e.state !== 'signed-in' || e.linked || !HOST_ACCOUNT_ID.test(String(e.id || ''))) continue
     const l = entryLabel(e, hostLabel, host.envOverrides)
     if (l) out.push({ id: e.id, name: l.name, title: l.title })
   }
   // Two with the same name: their whole email.
   for (const c of out) if (out.filter((o) => o.name === c.name).length > 1) c.name = c.title
+  for (const c of out) c.isDefault = isDefaultHostAccount(hostId, agentId, c.id)
   return out
 }
 
@@ -221,4 +367,9 @@ export function hostAccountChoices(hostId, agentId, hostLabel = '') {
 // undefined (the host's own sign-in).
 export function validHostAccount(v) {
   return typeof v === 'string' && HOST_ACCOUNT_ID.test(v) ? v : undefined
+}
+// ...or what a pane chose: a folder id, null (the host's own sign-in, chosen
+// or started on), undefined (nothing chosen: the host's default applies).
+export function hostAccountChoice(v) {
+  return v === null ? null : validHostAccount(v)
 }

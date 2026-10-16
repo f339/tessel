@@ -44,7 +44,8 @@ const EXPECTED_ACTION = {
   floating: 'toggleFloating()',
   browser: 'openInBrowser({ newPane: true, focusAddress: true })',
   help: 'helpOpen.value = true',
-  logs: 'openLogs()'
+  logs: 'openLogs()',
+  diagnostics: 'copyDiagnostics()'
 }
 
 describe('settingsTools', () => {
@@ -256,10 +257,11 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     return el
   }
 
-  it('are pages of AI capabilities, after the accounts', () => {
+  it('are pages of the AI group, after the accounts', () => {
     wrapper = mountAt(null)
     const ai = wrapper.findAll('.set-nav-group')[0]
-    expect(ai.findAll('.set-nav-item').map((b) => b.attributes('data-page'))).toEqual(['agents', 'accounts', 'skills', 'mcp', 'orchestration', 'voice'])
+    expect(ai.get('.set-nav-head').text()).toBe('AI')
+    expect(ai.findAll('.set-nav-item').map((b) => b.attributes('data-page'))).toEqual(['agents', 'accounts', 'skills', 'mcp', 'orchestration'])
     expect(wrapper.get('.set-nav-item[data-page="skills"]').text()).toBe('Skills')
     expect(wrapper.get('.set-nav-item[data-page="mcp"]').text()).toBe('MCP servers')
     expect(wrapper.get('.set-nav-item[data-page="mcp"] svg path').attributes('d')).toBeTruthy()
@@ -276,14 +278,14 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
 
     // A skill's copies are in its details, opened from its row; Escape in
     // there closes the details, not Settings.
-    await page.get('.skills-row').trigger('click')
+    await page.get('.sl-row').trigger('click')
     await flushPromises()
-    await page.get('.skills-details .skills-btn').trigger('keydown', { key: 'Escape' })
-    expect(page.find('.skills-details').exists()).toBe(false)
+    await page.get('.sl-details .exit-btn.small').trigger('keydown', { key: 'Escape' })
+    expect(page.find('.sl-details').exists()).toBe(false)
     expect(wrapper.emitted('close')).toBeUndefined()
-    await page.get('.skills-row').trigger('click')
+    await page.get('.sl-row').trigger('click')
     await flushPromises()
-    await page.findAll('.skills-copy .exit-btn').find((b) => b.text() === 'Update').trigger('click')
+    await page.findAll('.sl-sub .exit-btn').find((b) => b.text() === 'Update').trigger('click')
     await flushPromises()
     await page.get('.skills-setup .exit-btn').trigger('click')
     await flushPromises()
@@ -304,7 +306,7 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     const page = embeddedIn('mcp')
     expect(calls.mcpList).toBeGreaterThan(0)
     expect(page.text()).toContain('context7')
-    expect(page.findAll('.launch-seg-btn').map((b) => b.text())).toEqual(expect.arrayContaining(['Catalog', 'Custom', 'Team connections']))
+    expect(page.findAll('[role="tab"]').map((b) => b.text())).toEqual(expect.arrayContaining(['Catalog', 'Custom']))
     const mcp = wrapper.findComponent(McpDialog)
     expect(mcp.props('cwd')).toBe('/p')
 
@@ -320,19 +322,23 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     embeddedIn('skills')
   })
 
-  it("Orchestration's Details opens the MCP servers page on Team connections", async () => {
+  it('the team connections link of MCP servers opens Orchestration', async () => {
+    wrapper = mountAt('mcp')
+    await flushPromises()
+    await wrapper.get('.set-page[data-page="mcp"] .mcp-orchestration-link').trigger('click')
+    await flushPromises()
+    expect(visiblePages(wrapper)).toEqual(['orchestration'])
+  })
+
+  it("Orchestration's Details opens the MCP servers page (its team connections are no tab there any more)", async () => {
     wrapper = mountAt('orchestration')
     await flushPromises()
     const details = wrapper.get('.set-page[data-page="orchestration"]').findAll('button').find((b) => b.text() === 'Details')
     await details.trigger('click')
     await flushPromises()
     expect(visiblePages(wrapper)).toEqual(['mcp'])
-    expect(wrapper.get('.set-page[data-page="mcp"] .launch-seg-btn.on').text()).toBe('Team connections')
-    // Another page, then back: on Installed again.
-    await wrapper.get('.set-nav-item[data-page="agents"]').trigger('click')
-    await wrapper.get('.set-nav-item[data-page="mcp"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.get('.set-page[data-page="mcp"] .launch-seg-btn.on').text()).toContain('Installed')
+    expect(wrapper.find('.set-page[data-page="mcp"] .mcp-connections').exists()).toBe(false)
+    expect(wrapper.get('.set-page[data-page="mcp"] [role="tab"][aria-selected="true"]').text()).toContain('Installed')
   })
 
   it('search finds both pages by name, without loading their windows', async () => {

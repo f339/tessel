@@ -26,5 +26,12 @@ export function modelLabel(model) {
       .map((w) => (/^(mini|nano)$/i.test(w) ? w.toLowerCase() : w[0].toUpperCase() + w.slice(1).toLowerCase()))
     return [`GPT-${g[1]}`, ...words].join(' ') + (big ? ' (1M)' : '')
   }
+  // Meta's Muse models as their product names: "muse-spark-1.3" -> "Muse
+  // Spark 1.3", "muse-spark-1.3-contributor" -> "Muse Spark 1.3 Contributor".
+  if (/^muse-[a-z]+(?:-[a-z0-9.]+)*$/i.test(s))
+    return s
+      .split('-')
+      .map((w) => (/^\d/.test(w) ? w : w[0].toUpperCase() + w.slice(1).toLowerCase()))
+      .join(' ')
   return s + (big ? ' (1M)' : '')
 }

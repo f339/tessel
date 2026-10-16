@@ -18,7 +18,8 @@ import {
   findSetupCommands,
   safeRelPath,
   isSafeSkillName,
-  SKILL_CAPS
+  SKILL_CAPS,
+  SKILL_AGENTS
 } from '../skillsManager'
 import { readTar } from '../skillsTar'
 import { setLanguage } from '../i18n'
@@ -110,10 +111,11 @@ describe('skill folders per agent and scope', () => {
     const at = (p) => roots.find((r) => r.path === path.resolve(p))
     expect(at(path.join(home, '.claude', 'skills'))).toMatchObject({ scope: 'user', installFor: ['claude'] })
     expect(at(path.join(home, '.claude', 'skills')).seenBy).toContain('claude')
-    expect(at(path.join(tmp, 'codexhome', 'skills'))).toMatchObject({ scope: 'user', seenBy: ['codex'] })
+    // Muse Code reads Codex's folders too (its skills guide).
+    expect(at(path.join(tmp, 'codexhome', 'skills'))).toMatchObject({ scope: 'user', seenBy: ['codex', 'muse'] })
     expect(at(path.join(home, '.agents', 'skills')).seenBy).toContain('codex')
     expect(at(path.join(cwd, '.agents', 'skills'))).toMatchObject({ scope: 'project' })
-    expect(at(path.join(cwd, '.codex', 'skills'))).toMatchObject({ scope: 'project', seenBy: ['codex'] })
+    expect(at(path.join(cwd, '.codex', 'skills'))).toMatchObject({ scope: 'project', seenBy: ['codex', 'muse'] })
     expect(at(path.join(cwd, '.github', 'skills')).seenBy).toEqual(['copilot'])
   })
 
@@ -146,6 +148,17 @@ describe('skill folders per agent and scope', () => {
     expect(targetRoots(['antigravity'], 'user', { home, env, cwd }).map((r) => r.path)).toEqual([path.join(home, '.gemini', 'config', 'skills')])
     expect(targetRoots(['codex', 'antigravity'], 'project', { home, env, cwd }).map((r) => r.path)).toEqual([path.join(cwd, '.agents', 'skills')])
   })
+
+  it("Muse Code: its own ~/.config/muse/skills and the project .agents/skills, and the Claude Code, Codex and .agents ones it also reads", () => {
+    const roots = skillRoots({ home, env, cwd })
+    const at = (p) => roots.find((r) => r.path === path.resolve(p))
+    expect(at(path.join(home, '.config', 'muse', 'skills'))).toMatchObject({ scope: 'user', seenBy: ['muse'], installFor: ['muse'] })
+    for (const p of [path.join(home, '.claude', 'skills'), path.join(home, '.agents', 'skills'), path.join(home, '.codex', 'skills'), path.join(cwd, '.agents', 'skills'), path.join(cwd, '.claude', 'skills'), path.join(cwd, '.codex', 'skills')])
+      expect(at(p).seenBy).toContain('muse')
+    expect(targetRoots(['muse'], 'user', { home, env, cwd }).map((r) => r.path)).toEqual([path.join(home, '.config', 'muse', 'skills')])
+    expect(targetRoots(['muse'], 'project', { home, env, cwd }).map((r) => r.path)).toEqual([path.join(cwd, '.agents', 'skills')])
+    expect(SKILL_AGENTS).toContain('muse')
+  })
 })
 
 describe('listing', () => {
@@ -167,7 +180,8 @@ describe('listing', () => {
     expect(by('folded-skill')).toMatchObject({ description: 'Long text on two lines.', folder: 'folded' })
     expect(by('plain')).toMatchObject({ description: null })
     expect(by('docx')).toMatchObject({ managed: 'synced', removable: false })
-    expect(by('imagegen')).toMatchObject({ managed: 'system', removable: false, seenBy: ['codex'] })
+    // In $CODEX_HOME/skills, which Muse Code reads too.
+    expect(by('imagegen')).toMatchObject({ managed: 'system', removable: false, seenBy: ['codex', 'muse'] })
     expect(by('review')).toMatchObject({ scope: 'project', removable: true })
     expect(by('review').seenBy).toContain('codex')
     expect(roots.find((r) => r.path === path.join(home, '.claude', 'skills')).exists).toBe(true)
@@ -325,7 +339,7 @@ describe('install from GitHub', () => {
     const res = await installSkill({ id: pkg.id, agents: ['codex'], scope: 'user', home, env, sources })
     expect(res.ok).toBe(true)
     // Each result says which chosen agent it is for, and who else reads that folder.
-    expect(res.results[0]).toMatchObject({ agents: ['codex'], seenBy: ['codex', 'opencode', 'copilot', 'gemini'] })
+    expect(res.results[0]).toMatchObject({ agents: ['codex'], seenBy: ['codex', 'opencode', 'copilot', 'gemini', 'muse'] })
     const dest = path.join(home, '.agents', 'skills', 'pdf')
     expect(fs.readFileSync(path.join(dest, 'forms', 'fill.py'), 'utf8')).toBe('print(2)')
     expect(sources.get(dest)).toMatchObject({ kind: 'github', repo: 'r', path: 'skills/pdf' })
@@ -383,6 +397,94 @@ describe('install from GitHub', () => {
     await expect(packageFromGithub('big2/r', { fetchFn: fakeFetch(gz), caps: { ...SKILL_CAPS, download: 10 } })).rejects.toMatchObject({ code: 'SKILL_TOO_BIG' })
     await expect(packageFromGithub('big3/r', { fetchFn: fakeFetch(gz, { url: 'https://evil.example/x.tgz' }) })).rejects.toThrow(/somewhere else/)
     await expect(packageFromGithub('big4/r', { fetchFn: fakeFetch(gz, { status: 404 }) })).rejects.toMatchObject({ code: 'SKILL_NOT_FOUND' })
+  })
+
+  it('a skill picked from a list comes from the commit the list was read at, even once the branch has moved on', async () => {
+    const first = 'b'.repeat(40)
+    const moved = 'c'.repeat(40)
+    const repo = (commit, text) =>
+      tarGz(
+        [
+          { path: 'skills/pdf/SKILL.md', text: skillMd('pdf', text) },
+          { path: 'skills/docx/SKILL.md', text: skillMd('docx', 'Word.') }
+        ],
+        { commit }
+      )
+    const archives = { HEAD: repo(first, 'Old.'), [first]: repo(first, 'Old.') }
+    const calls = []
+    const fetchFn = async (u) => {
+      calls.push(u)
+      const gz = archives[/archive\/(\w+)\.tar\.gz$/.exec(u)[1]]
+      return { ok: true, status: 200, url: 'https://codeload.github.com/pin/r/tar.gz/x', headers: new Headers(), body: null, arrayBuffer: async () => gz.buffer.slice(gz.byteOffset, gz.byteOffset + gz.length) }
+    }
+    const list = await packageFromGithub('pin/r', { fetchFn, fresh: true })
+    expect(list.commit).toBe(first)
+    expect(list.total).toBe(2)
+    // The archive kept: read again for each skill picked at that commit.
+    const pdf = await packageFromGithub('pin/r', { fetchFn, pick: 'skills/pdf', commit: first })
+    expect(calls).toHaveLength(1)
+    expect(pdf.description).toBe('Old.')
+    // Later (the archive kept is gone, the branch has moved on): that commit
+    // is downloaded, never the branch; the skill still follows the branch for
+    // its updates (no ref recorded).
+    archives.HEAD = repo(moved, 'New.')
+    await packageFromGithub('other/r', { fetchFn: fakeFetch(tarGz([{ path: 'SKILL.md', text: skillMd('x', 'X.') }])) }) // another repository read meanwhile
+    const again = await packageFromGithub('pin/r', { fetchFn, pick: 'skills/pdf', commit: first })
+    expect(calls.at(-1)).toBe(`https://github.com/pin/r/archive/${first}.tar.gz`)
+    expect(again.description).toBe('Old.')
+    expect(again.source).toMatchObject({ ref: null, commit: first, path: 'skills/pdf' })
+    // No commit given (a lookup): the branch as it is now.
+    const now = await packageFromGithub('pin/r', { fetchFn, fresh: true, pick: 'skills/pdf' })
+    expect(now.description).toBe('New.')
+  })
+
+  it('a download that stalls is given up, with a sentence saying so', async () => {
+    const fetchFn = async (u, { signal }) => ({
+      ok: true,
+      status: 200,
+      url: 'https://codeload.github.com/slow/r/tar.gz/HEAD',
+      headers: new Headers(),
+      body: {
+        getReader: () => ({
+          read: () =>
+            new Promise((resolve, reject) => {
+              // One chunk, then nothing: the stall timer fires.
+              if (!fetchFn.sent) {
+                fetchFn.sent = true
+                return resolve({ done: false, value: new Uint8Array(10) })
+              }
+              signal.addEventListener('abort', () => reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })))
+            })
+        })
+      }
+    })
+    await expect(packageFromGithub('slow/r', { fetchFn, fresh: true, timeouts: { stall: 30, total: 5000 } })).rejects.toThrow(/^Could not download it: This operation was aborted/)
+  })
+
+  it('the biggest skills of anthropics/skills (their real files) are listed, picked and installed within the caps', async () => {
+    const real = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'src/renderer/src/__tests__/fixtures/anthropicSkills.json'), 'utf8'))
+    const entries = []
+    for (const [dir, p] of Object.entries(real.packages))
+      for (const [file, size] of p.files) entries.push({ path: `${dir}/${file}`, text: file === 'SKILL.md' ? skillMd(p.name, 'Big.').padEnd(size, ' ') : 'x'.repeat(size) })
+    const gz = tarGz(entries, { commit: real.list.commit })
+    const fetchFn = fakeFetch(gz)
+    const list = await packageFromGithub('anthropics-big/skills', { fetchFn, fresh: true })
+    for (const [dir, p] of Object.entries(real.packages))
+      expect(list.candidates.find((c) => c.path === dir)).toMatchObject({ files: p.files.length, bytes: p.files.reduce((n, [, size]) => n + size, 0) })
+    for (const [dir, p] of Object.entries(real.packages)) {
+      // Under the caps: picked whole...
+      expect(p.files.length).toBeLessThan(SKILL_CAPS.files)
+      const pkg = await packageFromGithub('anthropics-big/skills', { fetchFn, pick: dir, commit: real.list.commit })
+      expect(pkg.files).toHaveLength(p.files.length)
+      expect(pkg.totalBytes).toBeLessThan(SKILL_CAPS.bytes)
+      // ...and installed, for two agents, every file in place.
+      const res = await installSkill({ id: pkg.id, agents: ['claude', 'codex'], scope: 'user', home, env })
+      expect(res.results.map((r) => r.ok)).toEqual([true, true])
+      const dest = path.join(home, '.claude', 'skills', p.name)
+      const [last, size] = p.files.at(-1)
+      expect(fs.statSync(path.join(dest, ...last.split('/'))).size).toBe(size)
+    }
+    expect(fetchFn.calls).toHaveLength(1)
   })
 
   it('reads the tar fixture as tar', () => {

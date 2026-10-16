@@ -142,11 +142,16 @@ export function createContextCost({
     return tessel
   }
 
-  const mcpKey = (agent, s, cwd) => sha(JSON.stringify([agent, s.scope || 'user', s.name, s.scope === 'user' ? '' : String(cwd || '').toLowerCase(), s.target || '']))
+  // A measurement is kept by agent, scope, name (and project, for a project
+  // or local server), with the server's command or URL inside: a server
+  // whose command changed since is shown as not measured.
+  const mcpKey = (agent, s, cwd) => sha(JSON.stringify([agent, s.scope || 'user', s.name, (s.scope || 'user') === 'user' ? '' : String(cwd || '').toLowerCase()]))
   async function mcpRecord(agent, s, cwd) {
     try {
       const record = JSON.parse(await fs.readFile(path.join(mcpDir, `${mcpKey(agent, s, cwd)}.json`), 'utf8'))
-      return record && Number.isFinite(record.at) && clock() - record.at < MCP_RECORD_MAX_AGE_MS ? record : null
+      if (!record || !Number.isFinite(record.at) || clock() - record.at >= MCP_RECORD_MAX_AGE_MS) return null
+      if (s.target !== undefined && record.target !== undefined && record.target !== String(s.target || '')) return null
+      return record
     } catch {
       return null
     }
@@ -336,7 +341,7 @@ export function createContextCost({
       if (state === 'unapproved' && confirmed !== true) return { ok: false, code: 'needsConfirm', target: String(s.target || '').slice(0, 500) }
       const res = await testMcp({ agent, name, scope, cwd }, { defs: true })
       if (!res || !res.ok || !Array.isArray(res.defs)) return { ok: false, status: res && res.status, error: (res && res.error) || null }
-      const record = { at: clock(), defs: res.defs }
+      const record = { at: clock(), target: String(s.target || ''), defs: res.defs }
       const text = JSON.stringify(record)
       if (text.length <= MCP_RECORD_LIMIT) {
         await fs.mkdir(mcpDir, { recursive: true })
@@ -348,20 +353,21 @@ export function createContextCost({
       return { ok: true, tools: res.defs.length, counter: counterInfo, result: results.tools || null, at: record.at }
     },
 
-    // The kept measurements of the MCP page's rows (no server started).
-    async mcpMeasures({ cwd = null, auth = null } = {}) {
-      const all = await mcpOf(cwd, 'cached')
+    // The kept measurements of the servers the MCP page's tags show
+    // (servers: [{ agent, scope, name }], at most 200): read only, no server
+    // started, no list of servers read, no count API asked.
+    async mcpMeasures({ cwd = null, servers = [], auth = null } = {}) {
       const out = {}
-      for (const agent of CONTEXT_AGENTS) {
-        const servers = agentServers(all, agent).filter((s) => s.name !== TEAM_SERVER)
-        if (!servers.length) continue
-        const counterInfo = await resolveCounter(agent, modelOf(agent, cwd))
-        for (const s of servers) {
-          const record = await mcpRecord(agent, s, cwd)
-          if (!record || !Array.isArray(record.defs)) continue
-          const results = await counter.count([{ key: 'tools', kind: 'tools', tools: shapeTools(s.name, record.defs, agent) }], counterInfo, { remote: false, auth })
-          out[`${agent}:${s.scope || 'user'}:${s.name}`] = { tools: record.defs.length, at: record.at, counter: counterInfo, result: results.tools || null }
-        }
+      const counters = new Map()
+      for (const s of (Array.isArray(servers) ? servers : []).slice(0, 200)) {
+        if (!s || !CONTEXT_AGENTS.includes(s.agent) || typeof s.name !== 'string' || s.name === TEAM_SERVER) continue
+        const scope = typeof s.scope === 'string' ? s.scope : 'user'
+        const record = await mcpRecord(s.agent, { name: s.name, scope }, cwd)
+        if (!record || !Array.isArray(record.defs)) continue
+        if (!counters.has(s.agent)) counters.set(s.agent, await resolveCounter(s.agent, modelOf(s.agent, cwd), { kept: true }))
+        const counterInfo = counters.get(s.agent)
+        const results = await counter.count([{ key: 'tools', kind: 'tools', tools: shapeTools(s.name, record.defs, s.agent) }], counterInfo, { remote: false, auth })
+        out[`${s.agent}:${scope}:${s.name}`] = { tools: record.defs.length, at: record.at, counter: counterInfo, result: results.tools || null }
       }
       return out
     },
