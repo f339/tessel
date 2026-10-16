@@ -979,6 +979,24 @@
       "badName": "Nom de plugin invalide.",
       "setFailed": "L'Antigravity CLI n'a pas pu modifier ce plugin.",
       "removeFailed": "L'Antigravity CLI n'a pas pu désinstaller ce plugin."
+    },
+    "remoteAccounts": {
+      "noCopy": "Copier une connexion depuis ce PC n’est pas proposé : l’agent renouvelle sa connexion avec un jeton à usage unique, donc une copie déconnecterait ce PC ou l’hôte au premier renouvellement, et le serveur garderait un identifiant de longue durée. Connectez-vous plutôt sur l’hôte.",
+      "failed": "Les comptes sur {{host}} n’ont pas pu être lus.",
+      "invalid": "Ce compte ne peut pas être utilisé sur cet hôte.",
+      "createFailed": "Tessel n’a pas pu créer le dossier du compte sur {{host}}.",
+      "gone": "Le dossier de ce compte n’est plus sur {{host}}. Démarrez l’agent sur un autre compte.",
+      "unusable": "Le dossier de ce compte sur {{host}} ne peut pas être utilisé sans risque (il a été modifié en dehors de Tessel).",
+      "removeFailed": "Tessel n’a pas pu retirer le dossier de ce compte de {{host}} : il n’a pas été créé par Tessel, ou il a été modifié depuis.",
+      "signOutFailed": "Tessel n’a pas pu déconnecter {{agent}} sur {{host}}.",
+      "thisAccount": "ce compte",
+      "signOutTitle": "Déconnecter {{agent}} sur {{host}} ?",
+      "signOutMessage": "{{agent}} sur {{host}} est connecté avec {{account}} dans son propre dossier. La déconnexion retire cette connexion de l’hôte : chaque session là-bas qui n’est pas sur un dossier de compte de Tessel devra se reconnecter.",
+      "signOut": "Se déconnecter sur l’hôte",
+      "cancel": "Annuler",
+      "removeTitle": "Retirer {{account}} de {{host}} ?",
+      "removeMessage": "Tessel retire le dossier qu’il a créé sur {{host}} pour {{account}} ({{agent}}) : sa connexion là-bas part avec lui. Les panneaux sur ce compte devront démarrer sur un autre compte.",
+      "remove": "Retirer de cet hôte"
     }
   },
   "main.chat.image.tooLarge": "Cette image dépasse {{mb}} Mo.",

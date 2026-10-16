@@ -562,7 +562,10 @@
       "switchToTerminalView": "Passer en vue terminal",
       "chatViewHint": "Afficher cette conversation comme un chat par-dessus son terminal, ou de nouveau le terminal : l'agent continue de tourner, rien ne redémarre",
       "continueOnHost": "Continuer dans un panneau de chat (sur l’hôte)",
-      "continueOnHostHint": "Arrêter cet agent du terminal et poursuivre la même conversation dans un panneau de chat qui tourne sur l’hôte SSH"
+      "continueOnHostHint": "Arrêter cet agent du terminal et poursuivre la même conversation dans un panneau de chat qui tourne sur l’hôte SSH",
+      "restartOnHostAccountNew": "Redémarrer Codex sur {{account}} : même panneau, nouvelle conversation (une conversation Codex reste avec son compte)",
+      "signInOnHost": "Se connecter à un autre compte sur {{host}}…",
+      "signInOnHostHint": "Ouvre cet agent à côté de ce panneau dans un nouveau dossier de compte sur {{host}}, où vous vous connectez avec sa propre connexion. Votre connexion reste sur l’hôte ; rien n’est copié depuis ce PC."
     },
     "badge": {
       "quiet": "silencieux depuis {{minutes}} min",
@@ -680,7 +683,8 @@
       "started": "Démarré",
       "state": "État",
       "quiet": "Silencieux",
-      "cache": "Cache de prompt"
+      "cache": "Cache de prompt",
+      "account": "Compte"
     },
     "sessionOptions": {
       "model": "Modèle",
@@ -783,5 +787,13 @@
     "resizeHint": "Faites glisser pour redimensionner. Ctrl+` le masque, son terminal continue de tourner.",
     "hideHint": "Masquer (Ctrl+`). Son terminal continue de tourner.",
     "hide": "Masquer le terminal flottant"
+  },
+  "hostAccounts": {
+    "apiKey": "Clé d’API",
+    "notSignedIn": "pas encore connecté",
+    "folderOn": "Un nouveau dossier de compte sur {{host}} : pas encore connecté",
+    "onHost": "{{account}}, sur {{host}}",
+    "signedOut": "{{account}} (déconnecté là-bas)",
+    "ownTitle": "La connexion propre de l’hôte : {{account}}"
   }
 }

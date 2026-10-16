@@ -304,6 +304,24 @@ const api = {
     finishClaudeSwitch: () => ipcRenderer.invoke('accounts:finishClaudeSwitch'),
     discardClaudeSwitch: () => ipcRenderer.invoke('accounts:discardClaudeSwitch')
   },
+  // The agents' accounts on an SSH host (src/main/remoteAgent/remoteAccounts.js):
+  // who each agent there is signed in with (identity fields only), and the
+  // folders Tessel makes there for one account each. remove and signOut
+  // are confirmed in main.
+  remoteAccounts: {
+    detect: (hostId, opts) => ipcRenderer.invoke('remoteAccounts:detect', { hostId, fresh: !!(opts && opts.fresh === true) }),
+    create: (hostId, agent) => ipcRenderer.invoke('remoteAccounts:create', { hostId, agent }),
+    launchEnv: (hostId, agent, id) => ipcRenderer.invoke('remoteAccounts:launchEnv', { hostId, agent, id }),
+    remove: (hostId, agent, id) => ipcRenderer.invoke('remoteAccounts:remove', { hostId, agent, id }),
+    signOut: (hostId, agent) => ipcRenderer.invoke('remoteAccounts:signOut', { hostId, agent }),
+    copyPolicy: (agent) => ipcRenderer.invoke('remoteAccounts:copyPolicy', agent)
+  },
+  // "Where you're signed in" (src/main/signedInPlaces.js): this PC, its WSL
+  // distros and the saved SSH hosts; scan(id) checks one of them.
+  signedIn: {
+    places: () => ipcRenderer.invoke('signedIn:places'),
+    scan: (id, opts) => ipcRenderer.invoke('signedIn:scan', id, { fresh: !!(opts && opts.fresh === true), start: !!(opts && opts.start === true) })
+  },
   // Claude Code's usage report (tokens and estimated cost by day, model,
   // project, conversation), from its own files on this computer.
   claudeUsageReport: (query = {}) => ipcRenderer.invoke('usage:claudeReport', query),

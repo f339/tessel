@@ -42,6 +42,7 @@
 // and the next operation starts a new one.
 import { spawn } from 'child_process'
 import crypto from 'crypto'
+import { ACCOUNT_FUNCTIONS, ACCOUNTS_SHELL } from './remoteAgent/remoteAccounts'
 
 export const READY_TIMEOUT_MS = 180_000 // a password question may wait 2 minutes
 export const DEFAULT_TIMEOUT_MS = 30_000
@@ -162,8 +163,9 @@ export const FUNCTIONS = new Set([
   // titles, never their contents.
   '__t_rsess',
   // One agent conversation file on this host (Claude Code's transcript or a
-  // Codex rollout), found by its session id in the agent's own folder only,
-  // read-only, a bounded window of it (chat/remoteTranscripts.js).
+  // Codex rollout), found by its session id in the agent's own folder only
+  // (or a Codex account folder Tessel made there: its conversations are its
+  // own), read-only, a bounded window of it (chat/remoteTranscripts.js).
   '__t_tread',
   // The signed-in user's home folder ($HOME), to tell a "~/…" project from
   // the same folder named by its full path (chat file links).
@@ -179,7 +181,11 @@ export const FUNCTIONS = new Set([
   // next to its transcript): their names, sizes and change times (at most
   // N), and a bounded window of one; read-only, no link followed (jobCost.js).
   '__t_subs',
-  '__t_sread'
+  '__t_sread',
+  // Which account each agent there is signed in with (identity fields only,
+  // never a token), and the folders Tessel makes there for one account each
+  // (remoteAgent/remoteAccounts.js).
+  ...ACCOUNT_FUNCTIONS
 ])
 
 // The prelude: POSIX sh, for Linux (GNU, busybox) and macOS / BSD tools.
@@ -660,7 +666,7 @@ __t_tfile() {
       for __c in "\${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$2".jsonl; do [ -f "$__c" ] && [ ! -L "$__c" ] && { __F=$__c; break; }; done ;;
     codex)
       __cd="\${CODEX_HOME:-$HOME/.codex}"
-      for __r in "$__cd/sessions" "$__cd/archived_sessions"; do
+      for __r in "$__cd/sessions" "$__cd/archived_sessions" "$HOME"/.tessel-server/accounts/codex/*/sessions; do
         [ -d "$__r" ] || continue
         __F=$(find "$__r" -type f -name "rollout-*$2.jsonl" 2>/dev/null | head -n 1)
         [ -n "$__F" ] && break
@@ -766,6 +772,7 @@ __t_cxskills() {
   fi
   return 0
 }
+${ACCOUNTS_SHELL}
 if [ -z "$__T_B" ]; then printf '\\n@@R %s base64\\n' "$__T_N"; else printf '\\n@@R %s ok\\n' "$__T_N"; fi
 `
 }

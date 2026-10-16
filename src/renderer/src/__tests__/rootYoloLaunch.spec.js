@@ -9,6 +9,7 @@ import fs from 'fs'
 import vm from 'vm'
 import { join } from 'path'
 import { reactive } from 'vue'
+import { HOST_ACCOUNT_AGENTS, validHostAccount } from '../hostAccounts'
 import {
   claudeStartChoice,
   codexResumes,
@@ -52,6 +53,9 @@ function load({ username = 'root', status = { hostId: HOST, claude: '/usr/local/
   }
   const tree = { value: null }
   const ctx = {
+    HOST_ACCOUNT_AGENTS,
+    validHostAccount,
+    refreshHostAccounts: () => {},
     t: (k, en, vars) => en.replace(/\{\{(\w+)\}\}/g, (_, n) => (vars && vars[n] != null ? vars[n] : '')),
     reactive,
     watch: () => {},
@@ -290,5 +294,43 @@ describe('Antigravity on a host (any agent, as Claude Code and Codex)', () => {
     const leaf = await env.start(agy)
     expect(env.typed()).toEqual([])
     expect(leaf.agentMissing).toMatchObject({ agent: 'antigravity' })
+  })
+})
+
+describe('an agent on an account folder of its host (hostAccounts.js)', () => {
+  const PREFIX = "CLAUDE_CONFIG_DIR='/home/u/.tessel-server/accounts/claude/abc123' "
+  const onFolder = (env, extra = {}) => env.ctx.api.createLeaf('pwsh', claude, null, null, { id: 'pane-1', remoteHostId: HOST, remotePath: '/srv/app', hostAccount: 'abc123', ...extra })
+
+  it('its folder goes before its command (made whole first), and stays with the pane and the layout', async () => {
+    const env = load({ username: 'u', permissions: 'manual' })
+    env.shellApi.remoteAccounts = { launchEnv: vi.fn(async () => ({ ok: true, prefix: PREFIX })) }
+    const leaf = await onFolder(env)
+    expect(env.shellApi.remoteAccounts.launchEnv).toHaveBeenCalledWith(HOST, 'claude', 'abc123')
+    expect(env.typed()).toEqual([`${PREFIX}'/usr/local/bin/claude' --session-id ${SID}\r`])
+    expect(leaf.hostAccount).toBe('abc123')
+    expect(env.ctx.api.serializeNode(leaf).hostAccount).toBe('abc123')
+  })
+
+  it('a folder that cannot be used: nothing typed (never started on another account), and said', async () => {
+    const env = load({ username: 'u', permissions: 'manual' })
+    env.shellApi.remoteAccounts = { launchEnv: vi.fn(async () => ({ ok: false, missing: true, error: 'This account’s folder is no longer on Box.' })) }
+    const leaf = await onFolder(env)
+    expect(env.typed()).toEqual([])
+    expect(env.ctx.showToast.mock.calls.at(-1)[0]).toContain('no longer on Box')
+    expect(leaf.hostAccount).toBe('abc123')
+  })
+
+  it('the host’s own sign-in: no folder asked, no prefix; a pane on this PC never has one', async () => {
+    const env = load({ username: 'u', permissions: 'manual' })
+    env.shellApi.remoteAccounts = { launchEnv: vi.fn() }
+    await env.start()
+    expect(env.shellApi.remoteAccounts.launchEnv).not.toHaveBeenCalled()
+    expect(env.typed()).toEqual([`'/usr/local/bin/claude' --session-id ${SID}\r`])
+    // Not an account folder id: ignored (the host's own sign-in).
+    const other = load({ username: 'u', permissions: 'manual' })
+    other.shellApi.remoteAccounts = { launchEnv: vi.fn() }
+    const leaf = await onFolder(other, { hostAccount: '../../etc' })
+    expect(other.shellApi.remoteAccounts.launchEnv).not.toHaveBeenCalled()
+    expect(leaf.hostAccount).toBeUndefined()
   })
 })

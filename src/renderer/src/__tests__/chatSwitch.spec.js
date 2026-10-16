@@ -7,6 +7,7 @@ import fs from 'fs'
 import vm from 'vm'
 import { join } from 'path'
 import { reactive } from 'vue'
+import { HOST_ACCOUNT_AGENTS, validHostAccount } from '../hostAccounts'
 import { chatViewTakesImages, isPastedImageCopy } from '../chat/terminalChatBridge'
 import { isRemotePath, parseRemotePath, remoteRoot } from '../../../shared/remotePath'
 
@@ -22,6 +23,9 @@ function load(leaf) {
   const ws = { id: 'ws1', cwd: 'C:\\proj', tree: leaf }
   const calls = []
   const ctx = {
+    HOST_ACCOUNT_AGENTS,
+    validHostAccount,
+    refreshHostAccounts: () => {},
     t: (k, en, vars) => en.replace(/\{\{(\w+)\}\}/g, (_, n) => (vars && vars[n] != null ? vars[n] : '')),
     reactive,
     newId: () => 'x',

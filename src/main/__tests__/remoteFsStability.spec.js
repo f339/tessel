@@ -208,3 +208,26 @@ describe('remote files on a slow host', () => {
     rfs.close()
   })
 })
+
+describe('the agents’ accounts on a host (accountCall)', () => {
+  it('runs only the account functions, with plain string arguments, in the background', async () => {
+    const { rfs, seen } = service((fn) => (fn === '__t_accts' ? { out: '@h Linux /home/me\n' } : { rc: 0 }))
+    expect(await rfs.accountCall(HOST, '__t_ls', [])).toEqual({ error: 'invalid' })
+    expect(await rfs.accountCall(HOST, '__t_accts', [{ raw: 'x' }])).toEqual({ error: 'invalid' })
+    expect(await rfs.accountCall('../x', '__t_accts', [])).toMatchObject({ error: expect.any(String) })
+    const res = await rfs.accountCall(HOST, '__t_accts', ['login'])
+    expect(res.rc).toBe(0)
+    expect(res.out.toString()).toContain('@h Linux')
+    expect(seen.map((s) => s.fn)).toEqual(['__t_accts'])
+    expect(seen[0].line).toContain("__t_accts 'login'")
+    rfs.close()
+  })
+
+  it('a read on a host that is not signed in says so, without a sign-in', async () => {
+    const host = fakeHost(() => ({ rc: 0 }))
+    const rfs = createRemoteFs({ hosts: { get: () => ({ id: HOST, label: 'Box' }), sharedConnected: () => false, launchFor: () => ({ ok: true, file: 'ssh.exe', args: ['box'] }) }, spawnImpl: host.spawnImpl, env: {} })
+    expect(await rfs.accountCall(HOST, '__t_accts', ['login'])).toMatchObject({ notConnected: true })
+    expect(host.seen).toEqual([])
+    rfs.close()
+  })
+})

@@ -7,7 +7,8 @@ talks back through the SSH connection it already holds.
 
 v1 scope: ssh2 panes only (the shared connection in the terminal host,
 `ssh/sshHostBridge.js`). Panes that need the system ssh.exe (ProxyJump…) stay
-as today. Usage/quota of remote accounts: later.
+as today. Usage/quota of remote accounts: later (which account an agent there
+is signed in with, and account folders: below).
 
 ## Key choice: the team tools run on the PC, not on the server
 
@@ -99,7 +100,27 @@ server.cjs runs with cwd = the pane env's `TESSEL_PROJECT_DIR` (when absolute).
   and `~/.codex/hooks.json`. Only touches files that exist or whose agent is
   installed; writes atomically (tmp + rename), keeps a `.tessel-bak` once,
   never removes the user's other entries. Prints one JSON line with what it did.
+  Since 1.3.0 also the account folders below (marker checked): Claude's
+  `<folder>/.claude.json` (Tessel's server, plus the user's servers it lacks,
+  added once) and `<folder>/settings.json` hooks; Codex's `<folder>/config.toml`
+  and `hooks.json` (a missing one becomes a link to the default folder's first).
 - `version` – prints VERSION.
+
+### Account folders (remoteAccounts.js, remoteAccounts.sh)
+- `~/.tessel-server/accounts/<claude|codex>/<id>/` (mode 0700, `<id>` =
+  `[0-9a-z]{1,40}`), with `.tessel-account` = `tessel-account <agent> <id>`.
+  Only a folder with that marker is Tessel's: listed, repaired, set up by
+  `install`, removed. Never another folder, never the agent's own.
+- A pane on one runs its agent with `CLAUDE_CONFIG_DIR='<folder>'` /
+  `CODEX_HOME='<folder>'` before its command. You sign in there with the
+  agent's own login; no sign-in is ever copied from the PC.
+- Claude: `projects`, `plugins`, `skills`... are links into `~/.claude` (one
+  conversation goes on across accounts; `__t_tfile` finds it there); its
+  `.claude.json` and `.credentials.json` are its own. Codex: settings, hooks,
+  AGENTS.md, skills are links into `~/.codex`; its sign-in and `sessions` are
+  its own (`__t_tfile` and the shim's `sessions` look there too).
+- `__t_accts` prints identity fields only (email, organization, plan, login),
+  each taken by its key name; a token is only ever tested for presence.
 
 ## Parts
 1. Shim (`src/main/remoteAgent/tessel-shim.cjs` + tests) – Gauss.

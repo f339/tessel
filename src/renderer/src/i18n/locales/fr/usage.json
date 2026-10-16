@@ -95,7 +95,9 @@
       "extraUsageLimitReached": "Limite de dépense mensuelle atteinte.",
       "weekShare": "Répartition de votre usage cette semaine",
       "weekShareHint": "La part de chaque produit dans votre usage, pas la part de votre limite.",
-      "reset": "Réinitialiser"
+      "reset": "Réinitialiser",
+      "signedIn": "Où vous êtes connecté…",
+      "signedInHint": "Chaque endroit où Tessel voit vos comptes connectés : ce PC, WSL et vos hôtes SSH"
     },
     "time": {
       "minutes": "{{m}} min",

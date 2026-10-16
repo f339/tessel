@@ -5,7 +5,7 @@
 // Tessel on the PC, where the real tessel-team server runs.
 //   node tessel-shim.cjs mcp                     the tessel-team MCP server
 //   node tessel-shim.cjs hook <provider> <Event> an agent hook
-//   node tessel-shim.cjs install [--node <abs>]  set up Claude Code and Codex
+//   node tessel-shim.cjs install [--node <abs>]  set up Claude Code and Codex (and Tessel's account folders)
 //   node tessel-shim.cjs sessions [limit]       past Claude Code / Codex conversations
 //   node tessel-shim.cjs version
 // One file, Node >= 18, no dependencies.
@@ -16,7 +16,7 @@ const os = require('os')
 const net = require('net')
 const path = require('path')
 
-const VERSION = '1.2.2'
+const VERSION = '1.3.0'
 const PROTOCOL = 1
 const SERVER_NAME = 'tessel-team'
 const SHIM_NAME = 'tessel-shim.cjs'
@@ -488,8 +488,7 @@ function install({ home = os.homedir(), shimPath = path.resolve(__filename), env
   } else report.skipped.push('claude')
 
   const codexDir = path.join(home, '.codex')
-  if (fs.existsSync(codexDir) || onPath('codex', env)) {
-    const toml = path.join(codexDir, 'config.toml')
+  const tomlStep = (toml) =>
     step(toml, () => {
       let text = ''
       try {
@@ -504,11 +503,81 @@ function install({ home = os.homedir(), shimPath = path.resolve(__filename), env
       writeAtomic(toml, r.text)
       return { changed: true }
     })
+  if (fs.existsSync(codexDir) || onPath('codex', env)) {
+    tomlStep(path.join(codexDir, 'config.toml'))
     jsonStep(path.join(codexDir, 'hooks.json'), (s) => mergeHooks(s, CODEX_HOOK_EVENTS, 'codex', shimPath, node))
   } else report.skipped.push('codex')
 
+  // The folders Tessel made here for one account each (an agent started
+  // with CLAUDE_CONFIG_DIR / CODEX_HOME there reads its settings from that
+  // folder): the same team tools and hooks. Their settings are the default
+  // folder's (a link) when that one exists; a Claude account's .claude.json
+  // is its own (its sign-in's profile), with your MCP servers added once.
+  for (const dir of accountFolders(home, 'claude')) {
+    const system = readJsonObject(claudeJson) || {}
+    jsonStep(path.join(dir, '.claude.json'), (cfg) => mergeAccountClaudeJson(cfg, system, shimPath, node))
+    linkMissing(path.join(dir, 'settings.json'), path.join(claudeDir, 'settings.json'))
+    jsonStep(path.join(dir, 'settings.json'), (s) => mergeHooks(s, CLAUDE_HOOK_EVENTS, 'claude', shimPath, node))
+  }
+  for (const dir of accountFolders(home, 'codex')) {
+    linkMissing(path.join(dir, 'config.toml'), path.join(codexDir, 'config.toml'))
+    tomlStep(path.join(dir, 'config.toml'))
+    linkMissing(path.join(dir, 'hooks.json'), path.join(codexDir, 'hooks.json'))
+    jsonStep(path.join(dir, 'hooks.json'), (s) => mergeHooks(s, CODEX_HOOK_EVENTS, 'codex', shimPath, node))
+  }
+
   report.ok = report.errors.length === 0
   return report
+}
+
+// Folders Tessel made on this server for one account each
+// (remoteAccounts.sh __t_acctmk): ~/.tessel-server/accounts/<agent>/<id>,
+// whose marker names that agent and id. Never a folder without it, never
+// a link.
+const ACCOUNT_ID = /^[0-9a-z]{1,40}$/
+function accountFolders(home, agent) {
+  const root = path.join(home, '.tessel-server', 'accounts', agent)
+  const out = []
+  for (const d of dirEntries(root)) {
+    if (out.length >= 50) break
+    if (!d.isDirectory() || !ACCOUNT_ID.test(d.name)) continue
+    const dir = path.join(root, d.name)
+    try {
+      const mark = path.join(dir, '.tessel-account')
+      if (fs.lstatSync(mark).isFile() && fs.readFileSync(mark, 'utf8').trim() === `tessel-account ${agent} ${d.name}`) out.push(dir)
+    } catch {
+      // not one of Tessel's
+    }
+  }
+  return out
+}
+
+// A settings file an account folder lacks: a link to the default folder's
+// (so a change there counts for every account), when that one exists.
+function linkMissing(file, target) {
+  try {
+    fs.lstatSync(file)
+    return
+  } catch (err) {
+    if (err.code !== 'ENOENT') return
+  }
+  try {
+    if (fs.statSync(target).isFile()) fs.symlinkSync(target, file)
+  } catch {
+    // its own file then (written by the step after)
+  }
+}
+
+// An account's .claude.json: Tessel's server, and your own servers of the
+// default ~/.claude.json it does not have yet (never one it has).
+function mergeAccountClaudeJson(cfg, system, shimPath, node) {
+  const value = isPlainObject(cfg) ? cfg : {}
+  const own = isPlainObject(value.mcpServers) ? value.mcpServers : {}
+  const theirs = isPlainObject(system.mcpServers) ? system.mcpServers : {}
+  const added = Object.keys(theirs).filter((k) => k !== SERVER_NAME && !Object.hasOwn(own, k) && isPlainObject(theirs[k]))
+  const base = added.length ? { ...value, mcpServers: { ...own, ...Object.fromEntries(added.map((k) => [k, theirs[k]])) } } : value
+  const r = mergeClaudeJson(base, shimPath, node)
+  return r.changed || added.length ? { value: r.value, changed: true } : { value: cfg, changed: false }
 }
 
 // ---------------------------------------------------------------------------
@@ -725,6 +794,9 @@ function listSessions({ limit, home = os.homedir(), env = process.env } = {}) {
   }
   safely(() => claudeSessions(env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), max))
   safely(() => codexSessions(env.CODEX_HOME || path.join(home, '.codex'), max))
+  // A Codex account's conversations are in its own folder (Claude Code's
+  // are the default folder's, linked).
+  for (const dir of accountFolders(home, 'codex')) safely(() => codexSessions(dir, max))
   out.sort((a, b) => b.updated - a.updated)
   return { v: 1, sessions: out }
 }

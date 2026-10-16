@@ -873,5 +873,51 @@
       "systemTitle": "La connexion du système : {{email}}",
       "systemHint": "La connexion du système"
     }
+  },
+  "signedIn": {
+    "title": "Où vous êtes connecté",
+    "scopeNote": "Seulement les machines que Tessel connaît : ce PC, ses distributions WSL et vos hôtes SSH enregistrés. Les fournisseurs ne disent pas à Tessel sur quels autres appareils un compte est connecté.",
+    "refresh": "Actualiser",
+    "unavailable": "Non disponible dans cette version.",
+    "reading": "Lecture…",
+    "readFailed": "Les endroits n’ont pas pu être lus.",
+    "thisPc": "Ce PC",
+    "wsl": "{{name}} (WSL)",
+    "scope": {
+      "system": "sa propre connexion",
+      "added": "ajouté dans Tessel",
+      "own": "sa propre connexion",
+      "folder": "dossier de compte créé par Tessel",
+      "env": "son dossier venant du shell de connexion"
+    },
+    "state": {
+      "profile": "déconnecté (son profil est encore là)",
+      "missing": "connexion requise",
+      "unknown": "non vérifié"
+    },
+    "lastSeen": "dernier changement {{when}}",
+    "unnamed": "Connecté (sans nom de compte)",
+    "checking": "vérification…",
+    "notConnectedStale": "non connecté (affiché tel que vérifié la dernière fois)",
+    "notConnected": "non connecté : ouvrez un terminal ou son projet là-bas pour le vérifier",
+    "stopped": "pas démarrée",
+    "error": "n’a pas pu être vérifié",
+    "notChecked": "pas encore vérifié",
+    "placeCount_one": "{{count}} connexion",
+    "placeCount_other": "{{count}} connexions",
+    "none": "aucune connexion trouvée",
+    "switched": "{{pane}} redémarre sur {{account}}.",
+    "thisAccount": "ce compte",
+    "removed": "Retiré de {{host}}.",
+    "signedOut": "Déconnecté sur {{host}}.",
+    "actionFailed": "Cela n’a pas pu être fait.",
+    "switchHint": "Redémarrer {{pane}} sur ce compte (même panneau)",
+    "switch": "Basculer {{pane}}",
+    "remove": "Retirer de cet hôte",
+    "signOut": "Se déconnecter sur l’hôte…",
+    "places": "Endroits vérifiés",
+    "startHint": "Démarre cette distribution pour voir ses connexions",
+    "check": "Vérifier",
+    "recheck": "Vérifier de nouveau"
   }
 }

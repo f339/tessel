@@ -1439,6 +1439,15 @@ const emptyTitle = () => t('usage.menu.buttonTitleEmpty', "Usage of your agents'
             </button>
           </p>
           <p v-if="accountNotice" class="usage-account-notice" role="status">{{ accountNotice }}</p>
+          <button
+            type="button"
+            class="usage-text-button usage-signed-in-link"
+            data-test="usage-signed-in"
+            :title="t('usage.menu.signedInHint', 'Every place Tessel can see your accounts signed in: this PC, WSL and your SSH hosts')"
+            @click="(closeMenu(), emit('accounts', 'set-signed-in'))"
+          >
+            {{ t('usage.menu.signedIn', 'Where you’re signed in…') }}
+          </button>
         </div>
       </div>
       <footer v-if="hasAccounts" class="usage-roster-foot">
@@ -1944,6 +1953,11 @@ const emptyTitle = () => t('usage.menu.buttonTitleEmpty', "Usage of your agents'
   color: var(--accent);
   font: inherit;
   cursor: pointer;
+}
+.usage-signed-in-link {
+  justify-self: start;
+  padding: 2px 0;
+  font-size: 11.5px;
 }
 .usage-roster-foot {
   padding: 4px 0;
