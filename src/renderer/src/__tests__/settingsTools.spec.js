@@ -276,14 +276,14 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
 
     // A skill's copies are in its details, opened from its row; Escape in
     // there closes the details, not Settings.
-    await page.get('.skills-row').trigger('click')
+    await page.get('.sl-row').trigger('click')
     await flushPromises()
-    await page.get('.skills-details .skills-btn').trigger('keydown', { key: 'Escape' })
-    expect(page.find('.skills-details').exists()).toBe(false)
+    await page.get('.sl-details .exit-btn.small').trigger('keydown', { key: 'Escape' })
+    expect(page.find('.sl-details').exists()).toBe(false)
     expect(wrapper.emitted('close')).toBeUndefined()
-    await page.get('.skills-row').trigger('click')
+    await page.get('.sl-row').trigger('click')
     await flushPromises()
-    await page.findAll('.skills-copy .exit-btn').find((b) => b.text() === 'Update').trigger('click')
+    await page.findAll('.sl-sub .exit-btn').find((b) => b.text() === 'Update').trigger('click')
     await flushPromises()
     await page.get('.skills-setup .exit-btn').trigger('click')
     await flushPromises()

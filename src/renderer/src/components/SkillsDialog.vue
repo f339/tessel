@@ -138,6 +138,11 @@ function kindOf(copy) {
   const origin = originOf(copy)
   return copy.managed || origin === 'agent' ? 'builtin' : origin
 }
+// An origin's tag: its kind as a class (origin-own…) and its color.
+const ORIGIN_TAGS = { own: 'tag-ok', github: 'tag-info', synced: 'tag-purple' }
+function originTag(kind) {
+  return ['origin-' + kind, ORIGIN_TAGS[kind]]
+}
 function kindLabel(kind) {
   if (kind === 'own') return t('skills.kind.own', 'Yours')
   if (kind === 'github') return t('skills.kind.github', 'GitHub')
@@ -1201,7 +1206,7 @@ onMounted(async () => {
           </span>
           <button
             type="button"
-            class="exit-btn skills-btn"
+            class="exit-btn small"
             :disabled="loading || checking"
             :title="t('skills.installed.refreshHint', 'Read the skill folders again and check GitHub for updates')"
             @click="refreshAll"
@@ -1215,39 +1220,39 @@ onMounted(async () => {
             v-for="f in visibleFilters"
             :key="f"
             type="button"
-            class="skills-chip"
+            class="chip"
             :class="{ on: originFilter === f }"
             :aria-pressed="originFilter === f"
             :data-filter="f"
             @click="originFilter = f"
           >
-            {{ filterLabel(f) }}<span class="skills-chip-count">{{ counts[f] }}</span>
+            {{ filterLabel(f) }}<span class="chip-count">{{ counts[f] }}</span>
           </button>
         </div>
 
         <!-- The first read: placeholder rows, the size of real ones. -->
-        <ul v-if="loading && !groups.length" class="skills-list" aria-busy="true" :aria-label="t('skills.loading', 'Loading…')">
-          <li v-for="n in 3" :key="n" class="skills-item skills-skeleton" aria-hidden="true">
-            <span class="skills-skel-icon" />
-            <span class="skills-skel-lines"><span /><span /></span>
+        <ul v-if="loading && !groups.length" class="sl-list" aria-busy="true" :aria-label="t('skills.loading', 'Loading…')">
+          <li v-for="n in 3" :key="n" class="sl-item sl-skeleton" aria-hidden="true">
+            <span class="sl-skel-icon" />
+            <span class="sl-skel-lines"><span /><span /></span>
           </li>
         </ul>
 
         <div v-else-if="!groups.length" class="mcp-empty">
           {{ t('skills.installed.empty', 'No skills yet.') }}
-          <button type="button" class="exit-btn primary skills-btn" @click="openAdd">{{ t('skills.installed.addOne', 'Add a skill') }}</button>
+          <button type="button" class="exit-btn primary small" @click="openAdd">{{ t('skills.installed.addOne', 'Add a skill') }}</button>
         </div>
 
         <div v-else-if="!shown.length" class="mcp-empty skills-nomatch">
           {{ t('skills.installed.noMatch', 'No skill matches this search or filter.') }}
-          <button type="button" class="exit-btn skills-btn" @click="showAll">{{ t('skills.installed.showAll', 'Show every skill') }}</button>
+          <button type="button" class="exit-btn small" @click="showAll">{{ t('skills.installed.showAll', 'Show every skill') }}</button>
         </div>
 
-        <ul v-else class="skills-list" :aria-label="t('skills.installed.listLabel', 'Installed skills')">
+        <ul v-else class="sl-list" :aria-label="t('skills.installed.listLabel', 'Installed skills')">
           <li
             v-for="(g, i) in shown"
             :key="g.key"
-            class="skills-item"
+            class="sl-item"
             :class="{ open: openKey === g.key }"
             :data-skill="g.name"
             @keydown.escape="onItemEscape($event, g, i)"
@@ -1256,42 +1261,42 @@ onMounted(async () => {
               :id="rowId(g)"
               :ref="(el) => (rowEls[i] = el)"
               type="button"
-              class="skills-row"
+              class="sl-row"
               :aria-expanded="openKey === g.key"
               :aria-controls="detailsId(g)"
               @click="toggleGroup(g)"
               @keydown="onRowKey($event, i, g)"
             >
-              <BrandIcon class="skills-row-icon" :kind="'skill-' + g.name" accent="#8a93a6" :label="g.name" :size="20" />
-              <span class="skills-row-main">
-                <span class="skills-row-top">
-                  <span class="skills-row-name">{{ g.name }}</span>
-                  <span class="skills-tag skills-origin" :class="'origin-' + g.kind" :title="kindTitle(g)">{{ kindLabel(g.kind) }}</span>
-                  <span v-if="g.modified" class="skills-tag skills-modified" :title="t('skills.modified.hint', 'Changed on this computer since it was installed.')">{{
+              <BrandIcon class="sl-row-icon" :kind="'skill-' + g.name" accent="#8a93a6" :label="g.name" :size="20" />
+              <span class="sl-row-main">
+                <span class="sl-row-top">
+                  <span class="sl-row-name">{{ g.name }}</span>
+                  <span class="tag skills-origin" :class="originTag(g.kind)" :title="kindTitle(g)">{{ kindLabel(g.kind) }}</span>
+                  <span v-if="g.modified" class="tag tag-warn" :title="t('skills.modified.hint', 'Changed on this computer since it was installed.')">{{
                     t('skills.modified.badge', 'Modified locally')
                   }}</span>
-                  <span v-if="g.update" class="skills-tag skills-update" :title="updateTitle(g.update)">{{ t('skills.updates.badge', 'Update available') }}</span>
-                  <span v-if="g.partial" class="skills-tag skills-partial" :title="partialHint">{{ t('skills.history.partialBadge', 'Partly kept') }}</span>
+                  <span v-if="g.update" class="tag tag-update" :title="updateTitle(g.update)">{{ t('skills.updates.badge', 'Update available') }}</span>
+                  <span v-if="g.partial" class="tag skills-partial" :title="partialHint">{{ t('skills.history.partialBadge', 'Partly kept') }}</span>
                 </span>
-                <span class="skills-row-desc" :title="g.description || undefined">{{ g.description || t('skills.installed.noDescription', 'No description.') }}</span>
+                <span class="sl-row-desc" :title="g.description || undefined">{{ g.description || t('skills.installed.noDescription', 'No description.') }}</span>
               </span>
-              <span class="skills-row-meta">
-                <span v-if="g.agents.length" class="skills-agents" role="img" :aria-label="seenByNames(g.agents)" :title="seenByNames(g.agents)">
+              <span class="sl-row-meta">
+                <span v-if="g.agents.length" class="sl-icons" role="img" :aria-label="seenByNames(g.agents)" :title="seenByNames(g.agents)">
                   <BrandIcon v-for="a in g.agents" :key="a" :kind="a" :size="14" />
                 </span>
-                <span v-for="s in g.scopes" :key="s" class="skills-tag skills-scope">{{ scopeLabel(s) }}</span>
+                <span v-for="s in g.scopes" :key="s" class="tag tag-scope">{{ scopeLabel(s) }}</span>
               </span>
-              <svg class="skills-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg class="sl-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M6 3.5l4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </button>
 
             <!-- Its details: the whole description, then each copy. -->
-            <div v-if="openKey === g.key" :id="detailsId(g)" class="skills-details" role="region" :aria-labelledby="rowId(g)">
-              <p class="skills-details-desc">{{ g.description || t('skills.installed.noDescription', 'No description.') }}</p>
-              <div class="skills-section-head">
+            <div v-if="openKey === g.key" :id="detailsId(g)" class="sl-details" role="region" :aria-labelledby="rowId(g)">
+              <p class="sl-details-desc">{{ g.description || t('skills.installed.noDescription', 'No description.') }}</p>
+              <div class="sl-section-head">
                 <span>{{ t('skills.details.where', 'Where it is installed') }}</span>
-                <button v-if="g.removable.length > 1" type="button" class="exit-btn skills-btn skills-remove-all" :disabled="!!busy" @click="removeAll(g)">
+                <button v-if="g.removable.length > 1" type="button" class="exit-btn small danger" :disabled="!!busy" @click="removeAll(g)">
                   <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                     <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
                   </svg>
@@ -1301,29 +1306,29 @@ onMounted(async () => {
               <p v-if="g.versions > 1" class="set-hint skills-versions-note">
                 {{ versionsLabel(g.versions) }}
               </p>
-              <ul class="skills-copies">
-                <li v-for="copy in g.copies" :key="copy.id" class="skills-copy" :data-dir="copy.dir">
-                  <div class="skills-copy-line">
-                    <span v-if="agentsOf(copy).length" class="skills-agents" aria-hidden="true">
+              <ul class="sl-subs">
+                <li v-for="copy in g.copies" :key="copy.id" class="sl-sub" :data-dir="copy.dir">
+                  <div class="sl-sub-line">
+                    <span v-if="agentsOf(copy).length" class="sl-icons" aria-hidden="true">
                       <BrandIcon v-for="a in agentsOf(copy)" :key="a" :kind="a" :size="14" />
                     </span>
                     <span class="skills-copy-agents" :title="seenByNames(agentsOf(copy))">{{ agentNames(agentsOf(copy)) }}</span>
-                    <span class="skills-tag skills-scope">{{ scopeLabel(copy.scope) }}</span>
-                    <span class="skills-tag skills-origin" :class="'origin-' + kindOf(copy)" :title="originTitle(copy)">{{ originLabel(copy) }}</span>
-                    <span v-if="copy.link" class="skills-tag muted">{{ t('skills.installed.link', 'Link') }}</span>
-                    <span v-if="copy.modified" class="skills-tag skills-modified" :title="t('skills.modified.hint', 'Changed on this computer since it was installed.')">{{
+                    <span class="tag tag-scope">{{ scopeLabel(copy.scope) }}</span>
+                    <span class="tag skills-origin" :class="originTag(kindOf(copy))" :title="originTitle(copy)">{{ originLabel(copy) }}</span>
+                    <span v-if="copy.link" class="tag muted">{{ t('skills.installed.link', 'Link') }}</span>
+                    <span v-if="copy.modified" class="tag tag-warn" :title="t('skills.modified.hint', 'Changed on this computer since it was installed.')">{{
                       t('skills.modified.badge', 'Modified locally')
                     }}</span>
-                    <span v-if="copy.update && copy.update.available" class="skills-tag skills-update" :title="updateTitle(copy)">{{
+                    <span v-if="copy.update && copy.update.available" class="tag tag-update" :title="updateTitle(copy)">{{
                       t('skills.updates.badge', 'Update available')
                     }}</span>
-                    <span v-if="copy.history && copy.history.partial" class="skills-tag skills-partial" :title="partialHint">{{
+                    <span v-if="copy.history && copy.history.partial" class="tag skills-partial" :title="partialHint">{{
                       t('skills.history.partialBadge', 'Partly kept')
                     }}</span>
                   </div>
-                  <div class="skills-copy-foot">
-                    <span class="skills-copy-path">
-                      <span class="skills-path" :title="copy.dir">{{ shortPath(copy.dir) }}</span>
+                  <div class="sl-sub-foot">
+                    <span class="sl-sub-path">
+                      <span class="sl-path" :title="copy.dir">{{ shortPath(copy.dir) }}</span>
                       <button
                         type="button"
                         class="ws-icon-btn small skills-copy-btn"
@@ -1341,8 +1346,8 @@ onMounted(async () => {
                         </svg>
                       </button>
                     </span>
-                    <span class="skills-actions">
-                      <button type="button" class="exit-btn skills-btn" @click="openFolder(copy)">
+                    <span class="sl-actions">
+                      <button type="button" class="exit-btn small" @click="openFolder(copy)">
                         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                           <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
                         </svg>
@@ -1351,7 +1356,7 @@ onMounted(async () => {
                       <button
                         v-if="copy.removable && copy.source && copy.source.kind === 'github'"
                         type="button"
-                        class="exit-btn skills-btn"
+                        class="exit-btn small"
                         :class="{ primary: copy.update && copy.update.available }"
                         :disabled="!!busy"
                         @click="update(copy)"
@@ -1376,7 +1381,7 @@ onMounted(async () => {
                   <p v-if="copy.update && copy.update.available && updateTitle(copy)" class="set-hint skills-update-line">{{ updateTitle(copy) }}</p>
                   <div v-if="copy.history && copy.history.versions" class="set-hint skills-history-line">
                     {{ changedLabel(copy) }}
-                    <button type="button" class="skills-link" :aria-expanded="historyOpen === copy.id" @click="toggleHistory(copy)">
+                    <button type="button" class="sl-link" :aria-expanded="historyOpen === copy.id" @click="toggleHistory(copy)">
                       {{ historyOpen === copy.id ? t('skills.history.hide', 'Hide history') : t('skills.history.show', 'History') }}
                     </button>
                   </div>
@@ -1404,7 +1409,7 @@ onMounted(async () => {
                           <button
                             v-if="!v.latest && copy.removable && !(copy.history && copy.history.partial)"
                             type="button"
-                            class="exit-btn skills-btn"
+                            class="exit-btn small"
                             :disabled="!!busy"
                             @click="restoreVersion(copy, v)"
                           >
@@ -1477,9 +1482,9 @@ onMounted(async () => {
               autocomplete="off"
               :data-test="musePlugins ? 'muse-plugin-target' : 'agy-plugin-target'"
             />
-            <button class="exit-btn primary skills-btn skills-field-btn" type="submit" :disabled="!pluginTarget.trim()">{{ t('skills.plugins.install', 'Install') }}</button>
+            <button class="exit-btn primary small skills-field-btn" type="submit" :disabled="!pluginTarget.trim()">{{ t('skills.plugins.install', 'Install') }}</button>
           </div>
-          <button class="exit-btn skills-btn skills-plugin-folder" type="button" @click="installPluginFolder">
+          <button class="exit-btn small skills-plugin-folder" type="button" @click="installPluginFolder">
             <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
             </svg>
@@ -1498,23 +1503,23 @@ onMounted(async () => {
             <template v-if="pluginsLoading">{{ t('skills.loading', 'Loading…') }}</template>
             <template v-else-if="pluginsLoaded">{{ pluginsCountLabel }}</template>
           </span>
-          <button type="button" class="exit-btn skills-btn" :disabled="pluginsLoading" @click="loadPlugins">{{ t('skills.installed.refresh', 'Refresh') }}</button>
+          <button type="button" class="exit-btn small" :disabled="pluginsLoading" @click="loadPlugins">{{ t('skills.installed.refresh', 'Refresh') }}</button>
         </div>
 
-        <ul v-if="pluginsLoading && !plugins.length" class="skills-list" aria-busy="true" :aria-label="t('skills.loading', 'Loading…')">
-          <li v-for="n in 2" :key="n" class="skills-item skills-skeleton" aria-hidden="true">
-            <span class="skills-skel-icon" />
-            <span class="skills-skel-lines"><span /><span /></span>
+        <ul v-if="pluginsLoading && !plugins.length" class="sl-list" aria-busy="true" :aria-label="t('skills.loading', 'Loading…')">
+          <li v-for="n in 2" :key="n" class="sl-item sl-skeleton" aria-hidden="true">
+            <span class="sl-skel-icon" />
+            <span class="sl-skel-lines"><span /><span /></span>
           </li>
         </ul>
         <div v-else-if="pluginsLoaded && !plugins.length && !pluginsError" class="mcp-empty">
           {{ pluginWords.empty() }}
         </div>
-        <ul v-else-if="plugins.length" class="skills-list" :aria-label="t('skills.plugins.listLabel', 'Installed plugins')">
+        <ul v-else-if="plugins.length" class="sl-list" :aria-label="t('skills.plugins.listLabel', 'Installed plugins')">
           <li
             v-for="(p, i) in plugins"
             :key="p.name"
-            class="skills-item"
+            class="sl-item"
             :class="{ open: pluginOpen === p.name, off: !p.enabled }"
             :data-test="(musePlugins ? 'muse-plugin-' : 'agy-plugin-') + p.name"
             @keydown.escape="onPluginEscape($event, p, i)"
@@ -1523,44 +1528,44 @@ onMounted(async () => {
               :id="pluginRowId(p)"
               :ref="(el) => (pluginEls[i] = el)"
               type="button"
-              class="skills-row"
+              class="sl-row"
               :aria-expanded="pluginOpen === p.name"
               :aria-controls="pluginDetailsId(p)"
               @click="togglePluginRow(p)"
               @keydown="onPluginKey($event, i, p)"
             >
-              <BrandIcon class="skills-row-icon" :kind="'plugin-' + p.name" accent="#8a93a6" :label="p.name" :size="20" />
-              <span class="skills-row-main">
-                <span class="skills-row-top">
-                  <span class="skills-row-name">{{ p.label || p.name }}</span>
-                  <span v-if="p.version" class="skills-tag skills-scope">{{ p.version }}</span>
-                  <span v-if="!p.enabled" class="skills-tag skills-off">{{ t('skills.plugins.off', 'Turned off') }}</span>
+              <BrandIcon class="sl-row-icon" :kind="'plugin-' + p.name" accent="#8a93a6" :label="p.name" :size="20" />
+              <span class="sl-row-main">
+                <span class="sl-row-top">
+                  <span class="sl-row-name">{{ p.label || p.name }}</span>
+                  <span v-if="p.version" class="tag tag-scope">{{ p.version }}</span>
+                  <span v-if="!p.enabled" class="tag tag-off">{{ t('skills.plugins.off', 'Turned off') }}</span>
                 </span>
-                <span class="skills-row-desc">{{ pluginParts(p) }}</span>
+                <span class="sl-row-desc">{{ pluginParts(p) }}</span>
               </span>
-              <svg class="skills-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <svg class="sl-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <path d="M6 3.5l4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </button>
-            <div v-if="pluginOpen === p.name" :id="pluginDetailsId(p)" class="skills-details" role="region" :aria-labelledby="pluginRowId(p)">
-              <p v-if="p.description" class="skills-details-desc">{{ p.description }}</p>
-              <p v-if="pluginFrom(p)" class="skills-details-desc">{{ pluginFrom(p) }}</p>
-              <div class="skills-section-head">
+            <div v-if="pluginOpen === p.name" :id="pluginDetailsId(p)" class="sl-details" role="region" :aria-labelledby="pluginRowId(p)">
+              <p v-if="p.description" class="sl-details-desc">{{ p.description }}</p>
+              <p v-if="pluginFrom(p)" class="sl-details-desc">{{ pluginFrom(p) }}</p>
+              <div class="sl-section-head">
                 <span>{{ t('skills.plugins.bundles', 'What it brings') }}</span>
               </div>
               <div class="skills-plugin-parts">
-                <span v-for="part in pluginPartList(p)" :key="part" class="skills-tag">{{ part }}</span>
+                <span v-for="part in pluginPartList(p)" :key="part" class="tag">{{ part }}</span>
                 <span v-if="!pluginPartList(p).length" class="set-hint">{{ t('skills.plugins.nothing', 'Nothing listed in it.') }}</span>
               </div>
               <div class="skills-plugin-foot">
                 <span class="set-hint skills-plugin-state">
                   {{ p.enabled ? pluginWords.onHint() : pluginWords.offHint() }}
                 </span>
-                <span class="skills-actions">
-                  <button type="button" class="exit-btn skills-btn" :disabled="!!busy" :data-test="musePlugins ? 'muse-plugin-toggle' : 'agy-plugin-toggle'" @click="togglePlugin(p)">
+                <span class="sl-actions">
+                  <button type="button" class="exit-btn small" :disabled="!!busy" :data-test="musePlugins ? 'muse-plugin-toggle' : 'agy-plugin-toggle'" @click="togglePlugin(p)">
                     {{ p.enabled ? t('skills.plugins.turnOff', 'Turn off') : t('skills.plugins.turnOn', 'Turn on') }}
                   </button>
-                  <button type="button" class="exit-btn skills-btn skills-remove-all" :disabled="!!busy" :data-test="musePlugins ? 'muse-plugin-remove' : 'agy-plugin-remove'" @click="removePlugin(p)">
+                  <button type="button" class="exit-btn small danger" :disabled="!!busy" :data-test="musePlugins ? 'muse-plugin-remove' : 'agy-plugin-remove'" @click="removePlugin(p)">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                       <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
                     </svg>
@@ -1579,9 +1584,9 @@ onMounted(async () => {
         <section v-if="updating" class="skills-step skills-updating" :aria-labelledby="uid + '-step-update'">
           <div class="skills-step-head">
             <h3 :id="uid + '-step-update'" class="skills-step-title">{{ updatingTitle }}</h3>
-            <button type="button" class="skills-link skills-step-aside" @click="cancelUpdate">{{ t('skills.add.cancelUpdate', 'Back to the list') }}</button>
+            <button type="button" class="sl-link skills-step-aside" @click="cancelUpdate">{{ t('skills.add.cancelUpdate', 'Back to the list') }}</button>
           </div>
-          <span class="skills-path" :title="updating.dir">{{ shortPath(updating.dir) }}</span>
+          <span class="sl-path" :title="updating.dir">{{ shortPath(updating.dir) }}</span>
           <p v-if="busy === 'look'" class="set-hint skills-looking">
             <span class="skills-spinner" aria-hidden="true" />{{ t('skills.add.lookingUpdate', 'Getting the newest version from GitHub…') }}
           </p>
@@ -1625,24 +1630,24 @@ onMounted(async () => {
                 autocomplete="off"
                 data-test="skills-repo"
               />
-              <button class="exit-btn primary skills-btn skills-field-btn" type="submit" :disabled="!!busy || !repoInput.trim()" data-test="skills-look">
+              <button class="exit-btn primary small skills-field-btn" type="submit" :disabled="!!busy || !repoInput.trim()" data-test="skills-look">
                 <span v-if="busy === 'look'" class="skills-spinner" aria-hidden="true" />
                 {{ busy === 'look' ? t('skills.add.looking', 'Looking…') : t('skills.add.look', 'Look up') }}
               </button>
             </div>
             <p :id="uid + '-repo-hint'" class="set-hint skills-field-hint">
               {{ t('skills.add.exampleLabel', 'For example:') }}
-              <button type="button" class="skills-link skills-example" @click="useExample">{{ EXAMPLE_REPO }}</button>
+              <button type="button" class="sl-link skills-example" @click="useExample">{{ EXAMPLE_REPO }}</button>
               <span class="skills-hint-more">{{ t('skills.add.exampleMore', 'Add a folder path to pick one skill, or paste a github.com address.') }}</span>
             </p>
           </form>
           <div v-else class="skills-source-form">
             <div class="skills-folder-row">
-              <button type="button" class="exit-btn primary skills-btn" :disabled="!!busy" data-test="skills-choose-folder" @click="chooseFolder">
+              <button type="button" class="exit-btn primary small" :disabled="!!busy" data-test="skills-choose-folder" @click="chooseFolder">
                 <span v-if="busy === 'look'" class="skills-spinner" aria-hidden="true" />
                 {{ busy === 'look' ? t('skills.add.looking', 'Looking…') : t('skills.add.chooseFolder', 'Choose a folder…') }}
               </button>
-              <span v-if="folderDir" class="skills-path" :title="folderDir">{{ shortPath(folderDir) }}</span>
+              <span v-if="folderDir" class="sl-path" :title="folderDir">{{ shortPath(folderDir) }}</span>
             </div>
             <p class="set-hint skills-field-hint">{{ t('skills.add.folderHint', 'A folder with a SKILL.md at its top') }}</p>
           </div>
@@ -1665,11 +1670,11 @@ onMounted(async () => {
             <span v-if="candidates" class="set-hint skills-step-aside" :title="foundLabel">{{ foundLabel }}</span>
           </div>
           <p v-if="candidates" class="set-hint skills-step-hint">{{ t('skills.add.severalHint', 'This repository has several skills. Open one to read it, then install it.') }}</p>
-          <ul class="skills-list skills-found" :aria-label="t('skills.add.foundLabel', 'Skills found')">
+          <ul class="sl-list skills-found" :aria-label="t('skills.add.foundLabel', 'Skills found')">
             <li
               v-for="(item, i) in foundItems"
               :key="item.key"
-              class="skills-item"
+              class="sl-item"
               :class="{ open: foundOpen(item), single: !candidates }"
               :data-skill="item.name"
               @keydown.escape="onFoundEscape($event, item, i)"
@@ -1679,47 +1684,47 @@ onMounted(async () => {
                 :id="foundRowId(item)"
                 :ref="(el) => (foundEls[i] = el)"
                 type="button"
-                class="skills-row"
+                class="sl-row"
                 :aria-expanded="foundOpen(item)"
                 :aria-controls="foundDetailsId(item)"
                 @click="pickCandidate(item)"
                 @keydown="onFoundKey($event, i, item)"
               >
-                <BrandIcon class="skills-row-icon" :kind="'skill-' + item.name" accent="#8a93a6" :label="item.name" :size="20" />
-                <span class="skills-row-main">
-                  <span class="skills-row-top">
-                    <span class="skills-row-name">{{ item.name }}</span>
+                <BrandIcon class="sl-row-icon" :kind="'skill-' + item.name" accent="#8a93a6" :label="item.name" :size="20" />
+                <span class="sl-row-main">
+                  <span class="sl-row-top">
+                    <span class="sl-row-name">{{ item.name }}</span>
                     <span class="skills-row-path" :title="item.path">{{ item.path }}</span>
                   </span>
-                  <span class="skills-row-desc" :title="item.description || undefined">{{ item.description || t('skills.installed.noDescription', 'No description.') }}</span>
+                  <span class="sl-row-desc" :title="item.description || undefined">{{ item.description || t('skills.installed.noDescription', 'No description.') }}</span>
                 </span>
-                <span v-if="!foundOpen(item)" class="skills-row-meta">
+                <span v-if="!foundOpen(item)" class="sl-row-meta">
                   <span class="set-hint skills-row-size">{{ itemSize(item) }}</span>
                 </span>
-                <svg class="skills-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <svg class="sl-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                   <path d="M6 3.5l4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </button>
-              <div v-else :id="foundRowId(item)" class="skills-row skills-row-static">
-                <BrandIcon class="skills-row-icon" :kind="'skill-' + item.name" accent="#8a93a6" :label="item.name" :size="20" />
-                <span class="skills-row-main">
-                  <span class="skills-row-top">
-                    <span class="skills-row-name">{{ item.name }}</span>
+              <div v-else :id="foundRowId(item)" class="sl-row skills-row-static">
+                <BrandIcon class="sl-row-icon" :kind="'skill-' + item.name" accent="#8a93a6" :label="item.name" :size="20" />
+                <span class="sl-row-main">
+                  <span class="sl-row-top">
+                    <span class="sl-row-name">{{ item.name }}</span>
                   </span>
-                  <span class="skills-row-desc">{{ item.description || t('skills.installed.noDescription', 'No description.') }}</span>
+                  <span class="sl-row-desc">{{ item.description || t('skills.installed.noDescription', 'No description.') }}</span>
                 </span>
               </div>
 
               <!-- The preview: what will be installed, exactly. -->
-              <div v-if="foundOpen(item)" :id="foundDetailsId(item)" class="skills-details skills-preview" role="region" :aria-labelledby="foundRowId(item)">
+              <div v-if="foundOpen(item)" :id="foundDetailsId(item)" class="sl-details skills-preview" role="region" :aria-labelledby="foundRowId(item)">
                 <p v-if="busy === 'pick' && !preview" class="set-hint skills-looking"><span class="skills-spinner" aria-hidden="true" />{{ t('skills.loading', 'Loading…') }}</p>
                 <template v-else-if="preview">
                   <div class="skills-pv-meta">
-                    <span class="skills-tag skills-origin" :class="'origin-' + (preview.source.kind === 'github' ? 'github' : 'folder')">{{ kindLabel(preview.source.kind === 'github' ? 'github' : 'folder') }}</span>
+                    <span class="tag skills-origin" :class="originTag(preview.source.kind === 'github' ? 'github' : 'folder')">{{ kindLabel(preview.source.kind === 'github' ? 'github' : 'folder') }}</span>
                     <span class="skills-pv-source" :title="sourceTitle(preview.source)">{{ sourceShort(preview.source) }}</span>
                     <button
                       type="button"
-                      class="skills-link skills-pv-files"
+                      class="sl-link skills-pv-files"
                       :aria-expanded="filesOpen"
                       :aria-controls="uid + '-files'"
                       :title="t('skills.preview.filesHint', 'Show the files')"
@@ -1728,7 +1733,7 @@ onMounted(async () => {
                       {{ filesLabel(preview) }}
                     </button>
                   </div>
-                  <p v-if="candidates && preview.description" class="skills-details-desc">{{ preview.description }}</p>
+                  <p v-if="candidates && preview.description" class="sl-details-desc">{{ preview.description }}</p>
                   <table v-if="filesOpen" :id="uid + '-files'" class="skills-files">
                     <tbody>
                       <tr v-for="f in preview.files" :key="f.path">
@@ -1763,7 +1768,7 @@ onMounted(async () => {
                     <span class="skills-callout-text">{{ t('skills.preview.review', 'Read it before installing: an agent follows these instructions.') }}</span>
                     <button
                       type="button"
-                      class="exit-btn skills-btn skills-read-btn"
+                      class="exit-btn small skills-read-btn"
                       :aria-expanded="mdOpen"
                       :aria-controls="uid + '-md'"
                       data-test="skills-read"
@@ -1775,7 +1780,7 @@ onMounted(async () => {
                   <div v-if="mdOpen" :id="uid + '-md'" class="skills-md-box">
                     <div class="skills-md-bar">
                       <span class="skills-md-file">{{ SKILL_FILE }}</span>
-                      <button type="button" class="skills-link" :aria-pressed="mdSource" data-test="skills-source-toggle" @click="mdSource = !mdSource">
+                      <button type="button" class="sl-link" :aria-pressed="mdSource" data-test="skills-source-toggle" @click="mdSource = !mdSource">
                         {{ mdSource ? t('skills.preview.viewFormatted', 'View formatted') : t('skills.preview.viewSource', 'View source') }}
                       </button>
                     </div>
@@ -1799,7 +1804,7 @@ onMounted(async () => {
                       {{ t('skills.setup.body', 'Tessel does not run it. If you need it, run it yourself in a terminal and answer its questions there.') }}
                       <div v-for="cmd in preview.setup" :key="cmd" class="skills-setup">
                         <code class="mcp-preview">{{ cmd }}</code>
-                        <button type="button" class="exit-btn skills-btn" @click="runSetup(cmd)">{{ t('skills.setup.button', 'Run its setup in a terminal') }}</button>
+                        <button type="button" class="exit-btn small" @click="runSetup(cmd)">{{ t('skills.setup.button', 'Run its setup in a terminal') }}</button>
                       </div>
                     </div>
                   </div>
@@ -1818,8 +1823,8 @@ onMounted(async () => {
           <div class="skills-field-head">
             <span :id="uid + '-agents'" class="skills-field-label">{{ t('skills.add.agents', 'Agents') }}</span>
             <span class="skills-field-tools">
-              <button type="button" class="skills-link" :disabled="allChosen" @click="chooseAll(true)">{{ t('skills.add.selectAll', 'Select all') }}</button>
-              <button type="button" class="skills-link" :disabled="!chosenAgents.length" @click="chooseAll(false)">{{ t('skills.add.selectNone', 'Select none') }}</button>
+              <button type="button" class="sl-link" :disabled="allChosen" @click="chooseAll(true)">{{ t('skills.add.selectAll', 'Select all') }}</button>
+              <button type="button" class="sl-link" :disabled="!chosenAgents.length" @click="chooseAll(false)">{{ t('skills.add.selectNone', 'Select none') }}</button>
             </span>
           </div>
           <div class="skills-agent-chips" role="group" :aria-labelledby="uid + '-agents'">
@@ -1897,32 +1902,32 @@ onMounted(async () => {
               </svg>
               <span class="skills-result-main">
                 <span class="skills-result-top">
-                  <span class="skills-agents" aria-hidden="true"><BrandIcon v-for="a in resultAgents(r)" :key="a" :kind="a" :size="14" /></span>
+                  <span class="sl-icons" aria-hidden="true"><BrandIcon v-for="a in resultAgents(r)" :key="a" :kind="a" :size="14" /></span>
                   <span class="skills-result-agents">{{ agentNames(resultAgents(r)) }}</span>
                   <span class="skills-result-state">{{ resultState(r) }}</span>
                 </span>
-                <span class="skills-path" :title="r.dir">{{ shortPath(r.dir) }}</span>
+                <span class="sl-path" :title="r.dir">{{ shortPath(r.dir) }}</span>
                 <span v-if="!r.ok && !r.exists && r.error" class="skills-result-error">{{ r.error }}</span>
                 <span v-if="r.exists" class="set-hint">{{ t('skills.add.existsHint', 'A skill with this name is already in this folder. Replace it, or keep it as it is.') }}</span>
                 <span v-if="alsoSeen(r).length" class="set-hint">{{ alsoSeenLabel(r) }}</span>
               </span>
-              <button v-if="r.exists" type="button" class="exit-btn skills-btn" :disabled="!!busy" @click="install(r.dir)">
+              <button v-if="r.exists" type="button" class="exit-btn small" :disabled="!!busy" @click="install(r.dir)">
                 <span v-if="busy === 'replace:' + r.dir" class="skills-spinner" aria-hidden="true" />
                 {{ t('skills.add.replace', 'Replace it') }}
               </button>
             </li>
           </ul>
           <div class="skills-results-foot">
-            <button v-if="results.some((r) => r.ok || r.exists)" type="button" class="exit-btn skills-btn" data-test="skills-view-installed" @click="viewInstalled">
+            <button v-if="results.some((r) => r.ok || r.exists)" type="button" class="exit-btn small" data-test="skills-view-installed" @click="viewInstalled">
               {{ t('skills.add.viewInstalled', 'View it in Installed') }}
             </button>
-            <button v-if="!updating" type="button" class="skills-link" @click="addAnother">{{ t('skills.add.another', 'Add another skill') }}</button>
+            <button v-if="!updating" type="button" class="sl-link" @click="addAnother">{{ t('skills.add.another', 'Add another skill') }}</button>
           </div>
         </section>
 
         <form v-if="preview && !allDone" class="skills-add-foot" @submit.prevent="install()">
           <span class="set-hint skills-foot-summary">{{ footSummary }}</span>
-          <button class="exit-btn primary skills-btn skills-install-btn" type="submit" :disabled="!!busy || (!updating && !chosenAgents.length)" data-test="skills-install">
+          <button class="exit-btn primary small skills-install-btn" type="submit" :disabled="!!busy || (!updating && !chosenAgents.length)" data-test="skills-install">
             <span v-if="busy === 'install'" class="skills-spinner" aria-hidden="true" />
             {{ busy === 'install' ? t('skills.add.installing', 'Installing…') : installLabel(preview) /* i18n-ignore */ }}
           </button>
@@ -1938,21 +1943,6 @@ onMounted(async () => {
 .skills-search {
   flex: 1 1 auto;
   max-width: 260px;
-}
-/* Buttons of the list never break their text over two lines nor shrink:
-   when the width runs out, the group they are in moves to the next line. */
-.skills-btn {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 9px;
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-.skills-btn svg {
-  flex: 0 0 auto;
 }
 
 /* The search, the count and Refresh: the count gives way first. */
@@ -1977,271 +1967,8 @@ onMounted(async () => {
   gap: 4px;
   margin: 0 0 8px;
 }
-.skills-chip {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-  height: 22px;
-  padding: 0 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 11px;
-  background: transparent;
-  color: var(--text-dim);
-  font: inherit;
-  font-size: 11px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.skills-chip:hover {
-  color: var(--text-strong);
-}
-.skills-chip.on {
-  border-color: transparent;
-  background: var(--surface-3);
-  color: var(--text-strong);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-.skills-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-.skills-chip-count {
-  color: var(--text-dim);
-  font-size: 10.5px;
-}
-
-/* The list: one row per skill. Its own width decides the layout (the page
-   can be narrow, or zoomed in): below 460 px the agents and the scope go
-   under the name, and the details lose their indent. */
-.skills-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border-top: 1px solid var(--border);
-  container-type: inline-size;
-}
-.skills-item {
-  border-bottom: 1px solid var(--border);
-}
-.skills-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 46px;
-  padding: 5px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.skills-row:hover,
-.skills-item.open > .skills-row {
-  background: var(--surface-3);
-}
-.skills-row:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-.skills-row-icon {
-  flex: 0 0 auto;
-}
-.skills-row-main {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.skills-row-top {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px 6px;
-  min-width: 0;
-}
-.skills-row-name {
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--text-strong);
-  font-size: 12.5px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skills-row-desc {
-  overflow: hidden;
-  color: var(--text-dim);
-  font-size: 11.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skills-row-meta {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-}
-.skills-agents {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 3px;
-}
-.skills-chevron {
-  flex: 0 0 auto;
-  color: var(--text-dim);
-  transition: transform 0.12s ease;
-}
-.skills-item.open .skills-chevron {
-  transform: rotate(90deg);
-}
-
-/* Small tags: origin, state, scope. One line each; one longer than the
-   line itself ends in an ellipsis (its tooltip says it whole). */
-.skills-tag {
-  flex: 0 0 auto;
-  padding: 0 6px;
-  border-radius: 8px;
-  background: var(--surface-3);
-  color: var(--text-dim);
-  font-size: 10.5px;
-  font-weight: 400;
-  line-height: 16px;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skills-scope {
-  border: 1px solid var(--border-strong);
-  background: transparent;
-  line-height: 14px;
-}
-.skills-origin.origin-own {
-  background: color-mix(in srgb, #3fb950 20%, transparent);
-  color: #a8e6b4;
-}
-.skills-origin.origin-github {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: #cfe0ff;
-}
-.skills-origin.origin-synced {
-  background: color-mix(in srgb, #a371f7 22%, transparent);
-  color: #d9c7ff;
-}
-.skills-modified {
-  background: color-mix(in srgb, #d29922 24%, transparent);
-  color: #ffd98f;
-}
-.skills-update {
-  background: color-mix(in srgb, #3fb950 30%, transparent);
-  color: #c8f5d1;
-  font-weight: 600;
-}
-
-/* Placeholder rows while the folders are read the first time. */
-.skills-skeleton {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 46px;
-  padding: 5px 8px;
-}
-.skills-skel-icon,
-.skills-skel-lines span {
-  border-radius: 4px;
-  background: var(--surface-3);
-  opacity: 0.6;
-}
-.skills-skel-icon {
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-}
-.skills-skel-lines {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 6px;
-}
-.skills-skel-lines span {
-  height: 9px;
-}
-.skills-skel-lines span:first-child {
-  width: 30%;
-}
-.skills-skel-lines span:last-child {
-  width: 70%;
-}
-
-/* A skill's details, under its row, in line with its name. */
-.skills-details {
-  padding: 6px 8px 12px 38px;
-}
-.skills-details-desc {
-  margin: 0 0 8px;
-  color: var(--text);
-  font-size: 12px;
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-  user-select: text;
-}
-.skills-section-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 24px;
-  margin: 4px 0;
-  color: var(--text-dim);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-.skills-section-head .skills-btn {
-  margin-left: auto;
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
-}
-.skills-remove-all {
-  color: #ffb4b6;
-}
-.skills-remove-all:hover {
-  background: color-mix(in srgb, var(--danger) 25%, transparent);
-}
 .skills-versions-note {
   margin: 0 0 6px;
-}
-.skills-copies {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.skills-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  padding: 7px 9px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-.skills-copy-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 3px 6px;
-  min-width: 0;
-  font-size: 12px;
 }
 .skills-copy-agents {
   min-width: 0;
@@ -2251,45 +1978,11 @@ onMounted(async () => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The folder and the actions: one line while both fit, else the actions
-   (kept together) go under it. */
-.skills-copy-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
-  min-width: 0;
-}
-.skills-copy-path {
-  display: flex;
-  flex: 1 1 160px;
-  align-items: center;
-  gap: 2px;
-  min-width: 0;
-}
-.skills-path {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-dim);
-  font-family: 'Cascadia Mono', Consolas, monospace;
-  font-size: 10.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  user-select: text;
-}
 .skills-copy-btn {
   flex: 0 0 auto;
 }
 .skills-copy-btn.on {
   color: #8ff0b8;
-}
-.skills-actions {
-  display: inline-flex;
-  flex: 0 0 auto;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
 }
 .skills-update-line {
   margin: 0;
@@ -2298,37 +1991,6 @@ onMounted(async () => {
   display: flex;
   align-items: baseline;
   gap: 8px;
-}
-.skills-link {
-  flex: 0 0 auto;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--accent);
-  font: inherit;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.skills-link:hover {
-  text-decoration: underline;
-}
-
-@container (max-width: 460px) {
-  .skills-row {
-    flex-wrap: wrap;
-    row-gap: 3px;
-  }
-  .skills-row-meta {
-    order: 3;
-    flex-basis: 100%;
-    padding-left: 30px;
-  }
-  .skills-chevron {
-    order: 2;
-  }
-  .skills-details {
-    padding-left: 8px;
-  }
 }
 
 /* A message above the tab's content keeps its distance from it. */
@@ -2389,7 +2051,7 @@ onMounted(async () => {
 .skills-step-hint {
   margin: -4px 0 8px;
 }
-.skills-updating .skills-path {
+.skills-updating .sl-path {
   display: block;
 }
 .skills-looking {
@@ -2436,8 +2098,7 @@ onMounted(async () => {
 }
 .skills-source:focus-visible,
 .skills-agent-chip:focus-visible,
-.skills-scope-opt:focus-visible,
-.skills-link:focus-visible {
+.skills-scope-opt:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -2480,7 +2141,7 @@ onMounted(async () => {
   color: var(--text-dim);
   opacity: 0.8;
 }
-.skills-field-btn {
+.exit-btn.skills-field-btn {
   height: 26px;
   padding: 0 12px;
 }
@@ -2502,7 +2163,7 @@ onMounted(async () => {
   gap: 6px 10px;
   min-width: 0;
 }
-.skills-folder-row .skills-path {
+.skills-folder-row .sl-path {
   flex: 1 1 160px;
 }
 .skills-add-error {
@@ -2527,22 +2188,22 @@ onMounted(async () => {
 .skills-row-static {
   cursor: default;
 }
-.skills-item.single > .skills-row-static,
+.sl-item.single > .skills-row-static,
 .skills-row-static:hover {
   background: transparent;
 }
 /* The one skill found: its whole description, not cut to a line. */
-.skills-item.single .skills-row-static {
+.sl-item.single .skills-row-static {
   align-items: flex-start;
 }
-.skills-item.single .skills-row-icon {
+.sl-item.single .sl-row-icon {
   margin-top: 2px;
 }
-.skills-item.single .skills-row-desc {
+.sl-item.single .sl-row-desc {
   line-height: 1.45;
   white-space: normal;
 }
-.skills-found .skills-item.open:not(.single) {
+.skills-found .sl-item.open:not(.single) {
   background: color-mix(in srgb, var(--surface-3) 35%, transparent);
 }
 .skills-row-path {
@@ -2819,7 +2480,7 @@ onMounted(async () => {
   margin-left: auto;
   font-size: 11.5px;
 }
-.skills-link:disabled {
+.sl-link:disabled {
   color: var(--text-dim);
   text-decoration: none;
   opacity: 0.6;
@@ -3031,7 +2692,7 @@ onMounted(async () => {
   min-width: 0;
   line-height: 1.4;
 }
-.skills-install-btn {
+.exit-btn.skills-install-btn {
   height: 30px;
   max-width: 100%;
   padding: 0 14px;
@@ -3076,13 +2737,10 @@ onMounted(async () => {
 .skills-plugin-form .skills-field {
   flex: 1 1 260px;
 }
-.skills-plugin-folder {
+.exit-btn.skills-plugin-folder {
   height: 34px;
 }
-.skills-off {
-  background: color-mix(in srgb, var(--text-dim) 18%, transparent);
-}
-.skills-item.off .skills-row-name {
+.sl-item.off .sl-row-name {
   color: var(--text-dim);
 }
 .skills-plugin-parts {
