@@ -151,11 +151,11 @@ export function actionText(a) {
     case 'taskMove':
       return t('liveShare.action.taskMove', '{{name}} moved “{{title}}” to {{column}}', { name, title, column: columnName(a.column) })
     case 'taskEdit':
-      return t('liveShare.action.taskEdit', '{{name}} renamed a task: {{title}}', { name, title })
+      return a.from ? t('liveShare.action.taskRenamed', '{{name}} renamed the task “{{from}}” to “{{title}}”', { name, from: a.from, title }) : t('liveShare.action.taskEdit', '{{name}} renamed a task: {{title}}', { name, title })
     case 'taskRemove':
       return t('liveShare.action.taskRemove', '{{name}} deleted the task “{{title}}”', { name, title })
     case 'taskAnswer':
-      return t('liveShare.action.taskAnswer', '{{name}} answered the question on “{{title}}”', { name, title })
+      return a.answer ? t('liveShare.action.taskAnswered', '{{name}} answered “{{answer}}” on “{{title}}”', { name, answer: a.answer, title }) : t('liveShare.action.taskAnswer', '{{name}} answered the question on “{{title}}”', { name, title })
     default:
       return ''
   }
@@ -179,9 +179,10 @@ function columnName(column) {
 // [{ id, name }], offered to guests), agentName(id) (optional), activePaneId()
 // (optional: the pane with the keyboard, for a guest's focus), taskBoard
 // (optional: this computer's board for guests, { tasks() (the cards), add({
-// title, wsId }), move(id, column), rename(id, title), remove(id), answer(id,
-// answer) }). Phase 2c: pageGuest(paneId) (its page's webContents id,
-// reactive), activityOf(wsId) -> { events, teams }, activityRev()
+// title, wsId, guest }), move(id, column), rename(id, title, guest),
+// remove(id), answer(id, answer, guest) }; guest: the guest's name, for
+// what agents read). Phase 2c: pageGuest(paneId) (its page's webContents
+// id, reactive), activityOf(wsId) -> { events, teams }, activityRev()
 // (liveShareWindowFeeds.js).
 const OFF_HOST = () => ({ state: 'off', projectIds: [], invites: [], guests: [], offline: [], trusted: [], presence: [], progress: null, error: null })
 export function createLiveShareWindow(deps) {
@@ -576,14 +577,21 @@ export function createLiveShareWindow(deps) {
     const cards = board.tasks()
     return sharedWss().map((ws) => ({ project: ws.id, tasks: cards.filter((x) => x && x.wsId === ws.id) }))
   }
-  // A guest's change of a board, checked again here, then made; main hears
-  // whether it was ({ request, ok, code }).
-  function applyTask(req) {
+  // A guest's change of a board, checked again here, then once more by main
+  // right before it is made (the access model's word: this window's view of
+  // the rights may be late), then made; main hears whether it was ({ request,
+  // ok, code }). A guest's text that reaches an agent (a card it added or
+  // renamed, its answer) is marked as the guest's (guest: its name).
+  async function applyTask(req) {
     const answer = (ok, code) => api()?.taskDone?.({ request: req.request, ok, code })
     const board = deps.taskBoard
     const guestId = (req.guest && req.guest.id) || null
     const project = typeof req.project === 'string' ? req.project : null
-    if (!board || typeof req.request !== 'string' || !hostSharing() || !guestMay(guestId, 'tasks') || !guestSees(guestId, project) || !localWs(project)) return answer(false, 'revoked')
+    const stands = () => !!board && typeof req.request === 'string' && hostSharing() && guestMay(guestId, 'tasks') && guestSees(guestId, project) && !!localWs(project)
+    if (!stands()) return answer(false, 'revoked')
+    const check = await Promise.resolve(api()?.taskCheck?.(req.request)).catch(() => null)
+    if (!check || check.ok !== true || !stands()) return answer(false, 'revoked')
+    const who = (req.guest && typeof req.guest.name === 'string' && req.guest.name) || t('liveShare.guest', 'A guest')
     const a = req.args && typeof req.args === 'object' ? req.args : {}
     const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
     const card = typeof a.id === 'string' ? board.tasks().find((x) => x && x.id === a.id) : null
@@ -592,7 +600,7 @@ export function createLiveShareWindow(deps) {
       case 'add': {
         const title = text(a.title, 300)
         if (!title) return answer(false, 'bad-args')
-        board.add({ title, wsId: project })
+        board.add({ title, wsId: project, guest: who })
         return answer(true)
       }
       case 'move':
@@ -603,7 +611,7 @@ export function createLiveShareWindow(deps) {
         const title = text(a.title, 300)
         // Only a card not started yet is renamed (as on this computer).
         if (!title || card.column !== 'todo') return answer(false, 'not-allowed')
-        board.rename(card.id, title)
+        board.rename(card.id, title, who)
         return answer(true)
       }
       case 'remove':
@@ -612,7 +620,11 @@ export function createLiveShareWindow(deps) {
       case 'answer': {
         const reply = text(a.answer, 4096)
         if (!reply || !card.gate || card.gate.status !== 'pending') return answer(false, 'not-allowed')
-        board.answer(card.id, reply)
+        // Without the type right: one of the choices the agent offered only
+        // (free text would be typed to the agent).
+        const options = Array.isArray(card.gate.options) ? card.gate.options : []
+        if (!guestMay(guestId, 'type') && !options.includes(reply)) return answer(false, 'not-allowed')
+        board.answer(card.id, reply, who)
         return answer(true)
       }
       default:

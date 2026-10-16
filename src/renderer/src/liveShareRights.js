@@ -37,19 +37,19 @@ const WORDS = {
   edit: () => ({
     label: t('liveShare.right.edit', 'Edit files (save, create, rename, move to the Recycle Bin)'),
     short: t('liveShare.right.editShort', 'Edit'),
-    hint: t('liveShare.right.editHint', 'In the projects they see. Agent and tool settings files stay read-only unless they can also type.'),
+    hint: t('liveShare.right.editHint2', 'In the projects they see. Agent and tool settings, agent instructions (CLAUDE.md, AGENTS.md, the notes), git hooks and their configs, and .gitignore stay read-only unless they can also type.'),
     part: t('liveShare.rights.editPart', 'edit its files')
   }),
   git: () => ({
     label: t('liveShare.right.git', 'Stage, commit and discard changes (git)'),
     short: t('liveShare.right.gitShort', 'Git'),
-    hint: t('liveShare.right.gitHint', 'In the projects they see, with your git name. Push, pull and fetch stay yours.'),
+    hint: t('liveShare.right.gitHint2', 'In the projects they see, with your git name. Their commits run without your git hooks; push, pull and fetch stay yours.'),
     part: t('liveShare.rights.gitPart', 'stage and commit changes')
   }),
   tasks: () => ({
-    label: t('liveShare.right.tasks', 'Manage tasks (add, move, edit, answer questions)'),
+    label: t('liveShare.right.tasks2', 'Manage tasks (add, move, edit, answer questions, delete for good)'),
     short: t('liveShare.right.tasksShort', 'Tasks'),
-    hint: t('liveShare.right.tasksHint', 'The task board of the projects they see.'),
+    hint: t('liveShare.right.tasksHint2', 'The task board of the projects they see. A deleted card is gone for good; without Type, they answer an agent only with one of the choices it offered.'),
     part: t('liveShare.rights.tasksPart', 'manage its tasks')
   }),
   pagesView: () => ({

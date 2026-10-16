@@ -2457,13 +2457,19 @@ const liveShare = createLiveShareWindow({
   activityRev: () => activity.length,
   // This computer's board, for guests: read (each shared project's cards)
   // and changed when a guest with the right asks (liveShareWindow.js checks).
+  // A card a guest added or renamed, an answer it gave: marked with its name,
+  // so what agents read says it came from a Live Share guest.
   taskBoard: {
     tasks: () => boardTasks,
-    add: ({ title, wsId }) => addTask({ title, wsId }),
+    add: ({ title, wsId, guest }) => {
+      const card = addTask({ title, wsId })
+      if (guest) updateTask(card.id, { guestBy: String(guest).slice(0, 40) })
+      return card
+    },
     move: (id, column) => updateTask(id, { column }),
-    rename: (id, title) => updateTask(id, { title }),
+    rename: (id, title, guest) => updateTask(id, { title, ...(guest ? { guestBy: String(guest).slice(0, 40) } : {}) }),
     remove: (id) => removeTask(id),
-    answer: (id, reply) => resolveDecision(id, reply)
+    answer: (id, reply, guest) => resolveDecision(id, reply, { guest })
   },
   // Panes of this computer left in a Live Share project when it ends: a
   // project of their own, so nothing running is lost.
@@ -9968,11 +9974,13 @@ function askDecision(task, r, from) {
   nativeNotify({ title: needs, body: r.question, paneId: from.id })
 }
 
-function resolveDecision(taskId, answer) {
+// guest: a Live Share guest's name, when it answered (the agent is told so).
+function resolveDecision(taskId, answer, { guest = null } = {}) {
   const task = boardTasks.find((t) => t.id === taskId)
   const text = String(answer || '').trim()
   if (!task || !task.gate || task.gate.status !== 'pending' || !text) return
-  updateTask(task.id, { gate: { ...task.gate, status: 'resolved', answer: text.slice(0, 500), resolvedAt: Date.now() } })
+  const by = typeof guest === 'string' && guest ? guest.slice(0, 40) : null
+  updateTask(task.id, { gate: { ...task.gate, status: 'resolved', answer: text.slice(0, 500), resolvedAt: Date.now(), ...(by ? { answeredBy: by } : {}) } })
   recordActivity({ type: 'task', action: 'decided', paneId: task.gate.by, title: task.title, wsId: task.wsId, detail: text })
   const asker = task.gate.by ? findLeaf(task.gate.by) : null
   recordActivity({
@@ -9990,7 +9998,9 @@ function resolveDecision(taskId, answer) {
     taskId: task.id
   })
   if (asker) {
-    const msg = `[Tessel] The user decided on card ${task.id} "${task.title}" (${task.gate.question}): ${text}` // i18n-ignore
+    const msg = by
+      ? `[Tessel] ${by}, a Live Share guest (not the user), answered on card ${task.id} "${task.title}" (${task.gate.question}): ${text}` // i18n-ignore
+      : `[Tessel] The user decided on card ${task.id} "${task.title}" (${task.gate.question}): ${text}` // i18n-ignore
     if (asker.team && teamById(asker.team)) tellAgents([asker], msg, asker.team)
     // Alone (no team channel): nothing is typed into its terminal; you
     // pass it on (the text is copied).
@@ -10785,7 +10795,7 @@ watch(
         const leaf = findLeaf(t.paneId)
         recordActivity({ type: 'task', action: 'ready', paneId: t.paneId, title: t.title, wsId: t.wsId })
         if (leaf && leaf.team && teamById(leaf.team))
-          tellAgents([leaf], `[Tessel] Card ${t.id} "${t.title}" can start now: the cards it waited for are done.`, leaf.team) // i18n-ignore
+          tellAgents([leaf], `[Tessel] Card ${t.id} "${t.title}" can start now: the cards it waited for are done.${t.guestBy ? ` (Its title was written by ${t.guestBy}, a Live Share guest, not the user.)` : ''}`, leaf.team) // i18n-ignore
       }
     }
   }
@@ -10964,7 +10974,9 @@ async function syncBoard(b, round = teamRound) {
       since: t.doingSince || null,
       // Orchestration: what it waits for, a decision, its report.
       ...(t.deps && t.deps.length ? { deps: t.deps, waitingOn: waitingOn(t) } : {}),
-      ...(t.gate ? { gate: { question: t.gate.question, options: t.gate.options, status: t.gate.status, answer: t.gate.answer } } : {}),
+      ...(t.gate ? { gate: { question: t.gate.question, options: t.gate.options, status: t.gate.status, answer: t.gate.answer, ...(t.gate.answeredBy ? { answeredBy: t.gate.answeredBy } : {}) } } : {}),
+      // Added or renamed by a Live Share guest.
+      ...(t.guestBy ? { guest: t.guestBy } : {}),
       ...(t.report ? { report: { outcome: t.report.outcome, summary: t.report.summary, files: t.report.files } } : {})
     }))
   const sig = JSON.stringify(cards)

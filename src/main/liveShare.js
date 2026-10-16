@@ -105,8 +105,10 @@ import { createGuestFs } from './liveShare/guestFs.js'
 import { TASK_OPS, taskArgs, guestTasks, checkTasks } from './liveShare/shareTasks.js'
 import { parseLsharePath, lshareRoot, lsharePath, cleanRel } from '../shared/liveSharePath'
 import { createShareHistory, HISTORY_OPS, listArgs, isRef, checkSessionList, checkSessionDetails, checkTerminal } from './liveShare/shareHistory.js'
-import { guestActivity, checkActivity } from './liveShare/shareActivity.js'
+import { guestActivity, checkActivity, mapActivityTexts } from './liveShare/shareActivity.js'
 import { createPageFeed, checkPageFrame, checkPageEvent } from './liveShare/sharePageFeed.js'
+import { hideHiddenNames } from './liveShare/shareHiddenText.js'
+import { runAsGuest } from './gitSafety'
 import { watchProject as watchProjectFolder } from './explorer'
 import { createFileWatcher } from './editorFiles'
 import { t } from './i18n'
@@ -600,27 +602,45 @@ export function registerLiveShare({
   // A project's past agent conversations and its terminal agents' (masked,
   // shareHistory.js), with its folder (host-only) and its agent panes.
   const history = createShareHistory({ listSessions: sessionHistory && sessionHistory.list, sessionDetails: sessionHistory && sessionHistory.details, readTerminal })
-  addOps(HISTORY_OPS, (req, ctx, s) => historyRequest(req, s))
-  function historyRequest(req, s) {
+  addOps(HISTORY_OPS, (req, ctx, s) => historyRequest(req, ctx, s))
+  // The hidden files a project's texts name, out ("…"), as its Files tab
+  // hides them (shareHiddenText.js); git's check runs as the guest's
+  // (runAsGuest) and, for a guest's request, within its budget (charge).
+  const hiddenMasker = (project, charge = null) => {
+    const root = roots.get(project) || null
+    const info = root ? scope.root(root) : null
+    return (texts) => runAsGuest(() => hideHiddenNames(texts, { scope, info, settings: shareSettings, charge }))
+  }
+  async function historyRequest(req, ctx, s) {
     const root = roots.get(req.project) || null
     const info = root ? scope.root(root) : null
-    const where = { root: info ? info.root : null, roots: projectRoots(req.project), rawRoots: info ? [info.real, info.root] : [] }
-    if (req.op === 'sessions.list') return history.list(req.project, req.args, where)
-    if (req.op === 'sessions.details') return history.details(req.project, req.args, where)
-    const home = chatHomes(s)
-    const panes = (chatSources.get(req.project) || []).filter((c) => c.terminal && home.get(c.id) === req.project)
-    return history.terminal(req.project, req.args, { ...where, panes })
+    const charge = () => (typeof ctx.spend === 'function' ? ctx.spend('git') !== false : true)
+    const where = { root: info ? info.root : null, roots: projectRoots(req.project), rawRoots: info ? [info.real, info.root] : [], maskHidden: hiddenMasker(req.project, charge) }
+    try {
+      if (req.op === 'sessions.list') return await history.list(req.project, req.args, where)
+      if (req.op === 'sessions.details') return await history.details(req.project, req.args, where)
+      const home = chatHomes(s)
+      const panes = (chatSources.get(req.project) || []).filter((c) => c.terminal && home.get(c.id) === req.project)
+      return await history.terminal(req.project, req.args, { ...where, panes })
+    } catch (err) {
+      // Over the guest's git budget (the hidden files' check): later.
+      return { ok: false, code: err && err.code === 'busy' ? 'busy' : 'failed' }
+    }
   }
 
   // The activity of the projects guests follow: the window sends it while
   // they do (liveShare:feeds), guests get a masked copy when it changed.
   const activityWatched = new Set()
   let activities = new Map() // project -> { data, json }
+  // The window's last activity of each followed project (made again when
+  // hiding turns on).
+  let activityRaw = new Map()
   function watchActivity(s, project, on) {
     if (on) activityWatched.add(project)
     else {
       activityWatched.delete(project)
       activities.delete(project)
+      activityRaw.delete(project)
     }
     send('liveShare:feeds', { activity: [...activityWatched] })
     const a = activities.get(project)
@@ -697,16 +717,21 @@ export function registerLiveShare({
   }
   function folderChanged(project, w, change) {
     if (folderWatches.get(project) !== w || !w.info) return
-    scope.invalidate(w.info.real)
-    if (!change || !Array.isArray(change.paths)) w.all = true
-    else {
+    if (!change || !Array.isArray(change.paths)) {
+      w.all = true
+      scope.invalidatePaths(w.info.real, null)
+    } else {
+      const rels = []
       for (const full of change.paths) {
         const rel = relFrom(w.info.real, full)
         if (rel === null || rel === '') continue
+        rels.push(rel)
         if (/^\.git(\/|$)/i.test(rel)) w.git = true
         else if (!w.all) w.paths.add(rel)
         if (w.paths.size > FS_PATHS) w.all = true
       }
+      // What was kept about these paths only (a path seen ignored stays so).
+      scope.invalidatePaths(w.info.real, rels)
     }
     if (!w.timer) {
       w.timer = setTimeout(() => flushFolder(project, w), PUSH_MS)
@@ -775,6 +800,26 @@ export function registerLiveShare({
     fileWanted.clear()
     refreshFiles()
   }
+  // Hiding turned on while sharing: a file open in a guest's editor that is
+  // hidden now is said gone (its editor reads it again: not there) and no
+  // longer followed; every guest's Files read everything again.
+  async function hideNow() {
+    const s = sharing
+    if (!s || !s.server) return
+    for (const e of [...fileWanted.values()]) {
+      const root = roots.get(e.project)
+      const r = root ? await scope.resolve(root, e.rel, { settings: shareSettings, mustExist: false }).catch(() => null) : null
+      if (r && r.ok) continue
+      if (sharing !== s) return
+      e.real = null
+      s.server.push('file', e.project, e.rel, { exists: false, size: 0, mtimeMs: 0, sig: null })
+      s.server.endTopic('file', e.project, e.rel)
+    }
+    refreshFiles()
+    for (const project of folderWatches.keys()) s.server.push('fs', project, null, { paths: null })
+    // The activity guests follow, made again without what is hidden now.
+    for (const item of activityRaw.values()) if (activityWatched.has(item.project)) pushActivity(s, item)
+  }
   // A project's folder changed (the window said another one): its watch
   // starts again, its files are found again.
   function rootsChanged(before) {
@@ -800,7 +845,11 @@ export function registerLiveShare({
     const args = taskArgs(req.op, req.args)
     if (!args) return { ok: false, code: 'bad-args' }
     const board = boards.get(req.project)
-    if (args.id && !(board && board.tasks.some((x) => x.id === args.id))) return { ok: false, code: 'not-found' }
+    const card = args.id ? board && board.tasks.find((x) => x.id === args.id) : null
+    if (args.id && !card) return { ok: false, code: 'not-found' }
+    // An answer goes to the agent that asked: without the type right, only
+    // one of the choices it offered (never free text typed to an agent).
+    if (req.op === 'tasks.answer' && ctx.rights.type !== true && !(card.gate && card.gate.status === 'pending' && card.gate.options.includes(args.answer))) return { ok: false, code: 'not-allowed' }
     if (!ctx.recheck() || sharing !== s) return { ok: false, code: 'revoked' }
     const request = `t${nextTask++}`
     const res = await new Promise((resolve) => {
@@ -809,10 +858,12 @@ export function registerLiveShare({
         resolve({ ok: false, code: 'unavailable' })
       }, TASK_WAIT_MS)
       timer.unref?.()
-      taskRequests.set(request, { resolve, timer, guestId: ctx.guest.id, project: req.project })
-      send('liveShare:hostRequest', { action: 'task', request, op: req.op.slice('tasks.'.length), project: req.project, args, guest: ctx.guest })
+      // The window asks again whether it still stands right before making it
+      // (liveShare:taskCheck: the access model's word, not its own view).
+      taskRequests.set(request, { resolve, timer, guestId: ctx.guest.id, project: req.project, recheck: ctx.recheck })
+      send('liveShare:hostRequest', { action: 'task', request, op: req.op.slice('tasks.'.length), project: req.project, args, guest: ctx.guest, type: ctx.rights.type === true })
     })
-    if (res.ok) noteAction(ctx.guest, { op: req.op, project: req.project, args: { ...args, title: args.title || (board && board.tasks.find((x) => x.id === args.id)?.title) || '' } })
+    if (res.ok) noteAction(ctx.guest, { op: req.op, project: req.project, args: { ...args, title: args.title || (card && card.title) || '', from: req.op === 'tasks.edit' && card ? card.title : undefined } })
     return res
   }
   function endTaskRequests(code = 'revoked', which = () => true) {
@@ -852,7 +903,7 @@ export function registerLiveShare({
       count: paths.length || (path ? 1 : 0),
       ...(paths.length ? { paths } : {}),
       ...(req.op === 'scm.commit' ? { detail: str(String(a.message || '').split('\n')[0], 120) } : {}),
-      ...(req.op.startsWith('tasks.') ? { detail: str(a.title || '', 120), ...(a.column ? { column: a.column } : {}) } : {}),
+      ...(req.op.startsWith('tasks.') ? { detail: str(a.title || '', 120), ...(a.column ? { column: a.column } : {}), ...(typeof a.answer === 'string' ? { answer: str(a.answer, 300) } : {}), ...(typeof a.from === 'string' ? { from: str(a.from, 120) } : {}) } : {}),
       flagged: [path, ...paths].some((p) => INSTRUCTION_FILES.test(p))
     }
     actions = [entry, ...actions].slice(0, MAX_ACTIONS)
@@ -1128,12 +1179,14 @@ export function registerLiveShare({
     hostFile.clear()
     closeAllFeeds()
     stopWatches()
+    scope.reset()
     endTaskRequests('revoked')
     pageFeed?.stop()
     pageList = []
     history.forget()
     activityWatched.clear()
     activities = new Map()
+    activityRaw = new Map()
     layouts = new Map()
     chatSources = new Map()
     roots = new Map()
@@ -2060,18 +2113,36 @@ export function registerLiveShare({
     refreshPages()
   })
   // The activity of the projects guests follow: [{ project, events, teams }].
+  // The hidden files named in it go out first (shareHiddenText.js: one git
+  // check at most per push); a newer push of the same project wins.
+  const activitySeq = new Map() // project -> the latest push's number
   ipcMain.on('liveShare:activity', (_evt, list) => {
     const s = sharing
     if (!s || !s.server) return
     for (const item of (Array.isArray(list) ? list : []).slice(0, MAX_PROJECTS)) {
       if (!item || !(s.projects || []).includes(item.project) || !activityWatched.has(item.project)) continue
-      const data = guestActivity(item.events, item.teams, item.project, projectRoots(item.project))
-      const json = JSON.stringify(data)
-      if (activities.get(item.project)?.json === json) continue
-      activities.set(item.project, { data, json })
-      s.server.push('activity', item.project, null, data)
+      activityRaw.set(item.project, item)
+      pushActivity(s, item)
     }
   })
+  // One project's activity for guests: masked, its hidden files' names out,
+  // pushed when it changed.
+  function pushActivity(s, item) {
+    const project = item.project
+    const data = guestActivity(item.events, item.teams, project, projectRoots(project))
+    const seq = (activitySeq.get(project) || 0) + 1
+    activitySeq.set(project, seq)
+    hiddenMasker(project)(mapActivityTexts(data, (t) => t))
+      .then((texts) => {
+        if (sharing !== s || !s.server || activitySeq.get(project) !== seq || !activityWatched.has(project)) return
+        mapActivityTexts(data, (_t, i) => texts[i])
+        const json = JSON.stringify(data)
+        if (activities.get(project)?.json === json) return
+        activities.set(project, { data, json })
+        s.server.push('activity', project, null, data)
+      })
+      .catch(() => {})
+  }
   // A project added to the share or taken out: { id, shared }.
   ipcMain.handle('liveShare:share', (_evt, { id, shared } = {}) => setShared(id, !!shared))
   // The share's settings: { hideIgnored } (kept across shares). A change
@@ -2082,6 +2153,7 @@ export function registerLiveShare({
       settingsFile.write({ hideIgnored: shareSettings.hideIgnored })
       scope.invalidate()
       info(`guests ${shareSettings.hideIgnored ? 'no longer see' : 'now see'} ignored and secret files`)
+      if (shareSettings.hideIgnored) hideNow()
       pushHost()
     }
     return { ok: true, settings: { ...shareSettings } }
@@ -2101,6 +2173,16 @@ export function registerLiveShare({
       s.server.push('tasks', item.project, null, { tasks })
     }
     for (const id of [...boards.keys()]) if (!keep.has(id)) boards.delete(id)
+  })
+  // The window, right before it makes a guest's change of a board: does the
+  // request still stand (the guest in, with the right, seeing the project)?
+  ipcMain.handle('liveShare:taskCheck', (_evt, request) => {
+    const r = typeof request === 'string' ? taskRequests.get(request) : null
+    try {
+      return { ok: !!r && r.recheck() === true }
+    } catch {
+      return { ok: false }
+    }
   })
   // The window's answer to a guest's change of a board: { request, ok, code }.
   ipcMain.on('liveShare:taskDone', (_evt, { request, ok, code } = {}) => {

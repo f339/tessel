@@ -111,6 +111,26 @@ export function guestActivity(events, teams, project, roots) {
   return { events: newest(events, (e) => cleanEvent(e, text, project)), teams: cleanTeams(teams, text) }
 }
 
+// Every text of the guests' copy (its slots), given to fn and replaced by
+// what it gives back: the hidden files they name are taken out this way
+// (shareHiddenText.js). -> the texts, in order, when fn only reads.
+export function mapActivityTexts(data, fn) {
+  const texts = []
+  const at = (obj, k) => {
+    if (!obj || typeof obj[k] !== 'string' || !obj[k]) return
+    texts.push(obj[k])
+    obj[k] = fn(obj[k], texts.length - 1)
+  }
+  for (const e of (data && data.events) || []) {
+    for (const k of Object.keys(TEXTS)) at(e, k)
+    at(e, 'reset')
+    at(e.agent, 'title')
+    if (e.sender) for (const k of ['name', 'agentName', 'branch', 'cardTitle']) at(e.sender, k)
+  }
+  for (const team of (data && data.teams) || []) at(team, 'name')
+  return texts
+}
+
 // The guest's check of the host's copy: the same fields, cut; pane ids
 // turned into this window's (paneId(remote) -> id) and the project into its
 // Live Share project (wsId). -> { events, teams } | null

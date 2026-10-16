@@ -24,8 +24,20 @@
 //   name (.env, keys, credentials, cloud folders: SECRET_*).
 // - Write-protected even with the edit right, unless the guest may also type
 //   (which already runs any command as the host): the files agents and tools
-//   run or obey by themselves (.claude/, .mcp.json, .vscode/, git hooks
-//   managers, .envrc...).
+//   run or obey by themselves (.claude/, .mcp.json, .vscode/, an agent's
+//   instructions like CLAUDE.md or the notes, git hooks and the configs of
+//   the tools that run them (.husky/, .githooks/, .pre-commit-config.yaml,
+//   lefthook, lint-staged, commitlint, the folder core.hooksPath names), what
+//   decides which files git ignores or how it reads them (.gitignore,
+//   .gitattributes, .gitmodules), .envrc...).
+// - Never moved, made or put in the Recycle Bin by a guest: .git and .tessel
+//   themselves (either name, anywhere: a folder renamed to or from one would
+//   show or change what is hidden in it), and a folder with anything hidden
+//   or write-protected below it (moving it would show the hidden files under
+//   a new name, or take a protected one out of its place).
+// - What git ignores is decided once per path for the share: a path seen
+//   ignored stays hidden even if a .gitignore changes later (a guest's edit
+//   never shows it), and the check runs once per request for all its paths.
 //
 // Every rule is matched without case on both the path the guest gave and the
 // real one (realpath.native expands 8.3 names: TESSEL~1 is .tessel), so a
@@ -63,16 +75,18 @@ export function isAlwaysHidden(rel) {
 
 // Names that hold secrets by convention (hidden with the setting on).
 const SECRET_EXACT = new Set(['.npmrc', '.pypirc', '.netrc', '.git-credentials'])
-const SECRET_FOLDERS = new Set(['.aws', '.ssh', '.docker'])
+const SECRET_FOLDERS = new Set(['.aws', '.ssh', '.docker', '.kube', '.gnupg'])
 const SECRET_PATTERNS = [
   /^\.env(\..+)?$/, // .env, .env.local... (examples below are not)
-  /\.(pem|key|p12|pfx|kdbx|tfvars)$/,
-  /^id_(rsa|ed25519)/,
+  /\.env$/, // prod.env
+  /\.(pem|key|p12|pfx|p8|ppk|jks|keystore|kdbx|tfvars)$/,
+  /^id_(rsa|ed25519|ecdsa|dsa)/,
   /\.tfstate/,
   /^credentials.*\.json$/,
-  /^service-account.*\.json$/
+  /^service-account.*\.json$/,
+  /^secrets?\..+$/ // secrets.json, secrets.yaml...
 ]
-const SECRET_EXAMPLE = /^\.env(\..+)?\.(example|sample|template)$/
+const SECRET_EXAMPLE = /^(\.env(\..+)?|.+\.env)\.(example|sample|template)$/
 export function isSecretName(name) {
   const n = lower(name)
   if (!n) return false
@@ -94,20 +108,45 @@ export const DEFAULT_SHARE_SETTINGS = Object.freeze({ hideIgnored: true })
 export const hidesPrivate = (settings) => !(settings && settings.hideIgnored === false)
 
 // Files that run something, or tell an agent or a tool what to run, by
-// themselves: written by a guest only with the type right too.
-const PROTECTED_FOLDERS = new Set(['.claude', '.codex', '.gemini', '.cursor', '.vscode', '.husky'])
-const PROTECTED_FILES = new Set(['.mcp.json', '.envrc'])
-export function isProtectedRel(rel) {
+// themselves: written by a guest only with the type right too. extra: more
+// protected paths of that project (the folder its core.hooksPath names).
+const PROTECTED_FOLDERS = new Set(['.claude', '.codex', '.gemini', '.cursor', '.vscode', '.husky', '.githooks', '.tessel'])
+const PROTECTED_FILES = new Set([
+  '.mcp.json',
+  '.envrc',
+  // What git ignores, how it reads files (filters, diff drivers), its
+  // submodules.
+  '.gitignore',
+  '.gitattributes',
+  '.gitmodules',
+  // Hook managers: what they run on a commit.
+  '.pre-commit-config.yaml',
+  '.pre-commit-hooks.yaml',
+  // An agent's instructions.
+  'claude.md',
+  'agents.md',
+  'gemini.md',
+  '.cursorrules',
+  '.windsurfrules',
+  '.clinerules',
+  'copilot-instructions.md'
+])
+const PROTECTED_PATTERNS = [/^\.?lefthook(-local)?\.ya?ml$/, /^\.lintstagedrc(\..+)?$/, /^lint-staged\.config\.[cm]?[jt]s$/, /^\.?commitlint(rc|\.config)(\..+)?$/]
+export function isProtectedRel(rel, extra = null) {
   const segs = segsOf(rel)
-  for (let i = 0; i < segs.length; i++) {
-    if (PROTECTED_FOLDERS.has(segs[i])) return true
-    if (segs[i] === '.tessel' && segs[i + 1] === 'setup.ps1') return true
-  }
-  return segs.length > 0 && PROTECTED_FILES.has(segs[segs.length - 1])
+  if (segs.some((x) => PROTECTED_FOLDERS.has(x))) return true
+  const name = segs.length ? segs[segs.length - 1] : ''
+  if (name && (PROTECTED_FILES.has(name) || PROTECTED_PATTERNS.some((re) => re.test(name)))) return true
+  const low = lower(rel)
+  return Array.isArray(extra) && extra.some((x) => x && (low === x || low.startsWith(`${x}/`)))
 }
 // May a guest with these rights change `rel` (the edit or git right itself is
 // the caller's check)?
-export const writeAllowed = (rel, rights) => !isProtectedRel(rel) || !!(rights && rights.type === true)
+export const writeAllowed = (rel, rights, extra = null) => !isProtectedRel(rel, extra) || !!(rights && rights.type === true)
+
+// .git or .tessel anywhere in a path: never moved, made or put in the
+// Recycle Bin by a guest (only .tessel/notes.md is saved, with its right).
+export const touchesSpecial = (rel) => segsOf(rel).some((x) => x === '.git' || x === '.tessel')
 
 // --- Roots -------------------------------------------------------------------------
 // The project's folder as the window gave it: absolute, local (not ssh:// or
@@ -147,6 +186,8 @@ const sameFile = (a, b) => !!a && !!b && a.dev === b.dev && a.ino === b.ino
 const IGNORE_TTL_MS = 30000
 const IGNORE_CACHE_MAX = 50000
 const IGNORE_TIMEOUT_MS = 10000
+// Entries below a folder looked at before a guest moves it (more: refused).
+const BELOW_MAX = 20000
 
 // git check-ignore -z --stdin over rels (paths from cwd): -> Set of the
 // ignored ones | null (git failed: the caller hides them all).
@@ -202,9 +243,13 @@ export function checkIgnore(cwd, safety, rels) {
 // One per host: the roots' real paths and each project's ignored files, kept
 // between requests. ignoreCheck(cwd, safety, rels) and gitTop(root) can be
 // given (tests); git by default.
-export function createShareScope({ ignoreCheck = checkIgnore, gitTop = defaultGitTop } = {}) {
+export function createShareScope({ ignoreCheck = checkIgnore, gitTop = defaultGitTop, hooksPath = defaultHooksPath } = {}) {
   const roots = new Map() // root as given -> { root, real }
   const ignores = new Map() // real root -> { at, repo: Promise<{ top, safety } | null>, known: Map rel -> bool }
+  // Paths seen ignored, per real root, for the share (never shown again by a
+  // change of a .gitignore).
+  const sticky = new Map() // real root -> Set of lower-case rels
+  const STICKY_MAX = 200000
 
   function root(path) {
     if (roots.has(path)) return roots.get(path)
@@ -233,23 +278,40 @@ export function createShareScope({ ignoreCheck = checkIgnore, gitTop = defaultGi
     return s
   }
 
+  const stickyOf = (real) => {
+    let set = sticky.get(real)
+    if (!set) sticky.set(real, (set = new Set()))
+    return set
+  }
   // Which of rels (paths from the root's real path) git ignores: -> Set. Not
   // a repository: none. git failing: all of them (not kept: asked again).
-  async function ignoredOf(info, rels) {
+  // One git run for all the paths not known yet; charge() is asked first (a
+  // guest's budget: false -> the request is refused as busy). A path once
+  // seen ignored stays so for the share.
+  async function ignoredOf(info, rels, { charge = null } = {}) {
     const list = [...new Set(rels.filter((r) => typeof r === 'string' && r))]
     if (!list.length) return new Set()
     const s = ignoreState(info.real)
     const repo = await s.repo
-    if (!repo) return new Set()
-    const out = new Set()
+    const seen = stickyOf(info.real)
+    // Seen ignored before, itself or a folder it is in.
+    const stuck = (r) => {
+      const segs = lower(r).split('/')
+      for (let i = 1; i <= segs.length; i++) if (seen.has(segs.slice(0, i).join('/'))) return true
+      return false
+    }
+    const out = new Set(seen.size ? list.filter(stuck) : [])
+    if (!repo) return out
     const ask = []
     for (const r of list) {
+      if (out.has(r)) continue
       const k = lower(r)
       if (s.known.has(k)) {
         if (s.known.get(k)) out.add(r)
       } else ask.push(r)
     }
     if (ask.length) {
+      if (typeof charge === 'function' && charge() === false) throw Object.assign(new Error('busy'), { code: 'busy' }) // i18n-ignore internal: answered 'busy'
       const hits = await ignoreCheck(info.real, repo.safety, ask)
       if (!hits) {
         for (const r of ask) out.add(r)
@@ -259,14 +321,18 @@ export function createShareScope({ ignoreCheck = checkIgnore, gitTop = defaultGi
       for (const r of ask) {
         const ignored = hitKeys.has(lower(r))
         s.known.set(lower(r), ignored)
-        if (ignored) out.add(r)
+        if (ignored) {
+          out.add(r)
+          if (seen.size < STICKY_MAX) seen.add(lower(r))
+        }
       }
     }
     return out
   }
 
-  // The project's files changed (its watch), or its folder: what was kept
-  // about it is read again.
+  // The project's folder (path) or the host's setting changed: what was kept
+  // about it is read again (paths seen ignored stay hidden: reset() ends the
+  // share's).
   function invalidate(path) {
     if (path === undefined) {
       roots.clear()
@@ -278,17 +344,92 @@ export function createShareScope({ ignoreCheck = checkIgnore, gitTop = defaultGi
     ignores.delete(path)
     if (info) ignores.delete(info.real)
   }
+  // Files of a project changed (its watch): only what was kept about them is
+  // read again; a .gitignore changed, or none known: every answer not
+  // "ignored".
+  function invalidatePaths(real, rels) {
+    const s = ignores.get(real)
+    if (!s) return
+    if (!Array.isArray(rels) || rels.some((r) => /(^|\/)\.gitignore$/i.test(r))) {
+      for (const [k, v] of [...s.known]) if (!v) s.known.delete(k)
+      return
+    }
+    for (const r of rels) if (s.known.get(lower(r)) === false) s.known.delete(lower(r))
+  }
+  // A new share: nothing kept from the last one.
+  function reset() {
+    roots.clear()
+    ignores.clear()
+    sticky.clear()
+    hookFolders.clear()
+  }
+
+  // The folder the project's git runs its hooks from (core.hooksPath), when
+  // it is inside the project: [rel] (lower case), kept a while.
+  const hookFolders = new Map() // real root -> { at, value: Promise<string[]> }
+  function protectedOf(info) {
+    const hit = hookFolders.get(info.real)
+    if (hit && Date.now() - hit.at < IGNORE_TTL_MS) return hit.value
+    const value = (async () => {
+      const s = ignoreState(info.real)
+      const repo = await s.repo
+      if (!repo) return []
+      // (Read without the -c overrides: a guest's own hide the real one.)
+      const where = await hooksPath(info.real, ['-c', 'core.fsmonitor=false'])
+      if (!where) return []
+      const full = isAbsolute(where) ? where : resolve(repo.top, where)
+      let real
+      try {
+        real = fs.realpathSync.native(full)
+      } catch {
+        real = full
+      }
+      const rel = relFrom(info.real, real)
+      return rel ? [lower(rel)] : rel === '' ? [''] : []
+    })().catch(() => [])
+    hookFolders.set(info.real, { at: Date.now(), value })
+    if (hookFolders.size > 64) hookFolders.delete(hookFolders.keys().next().value)
+    return value
+  }
+
+  // Is anything below a folder (rel) hidden from guests, or write-protected
+  // for them (rights: theirs)? A walk of the folder (links not followed), at
+  // most BELOW_MAX entries (more: yes, as it can't be told), then one check
+  // of what git ignores. -> Promise<boolean>
+  async function hiddenBelow(info, rel, { settings, rights = null, extra = null, charge = null } = {}) {
+    const start = rel ? join(info.real, ...rel.split('/')) : info.real
+    const stack = [[start, rel]]
+    const names = []
+    while (stack.length) {
+      const [dir, base] = stack.pop()
+      let items
+      try {
+        items = fs.readdirSync(dir, { withFileTypes: true })
+      } catch {
+        return true
+      }
+      for (const d of items) {
+        const r = base ? `${base}/${d.name}` : d.name
+        if (hiddenByName(r, settings) || touchesSpecial(r) || !writeAllowed(r, rights, extra)) return true
+        names.push(r)
+        if (names.length > BELOW_MAX) return true
+        if (d.isDirectory() && !d.isSymbolicLink()) stack.push([join(dir, d.name), r])
+      }
+    }
+    if (!hidesPrivate(settings) || !names.length) return false
+    return (await ignoredOf(info, names, { charge })).size > 0
+  }
 
   // Of these paths (from the root: lexical and real alike), the ones a guest
-  // may not see. -> Set
-  async function hiddenOf(info, rels, settings) {
+  // may not see (one check of git's for all of them). -> Set
+  async function hiddenOf(info, rels, settings, { charge = null } = {}) {
     const out = new Set()
     const rest = []
     for (const r of rels) {
       if (hiddenByName(r, settings)) out.add(r)
       else rest.push(r)
     }
-    if (hidesPrivate(settings) && rest.length) for (const r of await ignoredOf(info, rest)) out.add(r)
+    if (hidesPrivate(settings) && rest.length) for (const r of await ignoredOf(info, rest, { charge })) out.add(r)
     return out
   }
 
@@ -304,7 +445,9 @@ export function createShareScope({ ignoreCheck = checkIgnore, gitTop = defaultGi
   // real: the target's real path (null when it does not exist yet); entry:
   // the name itself in its folder's real path (a link stays the link: what a
   // rename or the Recycle Bin acts on).
-  async function resolveRel(rootPath, rel, { settings, mustExist = true, kind = 'any' } = {}) {
+  // skipIgnore: what git ignores is the caller's check (a listing asks git
+  // once for the folder and its entries together): rel and realRel.
+  async function resolveRel(rootPath, rel, { settings, mustExist = true, kind = 'any', charge = null, skipIgnore = false } = {}) {
     const info = root(rootPath)
     if (!info) return { ok: false, code: 'no-project' }
     const segs = relSegments(rel)
@@ -375,7 +518,7 @@ export function createShareScope({ ignoreCheck = checkIgnore, gitTop = defaultGi
       return missing
     }
     if (realRel === null || hiddenByName(realRel, settings)) return missing
-    if (hidesPrivate(settings) && (await ignoredOf(info, [rel, realRel])).size) return missing
+    if (!skipIgnore && hidesPrivate(settings) && (await ignoredOf(info, [rel, realRel], { charge })).size) return missing
     let id = null
     let isDir = false
     let isFile = false
@@ -439,7 +582,41 @@ export function createShareScope({ ignoreCheck = checkIgnore, gitTop = defaultGi
     }
   }
 
-  return { root, resolve: resolveRel, readResolved, hiddenOf, ignoredOf, invalidate }
+  return { root, resolve: resolveRel, readResolved, hiddenOf, ignoredOf, invalidate, invalidatePaths, reset, hiddenBelow, protectedOf }
+}
+
+// The project's core.hooksPath (as set, relative to the repository's top or
+// absolute), or null.
+function defaultHooksPath(cwd, safety) {
+  return new Promise((done) => {
+    let child
+    let out = ''
+    try {
+      child = spawn('git', ['-C', cwd, ...safety, 'config', '--get', 'core.hooksPath'], { windowsHide: true, env: cleanEnv(process.env) })
+    } catch {
+      return done(null)
+    }
+    const timer = setTimeout(() => {
+      try {
+        child.kill()
+      } catch {
+        // gone already
+      }
+    }, IGNORE_TIMEOUT_MS)
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (x) => {
+      if (out.length < 4096) out += x
+    })
+    child.stderr.on('data', () => {})
+    child.on('error', () => {
+      clearTimeout(timer)
+      done(null)
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      done(code === 0 && out.trim() ? out.trim() : null)
+    })
+  })
 }
 
 // The repository's top for a folder, or null (not one, no git).

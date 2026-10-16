@@ -187,13 +187,23 @@ describe('Live Share pages: the channel', () => {
     client.input('ws-1', 'pane-web2', [{ type: 'key', key: 'a' }])
     await wait(80)
     expect(inputs).toHaveLength(1)
-    // The right taken away: the stream ends at once and sends nothing more.
-    host.change(id, { right: 'pagesView', on: false })
+    // The host ends the page for everyone (endTopic): that guest's stream ends.
+    host.endTopic('page', 'ws-1', 'pane-web')
     await until(() => streams.length === 2)
     expect(streams[1]).toMatchObject({ on: false })
     expect(streams[1].stream).toBe(s.stream)
-    expect(s.stream.live()).toBe(false)
     expect(s.stream.send('frame', { seq: 2, jpeg: 'AAAA' })).toBe(false)
+    client.subscribe('page', 'ws-1', 'pane-web', false)
+    client.subscribe('page', 'ws-1', 'pane-web', true)
+    await until(() => streams.length === 3)
+    const s2 = streams[2]
+    // The right taken away: the stream ends at once and sends nothing more.
+    host.change(id, { right: 'pagesView', on: false })
+    await until(() => streams.length === 4)
+    expect(streams[3]).toMatchObject({ on: false })
+    expect(streams[3].stream).toBe(s2.stream)
+    expect(s2.stream.live()).toBe(false)
+    expect(s2.stream.send('frame', { seq: 3, jpeg: 'AAAA' })).toBe(false)
     client.leave()
   })
 })
@@ -227,7 +237,7 @@ function fakeMain({ pages = [] } = {}) {
     last: (channel) => m.events(channel).at(-1),
     sessions: {
       list: vi.fn(async () => [{ agent: 'claude', id: SESSION, cwd: join(tmp, 'site'), started: 1, updated: 2, title: `Ship it with ${SECRET}`, accountId: 'acct-7', accountLabel: 'ada@example.com' }]),
-      details: vi.fn(async () => ({ ok: true, file: join(tmp, 'x.jsonl'), firstPrompt: `Read ${join(tmp, 'site', 'src', 'a.js')} and C:\\Users\\ada\\private.txt`, turns: [{ role: 'assistant', text: 'Done', at: 3 }], messageCount: 2 }))
+      details: vi.fn(async () => ({ ok: true, file: join(tmp, 'x.jsonl'), firstPrompt: `Read ${join(tmp, 'site', 'src', 'a.js')}, ${join(tmp, 'site', '.env')} and C:\\Users\\ada\\private.txt`, turns: [{ role: 'assistant', text: 'Done', at: 3 }], messageCount: 2 }))
     },
     readTerminal: vi.fn(async (q) => ({ ok: true, panes: Object.fromEntries(q.panes.map((p) => [p.ask, { key: `${p.sessionId}|s|0`, items: [{ role: 'user', t: 5, text: `my key ${SECRET}` }, { role: 'agent', t: 6, text: 'ok' }] }])) }))
   }
@@ -295,6 +305,8 @@ describe('Live Share phase 2c: two Tessels', () => {
     expect(host.sessions.details).toHaveBeenCalledWith({ agent: 'claude', id: SESSION, accountId: 'acct-7' })
     expect(details).toEqual({ ok: true, firstPrompt: expect.stringContaining('src'), turns: [{ role: 'assistant', text: 'Done', at: 3 }], messageCount: 2 })
     expect(details.firstPrompt).not.toContain('private')
+    // A hidden file of the project is never named (as in its Files tab).
+    expect(details.firstPrompt).not.toContain('.env')
     // Another project of the host's: not this guest's.
     expect(await guest.handle['liveShare:sessions'](null, { op: 'list', project: 'ws-2', args: {} })).toEqual({ ok: false, code: 'no-project' })
     const terminal = await guest.handle['liveShare:sessions'](null, { op: 'terminal', project: 'ws-1', args: { from: 0 } })
@@ -311,18 +323,19 @@ describe('Live Share phase 2c: two Tessels', () => {
     expect(sub).toMatchObject({ ok: true, outdated: false })
     await until(() => host.last('liveShare:feeds')?.activity?.includes('ws-1'))
     host.on['liveShare:activity'](null, [
-      { project: 'ws-1', events: [{ t: 1, type: 'message', paneId: 'pane-1-ag', text: `use ${SECRET}`, sender: { name: 'Ada', sessionId: SESSION, accountId: 'acct-7' } }], teams: [{ id: 'team-1', name: 'Builders', color: '#00ff00' }] },
+      { project: 'ws-1', events: [{ t: 1, type: 'message', paneId: 'pane-1-ag', text: `use ${SECRET} from .tessel/team/tok999/inbox.json`, sender: { name: 'Ada', sessionId: SESSION, accountId: 'acct-7' } }], teams: [{ id: 'team-1', name: 'Builders', color: '#00ff00' }] },
       { project: 'ws-2', events: [{ t: 1, type: 'message', text: 'not for this guest' }] }
     ])
     const pushed = await until(() => guest.events('liveShare:push').find((p) => p.topic === 'activity'))
     expect(pushed.project).toBe('ws-1')
     expect(pushed.data.events).toEqual([{ t: 1, type: 'message', paneId: local.agent, text: expect.not.stringContaining(SECRET), sender: { name: 'Ada' }, wsId: 'ws-1' }])
+    expect(pushed.data.events[0].text).toMatch(/from …$/)
     expect(pushed.data.teams).toEqual([{ id: 'team-1', name: 'Builders', color: '#00ff00' }])
     await guest.handle['liveShare:subscribe'](null, { topic: 'activity', project: 'ws-1', on: false })
     await until(() => host.last('liveShare:feeds')?.activity?.length === 0)
 
     const said = JSON.stringify(guest.sent)
-    for (const leak of [SESSION, 'acct-7', 'ada@example.com', SECRET, tmp, tmp.replace(/\\/g, '\\\\'), 'not for this guest', 'x.jsonl']) expect(said).not.toContain(leak)
+    for (const leak of [SESSION, 'acct-7', 'ada@example.com', SECRET, tmp, tmp.replace(/\\/g, '\\\\'), 'not for this guest', 'x.jsonl', 'tok999']) expect(said).not.toContain(leak)
   })
 
   it('pages: only the shared project panes, frames while watched, one at a time, input with the right, hidden and paused show nothing, the right taken away stops them', async () => {

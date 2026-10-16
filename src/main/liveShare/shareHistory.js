@@ -20,8 +20,11 @@
 // masked the same way; the reader's key for "nothing changed" is given to
 // guests as an HMAC too (it names the session), turned back here.
 //
-// Every answer goes through assertNoHostPaths at the end (the project's
-// folders, any drive, share or long path become "…").
+// Every text then has the share's hidden files it names as "…" (where:
+// maskHidden, shareHiddenText.js: .git, .tessel, secrets and what git
+// ignores, as the Files tab hides them), and every answer goes through
+// assertNoHostPaths at the end (the project's folders, any drive, share or
+// long path become "…").
 import crypto from 'crypto'
 import { CHAT_LIMITS, guestChatEvents, guestText, harnessUserText, stripHarnessBlocks } from './shareChat.js'
 import { assertNoHostPaths } from './shareScope.js'
@@ -55,6 +58,9 @@ const MODEL = /^[\w .:/()+-]{1,80}$/
 const EFFORT = /^[\w-]{1,20}$/
 const str = (v) => (typeof v === 'string' ? v : '')
 const time = (v) => (Number.isFinite(v) && v > 0 ? v : null)
+// where.maskHidden(texts) -> Promise<texts>: hidden files' names out (none
+// given: the texts as they are).
+const masker = (where) => (where && typeof where.maskHidden === 'function' ? where.maskHidden : async (texts) => texts)
 
 export const isRef = (v) => typeof v === 'string' && REF.test(v)
 
@@ -97,7 +103,8 @@ export function createShareHistory({ listSessions, sessionDetails, readTerminal 
   // The project's past conversations. root: its folder (host-only); roots:
   // its folders for the masking (cleanRoots shape), rawRoots: as paths for
   // assertNoHostPaths. -> { ok, data: { sessions, truncated } }
-  async function list(project, args, { root, roots, rawRoots }) {
+  async function list(project, args, where) {
+    const { root, roots, rawRoots } = where
     if (!root || typeof listSessions !== 'function') return { ok: false, code: 'unavailable' }
     const { limit } = listArgs(args)
     let rows
@@ -123,13 +130,16 @@ export function createShareHistory({ listSessions, sessionDetails, readTerminal 
         ...(r.origin === 'ide' ? { origin: 'ide' } : {})
       })
     }
+    const titles = await masker(where)(out.map((r) => r.title))
+    out.forEach((r, i) => (r.title = titles[i]))
     const data = { sessions: out, truncated: Array.isArray(rows) && rows.length > out.length }
     return { ok: true, data: assertNoHostPaths(data, rawRoots).value }
   }
 
   // One conversation of the project's last lists: its first prompt (unless
   // it is the harness's own) and latest turns, masked. -> { ok, data }
-  async function details(project, args, { roots, rawRoots }) {
+  async function details(project, args, where) {
+    const { roots, rawRoots } = where
     const ref = args && isRef(args.ref) ? args.ref : null
     const row = ref && refs.get(project) ? refs.get(project).get(ref) : null
     if (!row) return { ok: false, code: 'not-found' }
@@ -144,16 +154,18 @@ export function createShareHistory({ listSessions, sessionDetails, readTerminal 
     const first = str(d.firstPrompt)
     const firstPrompt = first && !harnessUserText(first) ? guestText(stripHarnessBlocks(first.slice(0, 64 * 1024)).trim(), roots, CHAT_LIMITS.user) : ''
     const { events } = guestChatEvents(turnsAsEvents(d.turns), roots)
-    const turns = events.map((e) => ({ role: e.type === 'user' ? 'user' : 'assistant', text: e.text, at: time(e.at) }))
+    const masked = await masker(where)([firstPrompt, ...events.map((e) => e.text)])
+    const turns = events.map((e, i) => ({ role: e.type === 'user' ? 'user' : 'assistant', text: masked[i + 1], at: time(e.at) }))
     const messageCount = Number.isSafeInteger(d.messageCount) && d.messageCount >= 0 ? d.messageCount : null
-    return { ok: true, data: assertNoHostPaths({ firstPrompt, turns, messageCount }, rawRoots).value }
+    return { ok: true, data: assertNoHostPaths({ firstPrompt: masked[0], turns, messageCount }, rawRoots).value }
   }
 
   // What was said in the project's terminal agents. panes: the project's
   // agent panes with a terminal (the host window's chats of it: id, agentId,
   // sessionId, accountId). args: { from, known: { paneId: key } }.
   // -> { ok, data: { panes: { paneId: { key, items } | { key, same: true } } } }
-  async function terminal(project, args, { panes, roots, rawRoots }) {
+  async function terminal(project, args, where) {
+    const { panes, roots, rawRoots } = where
     if (typeof readTerminal !== 'function') return { ok: false, code: 'unavailable' }
     const a = args && typeof args === 'object' ? args : {}
     const from = Number.isFinite(a.from) && a.from >= 0 ? a.from : 0
@@ -211,6 +223,10 @@ export function createShareHistory({ listSessions, sessionDetails, readTerminal 
       bytes += size
       out[p.id] = { key: gk, items: items.slice(start) }
     }
+    // The hidden files they name, all of them at once.
+    const all = Object.values(out).flatMap((e) => e.items || [])
+    const texts = await masker(where)(all.map((it) => it.text))
+    all.forEach((it, i) => (it.text = texts[i]))
     return { ok: true, data: assertNoHostPaths({ panes: out }, rawRoots).value }
   }
 

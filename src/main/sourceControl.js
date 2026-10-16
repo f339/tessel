@@ -13,7 +13,7 @@ import fs from 'fs'
 import { resolve, relative, isAbsolute, join, sep } from 'path'
 import { run } from './agentTools'
 import { cleanEnv } from './cleanEnv'
-import { localGitArgs } from './gitSafety'
+import { localGitArgs, inGuestGit } from './gitSafety'
 import { t } from './i18n'
 
 const MAX_FILE = 10 * 1024 * 1024 // a version larger than this is not shown
@@ -622,7 +622,8 @@ export function createScm(b) {
     if (!msg) return { ok: false, error: t('main.scm.noMessage', 'Enter a commit message to commit.') }
     const staged = await git(r.top, ['diff', '--cached', '--quiet', '--no-ext-diff', '--no-textconv'])
     if (staged.ok) return { ok: false, error: t('main.scm.nothingStaged', 'Stage at least one file to commit.') }
-    const res = await git(r.top, ['commit', '-m', msg], { timeout: 180000 })
+    // A Live Share guest's commit: no hook (also turned off in its config).
+    const res = await git(r.top, ['commit', ...(inGuestGit() ? ['--no-verify'] : []), '-m', msg], { timeout: 180000 })
     if (!res.ok) {
       if (identityError(res))
         return { ok: false, error: t('main.scm.noGitName', 'Git does not know your name yet (Tools > Git > Set name & email), then commit again.') }
@@ -715,17 +716,20 @@ export function createScm(b) {
   // -> { ok, base, mergeBase, ahead, behind, added, removed, reviewUrl,
   //      onBase, head, files, filesTruncated }
   //  | { ok: true, base: null } (nothing to compare with) | { ok: false, error }
-  async function scmBranchCompare({ root } = {}) {
+  // paths: the commits ahead and behind counted for them only (a Live Share
+  // project below its repository's top).
+  async function scmBranchCompare({ root, paths = null } = {}) {
     const r = await repoOf(root)
     if (r.error) return { ok: false, error: r.error }
-    const key = b.key(r.top)
+    const only = Array.isArray(paths) && paths.length ? paths : null
+    const key = `${b.key(r.top)}\n${only ? only.join('\n') : ''}`
     if (compareInFlight.has(key)) return compareInFlight.get(key)
-    const p = branchCompare(r.top).finally(() => compareInFlight.delete(key))
+    const p = branchCompare(r.top, only).finally(() => compareInFlight.delete(key))
     compareInFlight.set(key, p)
     return p
   }
 
-  async function branchCompare(top) {
+  async function branchCompare(top, only = null) {
     const branch = await currentBranch(top)
     const base = await resolveCompareBase(top, branch)
     if (!base) return { ok: true, base: null }
@@ -751,7 +755,7 @@ export function createScm(b) {
       ])
       if (ns.ok) list = branchFileList(ns.stdout, num.ok ? num.stdout : '')
     }
-    const behindAhead = await git(top, ['rev-list', '--left-right', '--count', `${base}...HEAD`])
+    const behindAhead = await git(top, ['rev-list', '--left-right', '--count', `${base}...HEAD`, ...(only ? ['--', ...only.map(literal)] : [])])
     const m = /^(\d+)\s+(\d+)/.exec(behindAhead.ok ? behindAhead.stdout.trim() : '')
     let added = null
     let removed = null
@@ -793,7 +797,9 @@ export function createScm(b) {
   }
 
   // -> { ok, items, currentRef, remoteRef, baseRef, mergeBase, hasMore, limit }
-  async function scmHistory({ root, limit, base } = {}) {
+  // paths: only the commits that touch them (from the top: a Live Share
+  // project below its repository's top).
+  async function scmHistory({ root, limit, base, paths = null } = {}) {
     const r = await repoOf(root)
     if (r.error) return { ok: false, error: r.error }
     const top = r.top
@@ -824,7 +830,8 @@ export function createScm(b) {
       const mb = await git(top, ['merge-base', headOid, remoteRef.revision])
       mergeBase = mb.ok ? mb.stdout.trim() || undefined : undefined
     }
-    const log = await git(top, ['log', `--format=${HISTORY_COMMIT_FORMAT}`, '-z', '--topo-order', '--decorate=full', `-n${n + 1}`, headOid])
+    const only = Array.isArray(paths) && paths.length ? ['--', ...paths.map(literal)] : []
+    const log = await git(top, ['log', `--format=${HISTORY_COMMIT_FORMAT}`, '-z', '--topo-order', '--decorate=full', `-n${n + 1}`, headOid, ...only])
     if (!log.ok) return { ok: false, error: gitMessage(log, t('main.scm.logFailed', 'git log failed.')) }
     const parsed = parseHistoryLog(log.stdout)
     return { ok: true, items: parsed.slice(0, n), currentRef, remoteRef, baseRef, mergeBase, hasMore: parsed.length > n, limit: n }
@@ -952,12 +959,15 @@ export function createScm(b) {
 
   // A commit's hover (VS Code's Timeline): its changes in numbers and its
   // page on GitHub. -> { ok, stats: { files, insertions, deletions }, webUrl }
-  async function scmCommitInfo({ root, commit } = {}) {
+  // paths: its numbers for them only (a Live Share project below its
+  // repository's top).
+  async function scmCommitInfo({ root, commit, paths = null } = {}) {
     const r = await repoOf(root)
     if (r.error) return { ok: false, error: r.error }
     if (!isCommitId(commit)) return { ok: false, error: t('main.scm.badCommit', 'Unknown commit.') }
+    const only = Array.isArray(paths) && paths.length ? ['--', ...paths.map(literal)] : []
     const [stat, url] = await Promise.all([
-      git(r.top, ['show', '--shortstat', '--format=', '--no-color', commit]),
+      git(r.top, ['show', '--shortstat', '--format=', '--no-color', '--no-ext-diff', '--no-textconv', commit, ...only]),
       git(r.top, ['remote', 'get-url', 'origin'])
     ])
     const line = stat.ok ? stat.stdout.trim() : ''
@@ -973,8 +983,29 @@ export function createScm(b) {
     }
   }
 
+  // Of these paths (from the top), the ones git reads through a filter
+  // (their filter attribute set: git-lfs, git-crypt...).
+  async function filteredPaths(top, rels) {
+    const out = []
+    for (let i = 0; i < rels.length; i += BULK) {
+      // (Paths, not pathspecs: check-attr takes them as they are.)
+      const res = await git(top, ['check-attr', '-z', 'filter', '--', ...rels.slice(i, i + BULK)])
+      if (!res.ok) return rels.slice() // not known: all of them
+      const parts = String(res.stdout || '').split('\0')
+      for (let j = 0; j + 2 < parts.length; j += 3) if (parts[j + 2] && parts[j + 2] !== 'unspecified' && parts[j + 2] !== 'unset') out.push(parts[j])
+    }
+    return out
+  }
+  // What is staged now (paths from the top), or null when git failed.
+  async function stagedPaths(top) {
+    const res = await git(top, ['diff', '--cached', '--name-only', '-z', '--no-ext-diff', '--no-textconv'])
+    return res.ok ? String(res.stdout || '').split('\0').filter(Boolean) : null
+  }
+
   return {
     repoOf,
+    filteredPaths,
+    stagedPaths,
     resolveCompareBase,
     scmStatus,
     scmStage,
@@ -1094,3 +1125,5 @@ export const scmFileVersions = local.scmFileVersions
 export const scmStagedDiff = local.scmStagedDiff
 export const scmFileHistory = local.scmFileHistory
 export const scmCommitInfo = local.scmCommitInfo
+export const filteredPaths = local.filteredPaths
+export const stagedPaths = local.stagedPaths
