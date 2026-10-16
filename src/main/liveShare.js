@@ -263,7 +263,8 @@ const KEEP_FRESH_MS = 60000
 // makes the reader of the conversations guests watch (src/main/chat/
 // transcriptView.js createTranscriptViews, with this send); without it, no
 // guest gets them. chatRetry: { firstMs, maxMs, tries } (tests: FEED_*).
-export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sendExit, log, queryState = processState, kill = (pid) => process.kill(pid), pidRunning = pidAlive, resume = true, chatViews: makeChatViews = null, chatRetry = {} }) {
+// requestLimits: { keepMs, max } (tests: the requests to open kept).
+export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sendExit, log, queryState = processState, kill = (pid) => process.kill(pid), pidRunning = pidAlive, resume = true, chatViews: makeChatViews = null, chatRetry = {}, requestLimits = {} }) {
   const info = (msg) => log?.info?.('liveshare', msg)
   const warn = (msg) => (log?.warn ? log.warn('liveshare', msg) : info(msg))
   const hostFile = createSessionFile(join(dataDir, 'liveshare-host.json'))
@@ -323,7 +324,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   // project id -> its agent panes with a conversation (cleanHostChats).
   let chatSources = new Map()
   const sizes = new Map() // pane id -> { cols, rows }, of every terminal
-  const asks = new Map() // guest id -> resolve(yes)
+  const asks = new Map() // guest id -> { resolve(answer), trustable }
   let changedTimer = null
   let hostTimer = null // keeps the saved share fresh, watches an adopted tunnel
 
@@ -588,18 +589,22 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
 
   // Requests to open sent to the window (opened at once with the right, or
   // asked of the host without it: { action, request, spec, guest }), kept
-  // until the window is done with them (liveShare:requestDone) or a while
-  // has passed: one that no longer stands (the guest gone, its project or,
-  // for one opened with the right, that right taken away) is called off
-  // ({ action: 'cancel', request }).
-  const REQUEST_KEEP_MS = 2 * 60 * 1000
-  const MAX_REQUESTS = 32
+  // until the window is done with them (liveShare:requestDone): one that no
+  // longer stands (the guest gone, its project or, for one opened with the
+  // right, that right taken away), or kept too long or past the most kept, is
+  // called off ({ action: 'cancel', request }).
+  const REQUEST_KEEP_MS = requestLimits.keepMs ?? 2 * 60 * 1000
+  const MAX_REQUESTS = requestLimits.max ?? 32
   const hostRequests = new Map() // request id -> { action, guestId, spec, at }
   let nextRequest = 1
+  function cancelRequest(request) {
+    if (!hostRequests.delete(request)) return
+    send('liveShare:hostRequest', { action: 'cancel', request })
+  }
   function requestOpen(action, spec, guest) {
     const t0 = Date.now()
-    for (const [id, r] of [...hostRequests]) if (t0 - r.at > REQUEST_KEEP_MS) hostRequests.delete(id)
-    if (hostRequests.size >= MAX_REQUESTS) hostRequests.delete(hostRequests.keys().next().value)
+    for (const [id, r] of [...hostRequests]) if (t0 - r.at > REQUEST_KEEP_MS) cancelRequest(id)
+    if (hostRequests.size >= MAX_REQUESTS) cancelRequest(hostRequests.keys().next().value)
     const request = `r${nextRequest++}`
     hostRequests.set(request, { action, guestId: guest.id, spec, at: t0 })
     send('liveShare:hostRequest', { action, request, spec, guest })
@@ -608,8 +613,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     for (const [request, r] of [...hostRequests]) {
       const g = list.find((x) => x.id === r.guestId && x.state === 'joined')
       if (g && g.projects.includes(r.spec.project) && (r.action !== 'open' || (g.rights && g.rights.open))) continue
-      hostRequests.delete(request)
-      send('liveShare:hostRequest', { action: 'cancel', request })
+      cancelRequest(request)
     }
   }
 
@@ -638,7 +642,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         closePane: (id, guest) => send('liveShare:hostRequest', { action: 'close', id, guest }),
         askApproval: (guest) =>
           new Promise((resolve) => {
-            asks.set(guest.id, resolve)
+            asks.set(guest.id, { resolve, trustable: !!guest.trustable })
             send('liveShare:ask', { guestId: guest.id, name: guest.name, code: guest.code || null, invite: guest.invite || null, offer: guest.offer || null, trustable: !!guest.trustable })
           }),
         onGuests: (list) => {
@@ -682,7 +686,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     } catch {
       /* already stopped */
     }
-    for (const resolve of asks.values()) resolve(false)
+    for (const ask of asks.values()) ask.resolve(false)
     asks.clear()
     hostRequests.clear()
     clearTimeout(presenceTimer)
@@ -1472,16 +1476,18 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   }))
   // The host's answer to a guest waiting: the shared projects it gets (the
   // ones listed; none when no list comes), its rights, and whether it is
-  // trusted from now on. Trusting needs room in the list: when it is full,
-  // the guest is let in untrusted and the answer says so (reason
-  // 'trust-full'), for the host to see.
+  // trusted from now on. When it can't be trusted, it is let in untrusted
+  // and the answer says why, for the host to see: 'not-trustable' (an older
+  // Tessel, without an identity key) or 'trust-full' (the list is full).
   ipcMain.handle('liveShare:approve', (_evt, { guestId, yes, projects, rights, trust: trustIt } = {}) => {
-    const resolve = asks.get(guestId)
-    if (!resolve) return { ok: false }
+    const ask = asks.get(guestId)
+    if (!ask) return { ok: false }
     asks.delete(guestId)
-    const full = !!yes && trustIt === true && trust.isFull()
-    resolve(yes ? { yes: true, projects: cleanProjectIds(projects), rights: cleanRights(rights), trust: trustIt === true && !full } : false)
-    return full ? { ok: true, reason: 'trust-full', max: MAX_TRUSTED } : { ok: true }
+    const wanted = !!yes && trustIt === true
+    const why = !wanted ? null : !ask.trustable ? 'not-trustable' : trust.isFull() ? 'trust-full' : null
+    ask.resolve(yes ? { yes: true, projects: cleanProjectIds(projects), rights: cleanRights(rights), trust: wanted && !why } : false)
+    if (why === 'trust-full') return { ok: true, reason: why, max: MAX_TRUSTED }
+    return why ? { ok: true, reason: why } : { ok: true }
   })
   // Trust a guest let in (connected or offline), or stop trusting someone.
   ipcMain.handle('liveShare:trust', (_evt, { guestId } = {}) =>

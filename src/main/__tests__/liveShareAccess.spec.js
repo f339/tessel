@@ -295,7 +295,7 @@ describe('people and trust', () => {
     expect(next.access.trustCounters(e.fp)).toMatchObject({ opened: 7, invites: [inv.id] })
   })
 
-  it('a trusted identity never pushes out someone the host let in; a few noes in a row pause every invitation', () => {
+  it('a trusted identity never pushes out someone the host let in; only the host’s own noes, across two invitations, pause every invitation', () => {
     const trust = createTrustStore()
     const online = new Set()
     const { access, clock } = model({ trust, online })
@@ -307,12 +307,17 @@ describe('people and trust', () => {
     expect(access.claimTrusted(e.fp, { key: key(), name: 'Simpa', sid, via: inv.id, identity })).toBe(null)
     expect(access.people()).toHaveLength(MAX_PEOPLE)
     const b = access.createInvite({}).invite
-    access.noteDenied(inv.id)
-    access.noteDenied(inv.id)
+    // Guests leaving or turned away pause their own invitation only.
+    for (let i = 0; i < 5; i++) access.noteDenied(inv.id)
+    expect(access.pausing(inv.id)).toBe(true)
     expect(access.pausingAll()).toBe(false)
-    access.noteDenied(b.id)
+    // The host's own noes, all for one invitation: still not every one.
+    for (let i = 0; i < 3; i++) access.noteDenied(inv.id, { byHost: true })
+    expect(access.pausingAll()).toBe(false)
+    // One for another invitation too: every invitation pauses a while.
+    access.noteDenied(b.id, { byHost: true })
     expect(access.pausingAll()).toBe(true)
-    clock.now += 15001
+    clock.now += 30001
     expect(access.pausingAll()).toBe(false)
   })
 

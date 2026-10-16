@@ -776,22 +776,128 @@ describe('Live Share: a trusted identity keeps its caps and its one place', () =
     expect(clones[2].closed).toBe('replaced')
   })
 
-  it('at most three guests wait for the host in all, whatever their invitations', async () => {
+  // Mallory's asks are never answered (the host away); everyone else hears no.
+  const parkMallory = (s) => (s.t.answers = new Proxy({}, { get: (_, name) => (String(name).startsWith('Mallory') ? () => new Promise(() => {}) : false), has: () => true }))
+  const waitingOrClosed = (r) => r.states.includes('waiting') || r.closed
+
+  it('one code fills only its own short line (two wait per invitation, six in all): the others are still asked', async () => {
     const clock = { t: 1_000_000 }
     const s = await share(clock)
-    s.t.answers = new Proxy({}, { get: () => () => new Promise(() => {}), has: () => true })
-    const invs = ['A', 'B', 'C', 'D'].map((label) => s.host.createInvite({ label, projects: ['ws-a'] }).invite)
-    const waiting = []
-    for (const inv of invs.slice(0, 3)) {
-      const r = guestOf(s, inv.id, inv.label)
-      await until(() => r.states.includes('waiting') || r.closed)
-      waiting.push(r)
+    parkMallory(s)
+    const leaked = s.host.createInvite({ label: 'public group', lifetime: 'never', projects: ['ws-a'] }).invite
+    const priv = s.host.createInvite({ label: 'Simpa only', projects: ['ws-a'] }).invite
+    const parked = []
+    for (let i = 0; i < 3; i++) {
+      const r = guestOf(s, leaked.id, `Mallory${i}`)
+      await until(() => waitingOrClosed(r))
+      parked.push(r)
     }
-    expect(waiting.every((r) => r.states.includes('waiting'))).toBe(true)
-    const fourth = guestOf(s, invs[3].id, 'D')
-    await until(() => fourth.closed)
-    expect(fourth.closed).toBe('busy')
-    // Not counted against D (other invitations filled the line): D is not blocked.
-    expect(s.host.accessState().invites.find((i) => i.id === invs[3].id).guard.unfinished).toEqual([])
+    expect(parked.map((r) => r.closed)).toEqual([null, null, 'busy'])
+    const simpa = guestOf(s, priv.id, 'Simpa')
+    await until(() => simpa.closed)
+    expect(simpa.closed).toBe('denied') // asked: the host said no
+    expect(s.t.asked.map((g) => g.name)).toContain('Simpa')
+    // Six wait in all, whatever their invitations; the next is turned away,
+    // not counted against its own invitation.
+    const more = ['B', 'C'].map((label) => s.host.createInvite({ label, projects: ['ws-a'] }).invite)
+    for (const inv of more) {
+      for (let i = 0; i < 2; i++) {
+        const r = guestOf(s, inv.id, `Mallory-${inv.label}${i}`)
+        await until(() => waitingOrClosed(r))
+        expect(r.closed).toBe(null)
+      }
+    }
+    clock.t += 16_000 // (Simpa's no paused only its own invitation)
+    const last = s.host.createInvite({ label: 'D', projects: ['ws-a'] }).invite
+    const d = guestOf(s, last.id, 'Mallory-D')
+    await until(() => d.closed)
+    expect(d.closed).toBe('busy')
+    expect(s.host.accessState().invites.find((i) => i.id === last.id).guard.unfinished).toEqual([])
+  })
+
+  it('leaving while waiting pauses only that invitation; the host’s own noes pause every invitation only when they span two invitations', async () => {
+    const clock = { t: 1_000_000 }
+    const s = await share(clock)
+    parkMallory(s)
+    const [leaked, x, y, z] = ['public group', 'X', 'Y', 'Z'].map((label) => s.host.createInvite({ label, lifetime: 'never', projects: ['ws-a'] }).invite)
+    const parked = []
+    for (let i = 0; i < 2; i++) {
+      const r = guestOf(s, leaked.id, `Mallory${i}`)
+      await until(() => waitingOrClosed(r))
+      parked.push(r)
+    }
+    for (const r of parked) r.client.leave()
+    await until(() => s.host.guests().length === 0)
+    // Its own invitation pauses; no other does.
+    const again = guestOf(s, leaked.id, 'Mallory9')
+    await until(() => again.closed)
+    expect(again.closed).toBe('busy')
+    const simpa = guestOf(s, x.id, 'Simpa')
+    await until(() => simpa.closed)
+    expect(simpa.closed).toBe('denied')
+    // Three noes, all for X: X pauses, the others do not.
+    for (const [i, wait] of [
+      [1, 16_000],
+      [2, 31_000]
+    ]) {
+      clock.t += wait
+      const r = guestOf(s, x.id, `Bob${i}`)
+      await until(() => r.closed)
+      expect(r.closed).toBe('denied')
+    }
+    const onZ = guestOf(s, z.id, 'Cid')
+    await until(() => onZ.closed)
+    expect(onZ.closed).toBe('denied') // asked
+    // That no was for Z: the host's noes now span two invitations, so every
+    // invitation pauses a while (Y too, which had none).
+    const paused = guestOf(s, y.id, 'Eve')
+    await until(() => paused.closed)
+    expect(paused.closed).toBe('busy')
+    // Not counted against Y (others' noes did it), and over after a while.
+    expect(s.host.accessState().invites.find((i) => i.id === y.id).guard.unfinished).toEqual([])
+    clock.t += 31_000
+    const later = guestOf(s, y.id, 'Fay')
+    await until(() => later.closed)
+    expect(later.closed).toBe('denied')
+  })
+
+  it('a guest waits four minutes at most for the host’s answer, then it counts against its own invitation only', async () => {
+    const clock = { t: 1_000_000 }
+    const s = await share(clock)
+    parkMallory(s)
+    const [x, y] = ['X', 'Y'].map((label) => s.host.createInvite({ label, lifetime: 'never', projects: ['ws-a'] }).invite)
+    const m = guestOf(s, x.id, 'Mallory')
+    await until(() => waitingOrClosed(m))
+    expect(m.closed).toBe(null)
+    clock.t += 4 * 60 * 1000 + 1
+    const simpa = guestOf(s, y.id, 'Simpa')
+    await until(() => simpa.closed && m.closed)
+    expect(m.closed).toBe('timeout')
+    expect(simpa.closed).toBe('denied') // asked
+    const guards = Object.fromEntries(s.host.accessState().invites.map((i) => [i.label, i.guard.unfinished.length]))
+    expect(guards).toEqual({ X: 1, Y: 0 })
+  })
+
+  it('a person whose trusted entry is gone (trust taken back while the share was taken back) is refused on coming back, and not listed', async () => {
+    const clock = { t: 1_000_000 }
+    const s = await share(clock)
+    const identityKey = newSigningKey()
+    const e = s.trust.add({ key: identityKey.publicRaw, name: 'T', projects: ['ws-a'], rights: { type: true } })
+    const inv = s.host.createInvite({ label: 'friends', projects: ['ws-a'] }).invite
+    const key = newSigningKey()
+    const r = guestOf(s, inv.id, 'T', { identityKey, signingKey: key })
+    await until(() => r.projects || r.closed)
+    expect(r.closed).toBe(null)
+    // What is saved for it: no grant of its own (its trusted entry's).
+    expect(s.host.accessState().people[0].grant).toEqual({ projects: [], rights: { type: false, open: false, close: false } })
+    r.client.disconnect()
+    await until(() => s.host.offlineGuests().length === 1)
+    // The trusted entry goes by itself (not through the share).
+    s.trust.remove(e.fp)
+    const back = guestOf(s, inv.id, 'T', { signingKey: key, back: true, hostKey: r.hostKey })
+    await until(() => back.closed)
+    expect(back.closed).toBe('rejoin-refused')
+    expect(s.host.offlineGuests()).toEqual([])
+    expect(s.t.asked).toEqual([])
   })
 })
