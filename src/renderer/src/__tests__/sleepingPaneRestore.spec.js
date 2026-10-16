@@ -49,6 +49,7 @@ function load({ shared = false, tree = null } = {}) {
     newId: () => 'pane-new',
     seedBuffer: () => {},
     exitOf: () => null,
+    performance,
     validPaneSessionOptions: (o) => (o && o.model ? o : null),
     validSavedFiles: () => [],
     launchPermissions: () => 'manual',

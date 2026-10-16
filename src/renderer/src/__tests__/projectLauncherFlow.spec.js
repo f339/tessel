@@ -317,7 +317,14 @@ describe('a restored layout', () => {
       restoresTerminal: (leaf) => leaf.type === 'leaf',
       seedBuffer: vi.fn(),
       performance,
-      window: { shellApi: attachPty ? { attachPty } : {} }
+      window: { shellApi: attachPty ? { attachPty } : {} },
+      forEachLeaf: (node, fn) => {
+        if (!node) return
+        if (node.type === 'leaf') fn(node)
+        else node.children.forEach((c) => ctx.forEachLeaf(c, fn))
+      },
+      exitOf: () => null,
+      waitForHostAgain: vi.fn()
     }
     vm.createContext(Object.assign(ctx, { liveShare: noLiveShare }))
     vm.runInContext(`this.run = async function (snaps, saved) {\n${slice('    // Every project as saved, in the saved order', '    if (workspaces.value.length) {')}\n}`, ctx)
@@ -357,6 +364,30 @@ describe('a restored layout', () => {
     expect(ctx.currentWsId.value).toBe('ws-c')
     expect(ctx.restoreReport.shownAt).toBeGreaterThan(0)
     expect(ctx.restoreReport.attach).toMatchObject({ count: 5, attached: 0 })
+  })
+
+  it('a pane on an SSH host whose connection dropped since its answer waits for its host once it is in the tree', async () => {
+    const live = []
+    const ctx = await restore(
+      [{ id: 'ws-a', name: 'A', tree: { type: 'split', children: [{ type: 'leaf', id: 'pane-s1' }, { type: 'leaf', id: 'pane-l1' }] } }],
+      async (tree) => ({
+        ...tree,
+        children: [
+          { type: 'leaf', id: 'pane-s1', attached: true, remoteHostId: 'ssh-box', pid: null, answeredAt: 100 },
+          { type: 'leaf', id: 'pane-l1', attached: true, pid: 42, answeredAt: 100 }
+        ]
+      }),
+      {
+        onCtx: (c) => {
+          c.exitOf = (id, pid, since) => (id === 'pane-s1' && pid === null && since === 100 ? { exitCode: 255 } : id === 'pane-l1' ? { exitCode: 1 } : null)
+          c.waitForHostAgain = vi.fn((id) => live.push([id, c.workspaces.value.map((w) => w.id)]))
+        }
+      }
+    )
+    // Only the SSH pane (a local one shows its end itself), once placed.
+    expect(ctx.waitForHostAgain).toHaveBeenCalledTimes(1)
+    expect(ctx.waitForHostAgain).toHaveBeenCalledWith('pane-s1', { exitCode: 255, pid: null })
+    expect(live).toEqual([['pane-s1', ['ws-a']]])
   })
 
   it('the project you were in could not come back: the one at its place is shown, as before', async () => {

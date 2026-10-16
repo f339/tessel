@@ -51,6 +51,7 @@ function load({ shared = false, tree = null } = {}) {
     newId: () => 'pane-new',
     seedBuffer: () => {},
     exitOf: () => null,
+    performance,
     validPaneSessionOptions: (o) => (o && o.model ? o : null),
     validSavedFiles: () => [],
     launchPermissions: () => 'manual',
@@ -205,9 +206,12 @@ describe('a pane re-attached from an answer asked ahead at startup', () => {
   const answer = { ok: true, shell: { id: 'pwsh', name: 'PowerShell' }, backend: 'conpty', pid: 42, cwd: 'C:\\proj', exited: false, buffer: 'SCREEN' }
   it('comes back ended when its terminal ended since the answer', async () => {
     const { api, ctx, shellApi } = load()
-    ctx.exitOf = (id, pid) => (id === 'pane-l1' && pid === 42 ? { exitCode: 1 } : null)
-    const leaf = await api.createLeaf('pwsh', null, 'C:\\proj', null, { id: 'pane-l1', attaching: Promise.resolve({ ...answer }) })
-    expect(leaf).toMatchObject({ id: 'pane-l1', pid: 42, exitedAtStart: true })
+    let since = null
+    ctx.exitOf = (id, pid, at) => ((since = at), id === 'pane-l1' && pid === 42 ? { exitCode: 1 } : null)
+    const leaf = await api.createLeaf('pwsh', null, 'C:\\proj', null, { id: 'pane-l1', attaching: Promise.resolve({ ...answer, answeredAt: 1234 }) })
+    expect(leaf).toMatchObject({ id: 'pane-l1', pid: 42, exitedAtStart: true, answeredAt: 1234 })
+    // Asked with the time its answer came (a terminal with no process id).
+    expect(since).toBe(1234)
     // Answered ahead: not asked again, and its output was seeded already.
     expect(shellApi.attachPty).not.toHaveBeenCalled()
     expect(shellApi.createPty).not.toHaveBeenCalled()

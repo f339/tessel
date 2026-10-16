@@ -3269,7 +3269,7 @@ onMounted(() => {
     // in place asks the host whether its own terminal still runs.
     if (!pid && (props.node.gen || props.node.restartedAt)) {
       const gen = props.node.gen
-      const a = await window.shellApi.attachPty(id).catch(() => null)
+      const a = await window.shellApi.attachPty(id, { probe: true }).catch(() => null)
       if (!mounted || props.node.gen !== gen || !term) return
       if (a && a.ok && !a.exited && (!a.pid || !props.node.pid || a.pid === props.node.pid)) return
     }
@@ -3277,7 +3277,7 @@ onMounted(() => {
   })
   // Its terminal ended before this pane was mounted (rebuilt at startup from
   // an answer asked ahead, or mounted again): the end kept since (ptyStore.js).
-  const endedBefore = exitOf(props.node.id, props.node.pid)
+  const endedBefore = exitOf(props.node.id, props.node.pid, props.node.answeredAt)
   if (endedBefore && !exited.value) paneEnded(endedBefore.exitCode)
 
   // Refit whenever the pane is resized (divider drag, window resize, splits).

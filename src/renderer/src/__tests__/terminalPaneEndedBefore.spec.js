@@ -85,6 +85,19 @@ describe('the end of a terminal kept from the start (ptyStore.js)', () => {
     dropBuffer('pane-k1')
     expect(exitOf('pane-k1', 11)).toBeNull()
   })
+
+  it('a terminal with no process id (on an SSH host): an end heard after its answer came', () => {
+    const before = performance.now()
+    heard.exit({ id: 'pane-ssh', exitCode: 255, signal: 0, pid: null })
+    const after = performance.now() + 1
+    expect(exitOf('pane-ssh', null, before)).toEqual({ exitCode: 255 })
+    // Heard before its answer: an older terminal's.
+    expect(exitOf('pane-ssh', null, after)).toBeNull()
+    // No answer time: never taken.
+    expect(exitOf('pane-ssh', null)).toBeNull()
+    // A pane with a process id is never matched by an end without one.
+    expect(exitOf('pane-ssh', 9, before)).toBeNull()
+  })
 })
 
 describe('a pane mounted after its terminal ended', () => {
@@ -135,6 +148,13 @@ describe('a pane mounted after its terminal ended', () => {
     heard.exit({ id: 'pane-e1', exitCode: 3, signal: 0, pid: 42 })
     const term = mountPane({ id: 'pane-e1', pid: 42 })
     expect(term.written.join('')).toContain('process exited with code 3')
+  })
+
+  it('a pane over ssh2 (no process id) whose terminal ended since its answer', () => {
+    const answeredAt = performance.now()
+    heard.exit({ id: 'pane-e4', exitCode: 255, signal: 0, pid: null })
+    const term = mountPane({ id: 'pane-e4', pid: null, answeredAt })
+    expect(term.written.join('')).toContain('process exited with code 255')
   })
 
   it('a pane restarted in place (another process) is not taken for ended', () => {

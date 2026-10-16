@@ -1294,6 +1294,9 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
   let res = null
   let attached = false
   let restoredText = ''
+  // When its terminal's answer came (attach or create): an end heard after it
+  // is its end, for a terminal with no process id (ptyStore.js exitOf).
+  let answeredAt = null
   // Reopening a pane: its terminal may still be running in the terminal host
   // (after a restart, crash or reload). Re-attach and replay its output.
   // At startup the re-attach was asked ahead (opts.attaching, restoreAttach.js)
@@ -1305,6 +1308,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
         res = a
         attached = true
         if (!opts.attaching) seedBuffer(id, a.buffer)
+        answeredAt = Number.isFinite(a.answeredAt) ? a.answeredAt : performance.now()
       }
     } catch {
       /* fall back to a new terminal */
@@ -1446,6 +1450,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     } catch (err) {
       res = { ok: false, error: err && err.message }
     }
+    answeredAt = performance.now()
     // The terminal stopped when the app closed: the pane shows what it last
     // printed above the new session (see TerminalPane).
     restoredText = res && res.ok ? opts.savedOutput || '' : ''
@@ -1528,7 +1533,8 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     toolsVersion: !attached && teamToolsReady ? teamToolsVersion : null,
     // Ended already, or since its answer came (asked ahead at startup, it may
     // have ended before its pane was rebuilt: its end was kept, ptyStore.js).
-    exitedAtStart: attached && (!!res.exited || !!exitOf(id, res.pid)),
+    exitedAtStart: attached && (!!res.exited || !!exitOf(id, res.pid, answeredAt)),
+    answeredAt,
     restoredText,
     broadcast: true
   })
@@ -8823,7 +8829,7 @@ async function restartInPlaceNow(leafId, opts) {
   let gone = false
   for (let i = 0; i < 40 && !gone; i++) {
     await new Promise((r) => setTimeout(r, 250))
-    const a = await window.shellApi.attachPty(leafId).catch(() => null)
+    const a = await window.shellApi.attachPty(leafId, { probe: true }).catch(() => null)
     gone = !a || !a.ok
     if (!gone) window.shellApi.killPty(leafId)
   }
@@ -9059,7 +9065,7 @@ async function switchToChat(leafId) {
     let gone = false
     for (let i = 0; i < 40 && !gone; i++) {
       await new Promise((r) => setTimeout(r, 250))
-      const a = await window.shellApi.attachPty(leafId).catch(() => null)
+      const a = await window.shellApi.attachPty(leafId, { probe: true }).catch(() => null)
       gone = !a || !a.ok
       if (!gone) window.shellApi.killPty(leafId)
     }
@@ -12608,6 +12614,15 @@ async function restoreOrSeedLayout() {
       const at = after ? workspaces.value.indexOf(after) : -1
       if (at >= 0) workspaces.value.splice(at, 0, ws)
       else workspaces.value.push(ws)
+      // A pane on an SSH host whose connection dropped since its answer came
+      // (before it was in the tree, its end found no pane): waits for its
+      // host again, as a live drop does.
+      const ended = []
+      forEachLeaf(ws.tree, (leaf) => {
+        const end = leaf.attached && leaf.remoteHostId ? exitOf(leaf.id, leaf.pid, leaf.answeredAt) : null
+        if (end) ended.push([leaf.id, { exitCode: end.exitCode, pid: leaf.pid || null }])
+      })
+      for (const [leafId, end] of ended) waitForHostAgain(leafId, end)
       if (i === first) {
         currentWsId.value = ws.id
         restoreReport.shownAt = performance.now()
@@ -12649,6 +12664,13 @@ function startAt(step) {
 }
 function logStartup() {
   if (!window.shellApi.log) return
+  try {
+    logStartupLine()
+  } catch {
+    /* the line is only a report */
+  }
+}
+function logStartupLine() {
   const sec = (ms) => (ms / 1000).toFixed(1) + ' s'
   const steps = startSteps.map(([step, ms]) => step + ' ' + sec(ms)).join(', ')
   let panes = 0
@@ -12667,119 +12689,124 @@ const startWatch = setTimeout(() => {
 onBeforeUnmount(() => clearTimeout(startWatch))
 
 onMounted(async () => {
-  shells.value = await window.shellApi.listShells()
-  startAt('agents list')
-  agents.value = await window.shellApi.listAgents()
-  // The model lists the agents' CLIs gave last time (before any launch, so a
-  // pane's model flags are the same at launch and when compared later).
-  startAt('model lists')
-  await loadModelLists()
-  startAt('layout')
-  await restoreOrSeedLayout()
-  // The compact defaults are applied now (settings.js, deserializeNode): once.
-  settings.compactDefaults = true
-  layoutReady.value = true
-  startAt('terminals')
-  if (window.shellApi.reconcilePtys) {
-    const ids = []
-    forEachWsLeaf((l) => !hasNoTerminal(l) && ids.push(l.id))
-    // The floating terminal's, still running while it is hidden.
-    ids.push(...floating.ptyIds())
-    window.shellApi.reconcilePtys(ids)
-  }
-  // Shown again if it was shown before the reload (its terminal re-attached).
-  floating.restoreAtStart()
-  // Settings > AI provider accounts asks for it too.
-  window.addEventListener('tessel:finish-claude-switch', finishClaudeSwitch)
-  void checkClaudeSwitch()
-  // Windows' input languages (a PowerShell): once Tessel has started.
-  afterStartup(loadVoiceLanguages)
-  // Settings (incl. your own agents) are loaded now; detect agents with them.
-  startAt('agent detection')
-  await loadAgents()
-  watch(
-    () => settings.customAgents.map((a) => a.command).join('|'),
-    () => loadAgents(),
-    {}
-  )
-
-  // Persist on any structural / size / title / broadcast change (debounced).
-  pruneTeams()
-  loadActivity().then(hydrateTracking)
-  persistReady = !layoutLocked
-  watch(
-    [
-      workspaces,
-      currentWsId,
-      selectedShell,
-      broadcast,
-      sidebarCollapsed,
-      sidebarWidth,
-      taskPanelWidth,
-      taskPanelOpen,
-      sideTab,
-      sideBrowsers,
-      settings,
-      placement,
-      teams
-    ],
-    scheduleSave,
-    {
-      deep: true
-    }
-  )
-  // Also capture the initial (seeded or restored) state so an untouched
-  // workspace still persists across launches.
-  scheduleSave()
-
-  // Hydrate the task board from its own persisted store, then debounce-save on
-  // any change. The watch is registered AFTER hydration so loading the saved
-  // tasks doesn't immediately trigger a redundant save.
+  // The finish below runs whatever happens in a step (a step that throws
+  // would otherwise leave the held work and the tessel command waiting).
   try {
-    startAt('task board')
-    // The layout already waited for its lock: no second long wait.
-    const saved = await loadUnlocked(() => window.shellApi.taskBoard.load({ withLedger: true }), layoutLocked ? 2 : 10)
-    // Cards deleted (saved, and any deleted in this window before the board
-    // was read again, e.g. while the interface restarted): never brought back
-    // by the copy read here.
-    addDeletedTasks(saved && saved.deleted)
-    if (saved && saved.locked === true) {
-      boardLocked = true
-      if (Array.isArray(saved.tasks)) setTasks(saved.tasks) // its previous copy, shown only
-      setTaskHistory(saved.history)
-      showToast(t('app.board.locked', 'Your task board could not be read (the file is in use by another program). Tessel shows its previous copy and will not save it until it is restarted, so the file stays intact.'), { kind: 'error', timeout: 20000 })
-    } else {
-      const savedTasks = Array.isArray(saved) ? saved : saved && saved.tasks
-      if (Array.isArray(savedTasks)) setTasks(savedTasks)
-      setTaskHistory(saved && saved.history)
-      for (const k of (saved && saved.appliedRequests) || []) appliedRequests.add(k)
+    shells.value = await window.shellApi.listShells()
+    startAt('agents list')
+    agents.value = await window.shellApi.listAgents()
+    // The model lists the agents' CLIs gave last time (before any launch, so a
+    // pane's model flags are the same at launch and when compared later).
+    startAt('model lists')
+    await loadModelLists()
+    startAt('layout')
+    await restoreOrSeedLayout()
+    // The compact defaults are applied now (settings.js, deserializeNode): once.
+    settings.compactDefaults = true
+    layoutReady.value = true
+    startAt('terminals')
+    if (window.shellApi.reconcilePtys) {
+      const ids = []
+      forEachWsLeaf((l) => !hasNoTerminal(l) && ids.push(l.id))
+      // The floating terminal's, still running while it is hidden.
+      ids.push(...floating.ptyIds())
+      window.shellApi.reconcilePtys(ids)
     }
-    endBoardLoad()
-  } catch (err) {
-    /* start with an empty board if persisted tasks can't be read */
-    endBoardLoad((err && err.message) || String(err))
+    // Shown again if it was shown before the reload (its terminal re-attached).
+    floating.restoreAtStart()
+    // Settings > AI provider accounts asks for it too.
+    window.addEventListener('tessel:finish-claude-switch', finishClaudeSwitch)
+    void checkClaudeSwitch()
+    // Windows' input languages (a PowerShell): once Tessel has started.
+    afterStartup(loadVoiceLanguages)
+    // Settings (incl. your own agents) are loaded now; detect agents with them.
+    startAt('agent detection')
+    await loadAgents()
+    watch(
+      () => settings.customAgents.map((a) => a.command).join('|'),
+      () => loadAgents(),
+      {}
+    )
+
+    // Persist on any structural / size / title / broadcast change (debounced).
+    pruneTeams()
+    loadActivity().then(hydrateTracking)
+    persistReady = !layoutLocked
+    watch(
+      [
+        workspaces,
+        currentWsId,
+        selectedShell,
+        broadcast,
+        sidebarCollapsed,
+        sidebarWidth,
+        taskPanelWidth,
+        taskPanelOpen,
+        sideTab,
+        sideBrowsers,
+        settings,
+        placement,
+        teams
+      ],
+      scheduleSave,
+      {
+        deep: true
+      }
+    )
+    // Also capture the initial (seeded or restored) state so an untouched
+    // workspace still persists across launches.
+    scheduleSave()
+
+    // Hydrate the task board from its own persisted store, then debounce-save on
+    // any change. The watch is registered AFTER hydration so loading the saved
+    // tasks doesn't immediately trigger a redundant save.
+    try {
+      startAt('task board')
+      // The layout already waited for its lock: no second long wait.
+      const saved = await loadUnlocked(() => window.shellApi.taskBoard.load({ withLedger: true }), layoutLocked ? 2 : 10)
+      // Cards deleted (saved, and any deleted in this window before the board
+      // was read again, e.g. while the interface restarted): never brought back
+      // by the copy read here.
+      addDeletedTasks(saved && saved.deleted)
+      if (saved && saved.locked === true) {
+        boardLocked = true
+        if (Array.isArray(saved.tasks)) setTasks(saved.tasks) // its previous copy, shown only
+        setTaskHistory(saved.history)
+        showToast(t('app.board.locked', 'Your task board could not be read (the file is in use by another program). Tessel shows its previous copy and will not save it until it is restarted, so the file stays intact.'), { kind: 'error', timeout: 20000 })
+      } else {
+        const savedTasks = Array.isArray(saved) ? saved : saved && saved.tasks
+        if (Array.isArray(savedTasks)) setTasks(savedTasks)
+        setTaskHistory(saved && saved.history)
+        for (const k of (saved && saved.appliedRequests) || []) appliedRequests.add(k)
+      }
+      endBoardLoad()
+    } catch (err) {
+      /* start with an empty board if persisted tasks can't be read */
+      endBoardLoad((err && err.message) || String(err))
+    }
+    // Drop assignments to panes that didn't survive into this session, then start
+    // saving. Reconciling before the watch is registered keeps it from writing the
+    // file back on every launch (the cleanup is idempotent and persists on the
+    // next real change).
+    // Done cards from before the history was kept get their record (saved
+    // with the next change).
+    if (!boardLocked) backfillHistory(boardTasks)
+    reconcileTaskPanes()
+    if (!boardLocked) watch([boardTasks, taskHistory], scheduleTaskSave, { deep: true })
+    teamsReady = true
+    // Scheduled automations start only now: panes, agents and the board are
+    // there to run them (and to follow the runs still going).
+    startAt('automations')
+    await startAutomations()
+  } finally {
+    startAt('started')
+    logStartup()
+    // What waited for the start (a hidden pane's model, sub-agent lists, model
+    // list probes: startupIdle.js) runs now, a moment apart.
+    startupFinished()
+    // The tessel command's requests (open, new pane, status, card) from now on.
+    startCliRequests()
   }
-  // Drop assignments to panes that didn't survive into this session, then start
-  // saving. Reconciling before the watch is registered keeps it from writing the
-  // file back on every launch (the cleanup is idempotent and persists on the
-  // next real change).
-  // Done cards from before the history was kept get their record (saved
-  // with the next change).
-  if (!boardLocked) backfillHistory(boardTasks)
-  reconcileTaskPanes()
-  if (!boardLocked) watch([boardTasks, taskHistory], scheduleTaskSave, { deep: true })
-  teamsReady = true
-  // Scheduled automations start only now: panes, agents and the board are
-  // there to run them (and to follow the runs still going).
-  startAt('automations')
-  await startAutomations()
-  startAt('started')
-  logStartup()
-  // What waited for the start (a hidden pane's model, sub-agent lists, model
-  // list probes: startupIdle.js) runs now, a moment apart.
-  startupFinished()
-  // The tessel command's requests (open, new pane, status, card) from now on.
-  startCliRequests()
 
   window.addEventListener('keydown', onKey)
   window.addEventListener('pointerdown', onDocPointerDown, true)

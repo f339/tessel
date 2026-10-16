@@ -10,6 +10,7 @@ import { paneEnv } from '../paneEnv'
 import { newTeamSecret, setTeamSecret, revokeTeamSecret, teamSecretOf, _resetTeamAuth } from '../teamAuth'
 import { wakeLaunchArgs, WAKE_LAUNCH_PROMPT } from '../../shared/orchestration'
 import { STATUS_PROVIDERS } from '../../shared/agentStateModel'
+import { trimBuffer } from '../ptyProtocol'
 import { claudeStartChoice, codexResumes, hasClaudeYoloFlag, rootSafeClaudeArgs } from '../../renderer/src/remoteAgentLaunch'
 // Claude Code and Codex panes: status from their hooks from launch.
 const managedAgentStatus = (leaf) => !!leaf.agentLaunchToken
@@ -74,9 +75,13 @@ function wire(hostRecords = new Map()) {
     pendingData: new Map(),
     // The output held while a re-attach answer goes out (covered by
     // ptyAttachOrder.spec.js): inert here.
-    heldData: new Set(),
+    heldData: new Map(),
     heldExits: new Map(),
+    holdData: () => {},
     releaseData: () => {},
+    trimBuffer,
+    setTimeout,
+    clearTimeout,
     PANE_HISTORY_CHARS: 200_000,
     agentStateStore: store,
     newTeamSecret,

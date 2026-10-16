@@ -54,6 +54,9 @@ export function prefetchAttaches(ids, { attach, seed, limit = 4, now = () => per
             // Right away: output after the snapshot then lands after it.
             if (a && a.ok) {
               attached++
+              // When it came (a terminal with no process id: an end heard
+              // after it is its end, ptyStore.js exitOf).
+              a.answeredAt = now()
               try {
                 if (seed) seed(job.id, a.buffer)
               } catch {

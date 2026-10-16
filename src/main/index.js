@@ -105,7 +105,7 @@ import { createIpcTiming } from './ipcTiming'
 import { PANE_HISTORY_CHARS } from '../shared/paneHistory'
 import { registerLiveShare } from './liveShare'
 import { listProcesses, treeOf, waitForExit, killPids, listProcessNames, runningWork, stopProcessSnapshots, pidRunning } from './processTree'
-import { pipeName } from './ptyProtocol'
+import { pipeName, trimBuffer } from './ptyProtocol'
 import { createUpdater } from './updater'
 import { createAgentUpdates } from './agentUpdates'
 import { createUpdateRunner, fakeSpawn, classifyFailure } from './agentUpdateRunner'
@@ -3905,7 +3905,12 @@ let flushTimer = null
 // their output waits here until it has gone (pty:attach), so the window gets
 // the snapshot first and what followed it after, never the other way round
 // (output sent first was replaced by the snapshot when it came, and lost).
-const heldData = new Set()
+// Counted: a page reloaded while it restored asks again for the same pane,
+// and the first answer to go must not let the output pass the second.
+const heldData = new Map() // id -> answers on their way
+function holdData(id) {
+  heldData.set(id, (heldData.get(id) || 0) + 1)
+}
 function flushData() {
   flushTimer = null
   for (const [id, data] of pendingData) {
@@ -3919,6 +3924,11 @@ function flushData() {
 // the last output, then the end; the answer itself says it ended (pty:attach).
 const heldExits = new Map() // id -> { exitCode, signal, pid }
 function releaseData(id) {
+  const left = (heldData.get(id) || 0) - 1
+  if (left > 0) {
+    heldData.set(id, left)
+    return
+  }
   heldData.delete(id)
   const ended = heldExits.get(id)
   if (ended) {
@@ -4449,49 +4459,67 @@ const attachStats = { count: 0, hostMs: 0, slowest: 0, chars: 0, sent: 0, firstA
 
 // Re-attach to a terminal that kept running in the host (after a restart,
 // crash or reload). Returns its recent output to replay.
-ipcMain.handle('pty:attach', async (_evt, id) => {
+// opts.probe: only whether it still runs (a restart waiting for the old
+// terminal to be gone): nothing replayed, its output left as it flows.
+ipcMain.handle('pty:attach', async (_evt, id, opts) => {
   if (liveShare?.isGuestPane(id)) return liveShare.guestAttach(id)
+  const probe = !!(opts && opts.probe === true)
   let res
+  let held = false
   const asked = Date.now()
   try {
     // Output queued here but not sent yet is in the snapshot already: dropped
     // the moment the answer is read, before the output that follows it in the
     // same read (that output comes after the snapshot and is kept).
-    res = await host.request('attach', { id, maxChars: PANE_HISTORY_CHARS }, undefined, (reply) => {
-      if (!reply || !reply.ok) return
-      pendingData.delete(id)
-      heldData.add(id)
-    })
+    res = probe
+      ? await host.request('attach', { id, scrollback: 0, maxChars: 1 })
+      : await host.request('attach', { id, maxChars: PANE_HISTORY_CHARS }, undefined, (reply) => {
+          if (!reply || !reply.ok) return
+          pendingData.delete(id)
+          holdData(id)
+          held = true
+        })
   } catch (err) {
-    releaseData(id)
     return { ok: false, error: err.message }
   }
-  if (!res.ok) {
-    releaseData(id)
-    return { ok: false }
-  }
+  if (!res.ok) return { ok: false }
   try {
-    return await attached(id, res, asked)
+    return await attached(id, res, asked, probe)
   } finally {
     // Its answer goes to the window now; its output follows it.
-    releaseData(id)
+    if (held) releaseData(id)
   }
 })
-async function attached(id, res, asked) {
+// How long a re-attach answer waits for its agent state to be registered: its
+// output is held meanwhile (registration queues behind the store's scans).
+const ATTACH_REGISTER_WAIT_MS = 2000
+async function attached(id, res, asked, probe = false) {
   const answered = Date.now()
-  attachStats.count++
-  attachStats.hostMs += answered - asked
-  attachStats.slowest = Math.max(attachStats.slowest, answered - asked)
-  attachStats.firstAt = attachStats.firstAt || asked
-  attachStats.lastAt = answered
+  if (!probe) {
+    attachStats.count++
+    attachStats.hostMs += answered - asked
+    attachStats.slowest = Math.max(attachStats.slowest, answered - asked)
+    attachStats.firstAt = attachStats.firstAt || asked
+    attachStats.lastAt = answered
+  }
   ptyInfo.set(id, { shellId: res.shellId, shellName: res.shellName, backend: res.backend, pid: res.pid, agentLaunchToken: res.agentLaunchToken, agentCodexHome: typeof res.agentCodexHome === 'string' ? res.agentCodexHome : null })
   // Still running since before: its team secret comes back from the host.
   if (res.exited) revokeTeamSecret(id)
   else setTeamSecret(id, res.teamSecret)
   if (res.remoteHostId && !res.exited) remoteHosts.paneStarted(id, res.remoteHostId, { ssh2: res.backend === 'ssh' })
   if (res.agentProvider && res.agentLaunchToken && !res.exited) {
-    try { await agentStateStore.register({ paneId: id, provider: res.agentProvider, launchToken: res.agentLaunchToken, startedAt: res.agentStartedAt }) }
-    catch { /* renderer shows unknown until an observation can be read */ }
+    // Not longer than ATTACH_REGISTER_WAIT_MS: it then goes on by itself.
+    let waited = null
+    try {
+      await Promise.race([
+        agentStateStore.register({ paneId: id, provider: res.agentProvider, launchToken: res.agentLaunchToken, startedAt: res.agentStartedAt }),
+        new Promise((resolve) => (waited = setTimeout(resolve, ATTACH_REGISTER_WAIT_MS)))
+      ])
+    } catch {
+      /* renderer shows unknown until an observation can be read */
+    } finally {
+      clearTimeout(waited)
+    }
   }
   return {
     ok: true,
@@ -4503,7 +4531,7 @@ async function attached(id, res, asked) {
     // Ended while its answer was held (its notice follows the answer).
     exited: !!res.exited || heldExits.has(id),
     exitCode: heldExits.has(id) ? heldExits.get(id).exitCode : res.exitCode,
-    buffer: replayOf(res.buffer),
+    buffer: probe ? '' : replayOf(res.buffer),
     agentLaunchToken: res.agentLaunchToken || null,
     remoteHostId: res.remoteHostId || null
   }
@@ -4522,10 +4550,11 @@ function logStartupMain() {
   log.info('app', `startup: ${connected}; ${attach}; window restored ${sec(Date.now() - processStartedAt)} after start; IPC that held this process longest: ${ipcTiming.busiest(6) || 'none'}`)
 }
 // What the window keeps of a pane's output (ptyStore.js), so no more is sent:
-// an older terminal host sends its whole history.
+// an older terminal host sends its whole history. Cut at a line start (never
+// inside an escape sequence), so the window does not cut it again.
 function replayOf(buffer) {
   const text = typeof buffer === 'string' ? buffer : ''
-  const kept = text.length > PANE_HISTORY_CHARS ? text.slice(-PANE_HISTORY_CHARS) : text
+  const kept = trimBuffer(text, PANE_HISTORY_CHARS)
   attachStats.chars += text.length
   attachStats.sent += kept.length
   return kept

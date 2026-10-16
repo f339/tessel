@@ -56,7 +56,10 @@ describe('prefetchAttaches', () => {
     await tick()
     // Seeded although nobody asked for p1's answer yet.
     expect(order).toEqual(['seed p1 screen'])
-    expect(await pre.get('p1')).toMatchObject({ ok: true })
+    const p1 = await pre.get('p1')
+    expect(p1).toMatchObject({ ok: true })
+    // When it came (ptyStore.js exitOf: a terminal with no process id).
+    expect(Number.isFinite(p1.answeredAt)).toBe(true)
     host.pending.get('p2').resolve({ ok: false })
     expect(await pre.get('p2')).toEqual({ ok: false })
     // A terminal not running: nothing seeded.
