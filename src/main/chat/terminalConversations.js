@@ -41,6 +41,8 @@ import {
 import { remoteWindowReader, validRemoteTranscript } from './remoteTranscripts.js'
 import { isTesselDelivery } from '../../shared/tesselDelivery.js'
 import { museModelTimeline } from '../museSessions.js'
+import { antigravityModelTimeline } from '../agentModel.js'
+import { piModelTimeline } from '../agentModelSources.js'
 
 // Cursor is left out: its file keeps no times (a line could not be placed).
 export const TERMINAL_CONVERSATION_AGENTS = [
@@ -224,9 +226,13 @@ function codexAnswer(line) {
 // each answer's model and the effort it ran with (perTurnEffort, else
 // effort); Codex: each turn_context (and thread settings applied), its effort
 // on the turn or in its collaboration mode; Muse Code: each turn's model, each
-// /models and /effort (museSessions.js). As agentModel.js reads them.
+// /models and /effort (museSessions.js); Antigravity: each model agy notes
+// with a prompt; OMP: each model change, thinking level and answer's model
+// (Pi's format, agentModelSources.js). As agentModel.js reads them.
 export function modelTimeline(agent, lines) {
   if (agent === 'muse') return museModelTimeline(lines.join('\n'))
+  if (agent === 'antigravity') return antigravityModelTimeline(lines)
+  if (agent === 'omp') return piModelTimeline(lines)
   const out = []
   const claude = agent === 'claude' || agent === 'openclaude'
   if (!claude && agent !== 'codex') return out

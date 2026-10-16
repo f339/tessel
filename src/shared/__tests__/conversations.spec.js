@@ -1,7 +1,7 @@
 // The conversations of the agents (src/shared/conversations.js): the lines
 // read from the activity log, their threads, the filters and the export.
 import { describe, it, expect } from 'vitest'
-import { conversationLines, buildThreads, filterThreads, participantsOf, lineCount, threadKeyOf, threadText, statusText, replyText, preview, recipients } from '../conversations'
+import { conversationLines, buildThreads, filterThreads, participantsOf, lineCount, threadKeyOf, threadText, statusText, replyText, preview, recipients, modelOf } from '../conversations'
 
 const T0 = Date.parse('2026-10-10T12:00:00Z')
 const MIN = 60 * 1000
@@ -250,6 +250,13 @@ describe("the sender Tessel recorded (main's sender snapshot)", () => {
     expect(lines).toHaveLength(1)
     expect(lines[0].from).toMatchObject({ paneId: 'pane-7', label: 'Euler' })
     expect(lines[0].sender.model).toBe('Opus 5.5 · High')
+  })
+  it("an agent's report, decision or chat answer keeps its speaker as recorded (the model it ran with)", () => {
+    const sender = { paneId: 'p2', name: 'Bob', agentId: 'kimi', agentName: 'Kimi Code', model: 'Kimi K2.6 · High' }
+    const lines = conversationLines([reply(7, 'p2', bob, { kind: 'report', outcome: 'succeeded', teamId: 'team1', taskTitle: 'Ship it', text: 'Merged.', sender })])
+    expect(lines[0].sender.model).toBe('Kimi K2.6 · High')
+    expect(modelOf(lines[0])).toBe('Kimi K2.6 · High')
+    expect(conversationLines([reply(1, 'p1', ada, { text: 'Done.' })])[0].sender).toBeUndefined()
   })
   it('an older message without it: by name, as before', () => {
     const lines = conversationLines([

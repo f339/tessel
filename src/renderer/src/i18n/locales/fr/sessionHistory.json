@@ -120,7 +120,8 @@
       "noFirstPrompt": "Aucun premier prompt disponible",
       "latestTurns": "Derniers échanges",
       "noPreview": "Aucun aperçu de conversation disponible",
-      "workingDirectory": "Répertoire de travail"
+      "workingDirectory": "Répertoire de travail",
+      "model": "Modèle"
     },
     "subagents": {
       "count": "Sous-agents ({{count}})",

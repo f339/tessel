@@ -11,10 +11,12 @@
 // A Live Share host's conversation (source): its details from the host,
 // read only (no resume, log, folder, id or delete).
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
-import { Bot, Check, ChevronDown, Copy, FileJson, Folder, FolderOpen, LoaderCircle, LocateFixed, MessageSquare, MoreHorizontal, Play, SquareTerminal, TextCursorInput, Trash2 } from 'lucide-vue-next'
+import { Bot, Check, ChevronDown, Copy, Cpu, FileJson, Folder, FolderOpen, LoaderCircle, LocateFixed, MessageSquare, MoreHorizontal, Play, SquareTerminal, TextCursorInput, Trash2 } from 'lucide-vue-next'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './chat/orca/ui/index.js'
 import BrandIcon from './BrandIcon.vue'
 import { maskSecrets } from '../chat/chatModel'
+import { nativeChatSessionChoiceLabel } from '../chat/orca/native-chat-session-option-labels'
+import { modelLabel } from '../../../shared/modelLabel'
 import { acquireChildren, childDotState, listsChildren } from '../agentChildrenFeed'
 import { childTime } from '../agentChildrenView'
 import { agentLabel, deleteBlockedReason, folderLabel, hasLog, roleLabel, timeAgo } from '../sessionHistory'
@@ -103,6 +105,13 @@ function loadDetails() {
 const promptText = computed(() => maskSecrets((details.value && details.value.firstPrompt) || s.value.title || '').trim())
 const promptFull = computed(() => !!(details.value && details.value.firstPrompt))
 const promptLabel = computed(() => (promptFull.value ? t('sessionHistory.details.firstPrompt', 'First prompt') : t('sessionHistory.details.prompt', 'Prompt')))
+// The model it ran with last, as a pane header names it ("Opus 5.5 · High").
+const modelText = computed(() => {
+  const d = details.value
+  if (!d || !d.ok || typeof d.model !== 'string' || !d.model) return ''
+  const effort = typeof d.effort === 'string' && d.effort ? nativeChatSessionChoiceLabel({ value: d.effort, label: d.effort }) : ''
+  return effort ? `${modelLabel(d.model)} · ${effort}` : modelLabel(d.model)
+})
 const turns = computed(() => (details.value && details.value.ok ? details.value.turns.map((x) => ({ ...x, text: maskSecrets(x.text || '') })) : []))
 const copied = ref(false)
 let copiedTimer = 0
@@ -312,6 +321,10 @@ function onRowClick(event) {
           </div>
           <div v-else-if="detailsLoading" class="sh-empty-box">{{ t('app.sessions.loading', 'Loading…') }}</div>
           <div v-else class="sh-empty-box">{{ t('sessionHistory.details.noPreview', 'No conversation preview available') }}</div>
+        </section>
+        <section v-if="modelText" class="sh-section" data-test="details-model">
+          <div class="sh-section-head"><Cpu :size="12" aria-hidden="true" /><span>{{ t('sessionHistory.details.model', 'Model') }}</span></div>
+          <div class="sh-model" :title="details.model">{{ modelText }}</div>
         </section>
         <section v-if="childrenKnown" class="sh-section" data-test="details-subagents">
           <div class="sh-section-head"><Bot :size="12" aria-hidden="true" /><span>{{ subagentsLabel }}</span></div>

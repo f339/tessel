@@ -1,5 +1,29 @@
 // The short model name shown in an agent pane's header.
 
+// An agent's own word for its reasoning effort as Tessel's effort labels
+// name it (the header and Conversations translate those): "Extra high",
+// "extra_high" -> 'xhigh', thinking "off" -> 'none', "MEDIUM" -> 'medium'.
+// A word Tessel has no label for: null (never shown as an effort).
+const EFFORT_WORDS = {
+  none: 'none',
+  off: 'none',
+  disabled: 'none',
+  minimal: 'minimal',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  'x high': 'xhigh',
+  'extra high': 'xhigh',
+  max: 'max',
+  ultra: 'ultra'
+}
+export function effortLevel(value) {
+  if (typeof value !== 'string') return null
+  const word = value.trim().toLowerCase().replace(/[\s_-]+/g, ' ')
+  return EFFORT_WORDS[word] || null
+}
+
 // A short name for the header: "claude-opus-5-5" -> "Opus 5.5",
 // "claude-sonnet-4-5-20250929" -> "Sonnet 4.5", "opus[1m]" -> "Opus (1M)";
 // "anthropic/claude-sonnet-5" -> "Sonnet 5"; "gpt-6-astra" -> "GPT-6 Astra";

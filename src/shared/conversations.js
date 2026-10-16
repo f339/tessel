@@ -135,7 +135,9 @@ export function conversationLines(events, opts = {}) {
         preview: e.preview || preview(text),
         status: 'sent',
         ...(e.taskTitle ? { taskTitle: String(e.taskTitle) } : {}),
-        ...(e.outcome ? { outcome: String(e.outcome) } : {})
+        ...(e.outcome ? { outcome: String(e.outcome) } : {}),
+        // Its speaker as Tessel recorded it (the model it ran with).
+        ...(senderOf(e) ? { sender: senderOf(e) } : {})
       })
       continue
     }

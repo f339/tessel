@@ -166,6 +166,8 @@ describe('SessionHistoryPanel.vue', () => {
     expect(details.find('[data-test="details-prompt"]').text()).toBe('Fix the build, please')
     expect(details.findAll('[data-test="details-turns"] .sh-card').map((c) => c.text())).toEqual(['YouFix the build, please', 'AgentFixed.'])
     expect(details.find('.sh-path').text()).toBe('C:\\proj')
+    // Its file named no model: no model line.
+    expect(details.find('[data-test="details-model"]').exists()).toBe(false)
     expect(details.find('[data-test="details-subagents"]').text()).toContain('Subagents (0)')
     expect(calls.find(([n]) => n === 'children')[1]).toMatchObject({ agent: 'claude', sessionId: 'aaaaaaaa-1111-4222-8333-444444444444' })
     expect(rows()[0].find('[data-test="session-meta"]').text()).toContain('2 msgs')
@@ -178,6 +180,17 @@ describe('SessionHistoryPanel.vue', () => {
     // Clicking the row again folds it.
     await rows()[0].trigger('click')
     expect(wrapper.find('[data-test="session-details"]').exists()).toBe(false)
+  })
+
+  it('expanded: the model it ran with last and its effort, as a pane header names them', async () => {
+    api.sessionDetails = vi.fn(() => Promise.resolve({ ok: true, file: 'C:\\x.jsonl', firstPrompt: 'Hi', turns: [], messageCount: 1, model: 'claude-opus-5-5', effort: 'xhigh' }))
+    await make()
+    await rows()[0].find('[data-test="session-toggle"]').trigger('click')
+    await flushPromises()
+    const model = wrapper.find('[data-test="details-model"]')
+    expect(model.text()).toContain('Model')
+    expect(model.text()).toContain('Opus 5.5 · Extra high')
+    expect(model.find('.sh-model').attributes('title')).toBe('claude-opus-5-5')
   })
 
   it('the action menu: copy the id, reveal the log, open the folder, delete after confirming', async () => {

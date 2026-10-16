@@ -341,6 +341,9 @@ function newestClaudeOf(family) {
   }
   return best
 }
+// The agents whose header name has its own rule (Claude Code's version from
+// its answers, Codex's and Cursor's screens, Antigravity's variants).
+const OWN_MODEL_NAMES = ['claude', 'codex', 'cursor', 'antigravity']
 let modelBusy = false
 let modelAgain = false // asked while a check ran: one more after it
 // The terminal, once it exists (the first check runs while the pane is set
@@ -440,6 +443,12 @@ async function refreshModel() {
     if (n.agentId === 'antigravity' && res && res.model) {
       const listed = antigravityListed(modelsFor('antigravity'), res.model, res.effort)
       if (listed) res = { ...res, ...listed }
+    }
+    // The other agents: the name their model list gives the id they report
+    // (Kimi's "kimi-code/kimi-for-coding" -> Kimi K2.6), when it has none.
+    if (res && res.model && !res.name && !OWN_MODEL_NAMES.includes(n.agentId)) {
+      const row = modelsFor(n.agentId).find((m) => m && m.id === res.model && typeof m.label === 'string' && m.label.trim())
+      if (row) res = { ...res, name: row.label.trim() }
     }
     if ((!res || !res.model) && !n.modelChoice) {
       const seen = modelOnScreen()
