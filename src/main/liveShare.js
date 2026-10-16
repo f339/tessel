@@ -1500,10 +1500,11 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   // for the host's eyes only.
   ipcMain.on('liveShare:focus', (_evt, id) => {
     const g = joined
-    if (!g || g.state !== 'joined') return
+    if (!g) return
+    // Kept while reconnecting too: the next connection says it once in.
     const pane = typeof id === 'string' ? g.byLocal.get(id) || g.chatByLocal.get(id) : null
     g.focusRemote = pane ? pane.remoteId : null
-    g.client.focus(g.focusRemote)
+    g.client?.focus(g.focusRemote)
   })
 
   // A share or a session the last Tessel left (a restart, an update, a
