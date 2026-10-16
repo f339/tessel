@@ -6,6 +6,7 @@ import os from 'os'
 import { createAgentBrowser, agentUrl, capText, consoleEntry, reservedKey, safeSelector, pruneScreenshots, MAX_IMAGE_B64, CONSOLE_KEEP } from '../agentBrowser'
 import { handleRequestLine, validateParams, CLI_PROTOCOL } from '../cliServer'
 import { setTeamSecret, verifyRequest, _resetTeamAuth } from '../teamAuth'
+import { leaseDebugger, debuggerHolders } from '../pageDebugger'
 
 // Run inside a Tessel pane, these tests would sign as that pane.
 delete process.env.TESSEL_TEAM_SECRET
@@ -236,6 +237,33 @@ describe('agent browser: who may call', () => {
     expect(guest.debugger.attached).toBe(false)
     await expect(call('snapshot')).rejects.toMatchObject({ code: 'stopped_by_user' })
     expect(ab.stop(12345)).toBe(false)
+  })
+
+  // Live Share watching the page holds its debugger too (pageDebugger.js):
+  // the agents letting it go leave it attached, undo what they turned on, and
+  // stop answering the page's dialogs.
+  it("the page's debugger stays attached for another holder when the agent lets it go", async () => {
+    const { call, ab, guest } = setup()
+    const other = leaseDebugger(guest, 'live-share')
+    await call('snapshot')
+    expect(debuggerHolders(guest).sort()).toEqual(['agent', 'live-share'])
+    guest.sent.length = 0
+    ab.release(guest.id)
+    expect(guest.debugger.attached).toBe(true)
+    expect(debuggerHolders(guest)).toEqual(['live-share'])
+    expect(guest.sent).toContainEqual(['Emulation.setFocusEmulationEnabled', { enabled: false }])
+    guest.sent.length = 0
+    guest.cdpEvent('Page.javascriptDialogOpening', { type: 'confirm', message: 'Sure?' })
+    expect(guest.sent.some(([m]) => m === 'Page.handleJavaScriptDialog')).toBe(false)
+    // The agent again, then Live Share leaves: the agent keeps it.
+    await call('snapshot')
+    other.release()
+    expect(guest.debugger.attached).toBe(true)
+    guest.cdpEvent('Page.javascriptDialogOpening', { type: 'alert', message: 'Hi' })
+    expect(guest.sent).toContainEqual(['Page.handleJavaScriptDialog', { accept: true }])
+    ab.release(guest.id)
+    expect(guest.debugger.attached).toBe(false)
+    expect(debuggerHolders(guest)).toEqual([])
   })
 
   // The page's view is rebuilt (moved to another workspace, the window

@@ -460,6 +460,10 @@ async function insertText(keys, text, insert = null, focusNow) {
   }
 }
 
+// Live Share's guests type at the page's keyboard, wherever it is
+// (liveShare/sharePages.js): the same path, the same checks.
+export { insertText as insertFocusedText }
+
 function checkText(text) {
   if (typeof text !== 'string') throw new BrowserInputError('invalid_argument', 'Give the "text" to put in.')
   if (text.length > MAX_INPUT_TEXT) throw new BrowserInputError('invalid_argument', `The text is too long (at most ${MAX_INPUT_TEXT} characters).`)
