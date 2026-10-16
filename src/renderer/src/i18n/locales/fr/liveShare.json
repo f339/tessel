@@ -20,7 +20,6 @@
     "share": {
       "warning2": "Un invité que vous autorisez à taper peut lancer n'importe quelle commande sur ce PC en votre nom. N'autorisez que des personnes de confiance.",
       "projects": "Projets à partager",
-      "projectsShared": "Projets que vous partagez (cochez ou décochez à tout moment)",
       "needProject": "Cochez au moins un projet.",
       "lastProject": "Pour arrêter de partager votre dernier projet, utilisez Arrêter le partage.",
       "seesLabel": "Ce que {{name}} voit",
@@ -52,12 +51,15 @@
       "offlineCount": "{{count}} hors ligne",
       "intro4": "D'autres personnes vous rejoignent depuis leur propre Tessel et voient en direct les projets que vous partagez (leurs terminaux et leurs agents, sans leur historique). Chacune attend votre accord, avec ce que son invitation offre.",
       "firstInvite": "Première invitation",
-      "sendCodes": "Envoyez un code d'invitation : chaque personne attend votre accord",
       "noInvites": "Plus aucune invitation : créez-en une pour qu'on puisse demander à entrer.",
       "allInvites": "Les {{count}} invitations…",
       "manageInvites": "Gérer les invitations…",
       "seePeople": "Voir les personnes…",
-      "keepSharing": "Continuer à partager"
+      "keepSharing": "Continuer à partager",
+      "projectsSharedTitle": "Projets que vous partagez",
+      "projectsSharedHint": "Cochez-les ou décochez-les à tout moment.",
+      "codesTitle": "Codes d'invitation",
+      "codesHint": "Envoyez-en un : chaque personne attend votre accord. Les codes cessent de fonctionner quand vous arrêtez de partager ; les personnes de confiance entrent avec n'importe quel nouveau code."
     },
     "join": {
       "intro": "Collez le code d'invitation que votre hôte vous a envoyé. Ses panneaux s'ouvrent ici, dans un projet Live Share.",
@@ -253,8 +255,8 @@
       "message": "Rejoignez mon Live Share Tessel : dans Tessel, ouvrez Live Share, puis Rejoindre, et collez ce code : {{code}}",
       "noProject": "aucun projet",
       "projectsLater": "{{list}}, et les projets partagés plus tard",
-      "joined_one": "{{count}} personne entrée avec",
-      "joined_other": "{{count}} personnes entrées avec",
+      "joined_one": "{{count}} personne entrée avec elle",
+      "joined_other": "{{count}} personnes entrées avec elle",
       "revokeRemove_one": "Retirer aussi la personne entrée avec elle",
       "revokeRemove_other": "Retirer aussi les {{count}} personnes entrées avec elle",
       "intro": "Une invitation par personne ou par groupe : chacune a son code, ses projets et ses droits. Chacun attend toujours votre accord.",
@@ -316,7 +318,17 @@
       "uses_one": "{{count}} utilisation, sans limite",
       "uses_other": "{{count}} utilisations, sans limite",
       "blocked": "Bloquée : plusieurs connexions ont utilisé ce code sans entrer. Faites un nouveau code pour l'utiliser de nouveau.",
-      "usedUp": "Épuisée : augmentez son nombre d'utilisations max. ou créez une autre invitation."
+      "usedUp": "Épuisée : augmentez son nombre d'utilisations max. ou créez une autre invitation.",
+      "usesOf_one": "{{uses}} utilisation sur {{max}}",
+      "usesOf_other": "{{uses}} utilisations sur {{max}}",
+      "presetView": "Regarder seulement",
+      "presetCollaborate": "Collaborer",
+      "presetFull": "Contrôle total",
+      "customize": "Personnaliser",
+      "presetViewHint": "Cette personne regarde les panneaux et les fichiers partagés, rien d'autre.",
+      "presetCollaborateHint": "Cette personne ouvre des terminaux et des agents, modifie des fichiers, fait des commits et gère les tâches. Elle ne tape jamais dans vos terminaux.",
+      "presetFullHint": "Tous les droits, y compris taper : cette personne peut lancer n'importe quelle commande sur ce PC en votre nom. Seulement pour des personnes de confiance.",
+      "presetCustomHint": "Personnalisé : {{rights}}"
     },
     "access": {
       "askAdd_one": "{{count}} personne est entrée avec « {{label}} ». Lui donner aussi {{what}} ?",
@@ -361,7 +373,10 @@
       "trust": "Faire confiance",
       "trustFailed": "{{name}} n'a pas pu devenir une personne de confiance (elle est peut-être partie, ou son Tessel est trop ancien).",
       "untrustToo2": "Ne plus lui faire confiance non plus (sinon elle peut revenir sans demander, avec n'importe quel nouveau code)",
-      "keepTrust": "Elle reste de confiance : elle peut revenir sans demander."
+      "keepTrust": "Elle reste de confiance : elle peut revenir sans demander.",
+      "letIn": "Laisser entrer…",
+      "refuse": "Refuser",
+      "refused": "La demande de {{name}} a été refusée."
     },
     "section": {
       "access": "Accès",

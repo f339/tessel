@@ -69,6 +69,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import CookieImportDialog from './components/CookieImportDialog.vue'
 import LiveShareDialog from './components/LiveShareDialog.vue'
 import LiveShareAsk from './components/LiveShareAsk.vue'
+import HelpDialog from './components/HelpDialog.vue'
 import { createLiveShareWindow, rightsText } from './liveShareWindow'
 import LiveSharePill from './components/LiveSharePill.vue'
 import { guestsIn, personName, viaName, joinedGuests, waitingGuests } from './liveShareAccess'
@@ -850,15 +851,10 @@ const worktreeState = reactive({ available: false, reason: null, checking: false
 const placement = ref('right')
 const launcher = reactive({ open: false, x: 0, y: 0, targetId: null })
 const helpOpen = ref(false)
-const helpCardEl = ref(null)
-// The help dialog takes keyboard focus (so Esc reaches it, not the terminal)
-// and hands it back to the active pane when it closes.
+// The help dialog takes keyboard focus (its search box, so Esc reaches it,
+// not the terminal) and hands it back to the active pane when it closes.
 watch(helpOpen, (open) => {
-  nextTick(() => {
-    if (open) {
-      if (helpCardEl.value) helpCardEl.value.focus()
-    } else focusActiveInput()
-  })
+  if (!open) nextTick(() => focusActiveInput())
 })
 
 // Small, non-blocking notices (errors, "agent is done", folder changes).
@@ -1120,72 +1116,6 @@ watch(
 const initError = ref('')
 const openMenu = ref(null) // toolbar dropdown: 'layout' | 'agents'
 
-// The help dialog's shortcuts, in the interface's language.
-const shortcuts = computed(() => [
-  {
-    title: t('app.help.panes', 'Panes'),
-    rows: [
-      ['Ctrl+Shift+T', t('app.help.newPane', 'New pane: the default agent, or the default shell')],
-      ['Ctrl+Shift+Space', t('app.help.launcher', 'Open a terminal or agent')],
-      ['Ctrl+Shift+P', t('app.help.palette', 'Command palette: find panes, workspaces, commands')],
-      ['Ctrl+Shift+J', t('app.help.finder', "Jump to a file of the workspace's project")],
-      ['Ctrl+Shift+E', t('app.help.splitRight', 'Split right')],
-      ['Ctrl+Shift+O', t('app.help.splitDown', 'Split down')],
-      ['Ctrl+Shift+W', t('app.help.closePane', 'Close pane')],
-      ['Ctrl+Shift+R', t('app.help.restartPane', 'Restart pane')],
-      ['Alt+Arrow', t('app.help.movePanes', 'Move between panes')],
-      ['Esc', t('app.help.restoreMax', 'Restore a maximized pane')],
-      ['Ctrl+`', t('app.help.floatingTerminal', 'Show or hide the floating terminal (the key left of 1)')]
-    ]
-  },
-  {
-    title: t('app.help.workspaces', 'Workspaces'),
-    rows: [
-      ['Ctrl+Shift+N', t('app.help.newWorkspace', 'New workspace')],
-      ['Ctrl+PageUp', t('app.help.prevWorkspace', 'Previous workspace')],
-      ['Ctrl+PageDown', t('app.help.nextWorkspace', 'Next workspace')]
-    ]
-  },
-  {
-    title: t('app.help.terminal', 'Terminal'),
-    rows: [
-      ['Ctrl+Shift+F', t('app.help.find', 'Find')],
-      ['Ctrl+Shift+C', t('app.help.copy', 'Copy')],
-      ['Ctrl+Shift+V', t('app.help.paste', 'Paste')],
-      ['Ctrl+=', t('app.help.bigger', 'Bigger text')],
-      ['Ctrl+-', t('app.help.smaller', 'Smaller text')],
-      ['Ctrl+0', t('app.help.resetSize', 'Reset text size')],
-      ['Shift+PageUp', t('app.help.scrollUp', 'Scroll up in the pane')],
-      ['Shift+PageDown', t('app.help.scrollDown', 'Scroll down in the pane')]
-    ]
-  },
-  {
-    title: t('app.help.editor', 'Editor'),
-    rows: [
-      ['Ctrl+S', t('app.help.save', 'Save the file')],
-      ['Ctrl+W', t('app.help.closeTab', 'Close the editor tab')],
-      ['Ctrl+F', t('app.help.findInFile', 'Find in the file')],
-      ['Ctrl+H', t('app.help.replace', 'Replace')],
-      ['Ctrl+G', t('app.help.goToLine', 'Go to line')],
-      ['Alt+Z', t('app.help.wordWrap', 'Word wrap on or off')],
-      ['F7 / Shift+F7', t('app.help.nextChange', 'Next / previous change (a diff)')],
-      ['Ctrl+Shift+A', t('app.help.reviewNote', 'Add Review Note (a diff: the selected lines)')]
-    ]
-  },
-  {
-    title: t('app.help.app', 'App'),
-    rows: [
-      ['Ctrl+Shift+B', t('app.help.broadcast', 'Broadcast typing to all panes')],
-      ['Alt+A', t('app.help.chatApproval', 'In a chat pane: go to the request waiting for your answer')],
-      ['Ctrl+Shift+K', t('app.help.taskBoard', 'Task board')],
-      ['Ctrl+Shift+X', t('app.help.fileExplorer', 'File explorer')],
-      ['Ctrl+Shift+G', t('app.help.sourceControl', 'Source Control (the git changes)')],
-      ['Ctrl+,', t('app.help.settings', 'Settings')],
-      ['Win+H', t('app.help.voice', 'Voice typing (Windows)')],
-      ['F1', t('app.help.thisHelp', 'This help')]
-    ]
-  }
-])
 const updateLabel = computed(() => t('app.toolbar.updateVersion', 'Update {{version}}', { version: updateStatus.value.version }))
 
 const gridOptions = [
@@ -3581,6 +3511,7 @@ function buildCommands() {
     add('Tessel', t('app.cmd.checkUpdates', 'Check for updates'), checkForUpdates)
   }
   add('Tessel', t('app.cmd.openLogs', 'Open the logs folder'), openLogs)
+  add('Tessel', t('app.cmd.copyDiagnostics', 'Copy diagnostics'), copyDiagnostics)
 
   for (const w of workspaces.value) {
     if (w.id !== currentWsId.value) {
@@ -4372,6 +4303,7 @@ const settingsToolActions = {
   browser: () => openInBrowser({ newPane: true, focusAddress: true }),
   help: () => (helpOpen.value = true),
   logs: () => openLogs(),
+  diagnostics: () => copyDiagnostics(),
   resources: () => withStatusBar((bar) => bar.openResources())
 }
 function openFromSettings(id) {
@@ -13277,6 +13209,7 @@ onBeforeUnmount(() => {
       :status="updateStatus"
       :panes="paneCount()"
       :installing="updateInstalling"
+      :release-url="updateReleaseUrl"
       @install="installUpdate"
       @close="updateOpen = false"
     />
@@ -13353,6 +13286,7 @@ onBeforeUnmount(() => {
       :projects="shareableProjects"
       :project-ids="liveShare.chosenIds()"
       @toggle-project="liveShare.setShared"
+      @review-guest="liveShare.showAsk"
       @close="liveShareOpen = false"
     />
     <LiveShareAsk :ask="liveShare.state.asks[0] || null" :more="Math.max(0, liveShare.state.asks.length - 1)" :projects="sharedProjectList" @answer="liveShare.answerAsk" />
@@ -13476,48 +13410,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="helpOpen" class="help-backdrop" @pointerdown.self="helpOpen = false">
-      <div
-        ref="helpCardEl"
-        class="help-card"
-        role="dialog"
-        :aria-label="t('app.help.title', 'Keyboard shortcuts')"
-        tabindex="-1"
-        @keydown.escape.prevent.stop="helpOpen = false"
-      >
-        <div class="help-head">
-          <span>{{ t('app.help.title', 'Keyboard shortcuts') }}</span>
-          <button class="tb-icon" :title="t('app.help.close', 'Close (Esc)')" @click="helpOpen = false">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path
-                d="M4 4l8 8M12 4l-8 8"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-              />
-            </svg>
-          </button>
-        </div>
-        <div class="help-grid">
-          <section v-for="group in shortcuts" :key="group.title">
-            <h3>{{ group.title }}</h3>
-            <div v-for="row in group.rows" :key="row[1]" class="help-row">
-              <span>{{ row[1] }}</span>
-              <span class="help-keys">
-                <kbd v-for="k in row[0].split(' ')" :key="k">{{ k }}</kbd>
-              </span>
-            </div>
-          </section>
-        </div>
-        <div class="help-logs">
-          <span class="set-hint">{{ t('app.help.logsHint', 'Something wrong? Logs help find the cause.') }}</span>
-          <button class="exit-btn" @click="openLogs">{{ t('app.help.openLogs', 'Open logs folder') }}</button>
-          <button class="exit-btn" @click="copyDiagnostics">{{ t('app.help.copyDiagnostics', 'Copy diagnostics') }}</button>
-        </div>
-        <p class="help-foot">
-          {{ t('app.help.foot', 'Drop files on a pane to paste their paths. Select text to copy it, right-click to paste. Shift+right-click a pane for more.') }}
-        </p>
-      </div>
-    </div>
+    <HelpDialog v-if="helpOpen" @close="helpOpen = false" />
   </div>
 </template>

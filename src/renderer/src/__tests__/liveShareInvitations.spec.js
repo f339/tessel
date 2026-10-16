@@ -95,7 +95,11 @@ describe('Live Share invitations: making one', () => {
     expect(document.activeElement).toBe(w.find('[data-test="ls-invite-label"]').element)
     expect(w.find('[data-test="ls-proj-ws-1-invite"] input').element.checked).toBe(true)
     expect(w.find('[data-test="ls-proj-ws-2-invite"] input').element.checked).toBe(true)
-    // Rights from the catalog, all off; the open right says what it means.
+    // Rights as presets, View only at first; each right behind Customize,
+    // from the catalog, all off; the open right says what it means.
+    expect(w.find('[data-test="ls-invite-preset-view"]').classes()).toContain('on')
+    expect(w.find('[data-test="ls-right-open-invite"]').exists()).toBe(false)
+    await w.find('[data-test="ls-invite-customize"]').trigger('click')
     expect(w.find('[data-test="ls-right-open-invite"]').text()).toContain('Can open terminals and agents on your computer (they can run commands)')
     expect(['type', 'open', 'close'].map((id) => w.find(`[data-test="ls-right-${id}-invite"] input`).element.checked)).toEqual([false, false, false])
     // 1 hour by default; nothing lets anyone in without asking.
@@ -113,6 +117,27 @@ describe('Live Share invitations: making one', () => {
     expect(api.createInvite).toHaveBeenCalledWith({ label: 'Design team', lifetime: 'week', maxUses: 4, rights: { ...NO_RIGHTS, type: true, open: false, close: false }, projects: ['ws-1'], later: true })
     expect(w.find('[data-test="ls-invite-editor"]').exists()).toBe(false)
     expect(w.find('[data-test="ls-host-notice"]').text()).toContain('Invitation ready')
+    w.unmount()
+  })
+
+  it('rights presets: View only, Collaborate, Full control (said plainly), Customize for the rest', async () => {
+    const w = await openWith({ invites: [] })
+    await w.find('[data-test="ls-invite-new"]').trigger('click')
+    await w.find('[data-test="ls-invite-preset-collaborate"] input').trigger('change')
+    expect(w.find('[data-test="ls-invite-preset-collaborate"]').classes()).toContain('on')
+    expect(w.find('[data-test="ls-invite-preset-hint"]').text()).toContain('never type in your terminals')
+    await w.find('[data-test="ls-invite-preset-full"] input').trigger('change')
+    expect(w.find('[data-test="ls-invite-preset-hint"]').classes()).toContain('warn')
+    expect(w.find('[data-test="ls-invite-preset-hint"]').text()).toContain('run any command on this PC as you')
+    // A box changed from a preset: Custom (no preset lit), the boxes stay.
+    await w.find('[data-test="ls-invite-customize"]').trigger('click')
+    await tick(w, '[data-test="ls-right-type-invite"] input')
+    expect(w.findAll('.lsi-seg-item.on').map((x) => x.attributes('data-test'))).toEqual(['ls-invite-lifetime-hour'])
+    expect(w.find('[data-test="ls-right-type-invite"]').exists()).toBe(true)
+    await w.find('[data-test="ls-invite-preset-collaborate"] input').trigger('change')
+    await w.find('[data-test="ls-invite-save"]').trigger('click')
+    await flushPromises()
+    expect(api.createInvite).toHaveBeenCalledWith(expect.objectContaining({ rights: { ...NO_RIGHTS, open: true, close: true, edit: true, git: true, tasks: true, pagesView: true } }))
     w.unmount()
   })
 

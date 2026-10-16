@@ -6,7 +6,7 @@
 // id, no box nobody can read), and a spec checks that every right of the
 // catalog has its words. Adding a right: an entry in the catalog, its words
 // here, its check in main.
-import { RIGHT_IDS } from '../../shared/liveShareRights'
+import { RIGHT_IDS, cleanRights, sameRights } from '../../shared/liveShareRights'
 import { t } from './i18n'
 
 const WORDS = {
@@ -80,4 +80,24 @@ export function shownRights() {
 export function rightsShort(rights) {
   const on = shownRights().filter((r) => rights && rights[r.id] === true)
   return on.length ? on.map((r) => r.short).join(', ') : t('liveShare.right.watchOnly', 'Watch only')
+}
+
+// An invitation's rights in one click (its editor's presets): View only
+// (watch, nothing else), Collaborate (open, close, edit, commit, tasks and
+// see pages; never type, use pages or see usage) and Full control (every
+// right, typing included). 'custom': rights that are none of them.
+export const RIGHTS_PRESETS = Object.freeze({
+  view: Object.freeze([]),
+  collaborate: Object.freeze(['open', 'close', 'edit', 'git', 'tasks', 'pagesView']),
+  full: RIGHT_IDS
+})
+export function presetRights(id) {
+  const on = RIGHTS_PRESETS[id] || []
+  const out = {}
+  for (const r of RIGHT_IDS) out[r] = on.includes(r)
+  return cleanRights(out)
+}
+export function rightsPreset(rights) {
+  for (const id of Object.keys(RIGHTS_PRESETS)) if (sameRights(presetRights(id), rights)) return id
+  return 'custom'
 }
