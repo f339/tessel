@@ -20,7 +20,7 @@ import { execFileSync } from 'child_process'
 import { registerLiveShare } from '../liveShare'
 import { createShareHost } from '../liveShare/shareHost'
 import { createShareGuest } from '../liveShare/shareGuest'
-import { newSecret, newSigningKey, encodeInvite } from '../liveShare/shareCrypto'
+import { newSecret, newSigningKey, encodeInvite, decodeInvite } from '../liveShare/shareCrypto'
 import { createShareRequests } from '../liveShare/shareRequests'
 import { createShareScope } from '../liveShare/shareScope'
 import { createShareUsage } from '../liveShare/shareUsage'
@@ -28,6 +28,7 @@ import { cleanRoots } from '../liveShare/shareChat'
 import { registerProviderUsage } from '../providerUsageIpc'
 import { createLocalHistory } from '../localHistory'
 import { TOPICS, OP_AREAS } from '../liveShare/shareChannel'
+import { createGuestReview, splitRawNumstat } from '../liveShare/shareReview'
 import { guestPanes, checkPanes, createAgentsFeed, guestChildren, checkChildren, hostHistory, guestHistory, checkHistory, hostTaskCopies, checkUsage, checkReviewInfo, checkReviewDiff, PANE_LIMITS, HISTORY_LIMITS } from '../liveShare/sharePanels'
 
 vi.setConfig({ testTimeout: 60000, hookTimeout: 60000 })
@@ -215,6 +216,8 @@ describe('what a guest gets of the host\u2019s panes (sharePanels.js)', () => {
     expect(one.title).not.toContain('ada')
     expect(one.cost).toEqual({ status: 'ok', inputTokens: 100, outputTokens: 50, cacheReadTokens: 5, cacheWriteTokens: 1, models: [{ model: 'claude-opus-4-7', inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0 }], subagents: 2, incomplete: false })
     expect(JSON.stringify(without.records)).not.toMatch(/usd|known|anthropic/)
+    // A model's name is masked like any text of the host's.
+    expect(JSON.stringify(guestHistory([{ id: 'task-9', cost: { status: 'ok', models: [{ model: 'C:\\Users\\ada\\models\\local.gguf' }] } }], { roots: HOST_ROOTS }))).not.toContain('ada')
     const withUsd = guestHistory(records, { roots: HOST_ROOTS, usd: true })
     expect(withUsd.usd).toBe(true)
     expect(withUsd.records.find((r) => r.id === 'task-1').cost).toMatchObject({ usd: 1.25, known: true, models: [expect.objectContaining({ usd: 1.25, known: true })] })
@@ -393,10 +396,13 @@ beforeEach(() => {
   put(wt, 'src/app.js', 'one\ntwo\n')
   put(wt, 'src/new.js', 'new\n')
   put(wt, '.env', 'API_KEY=hunter2\n')
+  put(wt, 'config/.env', 'NESTED_SECRET=abc123\n')
+  put(wt, 'config/server.pem', '-----BEGIN PRIVATE KEY-----\nnot a real key\n')
+  put(wt, 'config/app.json', '{}\n')
   put(wt, 'apps/web/index.js', 'web\nmore\n')
   put(wt, 'big.txt', `${'x'.repeat(99)}\n`.repeat(7000))
   git(wt, 'add', '-A')
-  git(wt, '-c', 'user.name=Host Person', '-c', 'user.email=host-secret@example.com', 'commit', '-q', '-m', 'agent work')
+  git(wt, '-c', 'user.name=Host Person', '-c', 'user.email=host-secret@example.com', 'commit', '-q', '-m', 'agent work', '-m', 'Reported by ada@example.com')
   put(wt, 'src/unsaved.js', 'later\n')
 })
 afterEach(() => {
@@ -438,13 +444,15 @@ describe('a file\u2019s Local History and a task branch\u2019s review (shareRequ
     const taskCopy = (project, id) => (id === 'task-1' ? { path: wt, branch: 'agent/fix', target: 'main' } : null)
     const info = await ask(requests, 'review.info', { task: 'task-1' }, { taskCopy })
     expect(info.ok).toBe(true)
-    expect(info.data.files.map((f) => f.path).sort()).toEqual(['apps/web/index.js', 'big.txt', 'src/app.js', 'src/new.js'])
-    expect(info.data.hidden).toBe(1) // .env
+    expect(info.data.files.map((f) => f.path).sort()).toEqual(['apps/web/index.js', 'big.txt', 'config/app.json', 'src/app.js', 'src/new.js'])
+    expect(info.data.hidden).toBe(3) // .env, config/.env, config/server.pem
     expect(info.data.files.find((f) => f.path === 'src/app.js')).toMatchObject({ status: 'M', added: 1, removed: 0, binary: false })
-    expect(info.data.commits).toEqual([{ sha: expect.stringMatching(/^[0-9a-f]{40}$/), author: 'Host Person', time: expect.any(Number), subject: 'agent work', body: '' }])
+    // No email, not even in a commit's message.
+    expect(info.data.commits).toEqual([{ sha: expect.stringMatching(/^[0-9a-f]{40}$/), author: 'Host Person', time: expect.any(Number), subject: 'agent work', body: 'Reported by …' }])
     expect(info.data).toMatchObject({ branch: 'agent/fix', target: 'main', uncommitted: ['src/unsaved.js'], conflicts: [], mergeCheck: 'done', behind: 0, copyExists: true })
     const said = JSON.stringify(info)
     expect(said).not.toContain('host-secret@example.com')
+    expect(said).not.toContain('ada@example.com')
     expect(said).not.toContain(tmp)
     expect(said).not.toContain(tmp.replace(/\\/g, '\\\\'))
     // The guest takes it as it is (and drops what it does not know).
@@ -462,12 +470,74 @@ describe('a file\u2019s Local History and a task branch\u2019s review (shareRequ
     expect(big.ok).toBe(true)
     expect(big.data.truncated).toBe(true)
     expect(big.data.text.length).toBeLessThanOrEqual(600 * 1024)
-    // Hidden files, other tasks, other shapes: refused.
-    expect(await ask(requests, 'review.diff', { task: 'task-1', file: '.env' }, { taskCopy })).toEqual({ ok: false, code: 'not-found' })
+    // Hidden files, folders, git's patterns, files the branch did not
+    // change, other tasks, other shapes: refused, git never asked.
+    for (const file of ['.env', '[.]env', 'config', 'config/server.pe[m]', 'src', 'src/unchanged.js', 'config/.env'])
+      expect(await ask(requests, 'review.diff', { task: 'task-1', file }, { taskCopy })).toEqual({ ok: false, code: 'not-found' })
+    expect(await ask(requests, 'review.diff', { task: 'task-1', file: 'config/*.pem' }, { taskCopy })).toEqual({ ok: false, code: 'bad-args' })
+    const ok = await ask(requests, 'review.diff', { task: 'task-1', file: 'config/app.json' }, { taskCopy })
+    expect(ok.data.text).toContain('+{}')
+    expect(ok.data.text).not.toMatch(/SECRET|PRIVATE KEY/)
     expect(await ask(requests, 'review.info', { task: 'task-9' }, { taskCopy })).toEqual({ ok: false, code: 'not-found' })
     expect(await ask(requests, 'review.info', { task: 'task-1' })).toEqual({ ok: false, code: 'not-found' })
     expect(await ask(requests, 'review.diff', { task: 'task-1', file: '../site/src/app.js' }, { taskCopy })).toEqual({ ok: false, code: 'bad-args' })
     expect(checkReviewDiff({ text: 'x'.repeat(3 * 1024 * 1024) })).toBe(null)
+  })
+
+  it('every git command is a guest\u2019s: literal paths, its settings, counted in its budget, kept a while; one file per diff', async () => {
+    const calls = []
+    const outputs = []
+    const fakeGit = vi.fn(async (file, args) => {
+      calls.push(args)
+      const out = outputs.find((o) => o.when(args)) || { ok: true, code: 0, stdout: '' }
+      return { ok: out.ok !== false, code: out.code || 0, stdout: out.stdout || '', stderr: '' }
+    })
+    outputs.push(
+      { when: (a) => a.includes('--show-toplevel'), stdout: `${repo}\n` },
+      { when: (a) => a.includes('worktree'), stdout: '' },
+      { when: (a) => a.includes('rev-parse'), stdout: `${'a'.repeat(40)}\n${'b'.repeat(40)}\n` },
+      { when: (a) => a.includes('merge-base'), stdout: `${'c'.repeat(40)}\n` },
+      { when: (a) => a.includes('--raw'), stdout: `:100644 100644 ${'1'.repeat(40)} ${'2'.repeat(40)} M\tsrc/app.js\n1\t0\tsrc/app.js\n` },
+      { when: (a) => a.includes('-U3'), stdout: 'diff --git a/src/app.js b/src/app.js\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/src/x b/src/x\n@@ -1 +1 @@\n-c\n+d\n' }
+    )
+    let budget = 100
+    const charge = vi.fn(() => budget-- > 0)
+    const review = createGuestReview({ git: fakeGit, gitArgs: async () => ['-c', 'core.hooksPath=/empty'] })
+    const copy = { root: repo, path: null, branch: 'agent/fix', target: 'main' }
+    const info = await review.info(copy, charge)
+    expect(info).toMatchObject({ ok: true, repo, head: 'a'.repeat(40), base: 'c'.repeat(40), files: [expect.objectContaining({ path: 'src/app.js', status: 'M', added: 1 })] })
+    // Each git process: literal paths, the guest's settings, one charge.
+    for (const args of calls) {
+      expect(args[0]).toBe('--literal-pathspecs')
+      expect(args).toContain('core.hooksPath=/empty')
+    }
+    expect(charge).toHaveBeenCalledTimes(calls.length)
+    expect(calls.find((a) => a.includes('--raw'))).toEqual(expect.arrayContaining(['--no-ext-diff', '--no-textconv']))
+    // Asked again soon: kept, no git.
+    const n = calls.length
+    expect(await review.info(copy, charge)).toBe(info)
+    expect(calls).toHaveLength(n)
+    // A diff naming two files (a folder, a file become a folder): refused.
+    expect(await review.diff(info, 'src', charge)).toEqual({ ok: false, code: 'not-found' })
+    outputs.splice(outputs.length - 1, 1, { when: (a) => a.includes('-U3'), stdout: 'diff --git a/src/app.js b/src/app.js\n@@ -1 +1 @@\n-a\n+b\n' })
+    const one = await review.diff(info, 'src/app.js', charge)
+    expect(one).toEqual({ ok: true, text: expect.stringContaining('+b'), truncated: false })
+    expect(calls.at(-1)).toEqual(expect.arrayContaining(['--', 'src/app.js', '--no-ext-diff', '--no-textconv']))
+    // The same file of the same branch again: kept.
+    const m = calls.length
+    expect(await review.diff(info, 'src/app.js', charge)).toBe(one)
+    expect(calls).toHaveLength(m)
+    // Over the guest's budget: refused as busy, git not run.
+    budget = 0
+    await expect(review.diff(info, 'src/other.js', charge)).rejects.toMatchObject({ code: 'busy' })
+    expect(calls).toHaveLength(m)
+    expect(splitRawNumstat(':100644 100644 aa bb A\tnew.txt\n3\t0\tnew.txt\n')).toEqual({ ns: 'A\tnew.txt', numstat: '3\t0\tnew.txt', raw: ':100644 100644 aa bb A\tnew.txt' })
+  })
+
+  it('over the guest\u2019s git budget, a review answers busy', async () => {
+    const requests = createShareRequests({ scope: createShareScope() })
+    const taskCopy = () => ({ path: wt, branch: 'agent/fix', target: 'main' })
+    expect(await ask(requests, 'review.info', { task: 'task-1' }, { taskCopy, spend: () => false })).toEqual({ ok: false, code: 'busy' })
   })
 
   it('a project below its repository\u2019s top sees only its own files, relative to it', async () => {
@@ -575,7 +645,7 @@ describe('Live Share phase 2b end to end', () => {
     }
     const localId = (remote) => guest.last('liveShare:guest').panes.find((p) => p.id.endsWith(`-${remote.replace(/^pane-/, '')}`)).id
     const request = (op, args) => guest.handle['liveShare:request'](null, { op, project: 'ws-1', args })
-    return { host, guest, give, guestId: ask.guestId, localId, request }
+    return { host, guest, give, guestId: ask.guestId, localId, request, invite: started.invites[0].code }
   }
   const agentPushes = (guest) => guest.events('liveShare:push').filter((p) => p.topic === 'agents')
   const PANE_1 = { id: 'pane-1-ps', kind: 'agent', agentId: 'claude', model: 'Opus 4.7 \u00b7 high', state: 'working', task: 'Fix the login', children: { agent: 'claude', sessionId: 'sess-secret-1', accountId: null } }
@@ -621,6 +691,10 @@ describe('Live Share phase 2b end to end', () => {
     // not show: nothing read.
     expect(await request('agents.children', { pane: localId('pane-2-ps') })).toEqual({ ok: false, code: 'not-found' })
     expect(await request('agents.children', { pane: 'pane-1-ps' })).toEqual({ ok: false, code: 'bad-args' })
+    // Asked again (or by another guest) within a few seconds: read once on
+    // the host, whatever the guests' own pace.
+    const again = await Promise.all([request('agents.children', { pane: localId('pane-1-ps') }), request('agents.children', { pane: localId('pane-1-ps') })])
+    expect(again.map((r) => r.ok)).toEqual([true, true])
     expect(agentChildren).toHaveBeenCalledTimes(1)
   })
 
@@ -664,7 +738,7 @@ describe('Live Share phase 2b end to end', () => {
 
   it('the task history: times and tokens with the project, dollars only with the usage right', async () => {
     const cardCosts = vi.fn(async (ids) => Object.fromEntries(ids.map((id) => [id, { status: 'ok', inputTokens: 7, outputTokens: 3, usd: 0.5, known: true, models: [] }])))
-    const { host, guest, give, request, localId } = await session({ cardCosts })
+    const { host, guest, give, request, localId, invite } = await session({ cardCosts })
     host.on['liveShare:history'](null, [
       { project: 'ws-1', records: [{ id: 'task-1', title: `Done in ${repo}\\src`, wsId: 'ws-1', paneId: 'pane-1-ps', doneAt: 20, durationMs: 60000, cost: { status: 'ok', inputTokens: 100, outputTokens: 50, usd: 1.25, known: true, models: [], final: true } }, { id: 'task-2', title: 'Second', wsId: 'ws-1', paneId: 'pane-gone', doneAt: 30, durationMs: 5 }] },
       { project: 'ws-9', records: [{ id: 'task-9', title: 'not shared', doneAt: 1 }] }
@@ -687,6 +761,18 @@ describe('Live Share phase 2b end to end', () => {
     expect(rich.data.records[0].cost).toMatchObject({ usd: 1.25, known: true })
     expect(rich.data.records[1].cost).toMatchObject({ usd: 0.5 })
     expect(JSON.stringify(guest.sent)).not.toContain(repo)
+    // The host itself never sends a pane its guests do not see (another
+    // guest's Tessel could keep it): a guest's raw answer.
+    const { url, secret } = decodeInvite(invite)
+    const raw = { states: [], projects: null }
+    const client = createShareGuest({ url, secret, name: 'Raw', signingKey: newSigningKey(), callbacks: { onState: (st) => raw.states.push(st), onProjects: (p) => (raw.projects = p) } })
+    client.connect()
+    const ask2 = await until(() => host.events('liveShare:ask').find((x) => x.name === 'Raw'))
+    await host.handle['liveShare:approve'](null, { guestId: ask2.guestId, yes: true, projects: ['ws-1'] })
+    await until(() => raw.states.includes('joined') && raw.projects)
+    const answer = await client.request('history.list', 'ws-1', {})
+    expect(answer.data.records.map((r) => r.paneId)).toEqual(['pane-1-ps', null])
+    client.leave()
   })
 
   it('the right taken away while the history is on its way: its dollars never leave', async () => {
@@ -731,7 +817,7 @@ describe('Live Share phase 2b end to end', () => {
     expect(info.ok).toBe(true)
     expect(info.data.files.map((f) => f.path)).toContain('src/app.js')
     expect(info.data.files.map((f) => f.path)).not.toContain('.env')
-    expect(info.data.hidden).toBe(1)
+    expect(info.data.hidden).toBe(3)
     const diff = await request('review.diff', { task: 'task-1', file: 'src/new.js' })
     expect(diff).toEqual({ ok: true, data: { text: expect.stringContaining('+new'), truncated: false } })
     expect(await request('review.info', { task: 'task-2' })).toEqual({ ok: false, code: 'not-found' })

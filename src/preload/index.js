@@ -727,6 +727,7 @@ const api = {
     setSettings: (patch = {}) => ipcRenderer.invoke('liveShare:setSettings', patch),
     setTasks: (list) => ipcRenderer.send('liveShare:tasks', list),
     taskDone: ({ request, ok, code } = {}) => ipcRenderer.send('liveShare:taskDone', { request, ok: ok === true, code }),
+    taskCheck: (request) => ipcRenderer.invoke('liveShare:taskCheck', typeof request === 'string' ? request : ''),
     subscribe: ({ topic, project, on } = {}) => ipcRenderer.invoke('liveShare:subscribe', { topic, project, on: !!on }),
     task: ({ op, project, args } = {}) => ipcRenderer.invoke('liveShare:task', { op, project, args }),
     // Phase 2b. Host: the shared projects' panes as their headers show them,

@@ -412,20 +412,20 @@
       "usageHint": "Vos forfaits, la part utilisée de chacun et quand ils se réinitialisent. Jamais vos comptes ni vos adresses.",
       "edit": "Modifier les fichiers (enregistrer, créer, renommer, mettre à la corbeille)",
       "editShort": "Modifier",
-      "editHint": "Dans les projets que cette personne voit. Les fichiers de réglages des agents et des outils restent en lecture seule, sauf si elle peut aussi taper.",
       "git": "Indexer, faire un commit et abandonner des modifications (git)",
       "gitShort": "Git",
-      "gitHint": "Dans les projets que cette personne voit, avec votre nom git. Push, pull et fetch restent à vous.",
-      "tasks": "Gérer les tâches (ajouter, déplacer, modifier, répondre aux questions)",
       "tasksShort": "Tâches",
-      "tasksHint": "Le tableau des tâches des projets que cette personne voit.",
       "pagesView": "Voir mes pages de navigateur",
       "pagesViewShort": "Pages",
       "pagesViewHint": "Les pages de navigateur des projets que cette personne voit, en direct. Les pages du panneau latéral ne sont jamais partagées.",
       "pagesUse": "Utiliser mes pages de navigateur : cette personne agit dans votre navigateur avec vos sessions connectées",
       "pagesUseShort": "Utiliser les pages",
       "pagesUseHint": "Cette personne clique et tape dans vos pages en votre nom, connectée partout où vous l'êtes. Inclut « Voir mes pages de navigateur ».",
-      "watchOnly": "Regarder seulement"
+      "watchOnly": "Regarder seulement",
+      "editHint2": "Dans les projets que cette personne voit. Les réglages des agents et des outils, les instructions des agents (CLAUDE.md, AGENTS.md, les notes), les hooks git et leurs configurations, et .gitignore restent en lecture seule, sauf si elle peut aussi taper.",
+      "gitHint2": "Dans les projets que cette personne voit, avec votre nom git. Ses commits se font sans vos hooks git ; push, pull et fetch restent à vous.",
+      "tasks2": "Gérer les tâches (ajouter, déplacer, modifier, répondre aux questions, supprimer définitivement)",
+      "tasksHint2": "Le tableau des tâches des projets que cette personne voit. Une carte supprimée l'est définitivement ; sans Taper, elle ne répond à un agent qu'avec l'un des choix qu'il propose."
     },
     "openAsk": {
       "titleAgent": "{{name}} demande d'ouvrir {{agent}}",
@@ -492,7 +492,9 @@
       "taskMove": "{{name}} a déplacé « {{title}} » vers {{column}}",
       "taskEdit": "{{name}} a renommé une tâche : {{title}}",
       "taskRemove": "{{name}} a supprimé la tâche « {{title}} »",
-      "taskAnswer": "{{name}} a répondu à la question de « {{title}} »"
+      "taskAnswer": "{{name}} a répondu à la question de « {{title}} »",
+      "taskRenamed": "{{name}} a renommé la tâche « {{from}} » en « {{title}} »",
+      "taskAnswered": "{{name}} a répondu « {{answer}} » sur « {{title}} »"
     },
     "taskFail": {
       "rights": "vous ne pouvez plus gérer ses tâches.",

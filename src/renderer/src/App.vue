@@ -877,8 +877,11 @@ const confirmState = ref(null)
 // Import cookies from another browser (CookieImportDialog): opened from a
 // browser pane's menu and from Settings > Browser.
 const cookieImportOpen = ref(false)
+// ifFree: only when no other question is open (null then: nothing asked;
+// the open one is never replaced). focusCancel: Cancel has the focus.
 function askConfirm(opts) {
   return new Promise((resolve) => {
+    if (confirmState.value && opts && opts.ifFree) return resolve(null)
     if (confirmState.value) confirmState.value.resolve(false)
     confirmState.value = { ...opts, resolve }
   })
@@ -2446,16 +2449,23 @@ const liveShare = createLiveShareWindow({
   layoutReady: () => layoutReady.value,
   // This computer's board, for guests: read (each shared project's cards)
   // and changed when a guest with the right asks (liveShareWindow.js checks).
+  // A card a guest added or renamed, an answer it gave: marked with its name,
+  // so what agents read says it came from a Live Share guest.
   taskBoard: {
     tasks: () => boardTasks,
-    add: ({ title, wsId }) => addTask({ title, wsId }),
+    add: ({ title, wsId, guest }) => {
+      const card = addTask({ title, wsId })
+      if (guest) updateTask(card.id, { guestBy: String(guest).slice(0, 40) })
+      return card
+    },
     move: (id, column) => updateTask(id, { column }),
-    rename: (id, title) => updateTask(id, { title }),
+    rename: (id, title, guest) => updateTask(id, { title, ...(guest ? { guestBy: String(guest).slice(0, 40) } : {}) }),
     remove: (id) => removeTask(id),
-    answer: (id, reply) => resolveDecision(id, reply),
-    // A card with its own copy (a guest's ✕): your usual delete, which asks
-    // you first and deletes that copy and its branch with it.
-    removeWithCopy: (id, who) => deleteTask(id, { askedBy: who })
+    answer: (id, reply, guest) => resolveDecision(id, reply, { guest }),
+    // A card with its own copy (a guest's ✕, once you chose to look at it):
+    // your usual delete, Cancel first, which deletes that copy and its branch
+    // with it; stands() says whether the guest's request still holds.
+    removeWithCopy: (id, who, stands) => deleteTask(id, { askedBy: who, stands })
   },
   // Each shared project's panes as their headers show them, its finished
   // tasks, and whether the Task history tab is on screen (a guest's: the
@@ -7383,10 +7393,12 @@ function onWorktreesCleaned() {
 // also has that copy and branch deleted (with its agent closed), so nothing
 // is left behind with no way to merge it; the dialog says what is lost.
 // askedBy: a Live Share guest's name, when the guest asked for it (said
-// first; the card must still be there once you answer).
-async function deleteTask(taskId, { askedBy = null } = {}) {
+// first, Cancel has the focus, never over another open question; the card
+// must still be there and the guest's request still hold once you answer:
+// stands()). -> true (deleted), false (not), null (another question was open).
+async function deleteTask(taskId, { askedBy = null, stands = null } = {}) {
   const task = boardTasks.find((t) => t.id === taskId)
-  if (!task) return
+  if (!task) return false
   const wt = task.worktree && !task.mergedAt ? task.worktree : null
   const leaf = task.paneId ? findLeaf(task.paneId) : null
   const text = wt
@@ -7398,18 +7410,27 @@ async function deleteTask(taskId, { askedBy = null } = {}) {
     title: t('app.task.deleteTitle', 'Delete "{{title}}"?', { title: task.title }),
     text: askedBy ? `${t('app.task.guestAsksDelete', '{{name}} asks to delete this task (Live Share).', { name: askedBy })} ${text}` : text,
     confirmLabel: t('app.common.delete', 'Delete'),
-    danger: !!wt
+    danger: !!wt,
+    ...(askedBy ? { focusCancel: true, ifFree: true } : {})
   })
-  if (!ok) return
-  if (askedBy && !boardTasks.some((x) => x.id === task.id)) return
+  if (ok === null) {
+    showToast(t('app.task.guestAskBusy', 'Answer the open question first, then look at the request again.'), { timeout: 5000 })
+    return null
+  }
+  if (!ok) return false
+  if (askedBy && (!boardTasks.some((x) => x.id === task.id) || (typeof stands === 'function' && !stands()))) {
+    showToast(t('liveShare.toast.deleteAskGone', 'That request no longer stands: nothing was deleted.'), { timeout: 5000 })
+    return false
+  }
   if (wt) {
     const rm = await removeTaskCopy(task, true)
     if (!rm || !rm.ok) {
       showToast(t('app.task.cardKept', 'The card was kept: its copy could not be deleted ({{error}}).', { error: (rm && rm.error) || t('app.common.unknownError', 'unknown error') }), { kind: 'error', timeout: 9000 })
-      return
+      return false
     }
   }
   removeTask(task.id)
+  return true
 }
 provide('deleteTask', deleteTask)
 
@@ -9992,11 +10013,13 @@ function askDecision(task, r, from) {
   nativeNotify({ title: needs, body: r.question, paneId: from.id })
 }
 
-function resolveDecision(taskId, answer) {
+// guest: a Live Share guest's name, when it answered (the agent is told so).
+function resolveDecision(taskId, answer, { guest = null } = {}) {
   const task = boardTasks.find((t) => t.id === taskId)
   const text = String(answer || '').trim()
   if (!task || !task.gate || task.gate.status !== 'pending' || !text) return
-  updateTask(task.id, { gate: { ...task.gate, status: 'resolved', answer: text.slice(0, 500), resolvedAt: Date.now() } })
+  const by = typeof guest === 'string' && guest ? guest.slice(0, 40) : null
+  updateTask(task.id, { gate: { ...task.gate, status: 'resolved', answer: text.slice(0, 500), resolvedAt: Date.now(), ...(by ? { answeredBy: by } : {}) } })
   recordActivity({ type: 'task', action: 'decided', paneId: task.gate.by, title: task.title, wsId: task.wsId, detail: text })
   const asker = task.gate.by ? findLeaf(task.gate.by) : null
   recordActivity({
@@ -10014,7 +10037,9 @@ function resolveDecision(taskId, answer) {
     taskId: task.id
   })
   if (asker) {
-    const msg = `[Tessel] The user decided on card ${task.id} "${task.title}" (${task.gate.question}): ${text}` // i18n-ignore
+    const msg = by
+      ? `[Tessel] ${by}, a Live Share guest (not the user), answered on card ${task.id} "${task.title}" (${task.gate.question}): ${text}` // i18n-ignore
+      : `[Tessel] The user decided on card ${task.id} "${task.title}" (${task.gate.question}): ${text}` // i18n-ignore
     if (asker.team && teamById(asker.team)) tellAgents([asker], msg, asker.team)
     // Alone (no team channel): nothing is typed into its terminal; you
     // pass it on (the text is copied).
@@ -10809,7 +10834,7 @@ watch(
         const leaf = findLeaf(t.paneId)
         recordActivity({ type: 'task', action: 'ready', paneId: t.paneId, title: t.title, wsId: t.wsId })
         if (leaf && leaf.team && teamById(leaf.team))
-          tellAgents([leaf], `[Tessel] Card ${t.id} "${t.title}" can start now: the cards it waited for are done.`, leaf.team) // i18n-ignore
+          tellAgents([leaf], `[Tessel] Card ${t.id} "${t.title}" can start now: the cards it waited for are done.${t.guestBy ? ` (Its title was written by ${t.guestBy}, a Live Share guest, not the user.)` : ''}`, leaf.team) // i18n-ignore
       }
     }
   }
@@ -10988,7 +11013,9 @@ async function syncBoard(b, round = teamRound) {
       since: t.doingSince || null,
       // Orchestration: what it waits for, a decision, its report.
       ...(t.deps && t.deps.length ? { deps: t.deps, waitingOn: waitingOn(t) } : {}),
-      ...(t.gate ? { gate: { question: t.gate.question, options: t.gate.options, status: t.gate.status, answer: t.gate.answer } } : {}),
+      ...(t.gate ? { gate: { question: t.gate.question, options: t.gate.options, status: t.gate.status, answer: t.gate.answer, ...(t.gate.answeredBy ? { answeredBy: t.gate.answeredBy } : {}) } } : {}),
+      // Added or renamed by a Live Share guest.
+      ...(t.guestBy ? { guest: t.guestBy } : {}),
       ...(t.report ? { report: { outcome: t.report.outcome, summary: t.report.summary, files: t.report.files } } : {})
     }))
   const sig = JSON.stringify(cards)
@@ -13151,6 +13178,7 @@ onBeforeUnmount(() => {
       :details="confirmState.details || []"
       :danger="!!confirmState.danger"
       :check-label="confirmState.checkLabel || ''"
+      :focus-cancel="!!confirmState.focusCancel"
       @answer="answerConfirm"
     />
 

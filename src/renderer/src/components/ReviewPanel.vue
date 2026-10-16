@@ -47,11 +47,14 @@ const feedbackEl = ref(null)
 
 // "Viewed" marks survive closing the panel (not a restart). A file whose
 // content changes in a new commit is unmarked.
-const viewed = viewedStore(props.task.id)
+// A Live Share host's task: kept apart from this computer's tasks (the same
+// id may be one of ours), per session and project (source.key).
+const storeKey = props.source ? `ls:${props.source.key || props.task.id}` : props.task.id // i18n-ignore
+const viewed = viewedStore(storeKey)
 
 // Comments on diff lines (a click on a line number): kept like the viewed
 // marks, all sent to the agent in one message with "Request changes".
-const comments = commentsStore(props.task.id)
+const comments = commentsStore(storeKey)
 const draft = ref(null) // { file, line, side, code, text }
 const draftEl = ref(null)
 function lineRef(l) {
@@ -522,7 +525,7 @@ function commentsStore(taskId) {
                       <td colspan="3">
                         <div class="rv-comment" data-test="line-comment">
                           <span class="rv-comment-text">{{ c.text }}</span>
-                          <button class="rv-comment-del" :title="t('review.removeCommentHint', 'Remove this comment')" @click="removeComment(c.id)">{{ t('review.remove', 'Remove') }}</button>
+                          <button v-if="!readOnly" class="rv-comment-del" :title="t('review.removeCommentHint', 'Remove this comment')" @click="removeComment(c.id)">{{ t('review.remove', 'Remove') }}</button>
                         </div>
                       </td>
                     </tr>

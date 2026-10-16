@@ -19,6 +19,8 @@ const TAIL_BYTES = 96 * 1024
 // after a sub-agent ends, often over 100 KB) is read again, wider, up to this.
 const WIDE_TAIL_BYTES = 2 * 1024 * 1024
 const MAX_AGENTS = 50
+// Sub-agent files of one conversation looked at, at most (stat only).
+const MAX_LISTED = 5000
 // Not finished, and nothing written for this long: quiet (maybe a long tool,
 // maybe stopped: nothing proves which, so it is never shown as finished).
 const QUIET_MS = 15 * 60 * 1000
@@ -147,17 +149,23 @@ export function claudeSubagents(sessionId, claudeDir = join(os.homedir(), '.clau
   } catch {
     return []
   }
+  // Only the MAX_AGENTS written to last are read (each read blocks a moment:
+  // a conversation can have hundreds of them); the others only stat'ed.
+  const stats = new Map()
+  for (const n of names.slice(0, MAX_LISTED)) {
+    try {
+      stats.set(n, fs.statSync(join(sub, n)))
+    } catch {
+      /* gone */
+    }
+  }
+  const newest = [...stats.keys()].sort((a, b) => stats.get(b).mtimeMs - stats.get(a).mtimeMs).slice(0, MAX_AGENTS)
   const out = []
-  for (const n of names) {
+  for (const n of newest) {
     const file = join(sub, n)
     const id = n.slice(6, -6)
     if (!realInside(base, file, false)) continue
-    let st
-    try {
-      st = fs.statSync(file)
-    } catch {
-      continue
-    }
+    const st = stats.get(n)
     let meta = {}
     const metaFile = join(sub, `agent-${id}.meta.json`)
     try {

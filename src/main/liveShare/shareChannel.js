@@ -69,6 +69,7 @@ export const CHANNEL_LIMITS = Object.freeze({
   light: 120, // light requests a minute
   heavy: 12, // heavy ones (searches, status, history, the file list)
   write: 30, // changes
+  git: 60, // git runs a request causes by itself (git check-ignore), a minute
   bulkBytes: 16 * 1024 * 1024, // bytes of large answers a minute
   bulkBuffered: 2 * 1024 * 1024, // past this behind, a large answer waits
   bulkQueue: 8, // large answers waiting at once

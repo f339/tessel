@@ -156,11 +156,11 @@ export function actionText(a) {
     case 'taskMove':
       return t('liveShare.action.taskMove', '{{name}} moved “{{title}}” to {{column}}', { name, title, column: columnName(a.column) })
     case 'taskEdit':
-      return t('liveShare.action.taskEdit', '{{name}} renamed a task: {{title}}', { name, title })
+      return a.from ? t('liveShare.action.taskRenamed', '{{name}} renamed the task “{{from}}” to “{{title}}”', { name, from: a.from, title }) : t('liveShare.action.taskEdit', '{{name}} renamed a task: {{title}}', { name, title })
     case 'taskRemove':
       return t('liveShare.action.taskRemove', '{{name}} deleted the task “{{title}}”', { name, title })
     case 'taskAnswer':
-      return t('liveShare.action.taskAnswer', '{{name}} answered the question on “{{title}}”', { name, title })
+      return a.answer ? t('liveShare.action.taskAnswered', '{{name}} answered “{{answer}}” on “{{title}}”', { name, answer: a.answer, title }) : t('liveShare.action.taskAnswer', '{{name}} answered the question on “{{title}}”', { name, title })
     default:
       return ''
   }
@@ -184,12 +184,13 @@ function columnName(column) {
 // [{ id, name }], offered to guests), agentName(id) (optional), activePaneId()
 // (optional: the pane with the keyboard, for a guest's focus), taskBoard
 // (optional: this computer's board for guests, { tasks() (the cards), add({
-// title, wsId }), move(id, column), rename(id, title), remove(id), answer(id,
-// answer), removeWithCopy(id, guestName) (a card with its own copy: deleted
-// after your yes, with that copy) }), paneAgents(wsId) (optional: a shared
-// project's panes as their headers show them), historyRecords() (optional:
-// taskHistory.js records), historyShown() (optional: the Task history tab is
-// on screen).
+// title, wsId, guest }), move(id, column), rename(id, title, guest),
+// remove(id), answer(id, answer, guest), removeWithCopy(id, guestName) (a
+// card with its own copy: deleted after your yes, with that copy) }; guest:
+// the guest's name, for what agents read), paneAgents(wsId) (optional: a
+// shared project's panes as their headers show them), historyRecords()
+// (optional: taskHistory.js records), historyShown() (optional: the Task
+// history tab is on screen).
 const OFF_HOST = () => ({ state: 'off', projectIds: [], invites: [], guests: [], offline: [], trusted: [], presence: [], progress: null, error: null })
 export function createLiveShareWindow(deps) {
   const api = () => (window.shellApi && window.shellApi.liveShare) || null
@@ -598,8 +599,57 @@ export function createLiveShareWindow(deps) {
     const list = Array.isArray(all) ? all : []
     return sharedWss().map((ws) => ({ project: ws.id, records: list.filter((r) => r && r.wsId === ws.id).slice(-500) }))
   }
-  // Cards a guest asked to delete with their copy: your answer awaited.
-  const confirming = new Set()
+  // A guest asking to delete a card with its own copy: a notice (never a
+  // question that a key you type could answer), whose button opens your usual
+  // delete with Cancel first, never over another open question. One ask per
+  // guest at a time (DELETE_ASK_MS), none from that guest for a while after
+  // your no (DELETE_QUIET_MS); when you look, and again when you answer, the
+  // request must still hold (the guest in, with the right to manage tasks,
+  // seeing the project; the card there with its copy). -> the guest's code:
+  // 'confirm' (you were asked), 'busy' (another ask waits, or you said no
+  // lately), 'not-allowed'.
+  const DELETE_ASK_MS = 60000
+  const DELETE_QUIET_MS = 60000
+  const deleteAsks = new Map() // guest id -> { card, project, who, timer }
+  const deleteQuiet = new Map() // guest id -> until when its asks are not heard
+  function askDelete(guestId, who, card, project) {
+    const board = deps.taskBoard
+    if (!board || typeof board.removeWithCopy !== 'function' || !guestId) return 'not-allowed'
+    const pending = deleteAsks.get(guestId)
+    if (pending) return pending.card === card.id ? 'confirm' : 'busy'
+    if ((deleteQuiet.get(guestId) || 0) > Date.now()) return 'busy'
+    const ask = { card: card.id, title: card.title || '', project, who, timer: null }
+    deleteAsks.set(guestId, ask)
+    noticeDelete(guestId, ask)
+    return 'confirm'
+  }
+  function noticeDelete(guestId, ask) {
+    clearTimeout(ask.timer)
+    ask.timer = setTimeout(() => deleteAsks.get(guestId) === ask && deleteAsks.delete(guestId), DELETE_ASK_MS)
+    deps.showToast(t('liveShare.toast.deleteAsk', '{{name}} asks to delete the task “{{title}}” with its own copy of the project.', { name: ask.who, title: ask.title }), {
+      timeout: DELETE_ASK_MS,
+      action: { label: t('liveShare.deleteAsk.review', 'Review…'), run: () => reviewDeleteAsk(guestId, ask) }
+    })
+  }
+  const deleteStands = (guestId, ask) => () =>
+    hostSharing() && guestMay(guestId, 'tasks') && guestSees(guestId, ask.project) && !!localWs(ask.project) && !!(deps.taskBoard && deps.taskBoard.tasks().find((x) => x && x.id === ask.card && x.wsId === ask.project && x.worktree && !x.mergedAt))
+  async function reviewDeleteAsk(guestId, ask) {
+    if (deleteAsks.get(guestId) !== ask) return
+    clearTimeout(ask.timer)
+    const stands = deleteStands(guestId, ask)
+    if (!stands()) {
+      deleteAsks.delete(guestId)
+      deps.showToast(t('liveShare.toast.deleteAskGone', 'That request no longer stands: nothing was deleted.'), { timeout: 5000 })
+      return
+    }
+    const res = await Promise.resolve()
+      .then(() => deps.taskBoard.removeWithCopy(ask.card, ask.who, stands))
+      .catch(() => false)
+    // Another question was open: the ask waits (its notice again).
+    if (res === null) return noticeDelete(guestId, ask)
+    deleteAsks.delete(guestId)
+    if (res === false) deleteQuiet.set(guestId, Date.now() + DELETE_QUIET_MS)
+  }
 
   // --- Task boards for guests ------------------------------------------------
   // Each shared project's cards (main makes the guests' copy).
@@ -609,14 +659,21 @@ export function createLiveShareWindow(deps) {
     const cards = board.tasks()
     return sharedWss().map((ws) => ({ project: ws.id, tasks: cards.filter((x) => x && x.wsId === ws.id) }))
   }
-  // A guest's change of a board, checked again here, then made; main hears
-  // whether it was ({ request, ok, code }).
-  function applyTask(req) {
+  // A guest's change of a board, checked again here, then once more by main
+  // right before it is made (the access model's word: this window's view of
+  // the rights may be late), then made; main hears whether it was ({ request,
+  // ok, code }). A guest's text that reaches an agent (a card it added or
+  // renamed, its answer) is marked as the guest's (guest: its name).
+  async function applyTask(req) {
     const answer = (ok, code) => api()?.taskDone?.({ request: req.request, ok, code })
     const board = deps.taskBoard
     const guestId = (req.guest && req.guest.id) || null
     const project = typeof req.project === 'string' ? req.project : null
-    if (!board || typeof req.request !== 'string' || !hostSharing() || !guestMay(guestId, 'tasks') || !guestSees(guestId, project) || !localWs(project)) return answer(false, 'revoked')
+    const stands = () => !!board && typeof req.request === 'string' && hostSharing() && guestMay(guestId, 'tasks') && guestSees(guestId, project) && !!localWs(project)
+    if (!stands()) return answer(false, 'revoked')
+    const check = await Promise.resolve(api()?.taskCheck?.(req.request)).catch(() => null)
+    if (!check || check.ok !== true || !stands()) return answer(false, 'revoked')
+    const who = (req.guest && typeof req.guest.name === 'string' && req.guest.name) || t('liveShare.guest', 'A guest')
     const a = req.args && typeof req.args === 'object' ? req.args : {}
     const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
     const card = typeof a.id === 'string' ? board.tasks().find((x) => x && x.id === a.id) : null
@@ -625,7 +682,7 @@ export function createLiveShareWindow(deps) {
       case 'add': {
         const title = text(a.title, 300)
         if (!title) return answer(false, 'bad-args')
-        board.add({ title, wsId: project })
+        board.add({ title, wsId: project, guest: who })
         return answer(true)
       }
       case 'move':
@@ -636,31 +693,28 @@ export function createLiveShareWindow(deps) {
         const title = text(a.title, 300)
         // Only a card not started yet is renamed (as on this computer).
         if (!title || card.column !== 'todo') return answer(false, 'not-allowed')
-        board.rename(card.id, title)
+        board.rename(card.id, title, who)
         return answer(true)
       }
       case 'remove':
         // A card with its own copy of the project: deleting it deletes that
-        // copy and its branch with any work not merged yet. As with your own
-        // ✕, you are asked first (removeWithCopy: the same question, saying
-        // who asks), and the guest hears that you were.
+        // copy and its branch with any work not merged yet. Never a question
+        // over your work: a notice says who asks, and its button opens your
+        // usual delete (askDelete). The guest hears that you were asked.
         if (card.worktree && !card.mergedAt) {
-          if (typeof board.removeWithCopy !== 'function') return answer(false, 'not-allowed')
-          if (!confirming.has(card.id)) {
-            confirming.add(card.id)
-            Promise.resolve()
-              .then(() => board.removeWithCopy(card.id, (req.guest && req.guest.name) || t('liveShare.guest', 'A guest')))
-              .catch(() => {})
-              .finally(() => confirming.delete(card.id))
-          }
-          return answer(false, 'confirm')
+          const code = askDelete(guestId, who, card, project)
+          return answer(false, code)
         }
         board.remove(card.id)
         return answer(true)
       case 'answer': {
         const reply = text(a.answer, 4096)
         if (!reply || !card.gate || card.gate.status !== 'pending') return answer(false, 'not-allowed')
-        board.answer(card.id, reply)
+        // Without the type right: one of the choices the agent offered only
+        // (free text would be typed to the agent).
+        const options = Array.isArray(card.gate.options) ? card.gate.options : []
+        if (!guestMay(guestId, 'type') && !options.includes(reply)) return answer(false, 'not-allowed')
+        board.answer(card.id, reply, who)
         return answer(true)
       }
       default:
@@ -1194,6 +1248,9 @@ export function createLiveShareWindow(deps) {
     return {
       task,
       host,
+      // Its own place for the panel's viewed marks and comments (apart from
+      // this computer's tasks).
+      key: `${s.session}:${r.project}:${r.taskId}`, // i18n-ignore
       async info() {
         const res = await ask('review.info', { task: r.taskId })
         if (!res || !res.ok || !res.data) return { ok: false, error: reviewFailText(res && res.code) }
@@ -1552,6 +1609,7 @@ export function createLiveShareWindow(deps) {
     for (const stop of stops.splice(0)) stop()
     clearTimeout(typingTimer)
     clearInterval(historyTimer)
+    for (const ask of deleteAsks.values()) clearTimeout(ask.timer)
   }
 
   return {

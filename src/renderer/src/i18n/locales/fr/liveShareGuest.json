@@ -7,7 +7,9 @@
       "localOnly": "Cela ne fonctionne que sur l'ordinateur de l'hôte."
     },
     "toast": {
-      "taskConfirm": "{{host}} doit confirmer : cette tâche a sa propre copie du projet, supprimée avec elle."
+      "taskConfirm": "{{host}} doit confirmer : cette tâche a sa propre copie du projet, supprimée avec elle.",
+      "deleteAsk": "{{name}} demande de supprimer la tâche « {{title}} » avec sa propre copie du projet.",
+      "deleteAskGone": "Cette demande ne tient plus : rien n'a été supprimé."
     },
     "panels": {
       "offline": "la connexion à l'hôte est coupée.",
@@ -20,6 +22,9 @@
       "outdated": "L'hôte doit mettre Tessel à jour pour afficher ceci.",
       "hostOnly": "Seul l'hôte ({{host}}) peut fusionner cette tâche.",
       "checkFailed": "Le Tessel de {{host}} n'a pas pu vérifier les conflits de cette branche."
+    },
+    "deleteAsk": {
+      "review": "Examiner…"
     }
   },
   "explorer": {
@@ -72,7 +77,8 @@
   },
   "app": {
     "task": {
-      "guestAsksDelete": "{{name}} demande de supprimer cette tâche (Live Share)."
+      "guestAsksDelete": "{{name}} demande de supprimer cette tâche (Live Share).",
+      "guestAskBusy": "Répondez d'abord à la question ouverte, puis revenez à la demande."
     }
   },
   "review": {

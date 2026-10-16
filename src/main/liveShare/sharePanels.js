@@ -265,7 +265,7 @@ export function checkChildren(list) {
 // --- Task history ---------------------------------------------------------------
 // One record's figures as a guest may read them (usd: the costs in dollars
 // too, for a guest with the usage right).
-function guestCost(c, usd) {
+function guestCost(c, usd, roots) {
   if (!isObj(c)) return null
   const tokens = (m) => ({ inputTokens: count(m.inputTokens), outputTokens: count(m.outputTokens), cacheReadTokens: count(m.cacheReadTokens), cacheWriteTokens: count(m.cacheWriteTokens) })
   const money = (m) => (usd ? { known: m.known !== false, ...(Number.isFinite(m.usd) && m.usd >= 0 ? { usd: m.usd } : {}) } : {})
@@ -277,7 +277,7 @@ function guestCost(c, usd) {
     models: (Array.isArray(c.models) ? c.models : [])
       .filter(isObj)
       .slice(0, HISTORY_LIMITS.models)
-      .map((m) => ({ model: text(m.model, null, PANE_LIMITS.model), ...tokens(m), ...money(m) })),
+      .map((m) => ({ model: text(m.model, roots, PANE_LIMITS.model), ...tokens(m), ...money(m) })),
     subagents: count(c.subagents),
     incomplete: c.incomplete === true
   }
@@ -300,7 +300,7 @@ function historyRecord(r, roots, usd) {
     doneAt: time(r.doneAt),
     durationMs: count(r.durationMs),
     workPeriods: periods,
-    cost: guestCost(r.cost, usd)
+    cost: guestCost(r.cost, usd, roots)
   }
 }
 

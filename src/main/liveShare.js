@@ -640,16 +640,21 @@ export function registerLiveShare({
   }
   function folderChanged(project, w, change) {
     if (folderWatches.get(project) !== w || !w.info) return
-    scope.invalidate(w.info.real)
-    if (!change || !Array.isArray(change.paths)) w.all = true
-    else {
+    if (!change || !Array.isArray(change.paths)) {
+      w.all = true
+      scope.invalidatePaths(w.info.real, null)
+    } else {
+      const rels = []
       for (const full of change.paths) {
         const rel = relFrom(w.info.real, full)
         if (rel === null || rel === '') continue
+        rels.push(rel)
         if (/^\.git(\/|$)/i.test(rel)) w.git = true
         else if (!w.all) w.paths.add(rel)
         if (w.paths.size > FS_PATHS) w.all = true
       }
+      // What was kept about these paths only (a path seen ignored stays so).
+      scope.invalidatePaths(w.info.real, rels)
     }
     if (!w.timer) {
       w.timer = setTimeout(() => flushFolder(project, w), PUSH_MS)
@@ -718,6 +723,24 @@ export function registerLiveShare({
     fileWanted.clear()
     refreshFiles()
   }
+  // Hiding turned on while sharing: a file open in a guest's editor that is
+  // hidden now is said gone (its editor reads it again: not there) and no
+  // longer followed; every guest's Files read everything again.
+  async function hideNow() {
+    const s = sharing
+    if (!s || !s.server) return
+    for (const e of [...fileWanted.values()]) {
+      const root = roots.get(e.project)
+      const r = root ? await scope.resolve(root, e.rel, { settings: shareSettings, mustExist: false }).catch(() => null) : null
+      if (r && r.ok) continue
+      if (sharing !== s) return
+      e.real = null
+      s.server.push('file', e.project, e.rel, { exists: false, size: 0, mtimeMs: 0, sig: null })
+      s.server.endTopic('file', e.project, e.rel)
+    }
+    refreshFiles()
+    for (const project of folderWatches.keys()) s.server.push('fs', project, null, { paths: null })
+  }
   // A project's folder changed (the window said another one): its watch
   // starts again, its files are found again.
   function rootsChanged(before) {
@@ -743,7 +766,11 @@ export function registerLiveShare({
     const args = taskArgs(req.op, req.args)
     if (!args) return { ok: false, code: 'bad-args' }
     const board = boards.get(req.project)
-    if (args.id && !(board && board.tasks.some((x) => x.id === args.id))) return { ok: false, code: 'not-found' }
+    const card = args.id ? board && board.tasks.find((x) => x.id === args.id) : null
+    if (args.id && !card) return { ok: false, code: 'not-found' }
+    // An answer goes to the agent that asked: without the type right, only
+    // one of the choices it offered (never free text typed to an agent).
+    if (req.op === 'tasks.answer' && ctx.rights.type !== true && !(card.gate && card.gate.status === 'pending' && card.gate.options.includes(args.answer))) return { ok: false, code: 'not-allowed' }
     if (!ctx.recheck() || sharing !== s) return { ok: false, code: 'revoked' }
     const request = `t${nextTask++}`
     const res = await new Promise((resolve) => {
@@ -752,10 +779,12 @@ export function registerLiveShare({
         resolve({ ok: false, code: 'unavailable' })
       }, TASK_WAIT_MS)
       timer.unref?.()
-      taskRequests.set(request, { resolve, timer, guestId: ctx.guest.id, project: req.project })
-      send('liveShare:hostRequest', { action: 'task', request, op: req.op.slice('tasks.'.length), project: req.project, args, guest: ctx.guest })
+      // The window asks again whether it still stands right before making it
+      // (liveShare:taskCheck: the access model's word, not its own view).
+      taskRequests.set(request, { resolve, timer, guestId: ctx.guest.id, project: req.project, recheck: ctx.recheck })
+      send('liveShare:hostRequest', { action: 'task', request, op: req.op.slice('tasks.'.length), project: req.project, args, guest: ctx.guest, type: ctx.rights.type === true })
     })
-    if (res.ok) noteAction(ctx.guest, { op: req.op, project: req.project, args: { ...args, title: args.title || (board && board.tasks.find((x) => x.id === args.id)?.title) || '' } })
+    if (res.ok) noteAction(ctx.guest, { op: req.op, project: req.project, args: { ...args, title: args.title || (card && card.title) || '', from: req.op === 'tasks.edit' && card ? card.title : undefined } })
     return res
   }
   function endTaskRequests(code = 'revoked', which = () => true) {
@@ -782,7 +811,7 @@ export function registerLiveShare({
   let historyCosts = new Map() // project -> { at, costs }: figures read here
   let taskCopies = new Map() // project -> Map(card id -> { path, branch, target })
   let usageOff = null
-  addOps(PANEL_OPS, (req, ctx, s) => (req.op === 'agents.children' ? childrenRequest(req, ctx, s) : historyRequest(req, ctx)))
+  addOps(PANEL_OPS, (req, ctx, s) => (req.op === 'agents.children' ? childrenRequest(req, ctx, s) : historyRequest(req, ctx, s)))
   channelTopics.set('agents', (s, project, key, on) => on && agentsFeed.sendNow(project))
   channelTopics.set('usage', (s, project, key, on) => {
     usageOff?.()
@@ -801,26 +830,42 @@ export function registerLiveShare({
     }
   }
   // A pane's sub-agents: only a pane of that project the guest sees, read
-  // from where the window said its conversation is.
+  // from where the window said its conversation is. Read once per
+  // CHILDREN_MS per pane whoever asks (reading them blocks this process a
+  // moment), one read at a time.
+  const CHILDREN_MS = 6000
+  let childReads = new Map() // project \n pane \n session -> { at, value: Promise<items> }
   async function childrenRequest(req, ctx, s) {
     const pane = req.args && typeof req.args.pane === 'string' && /^[\w-]{1,80}$/.test(req.args.pane) ? req.args.pane : null
     if (!pane) return { ok: false, code: 'bad-args' }
     const spec = paneChildren.get(req.project)?.get(pane)
     if (!spec || sharing !== s || !paneShared(s, req.project, pane) || typeof agentChildren !== 'function') return { ok: false, code: 'not-found' }
-    let list
+    const key = `${req.project}\n${pane}\n${spec.agent}\n${spec.sessionId}`
+    let entry = childReads.get(key)
+    if (!entry || Date.now() - entry.at >= CHILDREN_MS) {
+      const value = Promise.resolve()
+        .then(() => agentChildren({ agent: spec.agent, sessionId: spec.sessionId, ...(spec.accountId !== undefined ? { accountId: spec.accountId } : {}) }))
+        .then((list) => guestChildren(list, projectRoots(req.project)))
+      entry = { at: Date.now(), value }
+      childReads.delete(key)
+      childReads.set(key, entry)
+      // A failed read is not kept.
+      value.catch(() => childReads.get(key) === entry && childReads.delete(key))
+      if (childReads.size > 256) childReads.delete(childReads.keys().next().value)
+    }
     try {
-      list = await agentChildren({ agent: spec.agent, sessionId: spec.sessionId, ...(spec.accountId !== undefined ? { accountId: spec.accountId } : {}) })
+      return { ok: true, data: { items: await entry.value } }
     } catch {
       return { ok: false, code: 'failed' }
     }
-    return { ok: true, data: { items: guestChildren(list, projectRoots(req.project)) } }
   }
   // The project's task history: times and tokens; the costs in dollars only
   // for a guest with the usage right (its answer then leaves only while it
   // still has it). Figures the window has not read yet are read here, at most
   // once every 30 s per project.
-  async function historyRequest(req, ctx) {
-    const records = histories.get(req.project) || []
+  async function historyRequest(req, ctx, s) {
+    // The pane that did it only while that project's guests see it.
+    const records = (histories.get(req.project) || []).map((r) => (r.paneId && !(sharing === s && paneShared(s, req.project, r.paneId)) ? { ...r, paneId: null } : r))
     const usd = !!(ctx.rights && ctx.rights.usage === true)
     if (usd) ctx.uses?.('usage')
     let costs = null
@@ -849,6 +894,7 @@ export function registerLiveShare({
     histories = new Map()
     historyCosts = new Map()
     taskCopies = new Map()
+    childReads = new Map()
   }
 
   // --- What guests changed (the audit) ---------------------------------------
@@ -879,7 +925,7 @@ export function registerLiveShare({
       count: paths.length || (path ? 1 : 0),
       ...(paths.length ? { paths } : {}),
       ...(req.op === 'scm.commit' ? { detail: str(String(a.message || '').split('\n')[0], 120) } : {}),
-      ...(req.op.startsWith('tasks.') ? { detail: str(a.title || '', 120), ...(a.column ? { column: a.column } : {}) } : {}),
+      ...(req.op.startsWith('tasks.') ? { detail: str(a.title || '', 120), ...(a.column ? { column: a.column } : {}), ...(typeof a.answer === 'string' ? { answer: str(a.answer, 300) } : {}), ...(typeof a.from === 'string' ? { from: str(a.from, 120) } : {}) } : {}),
       flagged: [path, ...paths].some((p) => INSTRUCTION_FILES.test(p))
     }
     actions = [entry, ...actions].slice(0, MAX_ACTIONS)
@@ -1151,6 +1197,7 @@ export function registerLiveShare({
     hostFile.clear()
     closeAllFeeds()
     stopWatches()
+    scope.reset()
     endTaskRequests('revoked')
     endPanels()
     layouts = new Map()
@@ -2073,6 +2120,7 @@ export function registerLiveShare({
       settingsFile.write({ hideIgnored: shareSettings.hideIgnored })
       scope.invalidate()
       info(`guests ${shareSettings.hideIgnored ? 'no longer see' : 'now see'} ignored and secret files`)
+      if (shareSettings.hideIgnored) hideNow()
       pushHost()
     }
     return { ok: true, settings: { ...shareSettings } }
@@ -2121,6 +2169,16 @@ export function registerLiveShare({
     for (const item of (Array.isArray(list) ? list : []).slice(0, MAX_PROJECTS)) if (item && keep.has(item.project)) histories.set(item.project, hostHistory(item.records))
     for (const id of [...histories.keys()]) if (!keep.has(id)) histories.delete(id)
   })
+  // The window, right before it makes a guest's change of a board: does the
+  // request still stand (the guest in, with the right, seeing the project)?
+  ipcMain.handle('liveShare:taskCheck', (_evt, request) => {
+    const r = typeof request === 'string' ? taskRequests.get(request) : null
+    try {
+      return { ok: !!r && r.recheck() === true }
+    } catch {
+      return { ok: false }
+    }
+  })
   // The window's answer to a guest's change of a board: { request, ok, code }.
   ipcMain.on('liveShare:taskDone', (_evt, { request, ok, code } = {}) => {
     const r = typeof request === 'string' ? taskRequests.get(request) : null
@@ -2128,8 +2186,9 @@ export function registerLiveShare({
     taskRequests.delete(request)
     clearTimeout(r.timer)
     // 'confirm': a card with its own copy, whose delete the host is asked
-    // to confirm (its copy and branch go with it).
-    r.resolve(ok === true ? { ok: true, data: {} } : { ok: false, code: ['not-found', 'not-allowed', 'revoked', 'forbidden', 'bad-args', 'confirm'].includes(code) ? code : 'failed' })
+    // to confirm (its copy and branch go with it); 'busy': another such ask
+    // of this guest waits, or the host said no to one lately.
+    r.resolve(ok === true ? { ok: true, data: {} } : { ok: false, code: ['not-found', 'not-allowed', 'revoked', 'forbidden', 'bad-args', 'confirm', 'busy'].includes(code) ? code : 'failed' })
   })
   // Access, one change at a time, against what the subject has now (two
   // clicks in a row never undo each other): one project or one right of a

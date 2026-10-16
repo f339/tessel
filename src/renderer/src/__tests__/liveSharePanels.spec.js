@@ -20,6 +20,7 @@ import AgentDashboard from '../components/AgentDashboard.vue'
 import TaskCard from '../components/TaskCard.vue'
 import ReviewPanel from '../components/ReviewPanel.vue'
 import LiveShareChatPane from '../components/LiveShareChatPane.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 
 const flush = async () => {
   for (let i = 0; i < 6; i++) {
@@ -38,6 +39,7 @@ function setup({ cards = [], records = [] } = {}) {
     setPaneAgents: vi.fn(),
     setHistory: vi.fn(),
     taskDone: vi.fn(),
+    taskCheck: vi.fn(async () => ({ ok: true })),
     subscribe: vi.fn(async () => ({ ok: true })),
     task: vi.fn(async () => ({ ok: true })),
     request: vi.fn(async () => ({ ok: false, code: 'failed' })),
@@ -55,6 +57,7 @@ function setup({ cards = [], records = [] } = {}) {
   const workspaces = ref([])
   const currentWsId = ref(null)
   const toasts = []
+  const actions = []
   const board = reactive(cards.map((c) => ({ ...c })))
   const history = reactive(records.map((r) => ({ ...r })))
   const panes = reactive({})
@@ -85,7 +88,10 @@ function setup({ cards = [], records = [] } = {}) {
     selectedShell: () => 'pwsh',
     seedBuffer: () => {},
     dropBuffer: () => {},
-    showToast: (text, opts) => toasts.push([text, opts && opts.kind]),
+    showToast: (text, opts) => {
+      toasts.push([text, opts && opts.kind])
+      if (opts && opts.action) actions.push({ text, ...opts.action })
+    },
     isAgentLeaf: () => false,
     probeRunningWork: vi.fn(async () => ({ running: false, unknown: false, names: [] })),
     killPty: vi.fn(),
@@ -98,7 +104,7 @@ function setup({ cards = [], records = [] } = {}) {
     historyShown: () => historyOn.value
   }
   const ls = createLiveShareWindow(deps)
-  return { ls, api, listeners, workspaces, currentWsId, toasts, board, history, panes, historyOn, taskBoard, release: () => release && release(true) }
+  return { ls, api, listeners, workspaces, currentWsId, toasts, actions, board, history, panes, historyOn, taskBoard, answer: (yes) => release && release(yes) }
 }
 
 const GUEST = (rights = {}) => ({ id: 'g1', name: 'Ana', state: 'joined', rights: { ...NO_RIGHTS, ...rights }, projects: ['ws-1'] })
@@ -132,28 +138,86 @@ describe('Live Share phase 2b in the window, as the host', () => {
     expect(JSON.stringify(t.api.setPaneAgents.mock.calls)).not.toContain('elsewhere')
   })
 
-  it('a guest deleting a card with its own copy: you are asked first, as with your own \u2715; the guest hears it', async () => {
-    await host({ rights: { tasks: true }, cards: [{ id: 'task-1', title: 'With copy', column: 'review', wsId: 'ws-1', worktree: { path: 'C:\\site.worktrees\\a', branch: 'agent/a' } }, { id: 'task-2', title: 'Plain', column: 'todo', wsId: 'ws-1' }, { id: 'task-3', title: 'Merged', column: 'done', wsId: 'ws-1', mergedAt: 5, worktree: { path: 'C:\\x', branch: 'agent/x' } }] })
-    const ask = (id) => t.listeners.onHostRequest({ action: 'task', request: 't1', op: 'remove', project: 'ws-1', args: { id }, guest: { id: 'g1', name: 'Ana' } })
-    ask('task-1')
+  const COPY_CARDS = [
+    { id: 'task-1', title: 'With copy', column: 'review', wsId: 'ws-1', worktree: { path: 'C:\\site.worktrees\\a', branch: 'agent/a' } },
+    { id: 'task-2', title: 'Plain', column: 'todo', wsId: 'ws-1' },
+    { id: 'task-3', title: 'Merged', column: 'done', wsId: 'ws-1', mergedAt: 5, worktree: { path: 'C:\\x', branch: 'agent/x' } },
+    { id: 'task-4', title: 'Another copy', column: 'review', wsId: 'ws-1', worktree: { path: 'C:\\site.worktrees\\b', branch: 'agent/b' } }
+  ]
+  const askRemove = async (id, guest = { id: 'g1', name: 'Ana' }) => {
+    t.listeners.onHostRequest({ action: 'task', request: 't1', op: 'remove', project: 'ws-1', args: { id }, guest })
     await flush()
-    expect(t.taskBoard.removeWithCopy).toHaveBeenCalledWith('task-1', 'Ana')
+  }
+
+  it('a guest asking to delete a card with its own copy: a notice, never a question over your work; one at a time; quiet after your no', async () => {
+    await host({ rights: { tasks: true }, cards: COPY_CARDS })
+    await askRemove('task-1')
+    // No question opened by the guest: a notice with a button, and the guest
+    // hears you were asked.
+    expect(t.taskBoard.removeWithCopy).not.toHaveBeenCalled()
     expect(t.taskBoard.remove).not.toHaveBeenCalled()
     expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'confirm' })
-    // Asked again while you have not answered: one question.
-    ask('task-1')
+    expect(t.actions).toHaveLength(1)
+    expect(t.actions[0]).toMatchObject({ text: 'Ana asks to delete the task “With copy” with its own copy of the project.', label: 'Review…' })
+    // The same again: nothing more; another card while one waits: busy.
+    await askRemove('task-1')
+    expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'confirm' })
+    await askRemove('task-4')
+    expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'busy' })
+    expect(t.actions).toHaveLength(1)
+    // You look: your usual delete (the request checked again when you answer).
+    t.actions[0].run()
     await flush()
-    expect(t.taskBoard.removeWithCopy).toHaveBeenCalledTimes(1)
-    t.release()
+    expect(t.taskBoard.removeWithCopy).toHaveBeenCalledWith('task-1', 'Ana', expect.any(Function))
+    const stands = t.taskBoard.removeWithCopy.mock.calls[0][2]
+    expect(stands()).toBe(true)
+    t.listeners.onHost(sharing([GUEST({ tasks: false })]))
     await flush()
-    ask('task-1')
+    expect(stands()).toBe(false)
+    t.listeners.onHost(sharing([GUEST({ tasks: true })]))
     await flush()
-    expect(t.taskBoard.removeWithCopy).toHaveBeenCalledTimes(2)
+    // You say no: that guest's asks are not heard for a while.
+    t.answer(false)
+    await flush()
+    await askRemove('task-4')
+    expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'busy' })
+    expect(t.actions).toHaveLength(1)
+    // Another guest is heard.
+    t.listeners.onHost(sharing([GUEST({ tasks: true }), { ...GUEST({ tasks: true }), id: 'g2', name: 'Bo' }]))
+    await flush()
+    await askRemove('task-4', { id: 'g2', name: 'Bo' })
+    expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'confirm' })
+    expect(t.actions.at(-1).text).toBe('Bo asks to delete the task “Another copy” with its own copy of the project.')
     // A card without a copy (or merged already): deleted at once, as before.
-    ask('task-2')
-    ask('task-3')
+    await askRemove('task-2')
+    await askRemove('task-3')
     expect(t.taskBoard.remove.mock.calls.map((c) => c[0])).toEqual(['task-2', 'task-3'])
     expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: true, code: undefined })
+  })
+
+  it('a request that no longer stands when you look opens nothing', async () => {
+    await host({ rights: { tasks: true }, cards: COPY_CARDS })
+    await askRemove('task-1')
+    t.listeners.onHost(sharing([GUEST({ tasks: false })]))
+    await flush()
+    t.toasts.length = 0
+    t.actions[0].run()
+    await flush()
+    expect(t.taskBoard.removeWithCopy).not.toHaveBeenCalled()
+    expect(t.toasts).toEqual([['That request no longer stands: nothing was deleted.', undefined]])
+  })
+
+  it('another question already open: the request waits, its notice again', async () => {
+    await host({ rights: { tasks: true }, cards: COPY_CARDS })
+    await askRemove('task-1')
+    t.actions[0].run()
+    await flush()
+    t.answer(null)
+    await flush()
+    expect(t.actions).toHaveLength(2)
+    expect(t.actions[1].text).toBe(t.actions[0].text)
+    await askRemove('task-1')
+    expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'confirm' })
   })
 })
 
@@ -334,6 +398,42 @@ describe('the host\u2019s panes in the guest\u2019s panels', () => {
     await w.findAll('tr.rv-line.add')[0].findAll('.rv-num-click')[1].trigger('click')
     expect(w.find('.rv-comment-input').exists()).toBe(false)
     w.unmount()
+  })
+
+  it('a host review keeps its marks apart from this computer\u2019s task of the same id; no comment or Remove in read only', async () => {
+    const DIFF = '@@ -1,2 +1,2 @@\n const a = 1\n-const b = 2\n+const b = 3\n'
+    const facts = { ok: true, head: 'h1', branch: 'agent/x', target: 'main', rootBranch: 'main', files: [{ path: 'src/app.js', status: 'M', added: 1, removed: 1, blob: 'b1' }], commits: [], uncommitted: [], conflicts: [], dirtyOverlap: [], behind: 0, merging: false, blocker: null }
+    window.shellApi = { review: { info: vi.fn(async () => facts), diff: vi.fn(async () => ({ ok: true, text: DIFF })) } }
+    const id = `same-${Math.random()}`
+    const local = mount(ReviewPanel, {
+      props: { task: { id, title: 'Mine', worktree: { root: 'C:/p', path: 'C:/p.worktrees/x', branch: 'agent/x', baseBranch: 'main' } }, agentLabel: '#1 Codex', actions: { requestChanges: vi.fn(), merge: vi.fn(), discard: vi.fn(), markDone: vi.fn(), focusAgent: vi.fn(), resolveConflicts: vi.fn() } },
+      attachTo: document.body
+    })
+    await flushPromises()
+    await flushPromises()
+    const added = local.findAll('tr.rv-line').find((r) => r.classes('add'))
+    await added.findAll('.rv-num-click')[1].trigger('click')
+    await local.find('.rv-comment-input').setValue('Why 3?')
+    await local.findAll('.rv-comment-draft .confirm-btn.primary')[0].trigger('click')
+    expect(local.findAll('[data-test="line-comment"]')).toHaveLength(1)
+    local.unmount()
+    const source = { host: 'Cedric', key: `1:ws-1:${id}`, info: vi.fn(async () => facts), diff: vi.fn(async () => ({ ok: true, text: DIFF, truncated: false })) }
+    const remote = mount(ReviewPanel, { props: { task: { id, title: 'Theirs', worktree: { branch: 'agent/x' } }, source, actions: {} }, attachTo: document.body })
+    await flushPromises()
+    await flushPromises()
+    expect(remote.findAll('tr.rv-line.add')).toHaveLength(1)
+    expect(remote.findAll('[data-test="line-comment"]')).toHaveLength(0)
+    expect(remote.find('.rv-comment-del').exists()).toBe(false)
+    remote.unmount()
+  })
+
+  it('a confirmation someone else asked for has Cancel focused, never the action', () => {
+    const w = mount(ConfirmDialog, { props: { title: 'Delete?', confirmLabel: 'Delete', danger: true, focusCancel: true }, attachTo: document.body })
+    expect(document.activeElement).toBe(w.find('[data-test="confirm-cancel"]').element)
+    w.unmount()
+    const own = mount(ConfirmDialog, { props: { title: 'Delete?', confirmLabel: 'Delete' }, attachTo: document.body })
+    expect(document.activeElement.textContent.trim()).toBe('Delete')
+    own.unmount()
   })
 
   it('a host pane in chat mode shows its model as the host\u2019s header does', () => {

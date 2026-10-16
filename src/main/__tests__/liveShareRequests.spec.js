@@ -251,7 +251,8 @@ describe('reading', () => {
   it('filters searches and the file list, naming nothing hidden', async () => {
     const names = await ask('fs.searchNames', { query: 'HOW-TO' })
     expect(names.data.results).toEqual([])
-    expect(names.data.hidden).toBeGreaterThanOrEqual(1)
+    // Hidden names are never counted (that would tell they are there).
+    expect(names.data.hidden).toBe(0)
     const content = await ask('fs.searchContent', { query: 'TOKEN_NEEDLE' })
     expect(content.data.results.map((r) => r.rel)).toEqual(['README.md'])
     const files = await ask('fs.fileList', {})
@@ -300,9 +301,9 @@ describe('changes', () => {
     expect(await ask('scm.discard', { paths: ['src/a.js'] }, { rights: EDIT })).toEqual({ ok: false, code: 'forbidden' })
     expect(g(repo, 'status', '--porcelain')).toContain(' M proj/src/a.js')
     // With the git right: staged, committed.
-    expect(await ask('scm.stage', { paths: ['src/a.js'] }, { rights: GIT })).toEqual({ ok: true, data: {} })
+    expect(await ask('scm.stage', { paths: ['src/a.js'] }, { rights: GIT })).toEqual({ ok: true, data: { count: 1 } })
     expect(g(repo, 'status', '--porcelain')).toContain('M  proj/src/a.js')
-    expect(await ask('scm.unstage', { paths: ['src/a.js'] }, { rights: GIT })).toEqual({ ok: true, data: {} })
+    expect(await ask('scm.unstage', { paths: ['src/a.js'] }, { rights: GIT })).toEqual({ ok: true, data: { count: 1 } })
     await ask('scm.stage', { paths: ['src/a.js'] }, { rights: GIT })
     const c = await ask('scm.commit', { message: 'guest commit' }, { rights: GIT })
     expect(c.ok).toBe(true)
@@ -313,18 +314,21 @@ describe('changes', () => {
   it('never stages, discards or names a hidden file', async () => {
     expect(await ask('scm.stage', { paths: ['.env'] }, { rights: GIT })).toEqual({ ok: false, code: 'not-found' })
     expect(await ask('scm.stage', { paths: [`.tessel/team/${TOKEN}/HOW-TO.md`] }, { rights: GIT })).toEqual({ ok: false, code: 'not-found' })
-    expect(await ask('scm.discard', { paths: ['src/a.js', '.env'] }, { rights: GIT })).toEqual({ ok: false, code: 'not-found' })
-    expect(fs.readFileSync(join(root, 'src', 'a.js'), 'utf8')).toBe('one\ntwo\n')
+    // A hidden file named with a visible one: only the visible one.
+    put(root, 'src/new.txt', 'n')
+    expect(await ask('scm.discard', { paths: ['src/new.txt', '.env'] }, { rights: GIT })).toEqual({ ok: true, data: { restored: 0, trashed: 1, count: 1 } })
+    expect(trashed).toEqual([join(repo, 'proj', 'src', 'new.txt')])
+    expect(fs.existsSync(join(root, '.env'))).toBe(true)
     expect(g(repo, 'status', '--porcelain')).not.toContain('A  proj/.env')
     // A file deleted with its folder is still named by git: staged by name.
     fs.rmSync(join(root, 'src', 'deep'), { recursive: true })
-    expect(await ask('scm.stage', { paths: ['src/deep/only/x.js'] }, { rights: GIT })).toEqual({ ok: true, data: {} })
+    expect(await ask('scm.stage', { paths: ['src/deep/only/x.js'] }, { rights: GIT })).toEqual({ ok: true, data: { count: 1 } })
     // Discard: tracked files restored, untracked ones to the Recycle Bin.
-    put(root, 'src/new.txt', 'n')
-    const d = await ask('scm.discard', { paths: ['src/a.js', 'src/new.txt'] }, { rights: GIT })
-    expect(d).toEqual({ ok: true, data: { restored: 1, trashed: 1 } })
+    put(root, 'src/new2.txt', 'n')
+    const d = await ask('scm.discard', { paths: ['src/a.js', 'src/new2.txt'] }, { rights: GIT })
+    expect(d).toEqual({ ok: true, data: { restored: 1, trashed: 1, count: 2 } })
     expect(fs.readFileSync(join(root, 'src', 'a.js'), 'utf8')).toBe('one\n')
-    expect(trashed).toEqual([join(repo, 'proj', 'src', 'new.txt')])
+    expect(trashed).toEqual([join(repo, 'proj', 'src', 'new.txt'), join(repo, 'proj', 'src', 'new2.txt')])
   })
 
   it('saves only over the file the guest read, and asks for the right again first', async () => {
@@ -387,14 +391,17 @@ describe('changes', () => {
   it('loads and saves the notes, refusing a stale copy', async () => {
     const loaded = await ask('notes.load', {})
     expect(loaded.data).toMatchObject({ exists: true, text: '# notes\n' })
-    expect(await ask('notes.save', { text: 'x', baseMtime: loaded.data.mtime - 5000 }, { rights: EDIT })).toEqual({ ok: false, code: 'conflict' })
-    const saved = await ask('notes.save', { text: '# notes\nguest\n', baseMtime: loaded.data.mtime }, { rights: EDIT })
+    // Agents read the notes: saving them needs the type right too.
+    expect(await ask('notes.save', { text: 'x', baseMtime: loaded.data.mtime }, { rights: EDIT })).toEqual({ ok: false, code: 'not-allowed' })
+    const NOTES = { edit: true, type: true }
+    expect(await ask('notes.save', { text: 'x', baseMtime: loaded.data.mtime - 5000 }, { rights: NOTES })).toEqual({ ok: false, code: 'conflict' })
+    const saved = await ask('notes.save', { text: '# notes\nguest\n', baseMtime: loaded.data.mtime }, { rights: NOTES })
     expect(saved.ok).toBe(true)
     expect(fs.readFileSync(join(root, '.tessel', 'notes.md'), 'utf8')).toBe('# notes\nguest\n')
     // No .tessel at all: made on the first save.
     fs.rmSync(join(root, '.tessel'), { recursive: true })
     expect((await ask('notes.load', {})).data).toEqual({ exists: false, text: '', mtime: null })
-    expect((await ask('notes.save', { text: 'first' }, { rights: EDIT })).ok).toBe(true)
+    expect((await ask('notes.save', { text: 'first' }, { rights: NOTES })).ok).toBe(true)
     expect(fs.readFileSync(join(root, '.tessel', 'notes.md'), 'utf8')).toBe('first')
   })
 })
