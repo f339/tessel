@@ -589,12 +589,24 @@ function expiryText(iso) {
   if (timestamp(iso) <= now.value) return t('usage.menu.expired', 'Expired')
   return t('usage.menu.expiresIn', 'Expires in {{time}}', { time: shortReset(iso) })
 }
+// The system account by its address (the main process names it "System
+// default" when it has no better label); a saved one by its label.
+function systemAccountName(system) {
+  const label = system?.label && system.label !== 'System default' ? system.label : '' // i18n-ignore
+  return system?.email || label || t('usage.menu.systemDefault', 'System default')
+}
+function savedAccountName(account) {
+  const name = account?.label || account?.email || t('usage.menu.account', 'Account')
+  return account?.status === 'missing'
+    ? t('usage.menu.signInNeeded', '{{account}} - sign-in needed', { account: name })
+    : name
+}
 function accountLabel(id) {
   const provider = providerAccounts(id)
   return provider?.selectedId
     ? provider.accounts?.find((account) => account.id === provider.selectedId)?.label ||
         t('usage.menu.savedAccount', 'Saved account')
-    : provider?.system?.label || t('usage.menu.systemDefault', 'System default')
+    : systemAccountName(provider?.system)
 }
 function updatedText(agent) {
   const observed = timestamp(agent?.updatedAt || agent?.observedAt)
@@ -1401,24 +1413,14 @@ const emptyTitle = () => t('usage.menu.buttonTitleEmpty', "Usage of your agents'
               :data-test="'usage-account-' + detailAgent.id"
               @change="selectAccount(providerAccounts(detailAgent.id), $event)"
             >
-              <option v-if="providerAccounts(detailAgent.id).system" value="">
-                {{
-                  providerAccounts(detailAgent.id).system.label ||
-                  t('usage.menu.systemDefault', 'System default')
-                }}
-              </option>
+              <!-- Labels as text children, never v-text: ThemedSelect reads an
+                   option's label from its children, so v-text left it blank. -->
+              <option v-if="providerAccounts(detailAgent.id).system" value="">{{ systemAccountName(providerAccounts(detailAgent.id).system) }}</option>
               <option
                 v-for="account in providerAccounts(detailAgent.id).accounts || []"
                 :key="account.id"
                 :value="account.id"
-                v-text="
-                  account.status === 'missing'
-                    ? t('usage.menu.signInNeeded', '{{account}} - sign-in needed', {
-                        account: account.label || account.email || t('usage.menu.account', 'Account')
-                      })
-                    : account.label || account.email || t('usage.menu.account', 'Account')
-                "
-              ></option>
+              >{{ savedAccountName(account) }}</option>
             </ThemedSelect>
           </div>
           <p v-if="providerAccounts(detailAgent.id).error" class="usage-account-error" role="alert">
