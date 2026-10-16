@@ -292,6 +292,22 @@ describe('any agent missing on its SSH host (Antigravity)', () => {
     expect(asked.details[1]).toEqual({ label: 'Node.js', value: expect.stringContaining(NVM_INSTALL_URL) })
   })
 
+  it('Check again, the host too slow (a partial answer): unknown, said so, never started; the card stays', async () => {
+    const env = load({ status: missingAgy() })
+    const leaf = await env.api.createLeaf('pwsh', agy, null, null, { remoteHostId: HOST, remotePath: '/srv/app' })
+    env.ws.tree = leaf
+    env.shellApi.remoteAgents.check.mockResolvedValue({ ...missingAgy(), partial: true })
+    expect(await env.api.recheckMissingAgent('pane-new1')).toBe(false)
+    expect(leaf.agentMissing).toMatchObject({ unsure: true, notFound: false, checking: false })
+    expect(env.ctx.restartInPlace).not.toHaveBeenCalled()
+    // A pane already missing it starts only on a sure answer.
+    expect(await env.api.remoteAgentCommand(HOST, 'antigravity', 'agy', { strict: true })).toBe(null)
+    // Missing for sure: said so.
+    env.shellApi.remoteAgents.check.mockResolvedValue(missingAgy())
+    expect(await env.api.recheckMissingAgent('pane-new1')).toBe(false)
+    expect(leaf.agentMissing).toMatchObject({ unsure: false, notFound: true })
+  })
+
   it('no automatic install known: its install page opens, nothing runs on the host', async () => {
     const env = load({ status: missingAgy() })
     env.ws.tree = await env.api.createLeaf('pwsh', AGENTS[4], null, null, { remoteHostId: HOST, remotePath: '/srv/app' })

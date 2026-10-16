@@ -6,7 +6,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
-import { createRemoteSession, sessionArgs } from '../../remoteShell'
+import { createRemoteSession, prelude, sessionArgs } from '../../remoteShell'
 import { parseAgentTools, createRemoteAgentCheck, emptyHost } from '../remoteAgentSetup'
 import { gitSh, fakeSshLaunch, posixPath } from '../../__tests__/fixtures/fakeSsh'
 
@@ -53,6 +53,11 @@ describe('parseAgentTools', () => {
     expect(odd.host).toMatchObject({ nodeMajor: null, npmWritable: null, os: null, npm: null })
     expect(odd.uid).toBe(null)
     expect(parseAgentTools('@prefixw 0\n').host.npmWritable).toBe(false)
+  })
+
+  it('a probe that ran out of time (login shell, npm): partial', () => {
+    expect(parseAgentTools('agy -\n@partial login npm\n').partial).toBe(true)
+    expect(parseAgentTools('agy -\n').partial).toBe(false)
   })
 })
 
@@ -165,6 +170,19 @@ describe('createRemoteAgentCheck', () => {
     expect(calls.tools).toBe(1)
   })
 
+  it('a partial answer (the login shell ran out of time): sent, never reused, and the next terminal asks again', async () => {
+    let partial = true
+    const { check, calls, sent } = make({ agentBins: [{ id: 'antigravity', bin: 'agy' }], agentTools: () => ({ ...tools, bins: { agy: null }, partial }) })
+    await check.hostStarted('h1')
+    expect(sent[0]).toMatchObject({ partial: true, agents: { antigravity: null } })
+    expect(await check.check('h1')).toMatchObject({ partial: true })
+    expect(calls.tools).toBe(2)
+    partial = false
+    await check.hostStarted('h1')
+    expect(calls.tools).toBe(3)
+    expect(sent[1]).not.toHaveProperty('partial')
+  })
+
   it('a check that failed is never reused', async () => {
     let fail = true
     const { check, calls } = make({ agentTools: () => (fail ? { error: 'timeout' } : tools) })
@@ -244,8 +262,9 @@ describe.skipIf(!gitSh())('__t_agents on a POSIX sh (fake ssh)', () => {
     tool(join(dir, '.grok', 'bin', 'grok'))
     tool(join(dir, '.bun', 'bin', 'opencode'))
     tool(join(dir, 'loginbin', 'kiro-cli'))
-    // The login shell (its .profile) adds a folder this session lacks.
-    script(join(dir, 'fakesh'), `echo motd line\necho '${home}/loginbin:/usr/bin'`)
+    // The login shell (its .profile) adds a folder this session lacks, and
+    // prints around it (a welcome line before, a goodbye after).
+    script(join(dir, 'fakesh'), `echo 'Welcome to box'\nPATH='${home}/loginbin:/usr/bin:/bin'; export PATH\n[ "$1" = -lc ] && eval "$2"\necho 'bye from .bash_logout'`)
     const out = await agentsIn(dir, { SHELL: `${home}/fakesh` }, ['agy', 'grok', 'opencode', 'kiro-cli', 'gemini', '../etc', '-rf'])
     const r = parseAgentTools(out)
     expect(r.bins).toEqual({
@@ -274,14 +293,59 @@ describe.skipIf(!gitSh())('__t_agents on a POSIX sh (fake ssh)', () => {
     expect(r.host).toMatchObject({ node: `${home}/.nvm/versions/node/v22.3.0/bin/node`, nodeMajor: 22 })
   }, 60000)
 
-  it('a login shell that never ends (its .profile hangs): given up after a few seconds, the rest still found', async () => {
+  // fish keeps $PATH as a list: a plain "$PATH" prints it with spaces (or
+  // one per line), which read as one folder named "a b" (or the last folder).
+  it('fish: its PATH asked its own way (string join), read between the markers', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-agents-'))
+    const home = posixPath(dir)
+    tool(join(dir, 'fishpath', 'agy'))
+    script(
+      join(dir, 'fishbin', 'fish'),
+      [
+        "echo 'Welcome to fish, the friendly interactive shell'",
+        '[ "$1" = -lc ] || exit 2',
+        'case "$2" in',
+        `  *'(string join : $PATH)'*) printf '@@TPATH@@%s@@TEND@@\\n' '${home}/fishpath:/usr/bin' ;;`,
+        `  *) printf '@@TPATH@@%s@@TEND@@\\n' '${home}/fishpath /usr/bin' ;;`,
+        'esac',
+        `printf '%s\\n' '${home}/fishpath' /usr/bin`
+      ].join('\n')
+    )
+    const r = parseAgentTools(await agentsIn(dir, { SHELL: `${home}/fishbin/fish` }, ['agy']))
+    expect(r.bins.agy).toBe(`${home}/fishpath/agy`)
+    expect(r.partial).toBe(false)
+  }, 60000)
+
+  // Stock macOS and BusyBox have no `timeout` command: the time limits are
+  // the shell's own (a watchdog that ends the probe and what it started).
+  it('a login shell that never ends (its .profile hangs), with no timeout command: given up after a few seconds, the rest still found, the answer partial', async () => {
+    expect(prelude('0'.repeat(32))).not.toMatch(/\btimeout\s+["$\d]/)
     dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-agents-'))
     const home = posixPath(dir)
     tool(join(dir, '.local', 'bin', 'agy'))
-    script(join(dir, 'hangsh'), 'sleep 40')
+    script(join(dir, 'hangsh'), 'echo half a line\nsleep 40')
     const t0 = Date.now()
-    const r = parseAgentTools(await agentsIn(dir, { SHELL: `${home}/hangsh` }, ['agy']))
-    expect(r.bins.agy).toBe(`${home}/.local/bin/agy`)
+    const out = await agentsIn(dir, { SHELL: `${home}/hangsh` }, ['agy', 'gemini'])
+    const r = parseAgentTools(out)
+    expect(r.bins).toEqual({ agy: `${home}/.local/bin/agy`, gemini: null })
+    expect(out).toMatch(/^@partial login$/m)
+    expect(r.partial).toBe(true)
+    expect(Date.now() - t0).toBeLessThan(25000)
+  }, 60000)
+
+  it('npm that never answers: given up too, partial; a quick login shell alone is not', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-agents-'))
+    const home = posixPath(dir)
+    tool(join(dir, '.local', 'bin', 'agy'))
+    script(join(dir, 'quicksh'), `[ "$1" = -lc ] && eval "$2"`)
+    const quick = await agentsIn(dir, { SHELL: `${home}/quicksh` }, ['agy'])
+    expect(quick).not.toMatch(/^@partial/m)
+    session.close('done')
+    script(join(dir, '.local', 'bin', 'npm'), 'sleep 40')
+    const t0 = Date.now()
+    const out = await agentsIn(dir, { SHELL: `${home}/quicksh` }, ['agy'])
+    expect(out).toMatch(/^@partial npm$/m)
+    expect(parseAgentTools(out)).toMatchObject({ partial: true, bins: { agy: `${home}/.local/bin/agy` }, host: { npm: `${home}/.local/bin/npm`, npmPrefix: null } })
     expect(Date.now() - t0).toBeLessThan(25000)
   }, 60000)
 

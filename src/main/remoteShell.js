@@ -147,7 +147,12 @@ export const FUNCTIONS = new Set([
   // parseAgentTools): their paths only (an agent is never run); and what an
   // install there needs (node and npm, npm's folder and whether it is the user's,
   // snap, curl, wget, the user id). Its arguments: the command names looked
-  // for (each checked here and there).
+  // for (each checked here and there). The login shell's PATH (its own way
+  // for fish and csh, read between markers: a .profile may print around it)
+  // and npm's folder are asked with a time limit of the shell's own
+  // (__t_tmo: stock macOS and BusyBox have no timeout command); one that
+  // runs out says `@partial`: what was not found may be there (unknown, to
+  // check again), never "missing".
   '__t_agents',
   // An image pasted for an agent in a terminal on this host: written in
   // ~/.tessel-server/paste (kept a day), its path printed (remoteFs.js
@@ -574,7 +579,27 @@ __t_paste() {
   ( umask 077; __t_b64d <"$__T_D/u" >"$__f" ) || { rm -f "$__f"; return 98; }
   printf '%s\\n' "$__f"
 }
-__t_tmo() { if command -v timeout >/dev/null 2>&1; then timeout "$@"; else shift; "$@"; fi; }
+__t_tmo() {
+  __ts=$1; shift
+  rm -f "$__T_D/to" "$__T_D/tk"
+  "$@" </dev/null >"$__T_D/to" 2>/dev/null &
+  __tp=$!
+  ( sleep "$__ts"; : >"$__T_D/tk"; __t_killtree "$__tp" ) </dev/null >/dev/null 2>&1 &
+  __tw=$!
+  wait "$__tp"; __tr=$?
+  __t_killtree "$__tw"
+  [ "$__tr" -gt 128 ] || rm -f "$__T_D/tk"
+  cat "$__T_D/to" 2>/dev/null
+  return "$__tr"
+}
+__t_loginpath() {
+  __sh=\${SHELL:-/bin/sh}
+  case \${__sh##*/} in
+    fish) __t_tmo 6 "$__sh" -lc 'printf "@@TPATH@@%s@@TEND@@\\n" (string join : $PATH)' ;;
+    csh|tcsh) __t_tmo 6 "$__sh" -c 'printf "@@TPATH@@%s@@TEND@@\\n" "$PATH"' ;;
+    *) __t_tmo 6 "$__sh" -lc 'printf "@@TPATH@@%s@@TEND@@\\n" "$PATH"' ;;
+  esac
+}
 __t_which() {
   __w=
   set -f
@@ -588,13 +613,16 @@ __t_which() {
   [ -n "$__w" ]
 }
 __t_agents() {
-  __lp=$(__t_tmo 6 "\${SHELL:-/bin/sh}" -lc 'printf "%s\\n" "$PATH"' </dev/null 2>/dev/null | tail -n 1) || __lp=
+  __part=
+  __lp=$(__t_loginpath | sed -n 's/^.*@@TPATH@@\\(.*\\)@@TEND@@.*$/\\1/p' | tail -n 1) || __lp=
+  [ -e "$__T_D/tk" ] && __part="$__part login"
   __nv=
   for __c in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$__c" ] && __nv="$__c:$__nv"; done
   __X="$PATH:$__lp:$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$HOME/.npm-packages/bin:$HOME/.volta/bin:$HOME/.bun/bin:$HOME/.yarn/bin:$HOME/.local/share/pnpm:$HOME/.cargo/bin:$HOME/.opencode/bin:$HOME/.grok/bin:$__nv:/snap/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/home/linuxbrew/.linuxbrew/bin"
   if __t_which npm; then
     __npm=$__w
-    __pf=$(__t_tmo 10 env PATH="\${__npm%/*}:$PATH" "$__npm" --no-update-notifier config get prefix </dev/null 2>/dev/null | tail -n 1) || __pf=
+    __pf=$(__t_tmo 8 env PATH="\${__npm%/*}:$PATH" "$__npm" --no-update-notifier config get prefix | tail -n 1) || __pf=
+    [ -e "$__T_D/tk" ] && __part="$__part npm"
     case $__pf in /*) __X="$__X:$__pf/bin" ;; *) __pf= ;; esac
   else
     __npm=; __pf=
@@ -612,7 +640,7 @@ __t_agents() {
   printf 'vscode-claude %s\\n' "$__p"
   if __t_which node; then __nd=$__w; else __nd=-; fi
   printf '@node %s\\n' "$__nd"
-  if [ "$__nd" != - ]; then __v=$(__t_tmo 10 "$__nd" -v </dev/null 2>/dev/null | tail -n 1) || __v=; case $__v in v[0-9]*) printf '@nodev %s\\n' "\${__v#v}" ;; esac; fi
+  if [ "$__nd" != - ]; then __v=$(__t_tmo 8 "$__nd" -v | tail -n 1) || __v=; case $__v in v[0-9]*) printf '@nodev %s\\n' "\${__v#v}" ;; esac; fi
   printf '@npm %s\\n' "\${__npm:--}"
   if [ -n "$__pf" ]; then
     __pw=0
@@ -622,6 +650,7 @@ __t_agents() {
   fi
   for __c in snap curl wget; do if __t_which "$__c"; then __p=$__w; else __p=-; fi; printf '@%s %s\\n' "$__c" "$__p"; done
   printf '@uid %s\\n@os %s\\n' "$(id -u 2>/dev/null)" "$(uname -s 2>/dev/null)"
+  [ -z "$__part" ] || printf '@partial%s\\n' "$__part"
 }
 __t_tfile() {
   case $2 in ''|*[!0-9A-Za-z-]*) return 90 ;; esac

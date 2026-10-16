@@ -81,6 +81,14 @@ describe('what the launcher offers', () => {
     expect(remoteAgentFound('antigravity', status)).toBe(false)
     expect(remoteAgentFound('gemini', status)).toBe(true)
     expect(remoteAgentFound('mine', status)).toBe(null)
+    // A partial check (the login shell ran out of time): not found is unknown.
+    expect(remoteAgentFound('antigravity', { ...status, partial: true })).toBe(null)
+    expect(remoteAgentFound('gemini', { ...status, partial: true })).toBe(true)
+    expect(launcherAgents({ agents, remote: true, remoteStatus: { ...status, partial: true } }).map((a) => [a.id, a.missing, a.unchecked])).toEqual([
+      ['claude', false, false],
+      ['codex', false, true],
+      ['gemini', false, false]
+    ])
     // Turned off in Settings > Agents: not offered.
     expect(launcherAgents({ agents, remote: true, remoteStatus: status, enabled: (id) => id !== 'gemini' }).map((a) => a.id)).not.toContain('gemini')
     // What a project starts by itself: an agent found there, never one missing.

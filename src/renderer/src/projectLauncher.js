@@ -27,11 +27,12 @@ export const REMOTE_AGENT_IDS = ['claude', 'codex']
 
 // What the host's last check says of agent `id`: its path there (or true),
 // null when missing, undefined when it was not looked for (your own agent,
-// a check that did not list the agents: only Claude Code and Codex then).
+// a check that did not list the agents: only Claude Code and Codex then) or
+// may be there all the same (partial: the login shell ran out of time).
 export function hostAgentEntry(id, status) {
   if (!status || status.error) return undefined
-  if (status.agents && typeof status.agents === 'object' && Object.prototype.hasOwnProperty.call(status.agents, id)) return status.agents[id] || null
-  if (id === 'claude' || id === 'codex') return status[id] || null
+  if (status.agents && typeof status.agents === 'object' && Object.prototype.hasOwnProperty.call(status.agents, id)) return status.agents[id] || (status.partial ? undefined : null)
+  if (id === 'claude' || id === 'codex') return status[id] || (status.partial ? undefined : null)
   return undefined
 }
 

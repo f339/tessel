@@ -121,9 +121,11 @@ export function createShimInstaller({ install, source, log = () => {} }) {
 
 // What __t_agents (remoteShell.js) printed: one line per command looked
 // for, `<name> <abs path>|-` (claude, codex, agy...), `vscode-claude …`, then
-// what an install there needs, one `@<key> <value>` line each.
+// what an install there needs, one `@<key> <value>` line each, and
+// `@partial login npm` when the login shell or npm ran out of time (what was
+// not found may be in a folder they would have named: partial).
 // -> { claude, codex, vscodeClaude, bins: { name: path | null },
-//      host: { node, nodeMajor, npm, npmPrefix, npmWritable, snap, curl, wget, os }, uid }
+//      host: { node, nodeMajor, npm, npmPrefix, npmWritable, snap, curl, wget, os }, uid, partial }
 // (null when missing or not said)
 const AGENT_TOOL_KEYS = { claude: 'claude', codex: 'codex', 'vscode-claude': 'vscodeClaude' }
 export const BIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/
@@ -134,7 +136,7 @@ export function emptyHost() {
   return { node: null, nodeMajor: null, npm: null, npmPrefix: null, npmWritable: null, snap: null, curl: null, wget: null, os: null }
 }
 export function parseAgentTools(text) {
-  const out = { claude: null, codex: null, vscodeClaude: null, bins: {}, host: emptyHost(), uid: null }
+  const out = { claude: null, codex: null, vscodeClaude: null, bins: {}, host: emptyHost(), uid: null, partial: false }
   for (const line of String(text || '').split('\n')) {
     const sp = line.indexOf(' ')
     if (sp < 0) continue
@@ -153,6 +155,8 @@ export function parseAgentTools(text) {
         if (/^\d{1,10}$/.test(value)) out.uid = Number(value)
       } else if (name === '@os') {
         if (/^[A-Za-z][\w.-]{0,31}$/.test(value)) out.host.os = value
+      } else if (name === '@partial') {
+        out.partial = true
       }
       continue
     }
@@ -172,7 +176,9 @@ export function parseAgentTools(text) {
 // the background; again at the next terminal when the host could not be
 // reached. send(status) tells the window:
 //   { hostId, label, claude, codex, vscodeClaude, agents: { id: path | null },
-//     host: { node, npm... }, uid?, shim: 'ok' | reason, error? }
+//     host: { node, npm... }, uid?, partial?, shim: 'ok' | reason, error? }
+// partial: the login shell or npm ran out of time there, so an agent not
+// found may still be there (the window takes it as unknown, not missing).
 // A pane whose ssh still signs in (system ssh with askpass) waits for its
 // sign-in (paneConnected), so the user is never asked twice at once.
 // The window may ask again (check): a check younger than ttlMs, or one
@@ -216,10 +222,13 @@ export function createRemoteAgentCheck({ ensureShim, agentTools, agentBins = [],
       vscodeClaude: found.vscodeClaude || null,
       ...(ok ? { agents: agentsOf(found), host: { ...emptyHost(), ...(found.host || {}) } } : {}),
       ...(ok && Number.isInteger(found.uid) ? { uid: found.uid } : {}),
+      ...(ok && found.partial === true ? { partial: true } : {}),
       shim: shim && shim.ok ? 'ok' : (shim && shim.reason) || 'failed',
       ...(tools && tools.error ? { error: String(tools.error).slice(0, 500) } : {})
     }
     if (status.error) log(`remote agent check on ${hostId}: ${status.error}`)
+    else if (status.partial) log(`remote agent check on ${hostId}: the login shell or npm ran out of time; agents not found there are unknown`)
+    // Neither a failure nor a partial answer is given again: the next asks the host.
     else latest.set(hostId, { at: now(), status })
     return status
   }
@@ -237,8 +246,8 @@ export function createRemoteAgentCheck({ ensureShim, agentTools, agentBins = [],
     let p = done.get(hostId)
     if (p) return p
     p = ask(hostId).then((status) => {
-      // Not reached: the next terminal there tries again.
-      if (status.error && done.get(hostId) === p) done.delete(hostId)
+      // Not reached, or only partly (too slow): the next terminal there tries again.
+      if ((status.error || status.partial) && done.get(hostId) === p) done.delete(hostId)
       try {
         send(status)
       } catch {

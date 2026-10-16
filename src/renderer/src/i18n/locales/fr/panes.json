@@ -757,7 +757,8 @@
       "installing": "Installation dans le panneau du dessous. Il démarre ici une fois l'installation terminée.",
       "installPage": "Ouvrir sa page d'installation",
       "cancel": "Annuler",
-      "cancelHint": "Fermer ce panneau"
+      "cancelHint": "Fermer ce panneau",
+      "unsure": "L'hôte n'a pas répondu à temps : Tessel n'a pas pu le savoir. Vérifiez à nouveau."
     },
     "agentTerminal": {
       "keys": "touches",

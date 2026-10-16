@@ -70,6 +70,19 @@ describe('the command typed on the host', () => {
     expect(remoteAgentLine('claude', { ...status, agents: { ...status.agents, claude: null }, vscodeClaude: '/home/u/.vscode-server/x/claude' }, 'claude')).toBe("'/home/u/.vscode-server/x/claude'")
   })
 
+  // The login shell (or npm) ran out of time on the host: an agent not found
+  // may be in a folder it would have named. Unknown, never "missing".
+  it('a partial check: what it found by its path; what it did not, unknown (typed as is, asked again), never its card', () => {
+    const status = { partial: true, claude: null, codex: null, agents: { antigravity: null, kiro: '/home/u/.local/bin/kiro-cli' } }
+    expect(remoteAgentLine('antigravity', status, 'agy')).toBe('agy')
+    expect(remoteAgentLine('kiro', status, 'kiro-cli chat --tui')).toBe("'/home/u/.local/bin/kiro-cli' chat --tui")
+    expect(needsRemoteAgentCheck('antigravity', status, { connected: true })).toBe(true)
+    expect(hostMenuAgents([{ id: 'antigravity', name: 'Antigravity', available: false }, { id: 'claude', name: 'Claude Code', available: false }], { remote: true, status }).map((a) => [a.id, a.available, !!a.installOnHost])).toEqual([
+      ['antigravity', false, false],
+      ['claude', true, false]
+    ])
+  })
+
   it('root: its saved user, the uid the check reports, or an agent found in /root (an nvm one too)', () => {
     expect(hostRunsAsRoot({ status: { uid: 0 } })).toBe(true)
     expect(hostRunsAsRoot({ status: { uid: 1000 } })).toBe(false)

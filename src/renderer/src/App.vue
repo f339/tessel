@@ -5498,7 +5498,8 @@ function onRemoteAgentsStatus(st) {
   if (!st || typeof st.hostId !== 'string') return
   if (!st.error) remoteAgentTools[st.hostId] = st
   if (st.claude || st.vscodeClaude || remoteAgentOffered.has(st.hostId)) return
-  if (st.error || (st.shim && st.shim !== 'ok')) return
+  // A partial check (the login shell ran out of time) does not say it is missing.
+  if (st.error || st.partial || (st.shim && st.shim !== 'ok')) return
   remoteAgentOffered.add(st.hostId)
   offerAgentInstall(st.hostId, 'claude', st.label)
 }
@@ -5688,16 +5689,20 @@ async function recheckMissingAgent(leafId) {
   if (!missing || !leaf.remoteHostId || missing.checking || leaf.notConnected) return false
   missing.checking = true
   missing.notFound = false
-  let found = false
+  missing.unsure = false
+  let found = null
   try {
     const st = await askHostAgents(leaf.remoteHostId, { fresh: true })
-    found = remoteAgentFound(missing.agent, st) === true
+    found = remoteAgentFound(missing.agent, st)
   } finally {
     missing.checking = false
   }
   if (findLeaf(leafId) !== leaf || leaf.agentMissing !== missing) return false
-  if (!found) {
-    missing.notFound = true
+  // Not there: said so. No answer, or a partial one (the host too slow):
+  // unknown, to check again; never started on it.
+  if (found !== true) {
+    if (found === false) missing.notFound = true
+    else missing.unsure = true
     return false
   }
   // Its shell is replaced by the agent, same pane (restartInPlace keeps its

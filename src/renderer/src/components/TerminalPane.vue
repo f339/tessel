@@ -3609,6 +3609,9 @@ const paneMenuBindings = computed(() => ({
         <p v-if="node.agentMissing.notFound" class="missing-agent-hint" data-test="missing-agent-not-found">
           {{ t('pane.missingAgent.stillMissing', 'Still not found on the host.') }}
         </p>
+        <p v-else-if="node.agentMissing.unsure" class="missing-agent-hint" data-test="missing-agent-unsure">
+          {{ t('pane.missingAgent.unsure', 'The host did not answer in time, so Tessel could not tell. Check again.') }}
+        </p>
         <p v-else-if="node.agentMissing.installing" class="missing-agent-hint" data-test="missing-agent-installing">
           {{ t('pane.missingAgent.installing', 'Installing in the pane below. It starts here once the install ends.') }}
         </p>

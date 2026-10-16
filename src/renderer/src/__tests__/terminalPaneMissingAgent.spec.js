@@ -177,6 +177,12 @@ describe("a pane whose agent is not installed on its SSH host", () => {
     expect(wrapper.get('[data-test="missing-agent-not-found"]').text()).toBe('Still not found on the host.')
   })
 
+  it('a check that could not tell (the host too slow) says so, not "not found"', () => {
+    mountPane({ agent: 'codex', name: 'Codex CLI', unsure: true })
+    expect(wrapper.get('[data-test="missing-agent-unsure"]').text()).toBe('The host did not answer in time, so Tessel could not tell. Check again.')
+    expect(wrapper.find('[data-test="missing-agent-not-found"]').exists()).toBe(false)
+  })
+
   it('no card on a pane whose agent runs', () => {
     mountPane(undefined)
     expect(wrapper.find('[data-test="missing-agent-card"]').exists()).toBe(false)
