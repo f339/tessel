@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs'
 import { join } from 'node:path'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -1677,6 +1677,37 @@ describe('Skills dialog', () => {
     await wrapper.get('[data-test="muse-plugin-weather"] .sl-row').trigger('click')
     expect(wrapper.get('[data-test="muse-plugin-toggle"]').text()).toBe('Activer')
     expect(wrapper.get('.skills-plugin-state').text()).toBe('Désactivé : les panneaux Muse Code ne le chargent pas.')
+    wrapper.unmount()
+  })
+
+  it('the context cost: a tag per row, Up front and When used in the details, and for the skill about to be added', async () => {
+    const counted = (tokens, exact = true) => (exact ? { tokens, exact, source: 'local', tokenizer: 'o200k_base' } : { tokens, exact, source: 'estimate', base: 'o200k_base', factor: 1.35, reason: 'notCounted', api: 'anthropic' })
+    const skillPackage = vi.fn(async () => ({ rows: [{ agent: 'claude', upfront: counted(12, false), full: counted(900, false) }] }))
+    const skills = vi.fn(async () => ({ '/h/.claude/skills/pdf/SKILL.md': { agent: 'claude', result: counted(48) } }))
+    api({
+      skillsList: async () => ({ roots: [], skills: [skill({ dir: '/h/.claude/skills/pdf', skillFile: '/h/.claude/skills/pdf/SKILL.md' })] }),
+      skillsFromGithub: async () => pkg,
+      context: {
+        skills,
+        skillDetail: async () => ({ rows: [{ agent: 'claude', upfront: counted(48), full: counted(3920) }] }),
+        skillPackage
+      }
+    })
+    const wrapper = mount(SkillsDialog, { props: { agents: ['claude', 'codex'].map((id) => ({ id, available: true })), cwd: '/p/costs' }, attachTo: document.body })
+    await flushPromises()
+    expect(skills.mock.calls[0][0]).toMatchObject({ cwd: '/p/costs', remote: true })
+    expect(rowOf(wrapper, 'pdf').get('[data-test="skill-token-tag"]').text()).toBe('48 tokens')
+    const opened = await open(wrapper, 'pdf')
+    const detail = opened.get('[data-test="skill-token-detail"]').text()
+    expect(detail).toContain('Claude Code')
+    expect(detail).toContain('Up front 48 tokens')
+    expect(detail).toContain('When used 3.9k tokens')
+    // Add: the skill previewed, counted from the package Tessel holds.
+    await wrapper.get('[data-test="skills-tab-add"]').trigger('click')
+    await lookUpRepo(wrapper, 'o/r')
+    expect(skillPackage).toHaveBeenCalled()
+    expect(skillPackage.mock.calls[0][0]).toMatchObject({ id: 'p1', remote: true })
+    expect(wrapper.get('.skills-pv-cost').text()).toContain('When used ≈ 900 tokens')
     wrapper.unmount()
   })
 })

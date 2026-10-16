@@ -5,12 +5,13 @@
 // agent (or shell) with its icon, its model and conversation under it, its
 // state with the dot, its team and a muted hint. It
 // replaces the header title's native tooltip.
-import { computed } from 'vue'
-import { Users, SquareTerminal, Cpu, MessageSquareText, GitBranch, Coins, UserRound } from 'lucide-vue-next'
+import { computed, watch } from 'vue'
+import { Users, SquareTerminal, Cpu, MessageSquareText, GitBranch, Coins, UserRound, Layers } from 'lucide-vue-next'
 import BrandIcon from './BrandIcon.vue'
 import AgentStateDot from './sidebar/AgentStateDot.vue'
 import { t, currentLocale } from '../i18n'
 import { useJobCost, hasUsage, jobCostLine, jobCostDetails } from '../jobCost'
+import { contextStart, loadContextStart, startKey, tokensText, groupsText } from '../contextCost'
 
 const props = defineProps({
   // Built by TerminalPane: { heading, agentName, iconKind, accent, model,
@@ -41,6 +42,12 @@ const cost = computed(() => costOf(props.info.id))
 const costLine = computed(() => (currentLocale(), hasUsage(cost.value) ? jobCostLine(cost.value) : ''))
 const costDetails = computed(() => (currentLocale(), costLine.value ? jobCostDetails(cost.value, undefined, { withSummary: false }).split('\n') : []))
 const sessionLine = computed(() => (props.info.session ? t('pane.status.session', 'Session {{id}}', { id: props.info.session }) : ''))
+// What its agent loaded before the first message (Settings > Context),
+// read while the card is open.
+watch(() => startKey(props.info), () => loadContextStart(props.info), { immediate: true })
+const start = computed(() => contextStart[startKey(props.info)] || null)
+const startLine = computed(() => (start.value && start.value.total ? t('context.pane.start', 'At start: {{tokens}}', { tokens: tokensText({ tokens: start.value.total, exact: start.value.exact }) }) : ''))
+const startDetail = computed(() => (start.value ? groupsText(start.value.groups) : ''))
 </script>
 
 <template>
@@ -100,6 +107,17 @@ const sessionLine = computed(() => (props.info.session ? t('pane.status.session'
       <div class="hc-section-body hc-lines">
         <span class="hc-strong" data-hover-cost-line="" v-text="costLine"></span>
         <span v-for="(line, i) in costDetails" :key="i" class="hc-muted" v-text="line"></span>
+      </div>
+    </section>
+
+    <section v-if="startLine" class="hc-section" data-hover-context="">
+      <div class="hc-section-title">
+        <Layers :size="12" aria-hidden="true" />
+        <span>{{ t('context.pane.title', 'Context') }}</span>
+      </div>
+      <div class="hc-section-body hc-lines" :title="t('context.pane.hint', 'Rules files, skills, MCP tools and Tessel’s team tools it loads before your first message. Details in Settings > Context.')">
+        <span class="hc-strong" v-text="startLine"></span>
+        <span v-if="startDetail" class="hc-muted" v-text="startDetail"></span>
       </div>
     </section>
 

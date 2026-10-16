@@ -439,6 +439,20 @@ const api = {
   // A custom server's form, tested before it is added (nothing written).
   mcpTestSpec: (spec) => ipcRenderer.invoke('mcp:testSpec', spec),
   mcpCopy: (spec) => ipcRenderer.invoke('mcp:copy', spec),
+  // Settings > Context and the token tags (src/main/contextCost): token counts
+  // of what each agent loads; Measure starts an MCP server, on click only.
+  mcpMeasure: (q) => ipcRenderer.invoke('mcp:measure', q),
+  context: {
+    summary: (q) => ipcRenderer.invoke('context:summary', q),
+    skills: (q) => ipcRenderer.invoke('context:skills', q),
+    skillDetail: (q) => ipcRenderer.invoke('context:skillDetail', q),
+    skillPackage: (q) => ipcRenderer.invoke('context:skillPackage', q),
+    mcpMeasures: (q) => ipcRenderer.invoke('context:mcpMeasures', q),
+    tokenizers: () => ipcRenderer.invoke('context:tokenizers'),
+    downloadTokenizer: (id) => ipcRenderer.invoke('context:downloadTokenizer', id),
+    removeTokenizer: (id) => ipcRenderer.invoke('context:removeTokenizer', id),
+    retry: () => ipcRenderer.invoke('context:retry')
+  },
   // Agent skills (src/main/skillsManager.js).
   skillsList: (cwd, opts) => ipcRenderer.invoke('skills:list', opts ? { ...opts, cwd } : cwd),
   skillsFromFolder: (dir) => ipcRenderer.invoke('skills:fromFolder', dir),

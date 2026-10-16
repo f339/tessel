@@ -9,7 +9,7 @@ import { loadTasks, loadBoard, saveTasks } from './taskBoardPersistence'
 import { createAutomations } from './automations'
 import { createRemotePromptWriter } from './automationRemotePrompt'
 import { trimEvents, isEvent, isActivityText } from '../shared/activity'
-import { agentModelLive, watchModelFiles } from './agentModel'
+import { agentModel, agentModelLive, watchModelFiles } from './agentModel'
 import { createRemoteModelReader, remoteAgentModel } from './remoteAgentModel'
 import { createCodexAccounts } from './codexAccounts'
 import { createClaudeAccounts } from './claudeAccounts'
@@ -132,9 +132,20 @@ import {
   removeSkill,
   isSkillPath,
   createSkillSources,
-  dropStaleSources
+  dropStaleSources,
+  getPackage
 } from './skillsManager'
 import { createSkillHistory } from './skillHistory'
+import { createProviderUsage } from './providerUsage'
+import { createCountWorker } from './contextCost/workerClient'
+import { createHfTokenizers } from './contextCost/hfTokenizers'
+import { createAnthropicCounter } from './contextCost/anthropic'
+import { createGeminiCounter } from './contextCost/gemini'
+import { createXaiCounter, createResponsesCounter, OPENAI_INPUT_TOKENS_URL } from './contextCost/apis'
+import { createCountAuths, createSignIns, claudeSettingsEnvs } from './contextCost/auth'
+import { createOllamaCounter } from './contextCost/ollama'
+import { createContextCounter, createCountCache } from './contextCost/counts'
+import { createContextCost } from './contextCost'
 import { createSkillUpdates } from './skillUpdates'
 import { reviewInfo, reviewDiff, reviewMerge, reviewRemove, reviewCommit, reviewPush, setLeftoverStore } from './review'
 import { createLeftoverStore } from './worktreeLeftover'
@@ -2266,6 +2277,10 @@ ipcMain.handle('accounts:list', safe(() => accounts.list()))
 // once a minute; accountUsage is made further down, read only once a guest
 // follows it).
 const shareUsage = createShareUsage({ localUsage: () => accountUsage.usage(), log })
+// Settings > AI provider accounts: Gemini, OpenCode Go and MiniMax usage
+// credentials, encrypted with the OS (providerCredentials.js). Also read by
+// Settings > Context for Gemini's exact counts (the Gemini CLI login).
+const providerCredentials = createProviderCredentials({ dir: join(app.getPath('userData'), 'provider-credentials'), safeStorage })
 // Usage refresh: at startup, every 2 min (Settings) while the window is in use,
 // on focus when older than 5 min, and from the chats' own rate-limit reports
 // (usagePoller.js); results are pushed on providerUsage:update.
@@ -2287,9 +2302,7 @@ registerProviderUsage({
   // provider call of its own.
   onResult: (result) => shareUsage.onResult(result),
   onCache: (read) => shareUsage.setCache(read),
-  // Settings > AI provider accounts: Gemini, OpenCode Go and MiniMax usage
-  // credentials, encrypted with the OS (providerCredentials.js).
-  credentials: createProviderCredentials({ dir: join(app.getPath('userData'), 'provider-credentials'), safeStorage })
+  credentials: providerCredentials
 })
 ipcMain.handle('accounts:loginStatus', safe((id) => accounts.loginStatus(id)))
 ipcMain.handle('accounts:launchEnv', safe((query) => typeof query === 'string'
@@ -2813,6 +2826,122 @@ ipcMain.handle(
     if (!isSkillPath(dir, { cwd: skillCwd(q && q.cwd) })) return { ok: false, error: t('main.skills.unknownFolder', 'This is not a skill folder Tessel knows.') }
     const error = await shell.openPath(dir)
     return error ? { ok: false, error } : { ok: true }
+  })
+)
+
+// Settings > Context (contextCost/): what each agent loads into its context
+// before the user types (rules files, skills, MCP tools, Tessel's team tools)
+// and its cost in tokens; also the token tags of the Skills and MCP pages
+// (SkillTokenTag.vue, McpTokenTag.vue). Counted in a process of its own with
+// the model's own tokenizer, or, for models with none, by the agent's own
+// provider's count API, only when a page is opened or a button clicked. A
+// sign-in (Claude Code's, Gemini CLI's) is used for that only when the user
+// turned its switch on (each call says so: contextAuth); an API key in the
+// environment only when no gateway base URL is set (contextCost/auth.js).
+const claudeCountLogin = createProviderUsage({ accounts, log })
+const geminiCountSources = createUsageProviderSources({ credentials: providerCredentials })
+const contextSignIns = createSignIns()
+async function claudeConfigDir() {
+  const res = await accounts.sessionEnv('claude')
+  return (res && res.ok && res.env && res.env.CLAUDE_CONFIG_DIR) || null
+}
+const countAuths = createCountAuths({
+  env: () => freshEnv(),
+  // The "env" of Claude's settings (a gateway's ANTHROPIC_BASE_URL there too):
+  // the selected account's config folder, read again for each call, so that
+  // no count (the Skills page's first one too) runs before it is known.
+  claudeSettingsEnv: async (opts) => {
+    const dir = await claudeConfigDir()
+    return claudeSettingsEnvs({ configDirs: [...new Set([dir, join(os.homedir(), '.claude')].filter(Boolean))], cwd: (opts && opts.cwd) || null })
+  },
+  claudeLogin: () => claudeCountLogin.apiAuth('claude'),
+  geminiLogin: () => geminiCountSources.auth('gemini')
+})
+const contextWorker = createCountWorker({
+  fork: () => utilityProcess.fork(join(__dirname, 'contextCostWorker.js'), [], { serviceName: 'Tessel token counting' }),
+  log
+})
+app.on('will-quit', () => contextWorker.close())
+const contextFiles = createHfTokenizers({ dir: join(app.getPath('userData'), 'tokenizers'), log })
+const contextApis = {
+  anthropic: createAnthropicCounter({ log, auth: (opts) => countAuths.anthropic(opts) }),
+  google: createGeminiCounter({ log, auth: (opts) => countAuths.google(opts) }),
+  xai: createXaiCounter({ log, key: () => countAuths.xaiKey() }),
+  openai: createResponsesCounter({ name: 'openai input_tokens', url: OPENAI_INPUT_TOKENS_URL, log, key: () => countAuths.openaiKey() }), // i18n-ignore
+  ollama: createOllamaCounter()
+}
+const contextCost = createContextCost({
+  userData: app.getPath('userData'),
+  counter: createContextCounter({
+    cache: createCountCache(join(app.getPath('userData'), 'context-cost', 'counts.json')),
+    worker: contextWorker,
+    apis: contextApis,
+    files: contextFiles
+  }),
+  worker: contextWorker,
+  files: contextFiles,
+  apis: contextApis,
+  listSkills: (q) => listSkills({ cwd: skillCwd(q && q.cwd) }),
+  listMcp: (cwd) => listMcp(skillCwd(cwd) || undefined),
+  testMcp: (ref, opts) => testMcp(ref, freshEnv(), undefined, opts),
+  agentModel: (q) => agentModel(q),
+  claudeDir: () => claudeConfigDir(),
+  getPackage: (id) => getPackage(id),
+  env: () => freshEnv(),
+  log
+})
+// Every request says which sign-ins may count (turning one off stops the
+// counts still running with it), whether to count over the network now
+// (remote: the page was opened, or a click), and whether it comes from a
+// pane card's hover (kept: no process started). The sign-ins go with the
+// project folder, whose Claude settings may name a gateway (auth.js).
+const contextQuery = (q) => {
+  const o = q && typeof q === 'object' ? q : {}
+  const agents = Array.isArray(o.agents) ? o.agents.slice(0, 40) : undefined
+  const cwd = skillCwd(o.cwd)
+  return { ...o, agents, cwd, remote: o.remote === true, kept: o.kept === true, confirmed: o.confirmed === true, auth: { ...contextSignIns.take(o), cwd } }
+}
+ipcMain.handle(
+  'context:summary',
+  safe((q) => contextCost.summary(contextQuery(q)))
+)
+ipcMain.handle(
+  'context:skills',
+  safe((q) => contextCost.skills(contextQuery(q)))
+)
+ipcMain.handle(
+  'context:skillDetail',
+  safe((q) => contextCost.skillDetail(contextQuery(q)))
+)
+ipcMain.handle(
+  'context:skillPackage',
+  safe((q) => contextCost.skillPackage(contextQuery(q)))
+)
+ipcMain.handle(
+  'context:mcpMeasures',
+  safe((q) => contextCost.mcpMeasures(contextQuery(q)))
+)
+ipcMain.handle(
+  'mcp:measure',
+  safe((q) => contextCost.measureMcp(contextQuery(q)))
+)
+ipcMain.handle(
+  'context:tokenizers',
+  safe(() => contextCost.tokenizers())
+)
+ipcMain.handle(
+  'context:downloadTokenizer',
+  safe((id) => contextCost.downloadTokenizer(String(id || '')))
+)
+ipcMain.handle(
+  'context:removeTokenizer',
+  safe((id) => contextCost.removeTokenizer(String(id || '')))
+)
+ipcMain.handle(
+  'context:retry',
+  safe(() => {
+    contextCost.retry()
+    return { ok: true }
   })
 )
 

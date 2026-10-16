@@ -39,6 +39,9 @@ const config = {
           // The past conversations list's own process (sessionListClient.js:
           // started when the list is asked for, stopped when unused).
           sessionListWorker: 'src/main/sessionListWorker.js',
+          // Settings > Context's token counting (contextCost/workerClient.js:
+          // started when a count is asked for, stopped when unused).
+          contextCostWorker: 'src/main/contextCost/worker.js',
           // The tessel command (Settings > General > Tessel CLI), run by
           // Tessel's executable as Node; self-contained, unpacked from the
           // app archive (package.json asarUnpack).

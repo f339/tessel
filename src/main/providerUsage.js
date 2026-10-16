@@ -876,6 +876,22 @@ export function createProviderUsage({
         return result
       }
     },
+    // Settings > Context's exact Claude counts (contextCost/anthropic.js),
+    // when the user turned on "Count with my Claude sign-in": the selected
+    // account's Claude Code login as an API request's headers, read now
+    // through the same checks as a usage read, never refreshed, kept or logged.
+    async apiAuth(provider = 'claude') {
+      try {
+        if (provider !== 'claude') fail('validation', t('main.usage.noLiveUsage', 'This provider does not support live usage.'))
+        const state = await accounts.list()
+        const row = state?.providers?.find((item) => item.provider === 'claude')
+        const snapshot = await scope('claude', row?.selectedId ?? null)
+        const login = await auth(snapshot)
+        return { ok: true, headers: { Authorization: login.headers.Authorization } }
+      } catch (error) {
+        return errorResult(error)
+      }
+    },
     invalidate(provider) {
       const targets =
         provider === undefined

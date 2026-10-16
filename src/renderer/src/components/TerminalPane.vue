@@ -1606,7 +1606,11 @@ const hoverInfo = computed(() => {
     team: team.value ? { name: team.value.name, lead: isLead.value } : guestInfo.value && guestInfo.value.team ? { name: guestInfo.value.team.name, lead: !!guestInfo.value.team.lead } : null,
     num: n.num || 0,
     session: agent ? n.sessionId || '' : '',
-    id: agent ? n.id : ''
+    id: agent ? n.id : '',
+    // Settings > Context's count of what the agent loaded at start (its line).
+    contextAgent: agent ? shownAgentId.value || '' : '',
+    contextModel: agent && agentModel.value ? agentModel.value.model || '' : '',
+    contextCwd: agent ? (ctx.paneFolder ? ctx.paneFolder(n) : n.startDir || n.cwd) || '' : ''
   }
 })
 

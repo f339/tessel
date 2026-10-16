@@ -52,6 +52,16 @@ export const PAGES = {
     },
     icon: 'M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 01-7 0zM8 11v3'
   },
+  // What each agent loads into its context, in tokens (SettingsContext.vue).
+  context: {
+    get title() {
+      return t('settings.pages.context.title', 'Context')
+    },
+    get desc() {
+      return t('settings.pages.context.desc', 'What each agent loads before you type anything, what it costs in tokens, and what you can turn off.')
+    },
+    icon: 'M2.5 3.5h11v3h-11zM2.5 8h7M2.5 11h9M2.5 14h5'
+  },
   orchestration: {
     get title() {
       return t('settings.pages.orchestration.title', 'Orchestration')
@@ -193,7 +203,7 @@ export const GROUPS = [
     get title() {
       return t('settings.groups.ai', 'AI')
     },
-    pages: ['agents', 'accounts', 'skills', 'mcp', 'orchestration']
+    pages: ['agents', 'accounts', 'skills', 'mcp', 'context', 'orchestration']
   },
   {
     id: 'workspace',
@@ -245,6 +255,7 @@ export const PAGE_TITLES_EN = {
   accounts: 'AI provider accounts', // i18n-ignore
   skills: 'Skills', // i18n-ignore
   mcp: 'MCP servers', // i18n-ignore
+  context: 'Context', // i18n-ignore
   orchestration: 'Orchestration', // i18n-ignore
   voice: 'Voice typing', // i18n-ignore
   general: 'General', // i18n-ignore
