@@ -99,6 +99,28 @@
 // does not watch is ignored. Nothing about it reaches the pane: no typing, no
 // mode, no restart. A guest whose Tessel does not say so gets none of it.
 //
+// Requests and subscriptions (shareChannel.js: the messages; phase 2: the
+// host's Files, editor, Changes and Tasks on a guest's screen), for a guest
+// whose Tessel speaks their feature ('files', 'scm', 'tasks'): each request
+// is checked when it comes (a known op of a feature both sides speak, one of
+// the guest's projects still shared, the right the op needs), within the
+// guest's budgets (CHANNEL_LIMITS: requests in flight, light, heavy and
+// write requests a minute, bytes of large answers a minute, all counted for
+// its person so a new connection starts from nowhere), then handed to the
+// host's Tessel (callbacks.request) with a recheck() it calls right before a
+// change is made. A heavy request (a search, git's status...) runs once per
+// project at a time, and the same one asked by several guests runs once.
+// Its answer is checked again when it leaves (the project and the right
+// still the guest's), and a large one waits while the guest's connection is
+// behind (terminal output first). Taking a project or a right away answers
+// what was in flight for it as 'revoked' at once (a late result is dropped),
+// and ends the subscriptions of a project no longer the guest's; leaving or
+// being removed ends all of them. A subscription is to a topic (shareChannel
+// TOPICS): the host's Tessel is told when the first guest subscribes and the
+// last one leaves (callbacks.watch), and sends the news with push(): to each
+// guest subscribed that may still see it, the latest only while its
+// connection is behind.
+//
 // Presence, for the host's eyes only (presence(), onPresence): which of the
 // host's panes each guest has on screen (the 'presence' feature: 'focus',
 // checked against its projects, a couple of times a second at most, and it
@@ -111,7 +133,8 @@ import crypto from 'crypto'
 import { WebSocketServer } from 'ws'
 import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitmentMatches, bindingSigned, signBinding, newSigningKey, identitySigned, identityFingerprint, NONCE_BYTES, COMMIT_BYTES, KX_BYTES } from './shareCrypto.js'
 import { SHARE_FEATURES, cleanFeatures, CHAT_LIMITS, CHAT_CODES } from './shareChat.js'
-import { NO_RIGHTS, cleanRights, sameRights } from '../../shared/liveShareRights'
+import { NO_RIGHTS, cleanRights, sameRights, isRightId } from '../../shared/liveShareRights'
+import { cleanReq, cleanId, cleanSub, subKey, parseSubKey, TOPICS, CHANNEL_LIMITS } from './shareChannel.js'
 import { MAX_PROJECTS, isProjectId, cleanProjectIds, cleanName, cleanGrant } from './shareGrant.js'
 import { createAccess, pathOfUrl, keyHash, personId, isInviteId, INVITE_TTL_MS } from './shareAccess.js'
 import { isTrustId, trustId } from './shareTrust.js'
@@ -154,6 +177,18 @@ const OPENS_IN_ALL = 12
 const OPEN_ASKS_PER_MINUTE = 2 // asking the host to open (without the right)
 const CLOSES_PER_MINUTE = 6
 const RESYNCS_PER_MINUTE = 30 // pane screens asked again (a window reloaded)
+// Requests (shareChannel.js): budgets, the per-minute list of each kind in a
+// person's counters, a heavy request waiting for its project at most, and
+// how often a large answer held back looks again at the guest's connection.
+const L = CHANNEL_LIMITS
+const RATE_LISTS = { light: 'reqLight', heavy: 'reqHeavy', write: 'reqWrite' }
+const HEAVY_WAITING = 16
+const BULK_RETRY_MS = 50
+const PUSH_RETRY_MS = 250
+// The most paths a held 'fs' news keeps when it gathers several (then: null,
+// read everything again).
+const MAX_PUSH_PATHS = 256
+const CODE = /^[a-z][a-z-]{0,39}$/
 // The agents the host lists for guests, at most.
 const MAX_AGENTS = 32
 // Presence: typing in a pane counts for this long; a guest says what it has
@@ -297,6 +332,22 @@ export function stripTerminalReplies(data) {
 //                             stopped; its reads go out with sendChat(id, ...)
 //   onChatsWatched()       -> optional: who watches which conversation
 //                             changed (chatsWatched())
+//   opInfo(op)             -> optional (with request): what an op needs and
+//                             costs, { right: 'view' | a right id, kind:
+//                             'light' | 'heavy' | 'write', bulk } or null for
+//                             an op the host does not know (a change needs a
+//                             right)
+//   request(req, ctx)      -> optional (without it, no guest gets 'files',
+//                             'scm' or 'tasks'): Promise<{ ok: true, data } |
+//                             { ok: false, code, detail? }>; req: { op,
+//                             project, args } as the guest sent them (args
+//                             unchecked); ctx: { guest (publicGuest's), rights
+//                             (the guest's now), recheck() (true while the
+//                             guest still may: called right before a change),
+//                             cancelled() }
+//   watch(topic, project, key, on) -> optional: the first guest subscribed
+//                             to that topic (on), or the last one left; its
+//                             news go out with push(topic, project, key, data)
 // projects()' items may have chats: [{ id, title, agentId, accent,
 // terminal }] (shareChat.js cleanChatPanes), sent only to guests with the
 // 'chat' feature.
@@ -338,7 +389,8 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
   })
   const knownChanged = () => callbacks.onKnownChanged?.()
   // What this host speaks beyond the protocol version.
-  const FEATURE_NEEDS = { chat: callbacks.chatWatch, agents: callbacks.agents, presence: callbacks.onPresence }
+  const serves = callbacks.opInfo && callbacks.request
+  const FEATURE_NEEDS = { chat: callbacks.chatWatch, agents: callbacks.agents, presence: callbacks.onPresence, files: serves, scm: serves, tasks: serves }
   const hostFeatures = SHARE_FEATURES.filter((f) => typeof FEATURE_NEEDS[f] === 'function')
   // Conversations watched: pane id -> Set of guest ids; the last one read
   // (sent at once to a guest that starts watching), and when one last went out.
@@ -346,6 +398,16 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
   const chatLast = new Map()
   const chatTimes = new Map() // pane id -> { at, timer }
   let typingTimer = null
+  // Requests in flight per person (its key hash): a new connection of the
+  // same person shares them. Heavy requests running or waiting (by what they
+  // ask), and the last one queued on each project.
+  const inFlight = new Map()
+  const heavyRuns = new Map()
+  const heavyTails = new Map()
+  // Subscriptions: name (shareChannel subKey) -> Set of guest ids; the latest
+  // news of a topic that keeps it.
+  const watchers = new Map()
+  const lastPush = new Map()
 
   const inHandshake = (g) => g.state === 'handshake' || g.state === 'committed' || g.state === 'secured'
   const trustedOf = (g) => (g.person ? access.trustedOf(g.person) : null)
@@ -389,6 +451,8 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     // Nothing more of its conversations goes out.
     for (const id of [...g.chats.keys()]) unwatchChat(g, id)
     clearTimeout(g.chatHeldTimer)
+    // Nor of its requests and subscriptions.
+    endChannel(g)
     try {
       if (g.channel && g.socket.readyState === 1) g.socket.send(g.channel.seal({ t: 'bye', reason }))
     } catch {
@@ -614,6 +678,290 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     }
   }
 
+  // --- Requests and subscriptions (shareChannel.js) ------------------------
+  // What an op needs and costs, from the host's Tessel, checked: a change
+  // always needs a right.
+  function opInfoOf(op) {
+    let info
+    try {
+      info = callbacks.opInfo(op)
+    } catch {
+      info = null
+    }
+    if (!info || typeof info !== 'object') return null
+    const right = info.right === 'view' || isRightId(info.right) ? info.right : null
+    const kind = Object.hasOwn(RATE_LISTS, info.kind) ? info.kind : null
+    if (!right || !kind || (kind === 'write' && right === 'view')) return null
+    return { right, kind, bulk: info.bulk === true }
+  }
+  // A guest may still have what it asked for: connected and in, the project
+  // one of its own and still shared, the right still on. Asked of the access
+  // model itself (not what the connection last heard).
+  function stillMay(g, project, right) {
+    if (guests.get(g.id) !== g || g.state !== 'joined' || !g.person || !access.person(g.person.hash)) return false
+    const e = access.effective(g.person)
+    return e.projects.has(project) && sharedIds().has(project) && (right === 'view' || e.rights[right] === true)
+  }
+  // A request still stands: not called off, still waited for, still allowed.
+  const stands = (g, entry) => !entry.cancelled && g.reqs.get(entry.id) === entry && stillMay(g, entry.project, entry.right)
+  const failRes = (id, code) => ({ t: 'res', id, ok: false, code })
+  function busyMore(g, n) {
+    const hash = g.person.hash
+    const v = (inFlight.get(hash) || 0) + n
+    if (v > 0) inFlight.set(hash, v)
+    else inFlight.delete(hash)
+  }
+
+  function onRequest(g, msg) {
+    const req = cleanReq(msg)
+    // Not a request, a feature its Tessel did not say, an id it waits for
+    // already: nothing (its Tessel never sends those).
+    if (!req || !g.features.has(req.feature) || g.reqs.has(req.id)) return
+    const info = opInfoOf(req.op)
+    if (!info) return send(g, failRes(req.id, 'bad-op'))
+    if (!g.projects.has(req.project) || !stillMay(g, req.project, 'view')) return send(g, failRes(req.id, 'no-project'))
+    if (!stillMay(g, req.project, info.right)) return send(g, failRes(req.id, 'forbidden'))
+    // Its budgets: in flight, then a minute's worth of its kind.
+    if ((inFlight.get(g.person.hash) || 0) >= L.inFlight || !within(countsOf(g), RATE_LISTS[info.kind], L[info.kind])) return send(g, failRes(req.id, 'busy'))
+    const entry = { id: req.id, op: req.op, project: req.project, right: info.right, kind: info.kind, bulk: info.bulk, cancelled: false, message: null, size: 0 }
+    const ctx = {
+      guest: publicGuest(g),
+      rights: { ...g.rights },
+      recheck: () => stands(g, entry),
+      cancelled: () => entry.cancelled || g.reqs.get(entry.id) !== entry
+    }
+    const call = () => callbacks.request({ op: req.op, project: req.project, args: req.args }, ctx)
+    const run = info.kind === 'heavy' ? heavy(req, ctx, call) : Promise.resolve().then(call)
+    if (!run) return send(g, failRes(req.id, 'busy'))
+    g.reqs.set(req.id, entry)
+    busyMore(g, 1)
+    run.then(
+      (result) => finish(g, entry, result),
+      () => finish(g, entry, { ok: false, code: 'failed' })
+    )
+  }
+
+  // A heavy request: one at a time per project, and the same one (the same
+  // op, project, arguments and rights) asked again while it waits or runs
+  // shares its answer. null when too many wait on that project.
+  function heavy(req, ctx, call) {
+    let key
+    try {
+      key = JSON.stringify([req.op, req.project, req.args, ctx.rights])
+    } catch {
+      return null
+    }
+    const same = heavyRuns.get(key)
+    if (same) return same.promise
+    const waiting = [...heavyRuns.values()].filter((r) => r.project === req.project).length
+    if (waiting >= HEAVY_WAITING) return null
+    const prev = heavyTails.get(req.project) || Promise.resolve()
+    const promise = prev.then(call, call)
+    const tail = promise.then(
+      () => {},
+      () => {}
+    )
+    heavyTails.set(req.project, tail)
+    heavyRuns.set(key, { promise, project: req.project })
+    tail.then(() => {
+      heavyRuns.delete(key)
+      if (heavyTails.get(req.project) === tail) heavyTails.delete(req.project)
+    })
+    return promise
+  }
+
+  // The host's answer, as it leaves: still asked for, the project and the
+  // right still the guest's (else 'revoked'), a plain shape, bounded; a
+  // large one waits while the connection is behind.
+  function finish(g, entry, result) {
+    busyMore(g, -1)
+    if (g.reqs.get(entry.id) !== entry || entry.cancelled) return
+    if (!stands(g, entry)) {
+      g.reqs.delete(entry.id)
+      entry.cancelled = true
+      return send(g, failRes(entry.id, 'revoked'))
+    }
+    let message
+    if (result && typeof result === 'object' && result.ok === true) message = { t: 'res', id: entry.id, ok: true, data: result.data === undefined ? null : result.data }
+    else {
+      const code = result && typeof result.code === 'string' && CODE.test(result.code) ? result.code : 'failed'
+      message = typeof result?.detail === 'string' && result.detail ? { ...failRes(entry.id, code), detail: result.detail.slice(0, 300) } : failRes(entry.id, code)
+    }
+    let size
+    try {
+      size = Buffer.byteLength(JSON.stringify(message), 'utf8')
+    } catch {
+      message = failRes(entry.id, 'failed')
+      size = 0
+    }
+    if (size > L.answerBytes) message = failRes(entry.id, 'too-large')
+    if (!entry.bulk || !message.ok) {
+      g.reqs.delete(entry.id)
+      return send(g, message)
+    }
+    entry.message = message
+    entry.size = size
+    // Behind with its waiting line full: told to ask again later.
+    if (g.bulk.length >= L.bulkQueue && g.socket.bufferedAmount > L.bulkBuffered) {
+      g.reqs.delete(entry.id)
+      return send(g, failRes(entry.id, 'busy'))
+    }
+    g.bulk.push(entry)
+    sendBulk(g)
+  }
+  // Large answers waiting, in order, once the connection caught up and
+  // within the person's bytes a minute (past them: 'busy').
+  function sendBulk(g) {
+    clearTimeout(g.bulkTimer)
+    g.bulkTimer = null
+    while (g.bulk.length && guests.get(g.id) === g) {
+      const entry = g.bulk[0]
+      if (g.reqs.get(entry.id) !== entry || entry.cancelled) {
+        g.bulk.shift()
+        continue
+      }
+      if (!stands(g, entry)) {
+        g.bulk.shift()
+        g.reqs.delete(entry.id)
+        entry.cancelled = true
+        send(g, failRes(entry.id, 'revoked'))
+        continue
+      }
+      if (g.socket.bufferedAmount > L.bulkBuffered) {
+        g.bulkTimer = setTimeout(() => sendBulk(g), BULK_RETRY_MS)
+        g.bulkTimer.unref?.()
+        return
+      }
+      g.bulk.shift()
+      g.reqs.delete(entry.id)
+      const counts = countsOf(g)
+      const t = now()
+      const recent = (Array.isArray(counts.bulkBytes) ? counts.bulkBytes : []).filter((x) => Array.isArray(x) && t - x[0] < 60000)
+      const used = recent.reduce((sum, x) => sum + x[1], 0)
+      counts.bulkBytes = recent
+      if (used + entry.size > L.bulkBytes) {
+        send(g, failRes(entry.id, 'busy'))
+        continue
+      }
+      recent.push([t, entry.size])
+      send(g, entry.message)
+    }
+  }
+  // The guest stopped waiting for one: its answer is not sent (a change not
+  // started is not made: recheck() says no).
+  function onCancel(g, msg) {
+    const id = cleanId(msg.id)
+    const entry = id ? g.reqs.get(id) : null
+    if (!entry) return
+    entry.cancelled = true
+    g.reqs.delete(id)
+  }
+
+  function onSub(g, msg) {
+    const s = cleanSub(msg)
+    if (!s || !g.features.has(s.spec.feature)) return
+    if (!within(countsOf(g), 'subChanges', L.subsPerMinute)) return
+    const k = subKey(s.topic, s.project, s.key)
+    if (!s.on) return unsubscribe(g, k)
+    if (g.subs.has(k)) return
+    if (s.project && !(g.projects.has(s.project) && stillMay(g, s.project, s.spec.right || 'view'))) return
+    if (g.subs.size >= L.subs || [...g.subs.values()].filter((x) => x.topic === s.topic).length >= s.spec.max) return
+    g.subs.set(k, { topic: s.topic, project: s.project, key: s.key, seq: 0 })
+    let set = watchers.get(k)
+    const first = !set
+    if (!set) watchers.set(k, (set = new Set()))
+    set.add(g.id)
+    if (first) {
+      try {
+        callbacks.watch?.(s.topic, s.project, s.key, true)
+      } catch {
+        /* the host's watch going wrong never ends the guest */
+      }
+      return
+    }
+    if (lastPush.has(k)) pushTo(g, k, lastPush.get(k))
+  }
+  function unsubscribe(g, k) {
+    if (!g.subs.delete(k)) return
+    g.pushHeld.delete(k)
+    const set = watchers.get(k)
+    if (!set || !set.delete(g.id) || set.size) return
+    watchers.delete(k)
+    lastPush.delete(k)
+    const { topic, project, key } = parseSubKey(k)
+    try {
+      callbacks.watch?.(topic, project, key, false)
+    } catch {
+      /* gone anyway */
+    }
+  }
+  // A subscription still good: its feature, its project still the guest's
+  // and shared, its right.
+  const subLive = (g, sub) => {
+    const spec = Object.hasOwn(TOPICS, sub.topic) ? TOPICS[sub.topic] : null
+    return !!spec && g.features.has(spec.feature) && (!sub.project || (g.projects.has(sub.project) && stillMay(g, sub.project, spec.right || 'view')))
+  }
+  // News of one subscription to one guest: the latest only while its
+  // connection is behind ('fs' news gather their paths).
+  function pushTo(g, k, data) {
+    const sub = g.subs.get(k)
+    if (!sub) return
+    if (g.socket.bufferedAmount > L.pushBuffered || g.pushHeld.has(k)) {
+      const held = g.pushHeld.get(k)
+      g.pushHeld.set(k, held !== undefined && sub.topic === 'fs' ? mergePaths(held, data) : data)
+      if (!g.pushTimer) {
+        g.pushTimer = setTimeout(() => sendHeldPushes(g), PUSH_RETRY_MS)
+        g.pushTimer.unref?.()
+      }
+      return
+    }
+    send(g, { t: 'push', topic: sub.topic, ...(sub.project ? { project: sub.project } : {}), ...(sub.key ? { key: sub.key } : {}), seq: ++sub.seq, data })
+  }
+  function mergePaths(a, b) {
+    const pa = a && Array.isArray(a.paths) ? a.paths : null
+    const pb = b && Array.isArray(b.paths) ? b.paths : null
+    if (!pa || !pb) return { paths: null }
+    const all = [...new Set([...pa, ...pb])]
+    return { paths: all.length > MAX_PUSH_PATHS ? null : all }
+  }
+  function sendHeldPushes(g) {
+    g.pushTimer = null
+    if (guests.get(g.id) !== g) return
+    if (g.socket.bufferedAmount > L.pushBuffered) {
+      g.pushTimer = setTimeout(() => sendHeldPushes(g), PUSH_RETRY_MS)
+      g.pushTimer.unref?.()
+      return
+    }
+    const held = [...g.pushHeld]
+    g.pushHeld.clear()
+    for (const [k, data] of held) {
+      const sub = g.subs.get(k)
+      if (sub && g.state === 'joined' && subLive(g, sub)) pushTo(g, k, data)
+    }
+  }
+  // What a guest no longer may: its requests about a project or a right it
+  // lost are answered 'revoked' now (their late results dropped), and its
+  // subscriptions to a project it lost end.
+  function revalidate(g) {
+    for (const entry of [...g.reqs.values()]) {
+      if (stillMay(g, entry.project, entry.right)) continue
+      entry.cancelled = true
+      g.reqs.delete(entry.id)
+      send(g, failRes(entry.id, 'revoked'))
+    }
+    for (const [k, sub] of [...g.subs]) if (!subLive(g, sub)) unsubscribe(g, k)
+  }
+  // A connection that ends: nothing more of its requests or subscriptions.
+  function endChannel(g) {
+    for (const entry of g.reqs.values()) entry.cancelled = true
+    g.reqs.clear()
+    g.bulk.length = 0
+    clearTimeout(g.bulkTimer)
+    clearTimeout(g.pushTimer)
+    g.pushHeld.clear()
+    for (const k of [...g.subs.keys()]) unsubscribe(g, k)
+  }
+
   // --- Presence (for the host's eyes only) ------------------------------------
   function presenceChanged() {
     try {
@@ -790,6 +1138,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     for (const g of guests.values()) {
       if (g.state !== 'joined' || !g.person) continue
       const { projectsChanged, rightsChanged } = syncGrant(g)
+      if (projectsChanged || rightsChanged) revalidate(g)
       if (projectsChanged) sendProjects(g, projects)
       if (rightsChanged) send(g, { t: 'rights', rights: { ...g.rights } })
       if (projectsChanged || rightsChanged) any = true
@@ -1076,6 +1425,13 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
         knownChanged()
         callbacks.closePane(msg.id, publicGuest(g))
         return
+      // Phase 2's requests and subscriptions (shareChannel.js).
+      case 'req':
+        return onRequest(g, msg)
+      case 'cancel':
+        return onCancel(g, msg)
+      case 'sub':
+        return onSub(g, msg)
       // The pane it has on screen now (presence, the host's eyes only): one
       // of its panes, or none; a couple a second at most. It gives nothing.
       case 'focus': {
@@ -1205,6 +1561,12 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       typedSaid: new Map(), // pane id -> when its typing there was last said
       subscribed: new Map(), // pane id -> { state: 'loading' | 'live', held, exit, project }
       pending: new Map(),
+      reqs: new Map(), // request id -> what it asked (shareChannel.js), until answered
+      bulk: [], // large answers waiting for the connection to catch up
+      bulkTimer: null,
+      subs: new Map(), // subscription name -> { topic, project, key, seq }
+      pushHeld: new Map(), // subscription name -> its latest news, held while behind
+      pushTimer: null,
       flushTimer: null,
       since: 0,
       alive: true
@@ -1352,6 +1714,8 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       for (const g of [...guests.values()]) drop(g, reason)
       for (const st of chatTimes.values()) clearTimeout(st.timer)
       chatTimes.clear()
+      heavyRuns.clear()
+      heavyTails.clear()
       try {
         wss?.close()
       } catch {
@@ -1391,6 +1755,23 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       }
       flushChat(id)
     },
+    // News of a topic (shareChannel.js TOPICS), to every guest subscribed to
+    // it that may still see it; a topic that keeps it gives it to the next
+    // subscriber too.
+    push(topic, project = null, key = null, data = null) {
+      const spec = Object.hasOwn(TOPICS, topic) ? TOPICS[topic] : null
+      const k = subKey(topic, project, key)
+      const set = spec ? watchers.get(k) : null
+      if (!set) return
+      if (spec.keep) lastPush.set(k, data)
+      for (const gid of set) {
+        const g = guests.get(gid)
+        const sub = g && g.subs.get(k)
+        if (g && sub && g.state === 'joined' && subLive(g, sub)) pushTo(g, k, data)
+      }
+    },
+    // The subscriptions guests hold now ({ topic, project, key, guests }).
+    watched: () => [...watchers].map(([k, set]) => ({ ...parseSubKey(k), guests: [...set] })),
     // The panes whose conversation guests watch now, and who (guest ids).
     chatsWatched: () => [...chatWatchers].filter(([, set]) => set.size).map(([id, set]) => ({ id, guests: [...set] })),
     presence,
@@ -1423,6 +1804,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       for (const g of guests.values()) {
         if (g.state !== 'joined' || !g.person) continue
         const { projectsChanged, rightsChanged } = syncGrant(g)
+        revalidate(g)
         if (rightsChanged) send(g, { t: 'rights', rights: { ...g.rights } })
         if (projectsChanged || rightsChanged) any = true
         sendProjects(g, projects)

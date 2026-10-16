@@ -27,6 +27,42 @@ const WORDS = {
     short: t('liveShare.right.closeShort', 'Close'),
     hint: t('liveShare.right.closeHint', 'An agent, or a terminal where something runs, still waits for your yes.'),
     part: t('liveShare.rights.closePart', 'ask to close panes')
+  }),
+  usage: () => ({
+    label: t('liveShare.right.usage', 'See my usage (plans, % used, reset times)'),
+    short: t('liveShare.right.usageShort', 'Usage'),
+    hint: t('liveShare.right.usageHint', 'Your plans, how much of each you used and when it resets. Never your accounts or emails.'),
+    part: t('liveShare.rights.usagePart', 'see its usage')
+  }),
+  edit: () => ({
+    label: t('liveShare.right.edit', 'Edit files (save, create, rename, move to the Recycle Bin)'),
+    short: t('liveShare.right.editShort', 'Edit'),
+    hint: t('liveShare.right.editHint', 'In the projects they see. Agent and tool settings files stay read-only unless they can also type.'),
+    part: t('liveShare.rights.editPart', 'edit its files')
+  }),
+  git: () => ({
+    label: t('liveShare.right.git', 'Stage, commit and discard changes (git)'),
+    short: t('liveShare.right.gitShort', 'Git'),
+    hint: t('liveShare.right.gitHint', 'In the projects they see, with your git name. Push, pull and fetch stay yours.'),
+    part: t('liveShare.rights.gitPart', 'stage and commit changes')
+  }),
+  tasks: () => ({
+    label: t('liveShare.right.tasks', 'Manage tasks (add, move, edit, answer questions)'),
+    short: t('liveShare.right.tasksShort', 'Tasks'),
+    hint: t('liveShare.right.tasksHint', 'The task board of the projects they see.'),
+    part: t('liveShare.rights.tasksPart', 'manage its tasks')
+  }),
+  pagesView: () => ({
+    label: t('liveShare.right.pagesView', 'See my browser pages'),
+    short: t('liveShare.right.pagesViewShort', 'Pages'),
+    hint: t('liveShare.right.pagesViewHint', 'The browser pages of the projects they see, live. Pages of the side panel are never shared.'),
+    part: t('liveShare.rights.pagesViewPart', 'see its browser pages')
+  }),
+  pagesUse: () => ({
+    label: t('liveShare.right.pagesUse', 'Use my browser pages: they act in your browser with your logged-in sessions'),
+    short: t('liveShare.right.pagesUseShort', 'Use pages'),
+    hint: t('liveShare.right.pagesUseHint', 'They click and type in your pages as you, signed in wherever you are. Comes with “See my browser pages”.'),
+    part: t('liveShare.rights.pagesUsePart', 'use its browser pages')
   })
 }
 

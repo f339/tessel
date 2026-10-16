@@ -87,6 +87,7 @@ function harness({ helper = 'fake.exe', createDelay = null, sshMode = { mode: 's
     sshAskpass: broker,
     // Live Share is off (liveShare.js; covered by liveShareMain.spec.js).
     liveShare: null,
+    isLsharePath: (p) => typeof p === 'string' && p.startsWith('lshare://'),
     host: {
       request: (kind, v) => {
         creates.push({ kind, askpass: !!v.env.SSH_ASKPASS, token: v.env.TESSEL_ASKPASS_TOKEN, ...(v.ssh ? { ssh: v.ssh, backend: v.meta.backend } : {}), ...(v.meta && v.meta.agentProvider ? { agent: [v.meta.agentProvider, v.meta.agentLaunchToken] } : {}) })
@@ -137,6 +138,19 @@ describe('pty:create on the shared ssh2 connection (the real handler from index.
     const res = await h.create('pane-1', { agentId: 'claude' })
     expect(res).toMatchObject({ ok: true, agentLaunchToken: null, agentStatusWarning: null, remoteToolsWarning: { host: 'fake', reason: 'no node there' } })
     expect(h.creates[0].ssh.remoteAgent).toBeUndefined()
+    h.broker.close()
+  })
+})
+
+describe('pty:create in a Live Share host’s folder (the real handler from index.js)', () => {
+  it('starts nothing for a folder of a project shared with this Tessel', async () => {
+    const h = harness({ sshMode: { mode: 'ssh2', spec: { host: 'box', port: 22, username: 'me' } } })
+    for (const extra of [{ cwd: 'lshare://ws-1' }, { projectDir: 'lshare://ws-1\src' }, { remotePath: 'lshare://ws-1' }]) {
+      const res = await h.create('pane-1', { remoteHostId: undefined, ...extra })
+      expect(res).toMatchObject({ ok: false })
+      expect(res.error).toMatch(/Live Share host/)
+    }
+    expect(h.creates).toEqual([])
     h.broker.close()
   })
 })

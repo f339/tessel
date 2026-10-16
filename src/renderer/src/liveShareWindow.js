@@ -172,9 +172,16 @@ export function createLiveShareWindow(deps) {
 
   // What guests see of each shared project you have here. The fullscreen
   // pane is the window's: only for the project on screen. Its agent panes
-  // with a conversation (chats) are for main only: guests get them by name.
+  // with a conversation (chats) and its folder (root: what guests' Files,
+  // editor and Changes read, through main; none for a project on an SSH
+  // host) are for main only: guests get the panes by name, never the folder.
   function layoutsNow() {
-    return sharedWss().map((ws) => ({ id: ws.id, layout: hostLayoutFromWorkspace(ws, deps.currentWsId() === ws.id ? deps.maximizedId() : null), chats: hostChatsFromWorkspace(ws) }))
+    return sharedWss().map((ws) => ({
+      id: ws.id,
+      layout: hostLayoutFromWorkspace(ws, deps.currentWsId() === ws.id ? deps.maximizedId() : null),
+      chats: hostChatsFromWorkspace(ws),
+      root: !ws.remote && typeof ws.cwd === 'string' && ws.cwd ? ws.cwd : null
+    }))
   }
 
   // Before you start: the projects picked last time that are still there,

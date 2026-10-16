@@ -16,7 +16,7 @@
 // Each one's projects are the host window's project ids: a project not
 // shared at the moment is simply not seen (trust is standing access: shared
 // again later, it is seen again).
-import { cleanRights, isRightId } from '../../shared/liveShareRights'
+import { cleanRights, isRightId, setRight } from '../../shared/liveShareRights'
 import { identityFingerprint, isWeakSigningKey, KX_BYTES } from './shareCrypto.js'
 import { cleanProjectIds, cleanName } from './shareGrant.js'
 
@@ -105,7 +105,7 @@ export function createTrustStore({ entries = [], save = () => {}, onChange = () 
         return this.setGrant(fp, { projects: on ? [...e.grant.projects, project] : e.grant.projects.filter((p) => p !== project) })
       }
       if (!isRightId(right)) return false
-      return this.setGrant(fp, { rights: { ...e.grant.rights, [right]: !!on } })
+      return this.setGrant(fp, { rights: setRight(e.grant.rights, right, on) })
     },
     rename(fp, name) {
       const e = map.get(fp)

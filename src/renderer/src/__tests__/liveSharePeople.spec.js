@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import LiveShareDialog from '../components/LiveShareDialog.vue'
-import { RIGHT_IDS } from '../../../shared/liveShareRights'
+import { RIGHT_IDS, NO_RIGHTS } from '../../../shared/liveShareRights'
 import { fakeApi, OFF_HOST, OFF_GUEST, invite, guest, trustedOne, sharing } from './liveShareFakes'
 
 const PROJECTS = [
@@ -51,8 +51,8 @@ describe('Live Share: People', () => {
     const w = await openAt(
       'people',
       sharing({
-        guests: [guest({ rights: { type: false, open: true, close: false } }), guest({ id: 'g2', name: 'Eve', state: 'waiting', code: '123 456' })],
-        offline: [{ id: 'k-abc', name: 'Alex', rights: { type: true, open: false, close: false }, projects: ['ws-2'], invite: { id: null, label: 'Old' }, trusted: false, trustable: false }],
+        guests: [guest({ rights: { ...NO_RIGHTS, type: false, open: true, close: false } }), guest({ id: 'g2', name: 'Eve', state: 'waiting', code: '123 456' })],
+        offline: [{ id: 'k-abc', name: 'Alex', rights: { ...NO_RIGHTS, type: true, open: false, close: false }, projects: ['ws-2'], invite: { id: null, label: 'Old' }, trusted: false, trustable: false }],
         presence: [{ id: 'pane-1', guests: [{ id: 'g1', watching: true, typing: false, reading: false }] }]
       })
     )
@@ -76,7 +76,7 @@ describe('Live Share: People', () => {
   it('each box is one live change (offline people too); a click while its change is on its way does nothing', async () => {
     let answer
     api.access.mockImplementation(() => new Promise((resolve) => (answer = resolve)))
-    const w = await openAt('people', sharing({ guests: [guest()], offline: [{ id: 'k-abc', name: 'Alex', rights: { type: true, open: false, close: false }, projects: ['ws-1'], invite: null, trusted: false, trustable: true }] }))
+    const w = await openAt('people', sharing({ guests: [guest()], offline: [{ id: 'k-abc', name: 'Alex', rights: { ...NO_RIGHTS, type: true, open: false, close: false }, projects: ['ws-1'], invite: null, trusted: false, trustable: true }] }))
     await tick(w, '[data-test="ls-proj-ws-2-g1"] input')
     expect(api.access).toHaveBeenLastCalledWith({ subject: 'g1', project: 'ws-2', on: true })
     // The box waits while its change is on its way.
@@ -204,11 +204,11 @@ describe('Live Share: Access', () => {
   const host = () =>
     sharing({
       projectIds: ['ws-1', 'ws-2'],
-      guests: [guest({ projects: ['ws-1'], rights: { type: true, open: false, close: false } }), guest({ id: 'g3', name: 'Tess', trusted: true, projects: ['ws-2'] })],
+      guests: [guest({ projects: ['ws-1'], rights: { ...NO_RIGHTS, type: true, open: false, close: false } }), guest({ id: 'g3', name: 'Tess', trusted: true, projects: ['ws-2'] })],
       offline: [
-        { id: 'k-abc', name: 'Alex', rights: { type: false, open: false, close: false }, projects: ['ws-2'], invite: null, trusted: false, trustable: true },
+        { id: 'k-abc', name: 'Alex', rights: { ...NO_RIGHTS, type: false, open: false, close: false }, projects: ['ws-2'], invite: null, trusted: false, trustable: true },
         // A trusted person offline: shown once, as its trusted entry.
-        { id: 'k-def', name: 'Ty', rights: { type: false, open: false, close: false }, projects: ['ws-1'], invite: null, trusted: true, trustable: true }
+        { id: 'k-def', name: 'Ty', rights: { ...NO_RIGHTS, type: false, open: false, close: false }, projects: ['ws-1'], invite: null, trusted: true, trustable: true }
       ],
       trusted: [trustedOne({ id: 't-' + 'b'.repeat(32), name: 'Ty', projects: ['ws-1'], online: false }), trustedOne({ id: 't-' + 'c'.repeat(32), name: 'Tess', online: true })],
       invites: [invite({ projects: ['ws-1'], joined: 2 }), invite({ id: 'iv-bbbbbbbbbb', label: 'Team', projects: [], joined: 0 })]
@@ -254,7 +254,7 @@ describe('Live Share: Access', () => {
     expect(w.find('[data-test="ls-access-apply-no"]').classes()).toContain('primary')
     await w.find('[data-test="ls-access-apply-no"]').trigger('click')
     await flushPromises()
-    expect(api.updateInvite).toHaveBeenLastCalledWith({ id: 'iv-aaaaaaaaaa', patch: { rights: { type: false, open: true, close: false } }, applyRemovals: false, applyAdditions: false })
+    expect(api.updateInvite).toHaveBeenLastCalledWith({ id: 'iv-aaaaaaaaaa', patch: { rights: { ...NO_RIGHTS, type: false, open: true, close: false } }, applyRemovals: false, applyAdditions: false })
     // Escape: nothing changes.
     await tick(w, '[data-test="ls-access-iv-aaaaaaaaaa-ws-2"]')
     await w.find('[data-test="ls-access-apply"]').trigger('keydown', { key: 'Escape' })

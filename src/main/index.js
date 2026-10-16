@@ -44,6 +44,9 @@ import { createGitTrust, setGitTrust } from './gitSafety'
 import { createWorktreeList, localRootsOfLayout, localRepoRootsOfLayout } from './worktreeList'
 import { createWorktreeCleanup } from './worktreeCleanup'
 import { isRemotePath } from '../shared/remotePath'
+import { isLsharePath } from '../shared/liveSharePath'
+import { lshareArg, pickFs, localOnlyFor } from './liveShare/guestRouting'
+import { createGuestFs } from './liveShare/guestFs'
 import { STATUS_PROVIDERS } from '../shared/agentStateModel'
 import { prepareAgentStateHooks } from './agentStateSetup'
 import { assessNeeds } from './tesselNeeds'
@@ -988,6 +991,8 @@ ipcMain.handle('activity:save', (_evt, events) => {
 // changed since (an agent wrote in it), nothing is written and the current
 // text comes back, so nobody's work is overwritten.
 ipcMain.handle('notes:load', (_evt, opts = {}) => {
+  // A Live Share host's project: its notes, from the host.
+  if (lshareArg(opts)) return guestFs().loadNotes(opts || {})
   const res = ensureNotes(opts)
   if (!res.ok) return res
   try {
@@ -997,6 +1002,7 @@ ipcMain.handle('notes:load', (_evt, opts = {}) => {
   }
 })
 ipcMain.handle('notes:save', (_evt, opts = {}) => {
+  if (lshareArg(opts)) return guestFs().saveNotes(opts || {})
   const res = ensureNotes({ dir: opts.dir, content: '' })
   if (!res.ok) return res
   try {
@@ -1961,6 +1967,11 @@ try {
 app.on('will-quit', () => remoteFs.close())
 // A remote project's path (ssh://…) in a call made for local files.
 const remoteArg = (q) => (q && typeof q === 'object' ? isRemotePath(q.root) || isRemotePath(q.file) || isRemotePath(q.path) : isRemotePath(q))
+// A Live Share host's project (lshare://…, liveShare/guestRouting.js): the
+// same calls go to the host through this Tessel's Live Share session
+// (liveShare/guestFs.js); a session not there answers that the host did not.
+const offlineFs = createGuestFs({ request: () => Promise.reject(new Error('offline')) })
+const guestFs = () => (liveShare && liveShare.guestFs) || offlineFs
 // Add a project (addProject.js): clone from a URL, create a new one, find the
 // repositories in a folder.
 registerAddProject({ ipcMain, service: createAddProject({ send: (channel, payload) => send(channel, payload) }) })
@@ -2162,7 +2173,7 @@ ipcMain.handle('review:push', safe(reviewPush))
 // task's copy.
 // A remote project's root (ssh://…) goes to the same operations run on its
 // host (remoteFs.js).
-const scmFor = (q) => (remoteArg(q) ? remoteFs.scm : scm)
+const scmFor = (q) => pickFs(q, { local: scm, remote: remoteFs.scm, lshare: guestFs().scm })
 ipcMain.handle('scm:status', safe((q) => scmFor(q).scmStatus(q || {})))
 ipcMain.handle('scm:stage', safe((q) => scmFor(q).scmStage(q || {})))
 ipcMain.handle('scm:unstage', safe((q) => scmFor(q).scmUnstage(q || {})))
@@ -2190,11 +2201,12 @@ ipcMain.handle('localHistory:read', safe((q) => localHistory.read(q || {})))
 // The agents run on this machine: not for a remote project yet.
 const commitMessageGeneration = createCommitMessageGeneration({ scm, runHeadless, cancelHeadless })
 ipcMain.handle('scm:generate', safe(async (q) => {
+  if (localOnlyFor('scm:generate', q)) return guestFs().localOnly()
   if (remoteArg(q)) return remoteFs.remoteOnly()
   return commitMessageGeneration.generate(q || {})
 }))
 ipcMain.handle('scm:cancelGenerate', safe(async (q) => {
-  if (remoteArg(q)) return { ok: false }
+  if (remoteArg(q) || lshareArg(q)) return { ok: false }
   return commitMessageGeneration.cancel(q || {})
 }))
 ipcMain.handle('lead:ensure', safe(ensureInbox))
@@ -3204,9 +3216,10 @@ ipcMain.handle('images:openExternal', async (_evt, file) => {
 // File references in a terminal (fileOpen.js): which exist, and opening one
 // at its line in VS Code when installed, else in its default program.
 ipcMain.handle('files:resolve', (_evt, q = {}) => resolveFiles(q || {}))
-ipcMain.handle('files:list', safe((root) => listProjectFiles(root)))
+ipcMain.handle('files:list', safe((root) => (lshareArg(root) ? guestFs().listProjectFiles(root) : listProjectFiles(root))))
 ipcMain.handle('files:open', async (_evt, q = {}) => {
   const file = q && typeof q.file === 'string' ? q.file : ''
+  if (localOnlyFor('files:open', file)) return guestFs().localOnly()
   if (isRemotePath(file)) return remoteFs.remoteOnly()
   let ok = false
   try {
@@ -3236,7 +3249,7 @@ ipcMain.handle('chatFiles:reveal', (_evt, q = {}) => revealChatPath(q || {}, { s
 // watch per project (the window is told when files change).
 // A remote project (ssh://… root): the same operations on its host
 // (remoteFs.js); delete goes to the host user's trash.
-const explorerFor = (q) => (remoteArg(q) ? remoteFs : explorer)
+const explorerFor = (q) => pickFs(q, { local: explorer, remote: remoteFs, lshare: guestFs() })
 ipcMain.handle('explorer:list', safe((q) => explorerFor(q).listDir(q || {})))
 // Several folders in one call (one round trip to a remote host).
 ipcMain.handle('explorer:listMany', safe((q) => explorerFor(q).listMany(q || {})))
@@ -3248,8 +3261,9 @@ ipcMain.handle('explorer:searchNames', safe((q) => explorerFor(q).searchNames(q 
 ipcMain.handle('explorer:searchContent', safe((q) => explorerFor(q).searchContent(q || {})))
 ipcMain.handle('explorer:create', safe((q) => explorerFor(q).create(q || {})))
 ipcMain.handle('explorer:rename', safe((q) => explorerFor(q).rename(q || {})))
-ipcMain.handle('explorer:trash', safe((q) => (remoteArg(q) ? remoteFs.trash(q) : explorer.trash(q || {}, (p) => shell.trashItem(p)))))
+ipcMain.handle('explorer:trash', safe((q) => (lshareArg(q) ? guestFs().trash(q) : remoteArg(q) ? remoteFs.trash(q) : explorer.trash(q || {}, (p) => shell.trashItem(p)))))
 ipcMain.handle('explorer:reveal', safe((q) => {
+  if (localOnlyFor('explorer:reveal', q)) return guestFs().localOnly()
   if (remoteArg(q)) return remoteFs.remoteOnly()
   const p = q && explorer.inside(q.root, q.path)
   if (!p || !fs.existsSync(p)) return { ok: false, error: t('main.error.notFound', 'Not found.') }
@@ -3259,7 +3273,15 @@ ipcMain.handle('explorer:reveal', safe((q) => {
 const explorerWatches = new Map() // root -> stop
 ipcMain.handle('explorer:watch', (_evt, root) => {
   // A remote project is polled (nothing like a file watch reaches over ssh);
-  // one project watched at a time, local or remote.
+  // a Live Share host's is followed through the session (the host watches
+  // it); one project watched at a time, local, remote or shared.
+  if (isLsharePath(root)) {
+    for (const stop of explorerWatches.values()) stop()
+    explorerWatches.clear()
+    remoteFs.unwatchRoots()
+    return liveShare ? liveShare.guestWatchRoot(root) : { ok: false }
+  }
+  liveShare?.guestUnwatchRoots()
   if (isRemotePath(root)) {
     for (const stop of explorerWatches.values()) stop()
     explorerWatches.clear()
@@ -3287,11 +3309,13 @@ ipcMain.handle('explorer:unwatch', () => {
   for (const stop of explorerWatches.values()) stop()
   explorerWatches.clear()
   remoteFs.unwatchRoots()
+  liveShare?.guestUnwatchRoots()
   return { ok: true }
 })
 
 // The file viewer (fileView.js): read a file to show it; a PDF in its own window.
 ipcMain.handle('files:view', (_evt, file) => {
+  if (lshareArg(file)) return guestFs().readForView(file)
   if (isRemotePath(file)) return remoteFs.remoteOnly()
   try {
     return readForView(file)
@@ -3301,13 +3325,14 @@ ipcMain.handle('files:view', (_evt, file) => {
 })
 ipcMain.handle('files:viewImage', async (_evt, file) => {
   try {
+    if (lshareArg(file)) return await guestFs().readImage(file)
     return isRemotePath(file) ? await remoteFs.readImage(file) : readImageForView(file)
   } catch (err) {
     return { ok: false, error: err.message }
   }
 })
 ipcMain.handle('files:openPdf', (_evt, file) =>
-  isRemotePath(file) ? remoteFs.remoteOnly() : openPdfWindow(BrowserWindow, file, { icon: fs.existsSync(appIconPath()) ? appIconPath() : null })
+  localOnlyFor('files:openPdf', file) ? guestFs().localOnly() : isRemotePath(file) ? remoteFs.remoteOnly() : openPdfWindow(BrowserWindow, file, { icon: fs.existsSync(appIconPath()) ? appIconPath() : null })
 )
 
 // Tessel's code editor (editorFiles.js): read, write (atomic), the last
@@ -3319,19 +3344,24 @@ const editorWatcher = createFileWatcher((change) => {
 // A file of a remote project (ssh://…): read and written on its host
 // (remoteFs.js: size cap, conflict check, atomic replace there), watched by
 // polling.
-ipcMain.handle('editor:read', safe((file) => (isRemotePath(file) ? remoteFs.readForEdit(file) : readForEdit(file))))
-ipcMain.handle('editor:stat', safe((file) => (isRemotePath(file) ? remoteFs.statForEdit(file) : statForEdit(file))))
+// A Live Share host's file (lshare://…): read and written on the host
+// (guestFs.js: its size cap, the conflict check there), followed through
+// the session.
+ipcMain.handle('editor:read', safe((file) => pickFs(file, { local: { readForEdit }, remote: remoteFs, lshare: guestFs() }).readForEdit(file)))
+ipcMain.handle('editor:stat', safe((file) => pickFs(file, { local: { statForEdit }, remote: remoteFs, lshare: guestFs() }).statForEdit(file)))
 ipcMain.handle('editor:write', safe(async (q) => {
+  if (lshareArg(q && q.file)) return guestFs().writeForEdit(q || {})
   if (remoteArg(q && q.file)) return remoteFs.writeForEdit(q || {})
   const res = await writeForEdit(q || {})
   if (res.ok) editorWatcher.noteWritten(q.file, res.sig)
   return res
 }))
-ipcMain.handle('editor:head', safe((file) => (isRemotePath(file) ? remoteFs.headContent(file) : headContent(file))))
+ipcMain.handle('editor:head', safe((file) => pickFs(file, { local: { headContent }, remote: remoteFs, lshare: guestFs() }).headContent(file)))
 ipcMain.handle('editor:watch', safe((paths) => {
   const list = Array.isArray(paths) ? paths : []
   const remote = list.filter((p) => isRemotePath(p))
-  const count = editorWatcher.set(list.filter((p) => !isRemotePath(p))) + remoteFs.watchFiles(remote)
+  const shared = list.filter((p) => isLsharePath(p))
+  const count = editorWatcher.set(list.filter((p) => !isRemotePath(p) && !isLsharePath(p))) + remoteFs.watchFiles(remote) + (liveShare ? liveShare.guestWatchFiles(shared) : 0)
   return { ok: true, count }
 }))
 // Closing the window quits Tessel: the window asks first (closeGuard.js), for
@@ -3563,6 +3593,8 @@ liveShare = registerLiveShare({
     send('pty:exit', { id, exitCode, signal: 0, pid: null })
   },
   log,
+  // A guest's delete on this computer goes to the Recycle Bin.
+  trashItem: (p) => shell.trashItem(p),
   // Taken back once this is the only Tessel running (below).
   resume: false,
   // The conversations guests watch (read only): a reader of their own, never
@@ -3752,6 +3784,8 @@ ipcMain.handle('pty:create', async (_evt, opts = {}) => {
   // A Live Share guest's pane (liveShare.js guestPaneId) is the host's
   // terminal: never a shell of this computer under its id.
   if (/^pane-ls\d+-/.test(String(id))) return { ok: false, error: t('main.liveShare.notLocal', 'This pane belongs to a Live Share session: it cannot start a terminal on this computer.') }
+  // A folder of a Live Share host's project is not on this computer.
+  if (isLsharePath(cwd) || isLsharePath(projectDir) || isLsharePath(opts.remotePath)) return { ok: false, error: t('main.liveShare.lshareFolder', 'This folder is on a Live Share host’s computer: a terminal cannot start in it here.') }
   const shell = getShells().find((s) => s.id === shellId) || defaultShell()
   // A pane on a remote host: a shell channel on the host's shared ssh2
   // connection (in the terminal host), or, for a host that needs the system

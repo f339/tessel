@@ -19,7 +19,20 @@ export const SHARE_RIGHTS = Object.freeze([
   // Without it, a guest's request asks the host.
   Object.freeze({ id: 'open', default: false }),
   // Ask to close panes (an agent or a busy terminal still asks the host).
-  Object.freeze({ id: 'close', default: false })
+  Object.freeze({ id: 'close', default: false }),
+  // See the host's usage (plans, % used, reset times): host-wide data.
+  Object.freeze({ id: 'usage', default: false }),
+  // In each project the person sees (phase 2: the host's Files, editor,
+  // Changes and Tasks on the guest's screen): save, create, rename and move
+  // to the Recycle Bin files; stage, unstage, discard and commit; add, move,
+  // edit and delete task cards and answer their questions.
+  Object.freeze({ id: 'edit', default: false }),
+  Object.freeze({ id: 'git', default: false }),
+  Object.freeze({ id: 'tasks', default: false }),
+  // See the host's browser pages, and use them (they act with the host's
+  // logged-in sessions): using needs seeing.
+  Object.freeze({ id: 'pagesView', default: false }),
+  Object.freeze({ id: 'pagesUse', default: false, needs: 'pagesView' })
 ])
 
 export const RIGHT_IDS = Object.freeze(SHARE_RIGHTS.map((r) => r.id))
@@ -39,7 +52,23 @@ export function cleanRights(rights) {
   const given = rights && typeof rights === 'object' ? rights : null
   const out = {}
   for (const r of SHARE_RIGHTS) out[r.id] = !!given && Object.hasOwn(given, r.id) && given[r.id] === true
+  // A right that needs another is off without it (a record can only lose
+  // rights this way, never gain one).
+  for (const r of SHARE_RIGHTS) if (r.needs && !out[r.needs]) out[r.id] = false
   return out
+}
+
+// The right another one needs (pagesUse: pagesView), or null.
+export const neededBy = (id) => (SHARE_RIGHTS.find((r) => r.id === id) || {}).needs || null
+
+// Rights with one of them turned on or off, as a person's click means it:
+// turning on a right that needs another turns that one on too; turning one
+// off turns off the rights that need it. -> clean rights.
+export function setRight(rights, id, on) {
+  if (!isRightId(id)) return cleanRights(rights)
+  const out = { ...cleanRights(rights), [id]: !!on }
+  if (on && neededBy(id)) out[neededBy(id)] = true
+  return cleanRights(out)
 }
 
 export const NO_RIGHTS = Object.freeze(cleanRights(null))

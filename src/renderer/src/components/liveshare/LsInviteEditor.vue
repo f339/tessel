@@ -14,7 +14,7 @@
 import { ref, reactive, computed, watch, nextTick, onMounted, useId } from 'vue'
 import RightsChecks from './RightsChecks.vue'
 import ProjectChecks from './ProjectChecks.vue'
-import { cleanRights } from '../../../../shared/liveShareRights'
+import { cleanRights, setRight } from '../../../../shared/liveShareRights'
 import { grantDiff, inviteExpiry, inviteName } from '../../liveShareAccess'
 import { rightWords } from '../../liveShareRights'
 import { t } from '../../i18n'
@@ -87,7 +87,7 @@ function toggleProject(id, on) {
   form.projects = on ? [...rest, id] : rest
 }
 function toggleRight(id, on) {
-  form.rights = { ...form.rights, [id]: !!on }
+  form.rights = setRight(form.rights, id, on)
 }
 
 // The whole invitation as asked for.

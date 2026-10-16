@@ -26,6 +26,16 @@
 // asks the host. With 'presence', focus(id) tells the host which of its panes
 // this guest has on screen (only for the host's eyes; at most twice a second,
 // the latest).
+// Phase 2 (shareChannel.js): with 'files', 'scm' or 'tasks' on both sides,
+// request(op, project, args) asks the host about one of its projects and
+// resolves its answer ({ ok: true, data } | { ok: false, code, detail? }):
+// at most CHANNEL_LIMITS.inFlight at once (the rest wait their turn here, so
+// the host's limit is never what turns one away), each given up after a
+// while (the host is told: cancel); it rejects when the connection ends or
+// the time is up, and answers 'bad-op' at once for a feature the host does
+// not speak (an older Tessel). subscribe(topic, project, key, on) follows a
+// topic; its news come with onPush(topic, project, key, data), in order
+// (an older or repeated one is dropped).
 // The guest's identity key (identityKey: made once on this computer, kept in
 // liveshare-identity.json by liveShare.js): its public half and a proof that it holds it (shareCrypto.js
 // signIdentity, bound to this connection) go with a new join, so a host that
@@ -37,6 +47,7 @@ import WebSocket from 'ws'
 import { fallbackLookup } from './shareDns.js'
 import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitment, signBinding, bindingSigned, signIdentity, NONCE_BYTES, KX_BYTES } from './shareCrypto.js'
 import { SHARE_FEATURES, cleanFeatures } from './shareChat.js'
+import { OP_AREAS, TOPICS, CHANNEL_LIMITS, cleanSub, subKey } from './shareChannel.js'
 import { cleanRights } from '../../shared/liveShareRights'
 
 const CONNECT_TIMEOUT_MS = 20000
@@ -45,6 +56,13 @@ const MAX_FRAME = 64 * 1024 * 1024 // a snapshot of a screen
 // shareHost.js SHARE_PROTOCOL: 4, several projects.
 const PROTOCOL = 4
 const FOCUS_MS = 500
+// Requests: how long one is waited for (a change, a search or git's status
+// can take a while on a big project), and how many wait their turn here.
+const REQUEST_MS = 45000
+const MAX_QUEUED = 64
+// A request bigger than this is not sent (the host closes a connection whose
+// message is over 1 MB).
+const MAX_REQUEST_BYTES = 1000 * 1000
 
 // The host closed before the handshake: why (shareHost.js CLOSE_*).
 const CLOSE_REASONS = { 4001: 'expired', 4002: 'busy', 1013: 'busy', 4003: 'outdated' }
@@ -61,7 +79,8 @@ const BYE_REASONS = new Set(['stopped', 'restarting', 'denied', 'removed', 'repl
 // onAgents(list) (the agents the host lists: [{ id, name }], unchecked).
 // onHostKey(raw) (the host's key, from the first welcome). onFeatures(list)
 // (what the host speaks beyond the protocol, from each welcome), onChat(id,
-// message) (an agent pane's conversation: { ok, events, truncated, code }).
+// message) (an agent pane's conversation: { ok, events, truncated, code }),
+// onPush(topic, project, key, data) (a subscription's news, unchecked).
 // signingKey: { privateKey, publicRaw } (shareCrypto.js newSigningKey);
 // back: coming back with it (shareHost.js rejoin), no question; hostKey:
 // the host's key kept from the first welcome (a Buffer). features: what this
@@ -83,6 +102,12 @@ export function createShareGuest({ url, secret, name, signingKey, identityKey = 
   let focusWanted = null
   let focusTimer = null
   let focusAt = 0
+  // Requests sent (id -> { resolve, reject, timer }), those waiting their
+  // turn, and the last news of each subscription (its seq).
+  let nextReq = 1
+  const inFlight = new Map()
+  const waitingReqs = []
+  const lastSeq = new Map()
 
   function finish(reason) {
     if (closed) return
@@ -90,6 +115,12 @@ export function createShareGuest({ url, secret, name, signingKey, identityKey = 
     clearTimeout(timer)
     clearTimeout(silence)
     clearTimeout(focusTimer)
+    // Every request still waiting fails (the views keep what they show).
+    for (const r of [...inFlight.values(), ...waitingReqs.splice(0)]) {
+      clearTimeout(r.timer)
+      r.reject(new Error('closed'))
+    }
+    inFlight.clear()
     try {
       socket?.close(1000)
     } catch {
@@ -123,6 +154,55 @@ export function createShareGuest({ url, secret, name, signingKey, identityKey = 
     const later = focusAt + FOCUS_MS - Date.now()
     if (later > 0) focusTimer = setTimeout(go, later)
     else go()
+  }
+
+  // Requests waiting their turn, sent while fewer than the host's limit are
+  // in flight.
+  function pump() {
+    while (waitingReqs.length && inFlight.size < CHANNEL_LIMITS.inFlight && !closed) {
+      const r = waitingReqs.shift()
+      const id = nextReq
+      nextReq = nextReq >= 2 ** 31 ? 1 : nextReq + 1
+      const message = { t: 'req', id, op: r.op, project: r.project, args: r.args }
+      let size
+      try {
+        size = Buffer.byteLength(JSON.stringify(message), 'utf8')
+      } catch {
+        size = Infinity
+      }
+      if (size > MAX_REQUEST_BYTES) {
+        r.resolve({ ok: false, code: 'too-large' })
+        continue
+      }
+      r.timer = setTimeout(() => {
+        if (inFlight.get(id) !== r) return
+        inFlight.delete(id)
+        send({ t: 'cancel', id })
+        r.reject(new Error('timeout'))
+        pump()
+      }, r.timeoutMs)
+      inFlight.set(id, r)
+      send(message)
+    }
+  }
+  function onAnswer(msg) {
+    const r = Number.isSafeInteger(msg.id) ? inFlight.get(msg.id) : null
+    if (!r) return
+    inFlight.delete(msg.id)
+    clearTimeout(r.timer)
+    if (msg.ok === true) r.resolve({ ok: true, data: msg.data === undefined ? null : msg.data })
+    else r.resolve({ ok: false, code: typeof msg.code === 'string' ? msg.code.slice(0, 40) : 'failed', ...(typeof msg.detail === 'string' ? { detail: msg.detail.slice(0, 300) } : {}) })
+    pump()
+  }
+  // A subscription's news: a topic this Tessel knows, of a feature the host
+  // speaks, newer than the last one.
+  function onPushed(msg) {
+    const s = cleanSub({ topic: msg.topic, project: msg.project, key: msg.key, on: true })
+    if (!s || !hostSpeaks.has(s.spec.feature) || !Number.isSafeInteger(msg.seq)) return
+    const k = subKey(s.topic, s.project, s.key)
+    if (msg.seq <= (lastSeq.get(k) || 0)) return
+    lastSeq.set(k, msg.seq)
+    callbacks.onPush?.(s.topic, s.project, s.key, msg.data === undefined ? null : msg.data)
   }
 
   // Rights as this Tessel knows them (an id it does not know is never kept).
@@ -185,6 +265,12 @@ export function createShareGuest({ url, secret, name, signingKey, identityKey = 
         return
       case 'chat':
         if (typeof msg.id === 'string') callbacks.onChat?.(msg.id, msg)
+        return
+      case 'res':
+        onAnswer(msg)
+        return
+      case 'push':
+        onPushed(msg)
         return
       case 'bye':
         finish(BYE_REASONS.has(msg.reason) ? msg.reason : 'closed')
@@ -290,6 +376,31 @@ export function createShareGuest({ url, secret, name, signingKey, identityKey = 
     // up with the host's updates).
     resyncChat(id) {
       send({ t: 'chat', id, on: true, resync: true })
+    },
+    // Whether the host speaks a feature (its welcome; false before it).
+    speaks: (feature) => welcomed && hostSpeaks.has(feature),
+    // A request about one of the host's projects (shareChannel.js): resolves
+    // the host's answer; rejects when the connection ends or the time is up.
+    request(op, project, args = {}, { timeoutMs = REQUEST_MS } = {}) {
+      return new Promise((resolve, reject) => {
+        if (closed || !welcomed) return reject(new Error('closed'))
+        const area = typeof op === 'string' && op.includes('.') ? op.slice(0, op.indexOf('.')) : ''
+        const feature = Object.hasOwn(OP_AREAS, area) ? OP_AREAS[area] : null
+        // A host whose Tessel does not do this (an older one): said at once.
+        if (!feature || !hostSpeaks.has(feature)) return resolve({ ok: false, code: 'bad-op' })
+        if (waitingReqs.length >= MAX_QUEUED) return resolve({ ok: false, code: 'busy' })
+        waitingReqs.push({ op, project, args: args && typeof args === 'object' ? args : {}, resolve, reject, timer: null, timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : REQUEST_MS })
+        pump()
+      })
+    },
+    // A topic followed (on) or no longer. false when the host does not speak
+    // its feature (or before its welcome): nothing was asked.
+    subscribe(topic, project = null, key = null, on = true) {
+      const spec = Object.hasOwn(TOPICS, topic) ? TOPICS[topic] : null
+      if (closed || !welcomed || !spec || !hostSpeaks.has(spec.feature)) return false
+      if (!on) lastSeq.delete(subKey(topic, project, key))
+      send({ t: 'sub', topic, ...(project ? { project } : {}), ...(key ? { key } : {}), on: !!on })
+      return true
     },
     leave() {
       send({ t: 'leave' })

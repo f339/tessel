@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { reactive, ref, nextTick } from 'vue'
 import { createLiveShareWindow } from '../liveShareWindow'
+import { NO_RIGHTS } from '../../../shared/liveShareRights'
 
 const flush = async () => {
   for (let i = 0; i < 5; i++) {
@@ -90,7 +91,7 @@ function setup() {
   return { ls, api, listeners, deps, workspaces, currentWsId, maximizedId, layoutReady, seeded, toasts, hostIds, agentList, activePane }
 }
 
-const NO = { type: false, open: false, close: false }
+const NO = { ...NO_RIGHTS, type: false, open: false, close: false }
 const pane = (id, extra = {}) => ({ id, title: id, kind: 'shell', cols: 120, rows: 30, ...extra })
 const leaf = (id, view = 'terminal') => ({ type: 'leaf', id, view, title: id, kind: 'shell' })
 
@@ -161,7 +162,7 @@ describe('Live Share in the window, as a guest', () => {
   })
 
   it('follows what the host lets it do: view only until allowed to type, open or close', async () => {
-    const rights = { type: false, open: false, close: false }
+    const rights = { ...NO_RIGHTS, type: false, open: false, close: false }
     t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-a')], layout: { project: 'x', tree: leaf('pane-ls1-a'), activeId: null, maximizedId: null }, rights })
     await flush()
     const first = t.workspaces.value[0].tree
@@ -173,7 +174,7 @@ describe('Live Share in the window, as a guest', () => {
     expect(t.ls.canClose()).toBe(false)
     expect(t.toasts.at(-1)).toMatch(/has not let you close/)
 
-    t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-a')], layout: { project: 'x', tree: leaf('pane-ls1-a'), activeId: null, maximizedId: null }, rights: { type: true, open: true, close: true } })
+    t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-a')], layout: { project: 'x', tree: leaf('pane-ls1-a'), activeId: null, maximizedId: null }, rights: { ...NO_RIGHTS, type: true, open: true, close: true } })
     await flush()
     expect(first.liveShare.canType).toBe(true)
     expect(t.toasts.at(-1)).toMatch(/Ada changed what you can do/)
@@ -186,7 +187,7 @@ describe('Live Share in the window, as a guest', () => {
   })
 
   it('closing a host pane only asks the host: it stays until the host closed it', async () => {
-    t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-a')], layout: { project: 'x', tree: leaf('pane-ls1-a'), activeId: null, maximizedId: null }, rights: { type: false, open: false, close: true } })
+    t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-a')], layout: { project: 'x', tree: leaf('pane-ls1-a'), activeId: null, maximizedId: null }, rights: { ...NO_RIGHTS, type: false, open: false, close: true } })
     await flush()
     t.ls.requestClose('pane-ls1-a', 'Claude Code')
     expect(t.deps.killPty).toHaveBeenCalledWith('pane-ls1-a')
@@ -195,7 +196,7 @@ describe('Live Share in the window, as a guest', () => {
     expect(t.seeded['pane-ls1-a']).toBe('screen pane-ls1-a')
     // Not one of the host's panes, or not allowed: nothing asked.
     t.ls.requestClose('pane-1', 'x')
-    t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-a')], layout: { project: 'x', tree: leaf('pane-ls1-a'), activeId: null, maximizedId: null }, rights: { type: false, open: false, close: false } })
+    t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-a')], layout: { project: 'x', tree: leaf('pane-ls1-a'), activeId: null, maximizedId: null }, rights: { ...NO_RIGHTS, type: false, open: false, close: false } })
     await flush()
     t.ls.requestClose('pane-ls1-a', 'Claude Code')
     expect(t.deps.killPty).toHaveBeenCalledTimes(1)
@@ -248,7 +249,7 @@ describe('Live Share in the window, as a guest of several projects', () => {
   afterEach(() => t.ls.dispose())
 
   const proj = (id, name, ids) => ({ id, layout: { project: name, tree: ids.length === 1 ? leaf(ids[0]) : { type: 'split', dir: 'row', sizes: ids.map(() => 100 / ids.length), children: ids.map((x) => leaf(x)) }, activeId: ids[0], maximizedId: null } })
-  const status = (projects, panes, extra = {}) => ({ state: 'joined', host: 'Ada', session: 1, rights: { type: true, open: true, close: true }, projects, panes, ...extra })
+  const status = (projects, panes, extra = {}) => ({ state: 'joined', host: 'Ada', session: 1, rights: { ...NO_RIGHTS, type: true, open: true, close: true }, projects, panes, ...extra })
   const wsOf = (project) => t.workspaces.value.find((w) => w.liveShare && w.liveShare.project === project)
 
   it('one Live Share project per project of the host, each following its own layout; the first one opens', async () => {
@@ -351,7 +352,7 @@ describe('Live Share in the window, as the host', () => {
     expect(t.api.setLayouts).not.toHaveBeenCalled()
     sharingNow(['ws-1'])
     await flush()
-    expect(lastLayouts()).toEqual([{ id: 'ws-1', layout: expect.objectContaining({ project: 'tessel', activeId: 'pane-1' }), chats: [] }])
+    expect(lastLayouts()).toEqual([{ id: 'ws-1', layout: expect.objectContaining({ project: 'tessel', activeId: 'pane-1' }), chats: [], root: null }])
     shared.tree.title = 'npm run dev'
     await flush()
     expect(lastLayouts()[0].layout.tree.title).toBe('npm run dev')
@@ -458,9 +459,9 @@ describe('Live Share in the window, as the host', () => {
     twoProjects()
     sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g1', name: 'Alex', state: 'waiting' }, { id: 'g2', name: 'Bea', state: 'waiting' }] })
     t.listeners.onAsk({ guestId: 'g1', name: 'Alex', code: '1', invite: { id: 'iv-aaaaaaaaaa', label: 'Team' }, offer: { projects: ['ws-2'], rights: { open: true, made: true } }, trustable: true })
-    expect(t.ls.state.asks[0]).toMatchObject({ invite: { id: 'iv-aaaaaaaaaa', label: 'Team' }, offer: { projects: ['ws-2'], rights: { type: false, open: true, close: false } }, trustable: true })
+    expect(t.ls.state.asks[0]).toMatchObject({ invite: { id: 'iv-aaaaaaaaaa', label: 'Team' }, offer: { projects: ['ws-2'], rights: { ...NO_RIGHTS, type: false, open: true, close: false } }, trustable: true })
     t.ls.answerAsk({ key: 'g1', yes: true, projects: ['ws-2'], rights: { type: 1, open: true, made: true }, trust: true })
-    expect(t.api.approve).toHaveBeenLastCalledWith({ guestId: 'g1', yes: true, projects: ['ws-2'], rights: { type: false, open: true, close: false }, trust: true })
+    expect(t.api.approve).toHaveBeenLastCalledWith({ guestId: 'g1', yes: true, projects: ['ws-2'], rights: { ...NO_RIGHTS, type: false, open: true, close: false }, trust: true })
     // An older guest (no identity key) is never trusted; a no gives nothing.
     t.listeners.onAsk({ guestId: 'g2', name: 'Bea', trustable: false })
     t.ls.answerAsk({ key: 'g2', yes: false, projects: ['ws-1'], rights: { type: true }, trust: true })
@@ -586,7 +587,7 @@ describe('Live Share in the window, as the host', () => {
     t.ls.prepareShare()
     return ws
   }
-  const alex = (rights = { type: false, open: false, close: true }, projects = ['ws-1']) => ({ id: 'g1', name: 'Alex', state: 'joined', rights, projects })
+  const alex = (rights = { ...NO_RIGHTS, type: false, open: false, close: true }, projects = ['ws-1']) => ({ id: 'g1', name: 'Alex', state: 'joined', rights, projects })
   const hostSays = (guests, ids = ['ws-1']) => t.listeners.onHost({ state: 'sharing', invite: 'x', projectIds: ids, guests })
 
   it('closes an idle terminal a guest asks to close; an agent or a busy one waits for your yes', async () => {
@@ -634,7 +635,7 @@ describe('Live Share in the window, as the host', () => {
     expect(t.deps.closeLeaf).not.toHaveBeenCalled()
 
     // No right to close, or a pane outside the shared projects: nothing.
-    hostSays([alex({ type: true, open: true, close: false })])
+    hostSays([alex({ ...NO_RIGHTS, type: true, open: true, close: false })])
     t.listeners.onHostRequest({ action: 'close', id: 'pane-9', guest })
     hostSays([alex()])
     t.listeners.onHostRequest({ action: 'close', id: 'pane-elsewhere', guest })
@@ -646,7 +647,7 @@ describe('Live Share in the window, as the host', () => {
     await flush()
     const ask = t.ls.state.asks.find((a) => a.paneId === 'pane-agent')
     expect(ask).toBeTruthy()
-    hostSays([alex({ type: true, open: false, close: false })])
+    hostSays([alex({ ...NO_RIGHTS, type: true, open: false, close: false })])
     expect(t.ls.state.asks).toEqual([])
     t.ls.answerAsk({ key: ask.key, yes: true })
 
@@ -697,7 +698,7 @@ describe('Live Share in the window: what the review found', () => {
     session: 1,
     panes: [pane('pane-ls1-a'), pane('pane-ls1-b')],
     layout: { project: 'x', tree: { type: 'split', dir: 'row', sizes: [50, 50], children: [leaf('pane-ls1-a'), leaf('pane-ls1-b')] }, activeId: 'pane-ls1-a', maximizedId: null },
-    rights: { type: true, open: false, close: false },
+    rights: { ...NO_RIGHTS, type: true, open: false, close: false },
     ...extra
   })
 
@@ -802,7 +803,7 @@ describe('Live Share in the window: what the review found', () => {
     expect(t.api.setLayouts.mock.calls.every(([list]) => list.length === 0)).toBe(true)
     t.workspaces.value.push(reactive({ id: 'ws-1', name: 'tessel', activeId: 'pane-1', tree: { type: 'leaf', id: 'pane-1', kind: 'shell', title: 'PowerShell' } }))
     await flush()
-    expect(t.api.setLayouts).toHaveBeenLastCalledWith([{ id: 'ws-1', layout: expect.objectContaining({ project: 'tessel' }), chats: [] }])
+    expect(t.api.setLayouts).toHaveBeenLastCalledWith([{ id: 'ws-1', layout: expect.objectContaining({ project: 'tessel' }), chats: [], root: null }])
     expect(t.ls.sharedWss().map((w) => w.id)).toEqual(['ws-1'])
     expect(t.api.share).not.toHaveBeenCalled()
     // The window has its projects back and ws-2 is not among them: out of the share.
@@ -1079,7 +1080,7 @@ describe('Live Share, as a guest: asking the host to open, and what is on screen
     t.listeners.onNotice({ code: 'agent' })
     expect(t.toasts.at(-1)).toBe('Ada does not have that agent.')
     // With the right: opened at once.
-    joined({ rights: { type: false, open: true, close: false } })
+    joined({ rights: { ...NO_RIGHTS, type: false, open: true, close: false } })
     await flush()
     expect(t.ls.hostMenu(ws).canOpen).toBe(true)
     t.api.open.mockResolvedValue({ ok: true, asked: false })
