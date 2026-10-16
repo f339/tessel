@@ -69,7 +69,7 @@ import LiveShareDialog from './components/LiveShareDialog.vue'
 import LiveShareAsk from './components/LiveShareAsk.vue'
 import { createLiveShareWindow, rightsText } from './liveShareWindow'
 import LiveSharePill from './components/LiveSharePill.vue'
-import { guestsIn, personName, viaName, joinedGuests } from './liveShareAccess'
+import { guestsIn, personName, viaName, joinedGuests, waitingGuests } from './liveShareAccess'
 import { toastText as cookieImportToast } from './browser/cookieImportText'
 import { askQuitRunning } from './quitConfirm'
 import ImageViewer from './components/ImageViewer.vue'
@@ -2517,15 +2517,19 @@ const liveLine = computed(() => {
 function livePillGoto(id) {
   if (typeof id === 'string' && workspaces.value.some((w) => w.id === id)) selectWorkspace(id)
 }
+// Asked first while anyone is in or waiting for an answer, like the dialog's
+// Stop: guests waiting would be turned away without the host knowing.
 async function liveShareStop() {
   const n = joinedGuests(liveShare.state.host).length
-  if (n) {
+  const waiting = waitingGuests(liveShare.state.host).length
+  if (n || waiting) {
     const ok = await askConfirm({
       title: t('liveShare.stop.title', 'Stop Live Share?'),
-      text:
-        n === 1
+      text: n
+        ? n === 1
           ? t('liveShare.stop.text', '{{count}} person is disconnected, and every invitation code stops working. Trusted people stay trusted.', { count: 1 })
-          : t('liveShare.stop.text', '{{count}} people are disconnected, and every invitation code stops working. Trusted people stay trusted.', { count: n }),
+          : t('liveShare.stop.text', '{{count}} people are disconnected, and every invitation code stops working. Trusted people stay trusted.', { count: n })
+        : t('liveShare.stop.textWaiting', '{{count}} waiting for your answer will be turned away, and every invitation code stops working. Trusted people stay trusted.', { count: waiting }),
       confirmLabel: t('liveShare.stop.confirm', 'Stop sharing'),
       danger: true
     })

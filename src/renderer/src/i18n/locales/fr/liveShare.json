@@ -205,6 +205,8 @@
       "title": "Arrêter Live Share ?",
       "text_one": "{{count}} personne est déconnectée, et chaque code d'invitation cesse de fonctionner. Les personnes de confiance le restent.",
       "text_other": "{{count}} personnes sont déconnectées, et chaque code d'invitation cesse de fonctionner. Les personnes de confiance le restent.",
+      "textWaiting_one": "{{count}} personne en attente de votre réponse sera refusée, et chaque code d'invitation cesse de fonctionner. Les personnes de confiance le restent.",
+      "textWaiting_other": "{{count}} personnes en attente de votre réponse seront refusées, et chaque code d'invitation cesse de fonctionner. Les personnes de confiance le restent.",
       "confirm": "Arrêter le partage"
     },
     "leave": {
