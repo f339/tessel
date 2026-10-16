@@ -35,7 +35,7 @@ import { t } from './i18n'
 import { validateCloneUrl, deriveCloneRepoName, cloneFailureMessage, errorText as addProjectErrorText } from './addProject'
 import { parseWorktreeList, MAX_WORKTREES } from './worktreeList'
 import { parseSparseList, sparseDirsUnder } from './sparseCheckout'
-import { parseAgentTools, parseRemoteSessions, remoteSessionsLimit } from './remoteAgent/remoteAgentSetup'
+import { BIN_NAME, parseAgentTools, parseRemoteSessions, remoteSessionsLimit } from './remoteAgent/remoteAgentSetup'
 
 export const SESSION_PREFIX = 'rfs:'
 const MAX_ENTRIES = 5000
@@ -1552,9 +1552,10 @@ ${root}`, () => gitWorktreesNow(root))
     return call(hostId, '__t_ragent', [version], { cap: 64 * 1024, timeoutMs: 60_000, upload: Buffer.from(String(source || ''), 'utf8'), op: 'agent' })
   }
 
-  // The agents installed on this host (__t_agents): their paths, never run.
-  // Only through a session the host allows (a terminal opened on it).
-  // -> { claude, codex, vscodeClaude } (null when missing) | { error }
+  // The agents installed on this host (__t_agents): their paths, never run,
+  // and what an install there needs. Only through a session the host allows
+  // (a terminal opened on it).
+  // -> { claude, codex, vscodeClaude, bins, host, uid } (null when missing) | { error }
   // An image pasted for an agent in a terminal on this host (its own
   // program would read the host's clipboard, which a server has not): written
   // in ~/.tessel-server/paste there (kept a day), its path given back to be
@@ -1573,9 +1574,12 @@ ${root}`, () => gitWorktreesNow(root))
     return { ok: true, path }
   }
 
-  async function agentTools(hostId) {
+  // bins: the command names looked for (each agent's), else Claude Code's
+  // and Codex's.
+  async function agentTools(hostId, bins = null) {
     if (!hostIdOk(hostId)) return { error: t('main.remote.notFound', 'This remote host is no longer saved in Tessel.') }
-    const res = await call(hostId, '__t_agents', [], { cap: 16 * 1024, timeoutMs: 30_000, op: 'agents', background: true })
+    const names = Array.isArray(bins) ? [...new Set(bins.filter((b) => typeof b === 'string' && BIN_NAME.test(b)))].slice(0, 128) : []
+    const res = await call(hostId, '__t_agents', names, { cap: 64 * 1024, timeoutMs: 30_000, op: 'agents', background: true })
     if (!res || res.error) return { error: (res && res.error) || 'failed' }
     if (res.rc !== 0) return { error: rcText(res, `rc ${res.rc}`) }
     return parseAgentTools(Buffer.isBuffer(res.out) ? res.out.toString('utf8') : String(res.out || ''))

@@ -832,7 +832,14 @@
       "installText": "Tessel ouvre un terminal sur l’hôte et y lance cette commande d’installation officielle :",
       "installConfirm": "Installer",
       "rootNoYolo": "Claude Code refuse le mode Yolo en root : démarré en mode Accepter les modifications. Utilisez un compte non root sur {{host}} pour le mode Yolo.",
-      "toolsNotConnected": "Les outils de Tessel ne sont pas connectés sur {{host}} : {{reason}}"
+      "toolsNotConnected": "Les outils de Tessel ne sont pas connectés sur {{host}} : {{reason}}",
+      "noDownload": "Ni curl ni wget n’est installé sur {{host}} : {{agent}} ne peut pas y être téléchargé. Installez d’abord l’un des deux sur l’hôte.",
+      "installPage": "Tessel ne connaît pas d’installation automatique de {{agent}} pour {{host}} : sa page d’installation est ouverte dans votre navigateur.",
+      "nodeNote": "Absent de l’hôte, ou trop ancien pour {{agent}} : installé d’abord avec nvm, dans votre dossier personnel (aucun mot de passe demandé). nvm vient de {{url}}",
+      "sudoNote": "Cet installateur utilise sudo : l’hôte demande votre mot de passe, et votre compte doit pouvoir utiliser sudo.",
+      "snapLabel": "Ou avec snap",
+      "snapNote": "{{command}} : un paquet communautaire, pas celui de l’éditeur ; il demande sudo (votre mot de passe, et un compte autorisé à l’utiliser).",
+      "installSnap": "Installer avec snap (sudo)"
     },
     "agentTerminal": {
       "allow": "Autoriser",
@@ -881,7 +888,7 @@
       "hostTitle": "{{agent}} veut lancer des commandes sur l’hôte SSH {{host}}",
       "readText": "Il lira ce que ce terminal affiche et son historique, qui peut contenir des mots de passe, des clés ou d’autres secrets que vous avez tapés ou affichés. L’autoriser pour ce terminal lui permet de le relire jusqu’au redémarrage de Tessel.",
       "hostText": "Ce n’est pas l’hôte de votre projet : Tessel y ouvre un terminal avec votre compte, déjà connecté. Chaque commande vous est quand même demandée, et les règles de votre projet ne s’y appliquent pas.",
-      "allowRead": "Autoriser la lecture de ce terminal",
+      "allowRead": "Autoriser ce terminal",
       "allowHost": "Autoriser sur cet hôte",
       "lines": "{{count}} lignes : lisez-les toutes avant d’autoriser."
     }

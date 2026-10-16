@@ -223,5 +223,9 @@ describe('model of a terminal agent on a host', () => {
     const fresh = createRemoteModelReader({ readAgentFile: host.readAgentFile })
     expect(await remoteAgentModel({ agentId: 'claude', sessionId: S1, remoteHostId: HOST, chosenModel: 'fable' }, fresh)).toMatchObject({ model: 'claude-fable-5-1', chosenEffort: 'xhigh' })
     expect(await remoteAgentModel({ agentId: 'gemini', remoteHostId: HOST, command: 'gemini -m gemini-3' }, fresh)).toEqual({ model: 'gemini-3', effort: null, source: 'command' })
+    // An agent installed on the host from its pane's card (Antigravity): the
+    // pane's command stays its own (agy, not the path typed there), so its
+    // --model is read as before (its footer on screen first: TerminalPane).
+    expect(await remoteAgentModel({ agentId: 'antigravity', remoteHostId: HOST, command: 'agy --model gemini-4-argon-high --dangerously-skip-permissions' }, fresh)).toEqual({ model: 'gemini-4-argon-high', effort: null, source: 'command' })
   })
 })

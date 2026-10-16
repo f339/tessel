@@ -917,12 +917,16 @@ function connectRemote() {
 }
 
 // Its agent is not installed on its SSH host (App.vue createLeaf): nothing
-// was typed; the card offers its install, a new check, or a plain shell.
+// was typed; the card offers its install (or its install page, when Tessel
+// knows no automatic install of it there), a new check, a plain shell, or
+// Cancel (the pane closes).
 const missingAgentName = computed(() => (props.node.agentMissing && props.node.agentMissing.name) || props.node.title || '')
+const missingAgentInstallable = computed(() => !props.node.agentMissing || !ctx.missingAgentInstallable || ctx.missingAgentInstallable(props.node.id) !== false)
 function missingAgentText() {
   return t('pane.missingAgent.text', '{{agent}} is not installed on {{host}}.', { agent: missingAgentName.value, host: remoteHostName.value })
 }
 function missingAgentInstallLabel() {
+  if (!missingAgentInstallable.value) return t('pane.missingAgent.installPage', 'Open its install page')
   return t('pane.missingAgent.install', 'Install {{agent}}', { agent: missingAgentName.value })
 }
 function installMissing() {
@@ -933,6 +937,9 @@ function recheckMissing() {
 }
 function shellInstead() {
   if (props.node.agentMissing && ctx.missingAgentShell) ctx.missingAgentShell(props.node.id)
+}
+function cancelMissing() {
+  if (props.node.agentMissing && ctx.closeLeaf) ctx.closeLeaf(props.node.id, { force: true })
 }
 
 const sleptAt = computed(() =>
@@ -3604,6 +3611,9 @@ const paneMenuBindings = computed(() => ({
         <p v-if="node.agentMissing.notFound" class="missing-agent-hint" data-test="missing-agent-not-found">
           {{ t('pane.missingAgent.stillMissing', 'Still not found on the host.') }}
         </p>
+        <p v-else-if="node.agentMissing.unsure" class="missing-agent-hint" data-test="missing-agent-unsure">
+          {{ t('pane.missingAgent.unsure', 'The host did not answer in time, so Tessel could not tell. Check again.') }}
+        </p>
         <p v-else-if="node.agentMissing.installing" class="missing-agent-hint" data-test="missing-agent-installing">
           {{ t('pane.missingAgent.installing', 'Installing in the pane below. It starts here once the install ends.') }}
         </p>
@@ -3615,9 +3625,14 @@ const paneMenuBindings = computed(() => ({
             {{ node.agentMissing.checking ? t('pane.missingAgent.checking', 'Checking…') : t('pane.missingAgent.check', 'Check again') }}
           </button>
         </div>
-        <button class="exit-btn subtle" data-test="missing-agent-shell" @click="shellInstead">
-          {{ t('pane.missingAgent.shell', 'Open a shell instead') }}
-        </button>
+        <div class="missing-agent-actions">
+          <button class="exit-btn subtle" data-test="missing-agent-shell" @click="shellInstead">
+            {{ t('pane.missingAgent.shell', 'Open a shell instead') }}
+          </button>
+          <button class="exit-btn subtle" data-test="missing-agent-cancel" :title="t('pane.missingAgent.cancelHint', 'Close this pane')" @click="cancelMissing">
+            {{ t('pane.missingAgent.cancel', 'Cancel') }}
+          </button>
+        </div>
       </div>
     </div>
 

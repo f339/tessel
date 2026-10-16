@@ -1,9 +1,9 @@
 // Starting an agent on an SSH host (remoteAgentLaunch.js): which id it
 // starts with (never one in use: "Session ID ... is already in use"), the
-// command typed (or none: its install offered), the install commands and the
-// "+" menu's agents.
+// command typed (or none: its install offered; remoteAgentInstalls.spec.js)
+// and the "+" menu's agents.
 import { describe, expect, it } from 'vitest'
-import { claudeStartChoice, codexResumes, hostMenuAgents, needsRemoteAgentCheck, remoteAgentLine, remoteInstallCommand, remotePaneInstallCommand } from '../remoteAgentLaunch'
+import { claudeStartChoice, codexResumes, hostMenuAgents, hostRunsAsRoot, needsRemoteAgentCheck, remoteAgentLine } from '../remoteAgentLaunch'
 
 const newId = () => 'new-uuid'
 
@@ -40,7 +40,8 @@ describe('Codex: resume <id> unless the host says it is gone', () => {
 describe('the command typed on the host', () => {
   it('by the path found there; VS Code Claude as a fallback; missing: none', () => {
     expect(remoteAgentLine('claude', { claude: '/home/u/.local/bin/claude' }, 'claude')).toBe("'/home/u/.local/bin/claude'")
-    expect(remoteAgentLine('codex', { codex: '/home/u/.nvm/versions/node/v20/bin/codex' }, 'codex')).toBe("'/home/u/.nvm/versions/node/v20/bin/codex'")
+    // In an nvm folder: with the node next to it first on PATH.
+    expect(remoteAgentLine('codex', { codex: '/home/u/.nvm/versions/node/v20/bin/codex' }, 'codex')).toBe(`PATH='/home/u/.nvm/versions/node/v20/bin':"$PATH" '/home/u/.nvm/versions/node/v20/bin/codex'`)
     expect(remoteAgentLine('claude', { claude: null, vscodeClaude: '/home/u/.vscode-server/x/claude' }, 'claude')).toBe("'/home/u/.vscode-server/x/claude'")
     expect(remoteAgentLine('codex', { claude: '/c', codex: null, vscodeClaude: '/v' }, 'codex')).toBe(null)
     expect(remoteAgentLine('claude', { claude: null, codex: null, vscodeClaude: null }, 'claude')).toBe(null)
@@ -53,47 +54,49 @@ describe('the command typed on the host', () => {
     expect(remoteAgentLine('gemini', { claude: '/c' }, 'gemini')).toBe('gemini')
   })
 
+  // Found on a server: Antigravity picked in an SSH project, `agy
+  // --dangerously-skip-permissions` typed, and the shell said "Command 'agy'
+  // not found, but can be installed with: snap install antigravity-cli".
+  it('every agent the check looked for: by its path there, its own words kept; missing: none (its card)', () => {
+    const status = { claude: null, codex: null, vscodeClaude: null, agents: { antigravity: null, kiro: '/home/u/.local/bin/kiro-cli', grok: '/home/u/.grok/bin/grok', gemini: '/home/u/.nvm/versions/node/v22.11.0/bin/gemini' } }
+    expect(remoteAgentLine('antigravity', status, 'agy')).toBe(null)
+    expect(remoteAgentLine('kiro', status, 'kiro-cli chat --tui')).toBe("'/home/u/.local/bin/kiro-cli' chat --tui")
+    expect(remoteAgentLine('grok', status, 'grok')).toBe("'/home/u/.grok/bin/grok'")
+    // In an nvm folder: run with the node next to it, whatever this shell loaded.
+    expect(remoteAgentLine('gemini', status, 'gemini')).toBe(`PATH='/home/u/.nvm/versions/node/v22.11.0/bin':"$PATH" '/home/u/.nvm/versions/node/v22.11.0/bin/gemini'`)
+    // Not looked for (your own agent): typed as is.
+    expect(remoteAgentLine('mine', status, 'mine --x')).toBe('mine --x')
+    // Claude Code: VS Code's copy still counts.
+    expect(remoteAgentLine('claude', { ...status, agents: { ...status.agents, claude: null }, vscodeClaude: '/home/u/.vscode-server/x/claude' }, 'claude')).toBe("'/home/u/.vscode-server/x/claude'")
+  })
+
+  // The login shell (or npm) ran out of time on the host: an agent not found
+  // may be in a folder it would have named. Unknown, never "missing".
+  it('a partial check: what it found by its path; what it did not, unknown (typed as is, asked again), never its card', () => {
+    const status = { partial: true, claude: null, codex: null, agents: { antigravity: null, kiro: '/home/u/.local/bin/kiro-cli' } }
+    expect(remoteAgentLine('antigravity', status, 'agy')).toBe('agy')
+    expect(remoteAgentLine('kiro', status, 'kiro-cli chat --tui')).toBe("'/home/u/.local/bin/kiro-cli' chat --tui")
+    expect(needsRemoteAgentCheck('antigravity', status, { connected: true })).toBe(true)
+    expect(hostMenuAgents([{ id: 'antigravity', name: 'Antigravity', available: false }, { id: 'claude', name: 'Claude Code', available: false }], { remote: true, status }).map((a) => [a.id, a.available, !!a.installOnHost])).toEqual([
+      ['antigravity', false, false],
+      ['claude', true, false]
+    ])
+  })
+
+  it('root: its saved user, the uid the check reports, or an agent found in /root (an nvm one too)', () => {
+    expect(hostRunsAsRoot({ status: { uid: 0 } })).toBe(true)
+    expect(hostRunsAsRoot({ status: { uid: 1000 } })).toBe(false)
+    expect(hostRunsAsRoot({ command: "PATH='/root/.nvm/versions/node/v22/bin':\"$PATH\" '/root/.nvm/versions/node/v22/bin/claude'" })).toBe(true)
+    expect(hostRunsAsRoot({ command: "'/home/u/.local/bin/claude'" })).toBe(false)
+  })
+
   it('asks the host again when missing, or unknown while connected; never when found', () => {
+    expect(needsRemoteAgentCheck('antigravity', { agents: { antigravity: null } })).toBe(true)
+    expect(needsRemoteAgentCheck('antigravity', { agents: { antigravity: '/home/u/.local/bin/agy' } }, { connected: true })).toBe(false)
     expect(needsRemoteAgentCheck('codex', { codex: null })).toBe(true)
     expect(needsRemoteAgentCheck('codex', null, { connected: true })).toBe(true)
     expect(needsRemoteAgentCheck('codex', null, { connected: false })).toBe(false)
     expect(needsRemoteAgentCheck('codex', { codex: '/usr/bin/codex' }, { connected: true })).toBe(false)
-  })
-})
-
-describe('installs', () => {
-  it('the official commands: Claude installer; Codex by npm when there, else OpenAI standalone installer', () => {
-    expect(remoteInstallCommand('claude')).toBe('curl -fsSL https://claude.ai/install.sh | bash && ~/.local/bin/claude')
-    const codex = remoteInstallCommand('codex')
-    expect(codex).toContain('command -v npm')
-    expect(codex).toContain('npm install -g --prefix "$HOME/.local" @openai/codex')
-    expect(codex).toContain('curl -fsSL https://chatgpt.com/codex/install.sh | sh')
-    expect(remoteInstallCommand('gemini')).toBe(null)
-    expect(remoteInstallCommand('constructor')).toBe(null)
-  })
-
-  // Found on a server: `npm install -g @openai/codex` failed with EACCES on
-  // mkdir '/usr/local/lib/node_modules' (a global npm folder owned by root).
-  it('never needs root: npm installs into ~/.local (~/.local/bin/codex), no sudo, no system folder', () => {
-    expect(remoteInstallCommand('codex')).toBe(
-      'if command -v npm >/dev/null 2>&1; then npm install -g --prefix "$HOME/.local" @openai/codex; else curl -fsSL https://chatgpt.com/codex/install.sh | sh; fi'
-    )
-    for (const id of ['claude', 'codex']) {
-      for (const cmd of [remoteInstallCommand(id), remotePaneInstallCommand(id)]) {
-        expect(cmd).not.toMatch(/\bsudo\b|\/usr\/local|\bsu\b/)
-        // Every npm install says where (never the global, root-owned prefix).
-        for (const npm of cmd.match(/npm install[^;&|]*/g) || []) expect(npm).toContain('--prefix "$HOME/.local"')
-      }
-    }
-    // Claude Code's own installer: into ~/.local/bin, no root.
-    expect(remoteInstallCommand('claude')).not.toContain('npm')
-  })
-
-  it("from a pane's card: the install alone, then its shell ends (0 when it worked)", () => {
-    expect(remotePaneInstallCommand('claude')).toBe('curl -fsSL https://claude.ai/install.sh | bash && exit')
-    expect(remotePaneInstallCommand('codex')).toBe(`${remoteInstallCommand('codex')} && exit`)
-    expect(remotePaneInstallCommand('gemini')).toBe(null)
-    expect(remotePaneInstallCommand('constructor')).toBe(null)
   })
 })
 
@@ -112,5 +115,23 @@ describe('the "+" menu on an SSH project', () => {
     ])
     expect(hostMenuAgents(AGENTS, { remote: true, status: null }).map((a) => a.available)).toEqual([true, true, true])
     expect(hostMenuAgents(AGENTS, { remote: false, status: { claude: null } })).toBe(AGENTS)
+  })
+
+  it('every agent as the host has it: found there ready (installed here or not); missing: Install… for those you use here, others left out; your own agents as here', () => {
+    const agents = [
+      { id: 'claude', name: 'Claude Code', available: true },
+      { id: 'antigravity', name: 'Antigravity', available: true },
+      { id: 'kiro', name: 'Kiro', available: false },
+      { id: 'grok', name: 'Grok Build', available: false },
+      { id: 'mine', name: 'Mine', available: true, custom: true }
+    ]
+    const status = { claude: '/usr/bin/claude', agents: { claude: '/usr/bin/claude', antigravity: null, kiro: '/home/u/.local/bin/kiro-cli', grok: null } }
+    expect(hostMenuAgents(agents, { remote: true, status }).map((a) => [a.id, a.available, !!a.installOnHost])).toEqual([
+      ['claude', true, false],
+      ['antigravity', false, true],
+      ['kiro', true, false],
+      ['grok', false, false],
+      ['mine', true, false]
+    ])
   })
 })

@@ -270,3 +270,25 @@ describe('an agent on a host without Tessel tools', () => {
     expect(leaf.remoteToolsNote).toBeUndefined()
   })
 })
+
+// Found on a server (user fivem2): Antigravity in Yolo typed `agy
+// --dangerously-skip-permissions` and the shell said "Command 'agy' not
+// found". Every agent of Tessel's own is looked for on the host first.
+describe('Antigravity on a host (any agent, as Claude Code and Codex)', () => {
+  const agy = { id: 'antigravity', name: 'Antigravity', command: 'agy' }
+  const status = (path) => ({ hostId: HOST, claude: null, codex: null, vscodeClaude: null, agents: { antigravity: path }, uid: 1001 })
+  it('there: its path there with its Yolo flag; the pane keeps its own command (its model and effort read from it as before)', async () => {
+    const env = load({ username: 'fivem2', status: status('/home/fivem2/.local/bin/agy') })
+    const leaf = await env.start(agy)
+    expect(env.typed()).toEqual(["'/home/fivem2/.local/bin/agy' --dangerously-skip-permissions\r"])
+    expect(leaf).toMatchObject({ kind: 'agent', agentId: 'antigravity', agentCommand: 'agy', launchYolo: true })
+    expect(leaf.agentMissing).toBeUndefined()
+    expect(leaf.rootNoYolo).toBeUndefined()
+  })
+  it('missing there: nothing typed, its card', async () => {
+    const env = load({ username: 'fivem2', status: status(null) })
+    const leaf = await env.start(agy)
+    expect(env.typed()).toEqual([])
+    expect(leaf.agentMissing).toMatchObject({ agent: 'antigravity' })
+  })
+})

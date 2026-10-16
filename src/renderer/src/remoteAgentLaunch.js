@@ -6,10 +6,11 @@
 //   there (remote:agentSessionExists). When it can't be told (not connected,
 //   too slow), an id is never reused with --session-id: Claude Code refuses an
 //   id in use ("Session ID ... is already in use") and the agent never starts.
-// - Whether the agent is on the host (team 4's detection, remoteAgents:status):
-//   a missing one is offered for install instead of typing a command the
-//   host lacks ("Command 'codex' not found").
-import { remoteAgentFound } from './projectLauncher'
+// - Whether the agent is on the host (team 4's detection, remoteAgents:status,
+//   every built-in agent by its command): a missing one is offered for
+//   install instead of typing a command the host lacks ("Command 'codex' not
+//   found", "Command 'agy' not found"). Its install: remoteAgentInstalls.js.
+import { hostAgentEntry, remoteAgentFound } from './projectLauncher'
 
 // Claude Code / OpenClaude: resume the pane's conversation, start fresh with
 // its id, or start fresh with a new id. exists: true / false, or null when it
@@ -31,18 +32,30 @@ export function codexResumes({ sessionId = null, resume = false, exists = null }
 }
 
 // The command typed to start agent `id` on a host, from its last check
-// (remoteAgents:status { claude, codex, vscodeClaude }): by the path found
-// there (~/.local/bin may not be on PATH), else VS Code's Claude; a host
-// never checked (or a failed check) keeps `command`. Missing there: null.
+// (remoteAgents:status { claude, codex, vscodeClaude, agents }): by the path
+// found there (~/.local/bin may not be on PATH: a fresh install there, or a
+// shell started before it), else VS Code's Claude; a host never checked, a
+// failed check or an agent it did not look for keeps `command`. Missing
+// there: null.
 const POSIX_ABS = /^\/[^'\u0000-\u001f\u007f]{1,1024}$/
 export function remoteAgentLine(id, status, command) {
   if (!status || status.error) return command
-  const own = id === 'claude' ? status.claude : id === 'codex' ? status.codex : undefined
+  const own = hostAgentEntry(id, status)
   if (own === undefined) return command
-  if (typeof own === 'string' && POSIX_ABS.test(own)) return `'${own}'`
+  if (typeof own === 'string' && POSIX_ABS.test(own)) return hostPathLine(command, own)
   if (own) return command
-  if (id === 'claude' && typeof status.vscodeClaude === 'string' && POSIX_ABS.test(status.vscodeClaude)) return `'${status.vscodeClaude}'`
+  if (id === 'claude' && typeof status.vscodeClaude === 'string' && POSIX_ABS.test(status.vscodeClaude)) return hostPathLine(command, status.vscodeClaude)
   return null
+}
+// The agent's command with its program replaced by the path found
+// ('/home/u/.local/bin/kiro-cli' chat --tui). In an nvm folder, an npm
+// agent runs with the node next to it: that folder first on PATH, for a
+// shell that did not load nvm.
+const NVM_BIN = /\/\.nvm\/versions\/node\/[^/]+\/bin\/[^/]+$/
+export function hostPathLine(command, path) {
+  const rest = String(command || '').trim().replace(/^\S+/, '')
+  const dir = path.slice(0, path.lastIndexOf('/'))
+  return `${NVM_BIN.test(path) ? `PATH='${dir}':"$PATH" ` : ''}'${path}'${rest}` // i18n-ignore
 }
 
 // Whether to ask the host again before typing the agent's command: missing
@@ -71,7 +84,7 @@ export const ROOT_PERMISSION_MODE = 'acceptEdits'
 export function hostRunsAsRoot({ username = '', status = null, command = '' } = {}) {
   if (String(username || '').trim() === 'root') return true
   if (status && !status.error && (status.uid === 0 || status.user === 'root')) return true
-  return /^'?\/root\//.test(String(command || ''))
+  return /(?:^|[\s'])\/root\//.test(String(command || ''))
 }
 
 // Whether these arguments carry Claude Code's Yolo flag (refused as root).
@@ -108,46 +121,22 @@ export function rootRefusalWatcher() {
   }
 }
 
-// The official installs on a Linux / macOS host, run in a new pane there
-// after you confirm (shown exactly as typed). Never as root: most servers'
-// global npm folder (/usr/local/lib/node_modules) is root's (EACCES).
-// - Claude Code: its installer puts it in ~/.local/bin (which PATH may lack),
-//   then it starts to show its sign-in link.
-// - Codex CLI: npm when the host has it, into ~/.local (its binary in
-//   ~/.local/bin/codex, where the host check looks), else OpenAI's
-//   standalone installer (Codex README).
-export const REMOTE_INSTALL_COMMANDS = {
-  claude: 'curl -fsSL https://claude.ai/install.sh | bash && ~/.local/bin/claude', // i18n-ignore shell command
-  codex: 'if command -v npm >/dev/null 2>&1; then npm install -g --prefix "$HOME/.local" @openai/codex; else curl -fsSL https://chatgpt.com/codex/install.sh | sh; fi' // i18n-ignore shell command
-}
-export function remoteInstallCommand(id) {
-  return Object.prototype.hasOwnProperty.call(REMOTE_INSTALL_COMMANDS, id) ? REMOTE_INSTALL_COMMANDS[id] : null
-}
-// Installed from a pane that waits for the agent (its "not installed" card):
-// the install alone (that pane starts the agent, Claude Code's sign-in there
-// too), then its shell ends with 0 when it worked, so Tessel checks the host
-// again; a failure leaves the shell open with its error.
-const PANE_INSTALL_COMMANDS = {
-  claude: 'curl -fsSL https://claude.ai/install.sh | bash && exit', // i18n-ignore shell command
-  codex: REMOTE_INSTALL_COMMANDS.codex + ' && exit' // i18n-ignore shell command
-}
-export function remotePaneInstallCommand(id) {
-  return Object.prototype.hasOwnProperty.call(PANE_INSTALL_COMMANDS, id) ? PANE_INSTALL_COMMANDS[id] : null
-}
-
-// The "+" menu's agents for a pane on an SSH host: Claude Code and Codex as
-// found there (missing: offered as Install…, never as ready); the others as
-// on this computer. Not on a host: unchanged.
+// The "+" menu's agents for a pane on an SSH host, as found there: ready
+// when the host has it; missing, offered as Install… (never as ready):
+// Claude Code, Codex and the agents installed on this computer (the ones
+// you use; the others stay out of the menu, as here). Before the host was
+// checked: Claude Code and Codex start there (their own check decides), the
+// others as on this computer. Your own agents, and not on a host: unchanged.
 // -> [{ ...agent, available, installOnHost? }]
 export function hostMenuAgents(agents, { remote = false, status = null } = {}) {
   const list = Array.isArray(agents) ? agents : []
   if (!remote) return list
   return list.map((a) => {
-    if (!a || (a.id !== 'claude' && a.id !== 'codex')) return a
+    if (!a || a.custom) return a
+    const always = a.id === 'claude' || a.id === 'codex'
     const found = remoteAgentFound(a.id, status)
-    if (found === false) return { ...a, available: false, installOnHost: true }
-    // Found there, or not checked yet: started there (its own install, not
-    // this computer's, decides).
-    return { ...a, available: true }
+    if (found === false) return { ...a, available: false, installOnHost: always || a.available !== false }
+    if (found === true || always) return { ...a, available: true }
+    return a
   })
 }

@@ -63,8 +63,37 @@ describe('what the launcher offers', () => {
     ])
     // VS Code's copy of Claude counts.
     expect(remoteAgentFound('claude', { claude: null, vscodeClaude: '/x/claude' })).toBe(true)
-    expect(remoteAgentFound('gemini', { claude: 'x' })).toBe(false)
+    // A check that did not list every agent knows Claude Code and Codex only.
+    expect(remoteAgentFound('gemini', { claude: 'x' })).toBe(null)
     expect(remoteAgentFound('claude', { error: 'failed' })).toBe(null)
+  })
+
+  it('on an SSH host checked for every agent: those found there (installed here or not), and the missing ones you use here as Install…', () => {
+    const agents = [...AGENTS, { id: 'antigravity', name: 'Antigravity', available: true }, { id: 'kiro', name: 'Kiro', available: false }, { id: 'mine', name: 'Mine', available: true, custom: true }]
+    const status = { claude: '/usr/bin/claude', codex: null, agents: { claude: '/usr/bin/claude', codex: null, gemini: '/home/me/.local/bin/gemini', cursor: null, antigravity: null, kiro: null } }
+    expect(launcherAgents({ agents, remote: true, remoteStatus: status }).map((a) => [a.id, a.missing, a.unchecked])).toEqual([
+      ['claude', false, false],
+      ['codex', true, false],
+      ['gemini', false, false],
+      ['cursor', true, false],
+      ['antigravity', true, false]
+    ])
+    expect(remoteAgentFound('antigravity', status)).toBe(false)
+    expect(remoteAgentFound('gemini', status)).toBe(true)
+    expect(remoteAgentFound('mine', status)).toBe(null)
+    // A partial check (the login shell ran out of time): not found is unknown.
+    expect(remoteAgentFound('antigravity', { ...status, partial: true })).toBe(null)
+    expect(remoteAgentFound('gemini', { ...status, partial: true })).toBe(true)
+    expect(launcherAgents({ agents, remote: true, remoteStatus: { ...status, partial: true } }).map((a) => [a.id, a.missing, a.unchecked])).toEqual([
+      ['claude', false, false],
+      ['codex', false, true],
+      ['gemini', false, false]
+    ])
+    // Turned off in Settings > Agents: not offered.
+    expect(launcherAgents({ agents, remote: true, remoteStatus: status, enabled: (id) => id !== 'gemini' }).map((a) => a.id)).not.toContain('gemini')
+    // What a project starts by itself: an agent found there, never one missing.
+    expect(projectOpenChoice('agent:gemini', { agents, remote: true, remoteStatus: status })).toEqual({ kind: 'agent', id: 'gemini' })
+    expect(projectOpenChoice('agent:antigravity', { agents, remote: true, remoteStatus: status })).toBe(null)
   })
 
   it('the shells here, the default first; none to choose on a host', () => {

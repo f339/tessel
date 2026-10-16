@@ -6158,14 +6158,20 @@ button.act-stat:hover,
 
 .confirm-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 18px;
 }
 
 .confirm-btn {
+  flex: none;
+  max-width: 100%;
   height: 30px;
   padding: 0 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border: 1px solid var(--border-strong);
   border-radius: 7px;
   background: transparent;
