@@ -41,7 +41,12 @@
       "open": "Ouvrir le dossier",
       "update": "Mettre à jour",
       "remove": "Retirer",
-      "refreshHint": "Relire les dossiers de compétences et chercher des mises à jour sur GitHub"
+      "refreshHint": "Relire les dossiers de compétences et chercher des mises à jour sur GitHub",
+      "countOf_one": "{{shown}} sur {{count}} compétence",
+      "countOf_other": "{{shown}} sur {{count}} compétences",
+      "noMatch": "Aucune compétence ne correspond à cette recherche ou à ce filtre.",
+      "showAll": "Afficher toutes les compétences",
+      "listLabel": "Compétences installées"
     },
     "preview": {
       "files_one": "{{count}} fichier, {{size}}",
@@ -60,7 +65,14 @@
       "sureText": "Son dossier et tous ses fichiers sont supprimés. C'est irréversible.",
       "deleted": "« {{name}} » supprimée.",
       "trashed": "« {{name}} » mise à la Corbeille.",
-      "failed": "Elle n'a pas pu être retirée."
+      "failed": "Elle n'a pas pu être retirée.",
+      "allKeeps": "Les copies que Tessel ne peut pas retirer (liens) restent.",
+      "allConfirm": "Retirer toutes les copies de « {{name}} » ?",
+      "allSure": "Supprimer définitivement toutes les copies de « {{name}} » ?",
+      "allSureText": "Ces dossiers et tous leurs fichiers sont supprimés. C'est irréversible.",
+      "allDeleted": "Toutes les copies de « {{name}} » ont été supprimées.",
+      "allTrashed": "Toutes les copies de « {{name}} » ont été mises à la Corbeille.",
+      "allPartly": "Copies de « {{name}} » retirées : {{done}} sur {{total}}. {{error}}"
     },
     "add": {
       "pickTitle": "Choisissez un dossier de compétence (avec un SKILL.md)",
@@ -113,7 +125,9 @@
       "all": "Toutes",
       "own": "Les vôtres",
       "github": "GitHub",
-      "folder": "Dossiers"
+      "folder": "Dossiers",
+      "synced": "Synchronisées",
+      "builtin": "Intégrées"
     },
     "updates": {
       "hint": "Dernier changement : {{message}} ({{when}})",
@@ -201,6 +215,22 @@
       "installing": "Installation dans un terminal. Actualisez cette liste quand elle est terminée.",
       "pickTitle": "Choisissez le dossier d'un plugin (avec un plugin.json)",
       "badFolder": "Le chemin de ce dossier contient des caractères que Tessel ne peut pas passer sur une ligne de commande."
+    },
+    "kind": {
+      "own": "À vous",
+      "github": "GitHub",
+      "folder": "Dossier",
+      "synced": "Synchronisée",
+      "builtin": "Intégrée"
+    },
+    "details": {
+      "where": "Où elle est installée",
+      "removeAll": "Tout retirer",
+      "versions": "Ces copies ne sont pas toutes identiques : {{count}} versions différentes.",
+      "copyPath": "Copier le chemin",
+      "copied": "Copié",
+      "copyFailed": "Impossible de copier le chemin.",
+      "removeCopy": "Retirer cette copie"
     }
   }
 }
