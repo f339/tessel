@@ -820,6 +820,42 @@ describe('Live Share, as a guest: your own view of a host’s agent pane', () =>
     expect(reachedHost()).toBe(false)
   })
 
+  it('your text size for a host terminal: fit at first, yours only, kept for the session, forgotten after it', async () => {
+    const status = (session = 1, ids = ['pane-ls1-ps', 'pane-ls1-b']) => ({ state: 'joined', host: 'Ada', session, panes: ids.map((id) => pane(id)), layout: layoutOf(...ids.map((id) => leaf(id))) })
+    t.listeners.onGuest(status())
+    await flush()
+    const first = leafOf('pane-ls1-ps')
+    expect(first.liveShare.textSize).toBe('fit')
+    const attaches = window.shellApi.attachPty.mock.calls.length
+    expect(t.ls.setGuestTextSize('pane-ls1-ps', 'normal')).toBe(true)
+    expect(first.liveShare.textSize).toBe('normal')
+    expect(t.ls.setGuestTextSize('pane-ls1-ps', 'width')).toBe(true)
+    expect(first.liveShare.textSize).toBe('width')
+    // Not a text size, or not a pane of the host's: nothing.
+    expect(t.ls.setGuestTextSize('pane-ls1-ps', 'huge')).toBe(false)
+    expect(t.ls.setGuestTextSize('pane-nope', 'fit')).toBe(false)
+    expect(first.liveShare.textSize).toBe('width')
+    // Nothing went to the host, nor to a terminal.
+    expect(reachedHost()).toBe(false)
+    expect(window.shellApi.attachPty.mock.calls.length).toBe(attaches)
+    // The pane closed and opened again in the session: your choice.
+    t.listeners.onGuest(status(1, ['pane-ls1-b']))
+    await flush()
+    expect(leafOf('pane-ls1-ps')).toBe(null)
+    await flush()
+    t.listeners.onGuest(status())
+    await flush()
+    const again = leafOf('pane-ls1-ps')
+    expect(again).not.toBe(first)
+    expect(again.liveShare.textSize).toBe('width')
+    // A new session: fit again.
+    t.listeners.onGuest({ state: 'ended', host: 'Ada', session: 1, panes: [], layout: null, reason: 'left' })
+    await flush()
+    t.listeners.onGuest(status(2))
+    await flush()
+    expect(leafOf('pane-ls1-ps').liveShare.textSize).toBe('fit')
+  })
+
   it('a pane the host has in chat mode shows as a chat (no terminal attached)', async () => {
     t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-ps')], layout: layoutOf(leaf('pane-ls1-ps'), leaf('pane-ls1-c', 'chat')), chat: true, chats: [chatOf('pane-ls1-c', false)] })
     await flush()

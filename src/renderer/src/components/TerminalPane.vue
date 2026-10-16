@@ -87,7 +87,7 @@ import { remoteHostsState } from '../remoteHosts'
 import { readText as readScreenText, createShellIntegration, createTerminalAdapter } from '../agentTerminal/screenRead'
 import { terminalControl, terminalLog } from '../agentTerminal/agentTerminalState'
 import { nativeChatSessionChoiceLabel } from '../chat/orca/native-chat-session-option-labels'
-import { liveShareFit } from '../liveShareFit'
+import { liveShareFit, liveShareOffset, LS_TEXT_SIZES } from '../liveShareFit'
 
 const props = defineProps({
   node: { type: Object, required: true }
@@ -1536,25 +1536,45 @@ function liveShareSize() {
   return ls && ls.cols > 1 && ls.rows > 0 ? { cols: ls.cols, rows: ls.rows } : null
 }
 
+// This guest's Text size for the pane (its menu, liveShareFit.js): 'fit',
+// 'width' or 'normal'. On this screen only: nothing goes to the host.
+function liveShareTextSize() {
+  const ls = props.node.backend === 'liveshare' ? props.node.liveShare : null
+  return ls && LS_TEXT_SIZES.includes(ls.textSize) ? ls.textSize : 'fit'
+}
+
+// The room this pane gives the host's terminal, in px: its whole box (null
+// while it is not laid out). Its border box, so a scrollbar of its own
+// coming or going never changes the size chosen.
+function liveShareRoom() {
+  const el = hostEl.value
+  return el && el.offsetWidth > 0 && el.offsetHeight > 0 ? { w: el.offsetWidth, h: el.offsetHeight } : null
+}
+
 // A Live Share pane keeps the host's columns and rows (the host's terminal
-// is never resized for a guest), drawn here at this guest's own text size: a
-// pane larger than the host's terminal gets larger text (up to twice the
-// usual size, no empty band); a smaller one smaller text, down to a readable
-// minimum (liveShareFit.js), so a host's terminal a bit wider or taller than
-// the pane fits without scrolling; only one still too big then scrolls
-// here, following the cursor.
+// is never resized for a guest), drawn here at the largest text size where
+// all of them fit the pane (liveShareFit.js): larger than this guest's own
+// size in a larger pane (a hidden sidebar, a maximized pane: up to 1.6
+// times, 22 px at most), never so large that rows go past the bottom;
+// smaller in a smaller pane, down to a readable minimum; only a terminal
+// still too big then scrolls here, following the cursor. Each size tried is
+// measured with xterm's own cell size (xterm measures the font again as soon
+// as the size is set, and its renderer takes the new cell at once), against
+// the pane's box, not the fit addon's proposal (which keeps room for a
+// scrollbar a Live Share pane never shows).
 function fitLiveShareFont({ cols, rows }) {
+  const room = liveShareRoom()
   const roomAt = (size) => {
     if (term.options.fontSize !== size) term.options.fontSize = size
-    const p = fit.proposeDimensions()
-    return p && p.cols > 0 && p.rows > 0 ? Math.min(p.cols / cols, p.rows / rows) : null
+    const cell = liveShareCell()
+    return room && cell ? { w: room.w / (cell.w * cols), h: room.h / (cell.h * rows) } : null
   }
-  const { size, scroll } = liveShareFit(paneFontSize(), term.options.fontSize, roomAt)
+  const { size, scroll } = liveShareFit(paneFontSize(), term.options.fontSize, roomAt, liveShareTextSize())
   if (term.options.fontSize !== size) term.options.fontSize = size
   setLiveShareScroll(scroll)
 }
 
-// The host's terminal larger than this pane at this guest's text size: drawn
+// The host's terminal larger than this pane at the text size it gets: drawn
 // at its full size in the pane, which scrolls (both ways) and follows the
 // cursor, unless scrolled by hand a moment ago.
 let lsScroll = false
@@ -1566,12 +1586,27 @@ function liveShareCell() {
   const cell = term && term._core && term._core._renderService && term._core._renderService.dimensions && term._core._renderService.dimensions.css.cell
   return cell && cell.width > 0 && cell.height > 0 ? { w: cell.width, h: cell.height } : null
 }
-function sizeLiveShareTerminal() {
+// Where the host's terminal sits in the pane: at its exact size when the
+// pane scrolls, and centred across a pane wider than it (the height limits
+// its text size: liveShareOffset). The offset is a padding on xterm's own
+// element: xterm measures the mouse and the selection from its screen,
+// which moves with it, so they hit the right cells (nothing is scaled), and
+// the wheel on either side still scrolls it.
+function placeLiveShareTerminal() {
+  const el = term && term.element
+  if (!el) return
   const shared = liveShareSize()
   const cell = liveShareCell()
-  if (!term || !term.element || !shared || !cell) return
-  term.element.style.width = `${Math.ceil(cell.w * shared.cols)}px`
-  term.element.style.height = `${Math.ceil(cell.h * shared.rows)}px`
+  if (!shared || !cell) {
+    el.style.paddingLeft = ''
+    return
+  }
+  const width = Math.ceil(cell.w * shared.cols)
+  el.style.width = lsScroll ? `${width}px` : ''
+  el.style.height = lsScroll ? `${Math.ceil(cell.h * shared.rows)}px` : ''
+  const room = liveShareRoom()
+  const { left } = liveShareOffset(room ? room.w : 0, width)
+  el.style.paddingLeft = left ? `${left}px` : ''
 }
 function setLiveShareScroll(on) {
   lsScroll = on
@@ -1581,11 +1616,7 @@ function setLiveShareScroll(on) {
   term.element.style.transform = ''
   term.element.style.transformOrigin = ''
   term.element.style.pointerEvents = ''
-  if (on) sizeLiveShareTerminal()
-  else {
-    term.element.style.width = ''
-    term.element.style.height = ''
-  }
+  placeLiveShareTerminal()
 }
 function followLiveShareCursor() {
   lsFollowQueued = false
@@ -1622,9 +1653,10 @@ function doFit() {
     if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
     // Never shrink to nothing (e.g. while the pane is momentarily unmeasurable).
     if (dims.cols < 2 || dims.rows < 1) return
-    if (shared && lsScroll)
+    // Placed again once drawn (the renderer may round its cell then).
+    if (shared)
       requestAnimationFrame(() => {
-        sizeLiveShareTerminal()
+        placeLiveShareTerminal()
         followLiveShareCursor()
       })
     if (dims.cols !== term.cols || dims.rows !== term.rows) {
@@ -1651,10 +1683,27 @@ function notifyPtySize() {
   window.shellApi.resizePty(props.node.id, term.cols, term.rows)
 }
 
+// The host's terminal took a new size: this terminal takes it at once (the
+// output drawn for that size follows right behind) and its text size is
+// chosen again in the same step, so it changes once, with nothing drawn in
+// between. The host settles its own resizes before its terminal changes
+// size: one new size per resize, not one per pixel of a drag.
 watch(
   () => liveShareSize() && `${props.node.liveShare.cols}x${props.node.liveShare.rows}`,
   (size) => size && doFit()
 )
+// The Text size chosen in the pane menu.
+watch(liveShareTextSize, () => liveShareSize() && doFit())
+
+// A font that finished loading after xterm measured its cells (it does not
+// measure again by itself): a Live Share pane's text size is chosen from
+// them, so they are measured again and it is fitted again.
+function onFontsLoaded() {
+  if (!term || !liveShareSize()) return
+  const chars = term._core && term._core._charSizeService
+  if (chars && typeof chars.measure === 'function') chars.measure()
+  scheduleFit()
+}
 
 // A Live Share pane the host has not let you type in: nothing typed (nor
 // anything the terminal would answer by itself) goes to the host, and a key
@@ -2312,6 +2361,15 @@ function menuPickVoice(tip) {
   closeCtxMenu()
   ctx.voiceTypingIn(props.node.id, tip)
 }
+// Live Share guest: the Text size of the host's terminal in this pane, on
+// this screen only (liveShareWindow.js setGuestTextSize: kept for the
+// session, nothing sent to the host).
+const lsTextSizeChoice = computed(() => (liveShareSize() ? liveShareTextSize() : null))
+function menuLsTextSize(size) {
+  closeCtxMenu()
+  if (ctx.liveShareTextSize) ctx.liveShareTextSize(props.node.id, size)
+  else if (props.node.liveShare && LS_TEXT_SIZES.includes(size)) props.node.liveShare.textSize = size
+}
 function menuVoice() {
   closeCtxMenu()
   ctx.voiceTyping(props.node.id)
@@ -2916,6 +2974,7 @@ onMounted(() => {
   window.addEventListener('terminal-layout-change', onLayoutChange)
   window.addEventListener('pointerdown', onDocPointerDownMenu, true)
   window.addEventListener('keydown', onEscapeMenu)
+  if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', onFontsLoaded)
 
   paneApi = {
     paste: pasteText,
@@ -3054,6 +3113,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('terminal-layout-change', onLayoutChange)
   window.removeEventListener('pointerdown', onDocPointerDownMenu, true)
   window.removeEventListener('keydown', onEscapeMenu)
+  if (document.fonts && document.fonts.removeEventListener) document.fonts.removeEventListener('loadingdone', onFontsLoaded)
   unregisterPane(props.node.id, paneApi)
   if (unsubData) unsubData()
   if (unsubExit) unsubExit()
@@ -3109,6 +3169,8 @@ const paneMenuBindings = computed(() => ({
   menuVoice: unref(menuVoice),
   settings: unref(settings),
   menuPickVoice: unref(menuPickVoice),
+  lsTextSize: unref(lsTextSizeChoice),
+  menuLsTextSize: unref(menuLsTextSize),
   otherPanes: unref(otherPanes),
   menuSendSelection: unref(menuSendSelection),
   menuAskReview: unref(menuAskReview),

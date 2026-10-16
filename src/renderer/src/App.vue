@@ -3041,6 +3041,8 @@ provide('panelCtx', {
   // Live Share, as a guest: your own view of a host's agent pane (its chat or
   // its terminal, on your screen only), and its conversation, read only.
   liveShareView: (id, view) => liveShare.setGuestView(id, view),
+  // ...and the text size of a host's terminal in its pane (on your screen only).
+  liveShareTextSize: (id, size) => liveShare.setGuestTextSize(id, size),
   liveShareChatSource: (id) => liveShare.chatSource(id),
   // Live Share, as the host: the guests reading a pane's conversation now.
   liveShareReaders: (id) => liveShare.readersOf(id),
