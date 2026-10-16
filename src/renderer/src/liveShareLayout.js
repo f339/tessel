@@ -107,12 +107,14 @@ export function hostChatsFromWorkspace(ws) {
 // and a split left with one pane is that pane. A split's id comes from where
 // it is in the host's tree, so building again after each change of the host
 // gives the same ids and Vue keeps the terminals (SplitNode's :key). null
-// when nothing is left.
-export function buildGuestTree(layout, getLeaf) {
+// when nothing is left. pages: the guest may see the host's browser pages
+// (its "See my browser pages"): a browser pane is kept too (getLeaf gives
+// its page view, phase 2c).
+export function buildGuestTree(layout, getLeaf, { pages = false } = {}) {
   const build = (node, path) => {
     if (!node) return null
     // A terminal, or a pane in chat mode the guest's window shows as a chat.
-    if (node.type === 'leaf') return node.view === 'terminal' || node.view === 'chat' ? getLeaf(node) || null : null
+    if (node.type === 'leaf') return node.view === 'terminal' || node.view === 'chat' || (pages && node.view === 'browser') ? getLeaf(node) || null : null
     const kept = []
     ;(node.children || []).forEach((c, i) => {
       const built = build(c, `${path}-${i}`)

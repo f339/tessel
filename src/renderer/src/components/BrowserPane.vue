@@ -18,6 +18,11 @@
 // Orca's host-guest/browser-page-webview.ts, browser-page-viewport.ts,
 // webview-drag-passthrough.ts and assemble-chrome/BrowserFind.tsx (MIT,
 // Copyright (c) 2026 Lovecast Inc.).
+// While you share its project in Live Share: an eye when guests watch the
+// page, and "Hide this page from guests" (they then see nothing of it; frames
+// also pause by themselves while a password field has the keyboard). A page
+// a guest opened from one of yours (a new window from its click) is in the
+// browser's guest session, with none of your logins.
 import { ref, shallowRef, computed, watch, inject, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import {
   ArrowLeft,
@@ -30,6 +35,8 @@ import {
   Copy,
   Crosshair,
   Eraser,
+  Eye,
+  EyeOff,
   ExternalLink,
   Globe,
   Loader2,
@@ -55,7 +62,7 @@ import {
 } from '../browser/browserPage'
 import { registerWebview } from '../browser/webviewPassthrough'
 import { registerNavigationOwner, focusNavigationOwner, isNavigationOwner, releaseNavigationOwner } from '../browser/navigationFocus'
-import { claimPage, releasePage, placePage, createWebview, MAIN_PARTITION, AGENT_PARTITION } from '../browser/pageHost'
+import { claimPage, releasePage, placePage, createWebview, notePageGuest, MAIN_PARTITION, AGENT_PARTITION, GUEST_PARTITION } from '../browser/pageHost'
 import DesignModePanel from './DesignModePanel.vue'
 import ViewTabs from './ViewTabs.vue'
 import PageAudioButton from './PageAudioButton.vue'
@@ -95,8 +102,16 @@ const design = ref(null)
 const currentUrl = ref(allowedBrowserUrl(props.node.url) || BLANK_URL)
 const initialSrc = currentUrl.value
 // A page an agent opened when "Agents use a separate browser session" was on
-// is marked on the leaf; it keeps that session for its whole life.
-const partition = props.node.agentSession ? AGENT_PARTITION : MAIN_PARTITION
+// is marked on the leaf; it keeps that session for its whole life. So does a
+// page a Live Share guest opened (the guest session, in memory only).
+const partition = props.node.guestSession ? GUEST_PARTITION : props.node.agentSession ? AGENT_PARTITION : MAIN_PARTITION
+// Live Share, while you share this page's project: { hidden, watchers }.
+const liveShare = computed(() => (!props.inSidePanel && ctx.liveSharePageShare ? ctx.liveSharePageShare(props.node.id) : null))
+const liveWatchers = computed(() => (liveShare.value ? liveShare.value.watchers : []))
+const liveEyeTitle = computed(() => t('browser.liveShare.watched', 'Guests watching this page: {{names}}', { names: liveWatchers.value.join(', ') }))
+function toggleLiveHidden() {
+  if (liveShare.value && ctx.setLiveSharePageHidden) ctx.setLiveSharePageHidden(props.node.id, !liveShare.value.hidden)
+}
 const pageTitle = ref(pageTitleFor(props.node.title, currentUrl.value))
 const loading = ref(false)
 const canGoBack = ref(false)
@@ -224,7 +239,7 @@ function onDomReady() {
   if (id != null) guestId.value = id
   if (page) {
     page.ready = true
-    page.guestId = guestId.value
+    notePageGuest(props.node.id, guestId.value)
   }
   call('setZoomLevel', pageZoom())
   applyMuted()
@@ -684,13 +699,15 @@ function focusPage() {
 }
 
 // --- Links opened in a new pane (middle-click, Ctrl+click, the page's menu) --------------------
-async function openInNewPane(url) {
+// guest: a new window from a Live Share guest's click: always a new pane, in
+// the guest session (never this page itself, with your logins).
+async function openInNewPane(url, { guest = false } = {}) {
   const target = allowedBrowserUrl(url)
   if (!target || target === BLANK_URL) return
   // Opening splits this pane, which builds it again: its scroll comes back.
   await saveScroll()
-  if (ctx.openBrowserPane) ctx.openBrowserPane(target, { fromId: props.node.id, activate: false })
-  else navigate(target)
+  if (ctx.openBrowserPane) ctx.openBrowserPane(target, { fromId: props.node.id, activate: false, ...(guest ? { guestSession: true } : {}) })
+  else if (!guest) navigate(target)
 }
 
 // --- Shortcuts (here, and from the page through the main process) -----------------------------
@@ -800,7 +817,7 @@ function subscribe(api) {
     if (typeof off === 'function') unsubscribers.push(off)
   }
   // A link to a new window opens here; a middle-click or a Ctrl+click, in a new pane.
-  on('onPopup', (ev) => (ev.newPane ? openInNewPane(ev.url) : navigate(ev.url)))
+  on('onPopup', (ev) => (ev.guest ? openInNewPane(ev.url, { guest: true }) : ev.newPane ? openInNewPane(ev.url) : navigate(ev.url)))
   on('onShortcut', (ev) => runAction(ev.action))
   // The mouse's back/forward buttons while no page has the keyboard: the active pane's.
   if (typeof api.onAppCommand === 'function') {
@@ -1140,6 +1157,24 @@ defineExpose({ navigate, focusAddress })
           </button>
         </div>
 
+        <template v-if="liveShare">
+          <span v-if="liveWatchers.length && !liveShare.hidden" class="bp-live-eye" role="status" data-test="browser-live-eye" :title="liveEyeTitle" :aria-label="liveEyeTitle">
+            <Eye :size="14" aria-hidden="true" />
+            <span class="bp-live-count">{{ liveWatchers.length }}</span>
+          </span>
+          <button
+            type="button"
+            class="bp-btn"
+            data-test="browser-live-hide"
+            :class="{ on: liveShare.hidden }"
+            :aria-pressed="liveShare.hidden"
+            :title="liveShare.hidden ? t('browser.liveShare.hiddenHint', 'Hidden from guests: they see nothing of this page. Click to show it to them again.') : t('browser.liveShare.hide', 'Hide this page from guests')"
+            :aria-label="t('browser.liveShare.hide', 'Hide this page from guests')"
+            @click="toggleLiveHidden"
+          >
+            <EyeOff :size="16" />
+          </button>
+        </template>
         <div class="bp-menu-anchor">
           <button
             type="button"
@@ -1624,6 +1659,22 @@ defineExpose({ navigate, focusAddress })
 }
 .bp-agent-stop:hover {
   filter: brightness(1.1);
+}
+.bp-live-eye {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 11px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  flex: none;
+}
+.bp-live-count {
+  font-variant-numeric: tabular-nums;
 }
 .bp-badge {
   position: absolute;

@@ -59,6 +59,10 @@
 // view says so. The conversation comes from the host (chatSource: main's
 // liveShare:chatWatch, read only); a host whose Tessel does not share
 // conversations yet: the chat view says so.
+//
+// Phase 2c (liveShareWindowFeeds.js): your browser panes in the shared
+// projects and the activity guests follow go to main; as a guest, the host's
+// browser panes, its past conversations and its activity come to the panels.
 import { reactive, watch } from 'vue'
 import { t } from './i18n'
 import { buildGuestTree, hostLayoutFromWorkspace, hostChatsFromWorkspace, GUEST_CHAT_AGENTS } from './liveShareLayout'
@@ -68,6 +72,7 @@ import { initials, inviteName, personName, joinedGuests } from './liveShareAcces
 import { LS_TEXT_SIZES } from './liveShareFit'
 import { setLshareAccess, endLshareSession, forgetLshareAccess } from './liveShareGuestAccess'
 import { COLUMNS } from '../../shared/taskModel'
+import { createLiveShareFeeds } from './liveShareWindowFeeds'
 
 // Typing shown on a pane is main's (typed in the last 3 s, said again every
 // 4 s while it goes on and when it ends); one main never said the end of (a
@@ -175,7 +180,9 @@ function columnName(column) {
 // (optional: the pane with the keyboard, for a guest's focus), taskBoard
 // (optional: this computer's board for guests, { tasks() (the cards), add({
 // title, wsId }), move(id, column), rename(id, title), remove(id), answer(id,
-// answer) }).
+// answer) }). Phase 2c: pageGuest(paneId) (its page's webContents id,
+// reactive), activityOf(wsId) -> { events, teams }, activityRev()
+// (liveShareWindowFeeds.js).
 const OFF_HOST = () => ({ state: 'off', projectIds: [], invites: [], guests: [], offline: [], trusted: [], presence: [], progress: null, error: null })
 export function createLiveShareWindow(deps) {
   const api = () => (window.shellApi && window.shellApi.liveShare) || null
@@ -316,6 +323,7 @@ export function createLiveShareWindow(deps) {
     const lastShared = sharedIds()
     if (s.state === 'sharing' && state.host.state !== 'sharing') generation++
     Object.assign(state.host, OFF_HOST(), s)
+    feeds.onHost(state.host)
     noteTyping(state.host.presence)
     // Sharing ended: the projects it shared are the ones picked next time.
     if (wasOn && !hostSharing() && !hostStarting()) {
@@ -652,6 +660,8 @@ export function createLiveShareWindow(deps) {
   // --- Guest ---------------------------------------------------------------
   // What this guest may do (a host from before rights: everything).
   const may = (right) => !state.guest.rights || !!state.guest.rights[right]
+  // Phase 2c: pages, past conversations, activity (both sides).
+  const feeds = createLiveShareFeeds(deps, { api, state, hostSharing, sharedWss, isShared, guestWs })
   // A host pane's chat: 'shared' (the host sends its conversation), 'old-host'
   // (an agent pane of a host whose Tessel does not share conversations yet:
   // the chat view says so) or null (no chat button).
@@ -672,7 +682,8 @@ export function createLiveShareWindow(deps) {
 
   function applyLayout(ws, p) {
     const f = followOf(p.id)
-    const built = buildGuestTree(p.layout, (l) => leafIn(l.id, p.id))
+    // The host's browser panes too, with "See my browser pages" (phase 2c).
+    const built = buildGuestTree(p.layout, (l) => (l.view === 'browser' ? feeds.pageLeaf(l, p.id, ws.liveShare.session) : leafIn(l.id, p.id)), { pages: feeds.showsPages() })
     // Panes of this computer that opened here (a page, a file) stay, beside
     // the host's.
     const local = localLeaves(ws.tree)
@@ -889,6 +900,17 @@ export function createLiveShareWindow(deps) {
         } else if (p.project && leaf.liveShare.project !== p.project) leaf.liveShare.project = p.project
       } else if (!attaching.has(p.id)) attachGuestPane(p, s.session)
     }
+    // The host's browser panes and the projects' activity that are no longer
+    // there go (phase 2c).
+    const pageIds = new Set()
+    const walkPages = (n) => {
+      if (!n) return
+      if (n.type === 'leaf') n.view === 'browser' && pageIds.add(n.id)
+      else (n.children || []).forEach(walkPages)
+    }
+    for (const p of projects) walkPages(p.layout && p.layout.tree)
+    feeds.syncPages(pageIds)
+    feeds.syncProjects(new Set(projects.map((p) => p.id)))
     applyAll(s.session)
   }
 
@@ -980,6 +1002,7 @@ export function createLiveShareWindow(deps) {
       .catch(() => {})
   }
   function onPush(m) {
+    if (feeds.onPush(m)) return
     if (!m || m.topic !== 'tasks' || typeof m.project !== 'string' || !m.data || !Array.isArray(m.data.tasks)) return
     if (!(state.guest.projects || []).some((p) => p.id === m.project)) return
     state.boards[m.project] = { tasks: m.data.tasks }
@@ -987,6 +1010,7 @@ export function createLiveShareWindow(deps) {
 
   function endGuest(s) {
     endAccess()
+    feeds.endGuest()
     followedBoard = null
     for (const id of guestLeaves.keys()) deps.dropBuffer(id)
     guestLeaves.clear()
@@ -1163,6 +1187,7 @@ export function createLiveShareWindow(deps) {
     if (a.onInviteBlocked) offs.push(a.onInviteBlocked(onInviteBlocked))
     if (a.onGuestAction) offs.push(a.onGuestAction(onGuestAction))
     if (a.onPush) offs.push(a.onPush(onPush))
+    feeds.init(a)
     if (a.onChat)
       offs.push(
         a.onChat((m) => {
@@ -1273,6 +1298,7 @@ export function createLiveShareWindow(deps) {
     for (const off of offs.splice(0)) if (typeof off === 'function') off()
     for (const stop of stops.splice(0)) stop()
     clearTimeout(typingTimer)
+    feeds.dispose()
   }
 
   return {
@@ -1299,7 +1325,15 @@ export function createLiveShareWindow(deps) {
     sharedIds,
     sharedWss,
     chosenIds,
-    isShared
+    isShared,
+    // Phase 2c: your page's share (its eye, its hide), and as a guest the
+    // host's pages, past conversations and activity.
+    feeds: feeds.feeds,
+    pageShare: feeds.pageShare,
+    setPageHidden: feeds.setPageHidden,
+    pageSource: feeds.pageSource,
+    sessionSource: feeds.sessionSource,
+    activitySource: feeds.activitySource
   }
 }
 

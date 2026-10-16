@@ -7,7 +7,7 @@ import { join } from 'path'
 
 vi.mock('../browserPicker', () => ({ pickerScript: (a) => `/*${a}*/`, clampPickPayload: (x) => x }))
 
-import { createBrowserGuests, BROWSER_PARTITION, BROWSER_PARTITION_AGENT, BROWSER_PARTITIONS, shortcutOf, contextMenuItems, wantsNewPane } from '../browserGuest'
+import { createBrowserGuests, BROWSER_PARTITION, BROWSER_PARTITION_AGENT, BROWSER_PARTITION_GUEST, BROWSER_PARTITIONS, shortcutOf, contextMenuItems, wantsNewPane } from '../browserGuest'
 
 const ev = (extra = {}) => ({ preventDefault: vi.fn(), ...extra })
 
@@ -89,7 +89,7 @@ function setup(opts = {}) {
   }
   const log = { warn: vi.fn() }
   const openExternal = vi.fn()
-  const bg = createBrowserGuests({ getWindow: () => win, send: (ch, payload) => sent.push([ch, payload]), log, screenshotDir: dir, electron, openExternal, agentSessionOnly: opts.agentSessionOnly })
+  const bg = createBrowserGuests({ getWindow: () => win, send: (ch, payload) => sent.push([ch, payload]), log, screenshotDir: dir, electron, openExternal, agentSessionOnly: opts.agentSessionOnly, guestPopup: opts.guestPopup })
   bg.attachToWindow(win)
   const handlers = {}
   bg.register({ handle: (ch, fn) => (handlers[ch] = fn) })
@@ -762,8 +762,9 @@ describe('a page in full screen', () => {
 describe('clearData', () => {
   it("clears both browser sessions (the main one and the agents\'), asked by the window", async () => {
     expect(await t.call('browser:clearData')).toEqual({ ok: true })
-    // One pass per browser partition; Tessel's own session is never asked for.
-    for (const name of ['clearStorageData', 'clearCache', 'clearAuthCache', 'clearHostResolverCache']) expect(t.ses[name]).toHaveBeenCalledTimes(2)
+    // One pass per browser partition (the main one, the agents' and Live
+    // Share guests'); Tessel's own session is never asked for.
+    for (const name of ['clearStorageData', 'clearCache', 'clearAuthCache', 'clearHostResolverCache']) expect(t.ses[name]).toHaveBeenCalledTimes(BROWSER_PARTITIONS.size)
     expect(t.electron.session.fromPartition.mock.calls.every(([p]) => BROWSER_PARTITIONS.has(p))).toBe(true)
   })
 
@@ -1087,5 +1088,56 @@ describe("guestById and the agents' separate session", () => {
     const s = setup({ agentSes, agentSessionOnly: () => true })
     const g = s.attach()
     expect(s.bg.guestFor(s.fromWindow, 7)).toBe(g)
+  })
+})
+
+describe('Live Share: the guest session and the host’s own pages', () => {
+  it('accepts and hardens the guest session, kept in memory only', () => {
+    expect(BROWSER_PARTITIONS.has(BROWSER_PARTITION_GUEST)).toBe(true)
+    expect(BROWSER_PARTITION_GUEST.startsWith('persist:')).toBe(false)
+    const params = { src: 'https://a.test', partition: BROWSER_PARTITION_GUEST }
+    const prefs = { preload: 'C:/evil.js', nodeIntegration: true }
+    const e = ev()
+    t.winWc.emit('will-attach-webview', e, prefs, params)
+    expect(e.preventDefault).not.toHaveBeenCalled()
+    expect(prefs).toMatchObject({ partition: BROWSER_PARTITION_GUEST, nodeIntegration: false, sandbox: true, contextIsolation: true })
+    expect(prefs.preload).toBeUndefined()
+    expect(t.electron.session.fromPartition).toHaveBeenCalledWith(BROWSER_PARTITION_GUEST)
+    expect(t.ses.setPermissionRequestHandler).toHaveBeenCalled()
+  })
+
+  it('pageById gives the user’s own pages too (the agents’ filter is theirs), never another kind, window or session', () => {
+    const agentSes = fakeSession()
+    const s = setup({ agentSes, agentSessionOnly: () => true })
+    const g = s.attach()
+    expect(s.bg.guestById(7)).toBeNull()
+    expect(s.bg.pageById(7)).toBe(g)
+    expect(s.bg.pageById(7.5)).toBeNull()
+    s.attach({ type: 'window' })
+    expect(s.bg.pageById(7)).toBeNull()
+    s.attach({ host: new EventEmitter() })
+    expect(s.bg.pageById(7)).toBeNull()
+    s.attach({ ses: { other: true } })
+    expect(s.bg.pageById(7)).toBeNull()
+  })
+
+  it('a new window from a guest’s click: a new pane in the guest session, refused past its limit; the host’s own as before', () => {
+    let answer = { allowed: true }
+    const guestPopup = vi.fn(() => answer)
+    const s = setup({ guestPopup })
+    const g = s.attach()
+    s.click(g)
+    expect(g.openHandler({ url: 'https://example.com/a', disposition: 'foreground-tab' })).toEqual({ action: 'deny' })
+    expect(guestPopup).toHaveBeenCalledWith(7)
+    expect(s.sent).toEqual([['browser:popup', { webContentsId: 7, url: 'https://example.com/a', newPane: true, guest: true }]])
+    s.sent.length = 0
+    answer = { allowed: false }
+    s.click(g)
+    expect(g.openHandler({ url: 'https://example.com/b' })).toEqual({ action: 'deny' })
+    expect(s.sent).toEqual([])
+    answer = null
+    s.click(g)
+    g.openHandler({ url: 'https://example.com/c' })
+    expect(s.sent).toEqual([['browser:popup', { webContentsId: 7, url: 'https://example.com/c' }]])
   })
 })

@@ -41,8 +41,12 @@ export const BROWSER_PARTITION = 'persist:tessel-browser'
 // "Agents use a separate browser session" (Settings > Browser): its cookies
 // (and the logins imported into the main session) stay apart from the agents'.
 export const BROWSER_PARTITION_AGENT = 'persist:tessel-browser-agent'
+// Pages a Live Share guest opens (a new window from its click in a page the
+// host lets it use): a session kept in memory only, with none of the host's
+// logins or cookies, gone when Tessel quits; hardened like the others.
+export const BROWSER_PARTITION_GUEST = 'tessel-browser-guest'
 // Every partition a browser page may use (nothing else attaches).
-export const BROWSER_PARTITIONS = new Set([BROWSER_PARTITION, BROWSER_PARTITION_AGENT])
+export const BROWSER_PARTITIONS = new Set([BROWSER_PARTITION, BROWSER_PARTITION_AGENT, BROWSER_PARTITION_GUEST])
 // A picked element's screenshot, a page's: at most this big (PNG).
 const MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024
 // A screenshot the page never gives.
@@ -177,7 +181,10 @@ export function contextMenuItems(params = {}, nav = {}) {
 // agentSessionOnly() -> bool: Settings > Browser > "Agents use a separate
 // browser session". On, guestById (the agents' only way to a page) gives only
 // pages of the agents' own session, never the user's with its logins.
-export function createBrowserGuests({ getWindow, send, log = null, screenshotDir, electron, openExternal = null, onGuest = null, agentSessionOnly = () => false }) {
+// guestPopup(webContentsId) -> null | { allowed }: a new window a page asks
+// for came from a Live Share guest's click (liveShare/sharePageFeed.js
+// popupFrom): it opens in a new pane in the guest session, if allowed.
+export function createBrowserGuests({ getWindow, send, log = null, screenshotDir, electron, openExternal = null, onGuest = null, agentSessionOnly = () => false, guestPopup = null }) {
   const { webContents, clipboard, nativeImage, session: electronSession, Menu = null } = electron
   // guest id -> { cancel } while an element is being picked.
   const picking = new Map()
@@ -341,6 +348,19 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
         return { action: 'deny' }
       }
       gestureAt = 0
+      // A Live Share guest's click: a new pane in the guest session (never
+      // the host's own page, with its logins), a few a minute.
+      let byGuest
+      try {
+        byGuest = guestPopup ? guestPopup(guest.id) : null
+      } catch {
+        byGuest = { allowed: false }
+      }
+      if (byGuest) {
+        lastMouse = null
+        if (byGuest.allowed) send('browser:popup', { webContentsId: guest.id, url: target, newPane: true, guest: true })
+        return { action: 'deny' }
+      }
       const newPane = wantsNewPane(disposition, lastMouse)
       lastMouse = null
       send('browser:popup', { webContentsId: guest.id, url: target, ...(newPane ? { newPane: true } : {}) })
@@ -624,6 +644,19 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
     return guest
   }
 
+  // A page of the browser in Tessel's window, by its id, whatever its session
+  // (Live Share's view of the host's own pages: the host's window lists
+  // them, sharePageFeed.js checks each against the shared projects). Never
+  // Tessel's window itself, never another kind of webContents or session.
+  function pageById(id) {
+    const win = getWindow()
+    if (!win || win.isDestroyed() || !Number.isSafeInteger(id)) return null
+    const guest = webContents.fromId(id)
+    if (!guest || guest.isDestroyed() || guest.getType() !== 'webview') return null
+    if (guest.hostWebContents !== win.webContents) return null
+    return isBrowserSession(guest.session) ? guest : null
+  }
+
   // --- Design Mode ------------------------------------------------------------------
   // Screenshots and saved messages older than a day go (they are only for
   // pasting now): at start and at each new one.
@@ -663,8 +696,9 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
   }
 
   // Everything the browser's pages kept: cookies, storage, cache, HTTP
-  // authentication. Tessel's own session is not touched. By default both
-  // browser sessions (the main one and the agents') are cleared; a partition
+  // authentication. Tessel's own session is not touched. By default every
+  // browser session (the main one, the agents' and Live Share guests') is
+  // cleared; a partition
   // narrows it to one, and 'cookies' clears only the cookies of a partition
   // (used by "Clear imported cookies").
   async function clearData({ partition = null, cookiesOnly = false } = {}) {
@@ -818,7 +852,7 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
 
   purgeOldFiles()
 
-  return { attachToWindow, register, onWillAttach, onDidAttach, guestFor, guestById, capture, pick, shortcutOf, isScreenshot, browserSession, purgeOldFiles, saveFeedback, clearData, showContextMenu, runMenuItem }
+  return { attachToWindow, register, onWillAttach, onDidAttach, guestFor, guestById, pageById, capture, pick, shortcutOf, isScreenshot, browserSession, purgeOldFiles, saveFeedback, clearData, showContextMenu, runMenuItem }
 }
 
 export { shortcutOf }

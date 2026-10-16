@@ -9,6 +9,9 @@
 // said, src/main/sessionSearch), searches the conversations themselves; a
 // bar with the count and the sort; the rows (SessionHistoryRow.vue) under
 // collapsible group headers; Show more at the end.
+// In a Live Share project (source): the host's past conversations of that
+// project, read only (no resume, no log, no search of what was said: the
+// host's Tessel masks what it sends, liveShareWindowFeeds.js sessionSource).
 // After Orca's AiVaultPanel.tsx, AiVaultPanelHeader.tsx,
 // AiVaultPanelControls.tsx, AiVaultPanelSearch.tsx, AiVaultSessionListBar.tsx,
 // AiVaultSessionListStates.tsx and AiVaultShowMoreSessionsRow.tsx (MIT,
@@ -63,7 +66,10 @@ const props = defineProps({
   // sessionId -> paneId for the conversations open in a pane.
   openIds: { type: Object, default: () => ({}) },
   // Shown now (the list is read again when it is shown after a while).
-  active: { type: Boolean, default: true }
+  active: { type: Boolean, default: true },
+  // A Live Share host's project: { project, host, state, list({ limit }),
+  // details(ref) }; its conversations instead of this computer's.
+  source: { type: Object, default: null }
 })
 const emit = defineEmits(['resume', 'focus-pane', 'open-editor', 'toast'])
 const api = () => (typeof window !== 'undefined' && window.shellApi) || null
@@ -131,6 +137,15 @@ async function load() {
   error.value = ''
   try {
     const remote = props.remote && props.remote.hostId ? props.remote : null
+    // A Live Share host's project: its sessions, from the host.
+    if (props.source) {
+      waitingHost.value = false
+      const res = await props.source.list({ limit: view.limit })
+      if (seq !== loadSeq) return
+      sessions.value = res && res.ok && Array.isArray(res.sessions) ? res.sessions : []
+      if (!res || !res.ok) error.value = hostError(res && res.code)
+      return
+    }
     if (remote && !a.listRemoteSessions) {
       sessions.value = []
       return
@@ -161,6 +176,18 @@ async function load() {
     }
   }
 }
+// A host's project: whose sessions these are (Vue closes an interpolation
+// at the first }}: the text is made here).
+const hostSubtitle = computed(() => t('sessionHistory.host.subtitle', '{{host}}’s sessions of this project, read only', { host: (props.source && props.source.host) || '?' }))
+// Why the host's sessions are not there.
+function hostError(code) {
+  const host = (props.source && props.source.host) || '?'
+  if (code === 'outdated-host') return t('liveShare.access.outdatedHost', 'The host’s Tessel is too old for this: the host needs to update Tessel.')
+  if (code === 'no-project' || code === 'forbidden' || code === 'revoked') return t('liveShare.access.noAccess', 'You no longer have access to this project.')
+  if (code === 'offline') return t('sessionHistory.host.offline', 'The connection to {{host}} is down.', { host })
+  if (code === 'busy') return t('sessionHistory.host.busy', '{{host}}’s Tessel is busy: try again in a moment.', { host })
+  return t('sessionHistory.host.failed', 'The sessions of {{host}} could not be read.', { host })
+}
 function refresh() {
   if (searching.value) runSearch()
   else load()
@@ -183,7 +210,7 @@ onBeforeUnmount(() => hostRetry && clearInterval(hostRetry))
 // is loading, never "none"), and an answer for it still on the way is
 // dropped (loadSeq). The same source, another folder: the rows stay while
 // the list is read again (a conversation may be newer than the last read).
-const sourceKey = () => (props.remote && props.remote.hostId ? `remote:${props.remote.hostId}` : 'local') // i18n-ignore
+const sourceKey = () => (props.source ? `lshare:${props.source.project}` : props.remote && props.remote.hostId ? `remote:${props.remote.hostId}` : 'local') // i18n-ignore
 watch(
   () => [sourceKey(), scopeDir.value],
   ([src, dir], before) => {
@@ -242,8 +269,8 @@ let searchSeq = 0
 const hasQuery = computed(() => query.value.trim().length > 0)
 // The conversation-text index holds this computer's sessions only: a remote
 // project's list is filtered by title and folder instead.
-const searching = computed(() => hasQuery.value && !props.remote && !!(index.value && index.value.enabled))
-const needsConsent = computed(() => hasQuery.value && !!(index.value && index.value.available && !index.value.enabled))
+const searching = computed(() => hasQuery.value && !props.remote && !props.source && !!(index.value && index.value.enabled))
+const needsConsent = computed(() => hasQuery.value && !props.source && !!(index.value && index.value.available && !index.value.enabled))
 async function refreshIndex() {
   const a = searchApi()
   if (!a) return
@@ -406,7 +433,8 @@ onBeforeUnmount(() => {
             <span class="sh-title-full">{{ t('sessionHistory.title', 'Agent Session History') }}</span>
             <span class="sh-title-short">{{ t('sessionHistory.titleShort', 'Agents') }}</span>
           </div>
-          <div class="sh-subtitle">{{ searching || loaded ? t('sessionHistory.indexedHistory', 'Indexed history') : t('sessionHistory.resumePastSessions', 'Resume past sessions') }}</div>
+          <div v-if="source" class="sh-subtitle">{{ hostSubtitle }}</div>
+          <div v-else class="sh-subtitle">{{ searching || loaded ? t('sessionHistory.indexedHistory', 'Indexed history') : t('sessionHistory.resumePastSessions', 'Resume past sessions') }}</div>
         </div>
         <div class="sh-head-actions">
           <DropdownMenu>
@@ -468,7 +496,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div class="sh-scope" role="group" :aria-label="scopeAria" data-test="session-scopes">
+      <div v-if="!source" class="sh-scope" role="group" :aria-label="scopeAria" data-test="session-scopes">
         <button v-for="sc in scopes" :key="sc.id" class="sh-scope-btn" :class="{ on: scope === sc.id }" :disabled="sc.disabled" :aria-pressed="scope === sc.id ? 'true' : 'false'" :data-test="'scope-' + sc.id" @click="scope = sc.id">
           {{ sc.label }}
         </button>
@@ -541,8 +569,9 @@ onBeforeUnmount(() => {
             v-for="s in g.sessions"
             :key="s.agent + s.id"
             :session="s"
-            :pane-id="openIds[s.id] || null"
-            :scope="scope"
+            :pane-id="source ? null : openIds[s.id] || null"
+            :scope="source ? 'workspace' : scope"
+            :source="source"
             :expanded="expanded.has(s.id)"
             :now="now"
             @toggle="toggleExpanded(s.id)"

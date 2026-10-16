@@ -8,6 +8,8 @@
 // AiVaultSessionActionMenuItems.tsx, AiVaultSessionDetails.tsx,
 // ai-vault-first-prompt-card.tsx, AiVaultSessionSubagents.tsx and
 // AiVaultSearchEvidence.tsx (MIT, Copyright (c) 2026 Lovecast Inc.).
+// A Live Share host's conversation (source): its details from the host,
+// read only (no resume, log, folder, id or delete).
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { Bot, Check, ChevronDown, Copy, FileJson, Folder, FolderOpen, LoaderCircle, LocateFixed, MessageSquare, MoreHorizontal, Play, SquareTerminal, TextCursorInput, Trash2 } from 'lucide-vue-next'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './chat/orca/ui/index.js'
@@ -25,7 +27,9 @@ const props = defineProps({
   scope: { type: String, default: 'all' },
   expanded: { type: Boolean, default: false },
   // The clock, so the times move with the panel's.
-  now: { type: Number, default: () => Date.now() }
+  now: { type: Number, default: () => Date.now() },
+  // A Live Share host's conversation: { details(ref) } (session.id is its ref).
+  source: { type: Object, default: null }
 })
 const emit = defineEmits(['toggle', 'resume', 'focus-pane', 'open-log', 'toast', 'deleted'])
 const askConfirm = inject('askConfirm', null)
@@ -37,7 +41,8 @@ const title = computed(() => maskSecrets(s.value.title || '') || t('app.sessions
 // also when its folder is unknown (the IDE does not always record it): then
 // in the folder a new pane opens in.
 const fromIde = computed(() => s.value.agent === 'antigravity' && s.value.origin === 'ide')
-const canResume = computed(() => !!s.value.id && (!!s.value.cwd || fromIde.value))
+const guest = computed(() => !!props.source)
+const canResume = computed(() => !guest.value && !!s.value.id && (!!s.value.cwd || fromIde.value))
 const actionText = computed(() => (fromIde.value ? t('sessionHistory.row.continueInCli', 'Continue in CLI') : t('sessionHistory.row.resumeInNewPane', 'Resume in New Pane')))
 const resumeLabel = computed(() => {
   if (!canResume.value) return t('app.sessions.resumeUnavailable', 'The saved project folder is unavailable. You can still copy the session ID.')
@@ -61,7 +66,7 @@ const onHost = computed(() => typeof s.value.host === 'string' && !!s.value.host
 const deleteReason = computed(() =>
   onHost.value ? t('sessionHistory.row.onHost', 'This conversation is stored on the SSH host.') : deleteBlockedReason(s.value, props.paneId ? { [s.value.id]: props.paneId } : {})
 )
-const logActions = computed(() => hasLog(s.value.agent) && !onHost.value)
+const logActions = computed(() => !guest.value && hasLog(s.value.agent) && !onHost.value)
 // Its first prompt and latest turns: Claude Code's and Codex's files on the
 // host are read over the connection (src/main/chat/remoteTranscripts.js).
 const hostDetails = computed(() => onHost.value && (s.value.agent === 'claude' || s.value.agent === 'codex'))
@@ -73,13 +78,13 @@ let detailsPromise = null
 function loadDetails() {
   if (detailsPromise) return detailsPromise
   const a = api()
-  if (!(logActions.value || hostDetails.value) || !a || !a.sessionDetails) return Promise.resolve(null)
+  const fromHost = guest.value
+  if (!fromHost && (!(logActions.value || hostDetails.value) || !a || !a.sessionDetails)) return Promise.resolve(null)
   detailsLoading.value = true
   const query = hostDetails.value
     ? { agent: s.value.agent, id: s.value.id, hostId: s.value.host }
     : { agent: s.value.agent, id: s.value.id, ...(s.value.accountId !== undefined ? { accountId: s.value.accountId } : {}) }
-  detailsPromise = a
-    .sessionDetails(query)
+  detailsPromise = Promise.resolve(fromHost ? props.source.details(s.value.id) : a.sessionDetails(query))
     .then((res) => {
       details.value = res && res.ok ? res : { ok: false }
       return details.value
@@ -114,7 +119,7 @@ function copyPrompt() {
 // --- Sub-agents (Claude Code, Codex, OpenCode, Cline) ---------------------------
 const children = ref(null) // from acquireChildren, while expanded
 const childRows = computed(() => (children.value ? children.value.state.list : []))
-const childrenKnown = computed(() => listsChildren(s.value.agent))
+const childrenKnown = computed(() => !guest.value && listsChildren(s.value.agent))
 const subagentsLabel = computed(() => t('sessionHistory.subagents.count', 'Subagents ({{count}})', { count: childRows.value.length }))
 function childLine(c) {
   return childTime(c, props.now)
@@ -204,12 +209,12 @@ function onRowClick(event) {
     data-test="session-row"
     :data-session="session.id"
     @click="onRowClick"
-    @contextmenu.prevent.stop="menuOpen = true"
+    @contextmenu.prevent.stop="menuOpen = !guest"
   >
     <div class="sh-row-top">
       <div class="sh-row-title" :class="expanded ? 'clamp2' : 'clamp1'" :title="title">{{ title }}</div>
       <div class="sh-row-actions" @pointerdown.stop @click.stop @dblclick.stop>
-        <div class="sh-hover">
+        <div v-if="!guest" class="sh-hover">
           <button v-if="paneId" class="sh-icon-btn" :title="t('sessionHistory.row.jumpToOriginalPane', 'Jump to Original Pane')" :aria-label="t('sessionHistory.row.jumpToOriginalPane', 'Jump to Original Pane')" data-test="session-jump" @click="emit('focus-pane', paneId)">
             <LocateFixed :size="14" aria-hidden="true" />
           </button>
@@ -228,7 +233,7 @@ function onRowClick(event) {
         >
           <ChevronDown :size="14" class="sh-chevron" :class="{ open: expanded }" aria-hidden="true" />
         </button>
-        <DropdownMenu v-model:open="menuOpen">
+        <DropdownMenu v-if="!guest" v-model:open="menuOpen">
           <DropdownMenuTrigger as-child>
             <button class="sh-icon-btn" :title="t('sessionHistory.row.moreActions', 'More Actions')" :aria-label="t('sessionHistory.row.moreSessionActions', 'More Session Actions')" data-test="session-more">
               <MoreHorizontal :size="14" aria-hidden="true" />
@@ -276,7 +281,7 @@ function onRowClick(event) {
     </div>
 
     <div v-if="expanded" :id="detailsId" class="sh-details" data-test="session-details" @pointerdown.stop @click.stop @dblclick.stop>
-      <div class="sh-details-actions">
+      <div v-if="!guest" class="sh-details-actions">
         <button v-if="paneId" class="exit-btn" data-test="details-jump" @click="emit('focus-pane', paneId)"><LocateFixed :size="13" aria-hidden="true" /> {{ t('sessionHistory.row.jumpToOriginalPane', 'Jump to Original Pane') }}</button>
         <button v-else class="exit-btn primary" :disabled="!canResume" :title="resumeLabel" data-test="details-resume" @click="emit('resume')"><SquareTerminal v-if="fromIde" :size="13" aria-hidden="true" /><Play v-else :size="13" aria-hidden="true" /> {{ actionText }}</button>
         <button v-if="logActions" class="exit-btn subtle" data-test="details-view-log" @click="openLog"><FileJson :size="13" aria-hidden="true" /> {{ t('sessionHistory.details.viewLog', 'View Log') }}</button>
@@ -297,7 +302,7 @@ function onRowClick(event) {
             <p v-else class="sh-card-empty">{{ t('sessionHistory.details.noFirstPrompt', 'No first prompt available') }}</p>
           </div>
         </section>
-        <section v-if="logActions || hostDetails" class="sh-section">
+        <section v-if="logActions || hostDetails || guest" class="sh-section">
           <div class="sh-section-head"><MessageSquare :size="12" aria-hidden="true" /><span>{{ t('sessionHistory.details.latestTurns', 'Latest turns') }}</span></div>
           <div v-if="turns.length" class="sh-turns" data-test="details-turns">
             <div v-for="(turn, i) in turns" :key="i" class="sh-card" :class="turn.role === 'user' ? 'sh-card-user' : 'sh-card-agent'">

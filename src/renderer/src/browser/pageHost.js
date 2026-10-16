@@ -9,11 +9,22 @@
 // browser-page-viewport.ts and webview-registry.ts (MIT, Copyright (c) 2026
 // Lovecast Inc.), written for Tessel's panes.
 
+import { reactive } from 'vue'
+
 // A pane gone for longer than this is closed: its page goes too.
 export const RELEASE_MS = 400
 
 // pane id -> { paneId, host, box, overlay, webview, ready, guestId, timer }
 const pages = new Map()
+// pane id -> its page's webContents id once ready, reactive (Live Share:
+// the host's window lists its shared pages with them, liveShareWindowFeeds.js).
+export const pageGuests = reactive({})
+export function notePageGuest(paneId, id) {
+  const page = pages.get(paneId)
+  if (page) page.guestId = id
+  if (Number.isSafeInteger(id)) pageGuests[paneId] = id
+  else delete pageGuests[paneId]
+}
 
 // The page element, hardened as BrowserPane always made it (browserGuest.js
 // in the main process checks and locks it down again when it attaches).
@@ -21,10 +32,14 @@ export const MAIN_PARTITION = 'persist:tessel-browser'
 // The agents' own session (Settings > Browser: "Agents use a separate browser
 // session"): pages an agent opens keep away from the user's imported logins.
 export const AGENT_PARTITION = 'persist:tessel-browser-agent'
+// Pages a Live Share guest opens from your pages it uses: a session in
+// memory only, with none of your logins (src/main/browserGuest.js).
+export const GUEST_PARTITION = 'tessel-browser-guest'
+const PARTITIONS = [MAIN_PARTITION, AGENT_PARTITION, GUEST_PARTITION]
 
 export function createWebview(src, partition = MAIN_PARTITION) {
   const el = document.createElement('webview')
-  el.setAttribute('partition', partition === AGENT_PARTITION ? AGENT_PARTITION : MAIN_PARTITION)
+  el.setAttribute('partition', PARTITIONS.includes(partition) ? partition : MAIN_PARTITION)
   el.setAttribute('allowpopups', 'true')
   el.setAttribute('webpreferences', 'contextIsolation=yes,sandbox=yes,nodeIntegration=no')
   el.className = 'bp-webview'
@@ -89,6 +104,7 @@ export function destroyPage(paneId) {
   if (!page) return
   clearTimeout(page.timer)
   pages.delete(paneId)
+  delete pageGuests[paneId]
   page.box.remove()
 }
 

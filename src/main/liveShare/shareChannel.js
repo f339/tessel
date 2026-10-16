@@ -32,28 +32,38 @@ import { isProjectId } from './shareGrant.js'
 import { cleanRel } from '../../shared/liveSharePath'
 
 // The feature each op area needs (an op is `<area>.<verb>`). Next phases
-// add theirs here: agents.* (panes2), sessions.* and history.* (history).
-export const OP_AREAS = Object.freeze({ fs: 'files', notes: 'files', scm: 'scm', tasks: 'tasks' })
+// add theirs here: agents.* (panes2). sessions.*: a project's past agent
+// conversations and its terminal agents' (history, shareHistory.js).
+export const OP_AREAS = Object.freeze({ fs: 'files', notes: 'files', scm: 'scm', tasks: 'tasks', sessions: 'history' })
 
 // Topics a guest subscribes to:
 // - feature: what both sides must speak;
 // - project: the topic is about one of the guest's projects (else host-wide,
 //   like the usage of the next phase);
-// - key: what a key is (null: none; 'rel': a file of the project, relative);
+// - key: what a key is (null: none; 'rel': a file of the project, relative;
+//   'id': a pane of the project, by its id);
 // - right: the right it needs beyond seeing the project (null: none);
 // - max: subscriptions of that topic one guest holds at once;
 // - keep: the host keeps the latest news and gives it to a new subscriber
-//   at once (a board, a list); without it, only changes go out.
+//   at once (a board, a list); without it, only changes go out;
+// - perGuest: each guest's subscription is its own stream (the host's
+//   callbacks.watchGuest hears each one, and sends to that guest alone with
+//   its own messages): a page's frames, made at each guest's pace.
 // fs: files of the project changed ({ paths: [rel] | null }: null when too
 // many); scm: its git state changed (a hint to read the status again); file:
 // a file open in the guest's editor changed ({ exists, size, mtimeMs, sig });
-// tasks: the project's task board ({ tasks }). Next phases add agents and
-// usage (keep), page.
+// tasks: the project's task board ({ tasks }). activity: what its agents
+// and teams did and said ({ events, teams }, shareActivity.js). page: one of
+// its browser pages, watched (the guest's own stream of 'frame' and 'page'
+// messages, sharePageFeed.js; one page per guest). Next phases add agents
+// and usage (keep).
 export const TOPICS = Object.freeze({
   fs: Object.freeze({ feature: 'files', project: true, key: null, right: null, max: 16, keep: false }),
   scm: Object.freeze({ feature: 'scm', project: true, key: null, right: null, max: 16, keep: false }),
   file: Object.freeze({ feature: 'files', project: true, key: 'rel', right: null, max: 64, keep: false }),
-  tasks: Object.freeze({ feature: 'tasks', project: true, key: null, right: null, max: 16, keep: true })
+  tasks: Object.freeze({ feature: 'tasks', project: true, key: null, right: null, max: 16, keep: true }),
+  activity: Object.freeze({ feature: 'history', project: true, key: null, right: null, max: 16, keep: true }),
+  page: Object.freeze({ feature: 'pages', project: true, key: 'id', right: 'pagesView', max: 1, keep: false, perGuest: true })
 })
 
 // What one guest may cost the host (shareHost.js), counted per person so a
@@ -101,6 +111,9 @@ export function cleanSub(msg) {
   if (spec.key === 'rel') {
     key = cleanRel(msg.key)
     if (!key) return null
+  } else if (spec.key === 'id') {
+    if (typeof msg.key !== 'string' || !/^[\w-]{1,80}$/.test(msg.key)) return null
+    key = msg.key
   } else if (msg.key !== undefined && msg.key !== null) return null
   return { topic: msg.topic, project, key, on: msg.on === true, spec }
 }

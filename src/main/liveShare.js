@@ -54,6 +54,20 @@
 // window's usual explorer:changed and editor:changed, and a board as
 // liveShare:push.
 //
+// Phase 2c: a guest also sees each project's past agent conversations
+// (Agent Session History) and what its terminal agents said (requests,
+// liveShare/shareHistory.js: masked, no session id, account, folder or
+// file), its activity (the Conversations tab and the Activity panel: the
+// host's window sends the activity of the projects guests follow,
+// liveShare/shareActivity.js masks it, pushed on 'activity'), and, with "See
+// my browser pages", its browser panes live (liveShare/sharePageFeed.js: the
+// host's window lists the pages of its shared projects with their
+// webContents, checked here against the layouts; frames only to a guest
+// watching one, while its view is on screen), and with "Use my browser
+// pages" clicks and keys in them. The host's window shows which of its pages
+// guests watch (liveShare:pagesWatched) and hides a page from them on the
+// host's word (the list's hidden).
+//
 // Conversations (liveShare/shareChat.js): a guest can look at a host's agent
 // pane as a chat, read only, on its own screen (the host's pane, its mode,
 // its terminal and its agent never change). The host's window says which of
@@ -90,6 +104,9 @@ import { cleanRoots } from './liveShare/shareChat.js'
 import { createGuestFs } from './liveShare/guestFs.js'
 import { TASK_OPS, taskArgs, guestTasks, checkTasks } from './liveShare/shareTasks.js'
 import { parseLsharePath, lshareRoot, lsharePath, cleanRel } from '../shared/liveSharePath'
+import { createShareHistory, HISTORY_OPS, listArgs, isRef, checkSessionList, checkSessionDetails, checkTerminal } from './liveShare/shareHistory.js'
+import { guestActivity, checkActivity } from './liveShare/shareActivity.js'
+import { createPageFeed, checkPageFrame, checkPageEvent } from './liveShare/sharePageFeed.js'
 import { watchProject as watchProjectFolder } from './explorer'
 import { createFileWatcher } from './editorFiles'
 import { t } from './i18n'
@@ -136,7 +153,9 @@ const ACTION_KINDS = Object.freeze({
   'tasks.answer': 'taskAnswer'
 })
 // The topics a guest's window may follow itself (the others are main's).
-const WINDOW_TOPICS = new Set(['tasks'])
+const WINDOW_TOPICS = new Set(['tasks', 'activity'])
+// A guest's input message on a page: events at most.
+const PAGE_EVENTS = 50
 
 // A shared project's folder as the host's window gives it: a local absolute
 // path (never sent anywhere), or null.
@@ -326,6 +345,11 @@ const KEEP_FRESH_MS = 60000
 // trashItem(path): the Recycle Bin (Electron's shell; without it a guest's
 // delete is refused). watchProject(root, fn) and makeFileWatcher(onChange):
 // the folder and file watches for guests (explorer.js, editorFiles.js).
+// sessionHistory: { list(query), details(query) } (providerAccountSessions.js:
+// the past conversations guests of a project see), readTerminal(query)
+// (chat/terminalConversations.js read: what its terminal agents said),
+// pageById(webContentsId) (browserGuest.js: a browser page of the window,
+// any session); without them, guests get none of it.
 export function registerLiveShare({
   ipcMain,
   send,
@@ -343,7 +367,11 @@ export function registerLiveShare({
   requestLimits = {},
   trashItem = null,
   watchProject = watchProjectFolder,
-  makeFileWatcher = (onChange) => createFileWatcher(onChange)
+  makeFileWatcher = (onChange) => createFileWatcher(onChange),
+  sessionHistory = null,
+  readTerminal = null,
+  pageById = null,
+  pageDeps = {}
 }) {
   const info = (msg) => log?.info?.('liveshare', msg)
   const warn = (msg) => (log?.warn ? log.warn('liveshare', msg) : info(msg))
@@ -447,7 +475,11 @@ export function registerLiveShare({
       // The share's settings (also while not sharing), and what guests
       // changed lately (newest first; only while sharing).
       settings: { ...shareSettings },
-      actions: live ? actions.map((a) => ({ ...a })) : []
+      actions: live ? actions.map((a) => ({ ...a })) : [],
+      // Phase 2c: the projects whose activity guests follow (the window
+      // sends it while they do), and the pages they watch.
+      feeds: { activity: live ? [...activityWatched] : [] },
+      pagesWatched: live && pageFeed ? pageFeed.watched() : []
     }
   }
   const pushHost = () => send('liveShare:host', hostStatus())
@@ -555,12 +587,60 @@ export function registerLiveShare({
     ['fs', (s, project, key, on) => watchFolder(s, project, 'fs', on)],
     ['scm', (s, project, key, on) => watchFolder(s, project, 'scm', on)],
     ['file', (s, project, key, on) => watchFile(s, project, key, on)],
-    ['tasks', (s, project, key, on) => on && pushBoard(s, project)]
+    ['tasks', (s, project, key, on) => on && pushBoard(s, project)],
+    ['activity', (s, project, key, on) => watchActivity(s, project, on)]
   ])
   const projectRoots = (project) => {
     const root = roots.get(project)
     const info = root ? scope.root(root) : null
     return info ? cleanRoots([info.real, info.root]) : []
+  }
+
+  // --- Phase 2c: past conversations, activity, browser pages ----------------------
+  // A project's past agent conversations and its terminal agents' (masked,
+  // shareHistory.js), with its folder (host-only) and its agent panes.
+  const history = createShareHistory({ listSessions: sessionHistory && sessionHistory.list, sessionDetails: sessionHistory && sessionHistory.details, readTerminal })
+  addOps(HISTORY_OPS, (req, ctx, s) => historyRequest(req, s))
+  function historyRequest(req, s) {
+    const root = roots.get(req.project) || null
+    const info = root ? scope.root(root) : null
+    const where = { root: info ? info.root : null, roots: projectRoots(req.project), rawRoots: info ? [info.real, info.root] : [] }
+    if (req.op === 'sessions.list') return history.list(req.project, req.args, where)
+    if (req.op === 'sessions.details') return history.details(req.project, req.args, where)
+    const home = chatHomes(s)
+    const panes = (chatSources.get(req.project) || []).filter((c) => c.terminal && home.get(c.id) === req.project)
+    return history.terminal(req.project, req.args, { ...where, panes })
+  }
+
+  // The activity of the projects guests follow: the window sends it while
+  // they do (liveShare:feeds), guests get a masked copy when it changed.
+  const activityWatched = new Set()
+  let activities = new Map() // project -> { data, json }
+  function watchActivity(s, project, on) {
+    if (on) activityWatched.add(project)
+    else {
+      activityWatched.delete(project)
+      activities.delete(project)
+    }
+    send('liveShare:feeds', { activity: [...activityWatched] })
+    const a = activities.get(project)
+    if (on && a && sharing === s && s.server) s.server.push('activity', project, null, a.data)
+  }
+
+  // The browser pages of the shared projects (sharePageFeed.js): the window's
+  // list, each page kept only when it is a browser pane of its shared
+  // project's layout; who watches which, for the host's window.
+  const pageFeed = typeof pageById === 'function' ? createPageFeed({ guestById: pageById, log, onWatchers: () => pushPagesWatched(), ...pageDeps }) : null
+  let pageList = []
+  const pageAllowed = (s) => (project, paneId) => (s.projects || []).includes(project) && layoutLeaves(layouts.get(project)).some((l) => l.id === paneId && l.view === 'browser')
+  function refreshPages() {
+    const s = sharing
+    if (!pageFeed || !s || !s.server) return
+    pageFeed.setPages(pageList, pageAllowed(s))
+  }
+  function pushPagesWatched() {
+    const s = sharing
+    if (pageFeed && s && s.state === 'sharing' && s.server) send('liveShare:pagesWatched', pageFeed.watched())
   }
 
   // Files, notes and git (shareRequests.js), with the project's folder, the
@@ -981,6 +1061,13 @@ export function registerLiveShare({
           return o ? o.run(req, ctx, s) : { ok: false, code: 'bad-op' }
         },
         watch: (topic, project, key, on) => channelTopics.get(topic)?.(s, project, key, on),
+        // Phase 2c: a guest watching one of the browser pages, its input.
+        ...(pageFeed
+          ? {
+              watchGuest: (topic, project, key, stream, on) => topic === 'page' && sharing === s && pageFeed.watchGuest(stream, project, key, on),
+              pageInput: (stream, project, page, events, mayUse) => (sharing === s ? pageFeed.input(stream, project, page, events, mayUse) : { ok: false, code: 'revoked', done: 0, refused: [] })
+            }
+          : {}),
         write: (id, data) => host.send('write', { id, data }),
         agents: () => hostAgents,
         openPane: (spec, guest) => requestOpen('open', spec, guest),
@@ -1042,6 +1129,11 @@ export function registerLiveShare({
     closeAllFeeds()
     stopWatches()
     endTaskRequests('revoked')
+    pageFeed?.stop()
+    pageList = []
+    history.forget()
+    activityWatched.clear()
+    activities = new Map()
     layouts = new Map()
     chatSources = new Map()
     roots = new Map()
@@ -1295,6 +1387,10 @@ export function registerLiveShare({
     s.projects = on ? [...projects, id] : projects.filter((x) => x !== id)
     info(on ? 'a project added to the share' : 'a project taken out of the share')
     if (sharing === s) changedNow()
+    if (!on) {
+      history.forget(id)
+      refreshPages()
+    }
     saveHost()
     pushHost()
     return { ok: true, projectIds: [...s.projects] }
@@ -1339,6 +1435,8 @@ export function registerLiveShare({
       if (s.project && !keep.has(s.project)) g.subs.delete(k)
     }
     if (g.watchedRoot && !keep.has(g.watchedRoot)) g.watchedRoot = null
+    if (g.page && !keep.has(g.page.project)) g.page = null
+    for (const id of [...g.activities.keys()]) if (!keep.has(id)) g.activities.delete(id)
   }
 
   // The Files tab's project (one at a time, like a local one): its files and
@@ -1403,6 +1501,45 @@ export function registerLiveShare({
       g.boards.set(project, tasks)
       return send('liveShare:push', { topic: 'tasks', project, data: { tasks } })
     }
+    if (topic === 'activity') {
+      const checked = checkActivity(data, { paneId: (id) => guestPaneId(g.session, id), wsId: project })
+      if (!checked) return
+      g.activities.set(project, checked)
+      return send('liveShare:push', { topic: 'activity', project, data: checked })
+    }
+  }
+
+  // --- Phase 2c on the guest's side: the host's pages, its past conversations --
+  // A browser pane of the host's shown here (its id in this window) -> where
+  // it is on the host, or null.
+  function hostPageOf(g, id) {
+    for (const p of g.projects) for (const l of layoutLeaves(p.layout)) if (l.view === 'browser' && guestPaneId(g.session, l.id) === id) return { project: p.id, remote: l.id }
+    return null
+  }
+  // The host's pane of one of this window's (a terminal or a chat), by its
+  // id here.
+  function hostPaneOf(g, id) {
+    const pane = g.byLocal.get(id) || g.chatByLocal.get(id)
+    return pane ? pane.remoteId : null
+  }
+  // A frame or news of the page this window watches, checked (a host is not
+  // trusted with what it sends), to the window.
+  function onPageFrame(g, msg) {
+    const f = checkPageFrame(msg)
+    if (!f || !g.page || g.page.remote !== f.page || g.page.project !== msg.project) return
+    send('liveShare:pageFrame', { id: g.page.local, seq: f.seq, jpeg: f.jpeg, w: f.w, h: f.h, viewport: f.viewport, meta: f.meta })
+  }
+  function onPageEvent(g, msg) {
+    const ev = checkPageEvent(msg)
+    if (!ev || !g.page || g.page.remote !== ev.page || g.page.project !== msg.project) return
+    const rest = { ...ev }
+    delete rest.page
+    send('liveShare:pageEvent', { id: g.page.local, ...rest })
+  }
+  function unwatchPage(g) {
+    if (!g.page) return
+    guestSubscribe('page', g.page.project, g.page.remote, false)
+    g.page = null
   }
 
   // --- Guest -------------------------------------------------------------
@@ -1668,6 +1805,8 @@ export function registerLiveShare({
         },
         onNotice: (code) => joined === g && g.client === client && send('liveShare:notice', { code: str(code, 40) }),
         onPush: (topic, project, key, data) => joined === g && g.client === client && onGuestPush(g, topic, project, key, data),
+        onPageFrame: (msg) => joined === g && g.client === client && onPageFrame(g, msg),
+        onPageEvent: (msg) => joined === g && g.client === client && onPageEvent(g, msg),
         onProjects: (projects) => joined === g && g.client === client && onProjects(g, projects),
         onSnapshot: (remoteId, data, cols, rows) => {
           if (joined !== g || g.client !== client) return
@@ -1752,6 +1891,10 @@ export function registerLiveShare({
       subs: new Map(),
       watchedRoot: null,
       boards: new Map(),
+      // Phase 2c: the host's page this window watches ({ local, project,
+      // remote }), and the activity that came (project -> { events, teams }).
+      page: null,
+      activities: new Map(),
       reason: null,
       client: null,
       rights: null,
@@ -1908,6 +2051,26 @@ export function registerLiveShare({
     if ([...before].some(([id, project]) => after.get(id) !== project) || [...chatsBefore].some(([id, project]) => chatsAfter.get(id) !== project)) changedNow()
     else screenChanged()
     refreshFeeds()
+    refreshPages()
+  })
+  // The window's browser panes of the shared projects: [{ project, paneId,
+  // webContentsId, hidden }] (host-only: guests know a page by its pane).
+  ipcMain.on('liveShare:pages', (_evt, list) => {
+    pageList = Array.isArray(list) ? list.slice(0, 64) : []
+    refreshPages()
+  })
+  // The activity of the projects guests follow: [{ project, events, teams }].
+  ipcMain.on('liveShare:activity', (_evt, list) => {
+    const s = sharing
+    if (!s || !s.server) return
+    for (const item of (Array.isArray(list) ? list : []).slice(0, MAX_PROJECTS)) {
+      if (!item || !(s.projects || []).includes(item.project) || !activityWatched.has(item.project)) continue
+      const data = guestActivity(item.events, item.teams, item.project, projectRoots(item.project))
+      const json = JSON.stringify(data)
+      if (activities.get(item.project)?.json === json) continue
+      activities.set(item.project, { data, json })
+      s.server.push('activity', item.project, null, data)
+    }
   })
   // A project added to the share or taken out: { id, shared }.
   ipcMain.handle('liveShare:share', (_evt, { id, shared } = {}) => setShared(id, !!shared))
@@ -2079,7 +2242,84 @@ export function registerLiveShare({
     if (!g || (on && !g.projects.some((p) => p.id === project))) return { ok: false }
     const ok = guestSubscribe(topic, project, null, !!on)
     const board = topic === 'tasks' && on ? g.boards.get(project) : null
-    return { ok, ...(board ? { data: { tasks: board } } : {}), outdated: !g.features.has(TOPICS[topic].feature) && g.state === 'joined' }
+    const activity = topic === 'activity' && on ? g.activities.get(project) : null
+    return { ok, ...(board ? { data: { tasks: board } } : {}), ...(activity ? { data: activity } : {}), outdated: !g.features.has(TOPICS[topic].feature) && g.state === 'joined' }
+  })
+  // Guest: the host's past conversations of a project and what its terminal
+  // agents said ({ op: list | details | terminal, project, args }), checked
+  // when they come back. -> { ok, data } | { ok: false, code }
+  ipcMain.handle('liveShare:sessions', async (_evt, { op, project, args } = {}) => {
+    const g = joined
+    if (!g || g.state !== 'joined') return { ok: false, code: 'offline' }
+    if (!g.features.has('history')) return { ok: false, code: 'outdated-host' }
+    const a = args && typeof args === 'object' ? args : {}
+    let name
+    let clean
+    if (op === 'list') {
+      name = 'sessions.list'
+      clean = listArgs(a)
+    } else if (op === 'details') {
+      name = 'sessions.details'
+      clean = isRef(a.ref) ? { ref: a.ref } : null
+    } else if (op === 'terminal') {
+      name = 'sessions.terminal'
+      const known = {}
+      for (const [id, key] of Object.entries(a.known && typeof a.known === 'object' ? a.known : {}).slice(0, 64)) {
+        const remote = typeof id === 'string' ? hostPaneOf(g, id) : null
+        if (remote && isRef(key)) known[remote] = key
+      }
+      clean = { from: Number.isFinite(a.from) && a.from >= 0 ? a.from : 0, known }
+    }
+    if (!name || !clean || typeof project !== 'string') return { ok: false, code: 'bad-args' }
+    let res
+    try {
+      res = await guestRequest(name, project, clean)
+    } catch {
+      return { ok: false, code: 'offline' }
+    }
+    if (!res || !res.ok) return { ok: false, code: (res && typeof res.code === 'string' && res.code.slice(0, 40)) || 'failed' }
+    if (op === 'list') {
+      const sessions = checkSessionList(res.data)
+      return sessions ? { ok: true, sessions, truncated: !!(res.data && res.data.truncated) } : { ok: false, code: 'failed' }
+    }
+    if (op === 'details') return checkSessionDetails(res.data) || { ok: false, code: 'failed' }
+    const local = (remote) => (g.panes.get(remote) || g.chats.get(remote) || {}).localId || null
+    const checked = checkTerminal(res.data, local)
+    if (!checked) return { ok: false, code: 'failed' }
+    // Each pane's name and agent, as this window shows them.
+    for (const [id, entry] of Object.entries(checked.panes)) {
+      const pane = g.byLocal.get(id) || g.chatByLocal.get(id)
+      entry.title = pane ? pane.title || '' : ''
+      entry.agentId = pane ? pane.agentId || null : null
+    }
+    return { ok: true, panes: checked.panes }
+  })
+  // Guest: a browser pane of the host's watched by this window (on: its view
+  // is on screen) or no longer; one at a time. -> { ok } | { ok: false, code }
+  ipcMain.handle('liveShare:pageWatch', (_evt, { id, on } = {}) => {
+    const g = joined
+    if (!g) return { ok: false, code: 'offline' }
+    if (!on) {
+      if (g.page && g.page.local === id) unwatchPage(g)
+      return { ok: true }
+    }
+    if (g.state === 'joined' && !g.features.has('pages')) return { ok: false, code: 'outdated-host' }
+    const loc = typeof id === 'string' ? hostPageOf(g, id) : null
+    if (!loc) return { ok: false, code: 'missing' }
+    if (!(g.rights && g.rights.pagesView)) return { ok: false, code: 'forbidden' }
+    if (g.page && g.page.local === id) return { ok: true }
+    unwatchPage(g)
+    g.page = { local: id, project: loc.project, remote: loc.remote }
+    guestSubscribe('page', loc.project, loc.remote, true)
+    return { ok: true }
+  })
+  // Guest: input on the page this window watches ({ id, events }), with the
+  // right to use it; the host checks everything again.
+  ipcMain.on('liveShare:pageInput', (_evt, { id, events } = {}) => {
+    const g = joined
+    if (!g || g.state !== 'joined' || !g.client || !g.page || g.page.local !== id || !Array.isArray(events)) return
+    if (!(g.rights && g.rights.pagesView && g.rights.pagesUse)) return
+    g.client.input(g.page.project, g.page.remote, events.slice(0, PAGE_EVENTS))
   })
   // Guest: a change of a host's board ({ op: add | move | edit | remove |
   // answer, project, args }): the host checks the right, and its window
@@ -2163,6 +2403,9 @@ export function registerLiveShare({
     shareSettings: () => ({ ...shareSettings }),
     addOps,
     addTopic: (topic, fn) => channelTopics.set(topic, fn),
+    // Host: a new window a browser page asks for, from a guest's click? (the
+    // browser's popup rule, browserGuest.js guestPopup) -> null | { allowed }
+    pagePopup: (webContentsId) => (sharing && sharing.server && pageFeed ? pageFeed.popupFrom(webContentsId) : null),
     // Guest panes (the host's, shown here).
     isGuestPane,
     guestAttach,
@@ -2176,6 +2419,7 @@ export function registerLiveShare({
       suspended = true
       const s = sharing
       closeAllFeeds()
+      pageFeed?.stop()
       if (s && s.state === 'sharing') {
         saveHost()
         clearInterval(hostTimer)

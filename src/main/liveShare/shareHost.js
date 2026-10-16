@@ -122,7 +122,13 @@
 // TOPICS): the host's Tessel is told when the first guest subscribes and the
 // last one leaves (callbacks.watch), and sends the news with push(): to each
 // guest subscribed that may still see it, the latest only while its
-// connection is behind.
+// connection is behind. A topic whose subscriptions are each guest's own
+// stream (perGuest: a page's frames, phase 2c's 'pages' feature) is told to
+// the host's Tessel for each guest (callbacks.watchGuest), which sends to
+// that guest alone (stream.send: 'frame' and 'page' messages), never to a
+// subscription that no longer stands; with 'pages', a guest's input on the
+// page it watches ('input') goes to callbacks.pageInput when it still has
+// both page rights.
 //
 // Presence, for the host's eyes only (presence(), onPresence): which of the
 // host's panes each guest has on screen (the 'presence' feature: 'focus',
@@ -195,6 +201,11 @@ const PUSH_RETRY_MS = 250
 // read everything again).
 const MAX_PUSH_PATHS = 256
 const CODE = /^[a-z][a-z-]{0,39}$/
+// A guest's input messages on a page a minute (each carries a few events,
+// counted again by the host's Tessel).
+const PAGE_INPUTS_PER_MINUTE = 1800
+// What a page stream sends a guest.
+const STREAM_MESSAGES = new Set(['frame', 'page'])
 // The agents the host lists for guests, at most.
 const MAX_AGENTS = 32
 // Presence: typing in a pane counts for this long; a guest says what it has
@@ -354,6 +365,19 @@ export function stripTerminalReplies(data) {
 //   watch(topic, project, key, on) -> optional: the first guest subscribed
 //                             to that topic (on), or the last one left; its
 //                             news go out with push(topic, project, key, data)
+//   watchGuest(topic, project, key, stream, on) -> optional (without it, no
+//                             guest gets 'pages'): a guest's subscription to a
+//                             perGuest topic started or ended; stream: { guest
+//                             (its id), person (its person's key hash), name,
+//                             live() (still subscribed and allowed), behind()
+//                             (its connection's bytes waiting), send(type,
+//                             body) ('frame' | 'page', to that guest only,
+//                             while live) }, the same object on and off
+//   pageInput(stream, project, page, events, mayUse) -> optional: a guest's
+//                             input on the page it watches (it has
+//                             'pagesView' and 'pagesUse' there; mayUse()
+//                             says it still does): Promise<{ ok, done,
+//                             refused, notice?, code? }>
 // projects()' items may have chats: [{ id, title, agentId, accent,
 // terminal }] (shareChat.js cleanChatPanes), sent only to guests with the
 // 'chat' feature.
@@ -396,7 +420,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
   const knownChanged = () => callbacks.onKnownChanged?.()
   // What this host speaks beyond the protocol version.
   const serves = callbacks.opInfo && callbacks.request
-  const FEATURE_NEEDS = { chat: callbacks.chatWatch, agents: callbacks.agents, presence: callbacks.onPresence, files: serves, scm: serves, tasks: serves }
+  const FEATURE_NEEDS = { chat: callbacks.chatWatch, agents: callbacks.agents, presence: callbacks.onPresence, files: serves, scm: serves, tasks: serves, history: serves, pages: callbacks.watchGuest }
   const hostFeatures = SHARE_FEATURES.filter((f) => typeof FEATURE_NEEDS[f] === 'function')
   // Conversations watched: pane id -> Set of guest ids; the last one read
   // (sent at once to a guest that starts watching), and when one last went out.
@@ -890,6 +914,8 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     if (s.project && !(g.projects.has(s.project) && stillMay(g, s.project, s.spec.right || 'view'))) return
     if (g.subs.size >= L.subs || [...g.subs.values()].filter((x) => x.topic === s.topic).length >= s.spec.max) return
     g.subs.set(k, { topic: s.topic, project: s.project, key: s.key, seq: 0 })
+    // Its own stream: the host's Tessel hears this guest's subscription.
+    if (s.spec.perGuest) return streamWatch(g, k, true)
     let set = watchers.get(k)
     const first = !set
     if (!set) watchers.set(k, (set = new Set()))
@@ -905,7 +931,10 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     if (lastPush.has(k)) pushTo(g, k, lastPush.get(k))
   }
   function unsubscribe(g, k) {
+    const sub = g.subs.get(k)
+    if (sub && sub.stream) streamWatch(g, k, false)
     if (!g.subs.delete(k)) return
+    if (sub && sub.stream) return
     g.pushHeld.delete(k)
     const set = watchers.get(k)
     if (!set || !set.delete(g.id) || set.size) return
@@ -924,6 +953,58 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     const spec = Object.hasOwn(TOPICS, sub.topic) ? TOPICS[sub.topic] : null
     return !!spec && g.features.has(spec.feature) && (!sub.project || (g.projects.has(sub.project) && stillMay(g, sub.project, spec.right || 'view')))
   }
+  // A guest's own stream of a perGuest topic (a page it watches): the host's
+  // Tessel hears it start and end, and sends to this guest alone while the
+  // subscription stands (its project and right still the guest's).
+  function streamWatch(g, k, on) {
+    const sub = g.subs.get(k)
+    if (!sub) return
+    if (on && !sub.stream) {
+      const live = () => guests.get(g.id) === g && g.state === 'joined' && g.subs.get(k) === sub && subLive(g, sub)
+      sub.stream = {
+        guest: g.id,
+        person: g.person ? g.person.hash : g.id,
+        name: g.name || '',
+        live,
+        behind: () => g.socket.bufferedAmount,
+        send: (type, body) => {
+          if (!STREAM_MESSAGES.has(type) || !live()) return false
+          send(g, { ...(body && typeof body === 'object' ? body : {}), t: type, project: sub.project, page: sub.key })
+          return true
+        }
+      }
+    }
+    if (!sub.stream) return
+    try {
+      callbacks.watchGuest?.(sub.topic, sub.project, sub.key, sub.stream, on)
+    } catch {
+      /* the host's watch going wrong never ends the guest */
+    }
+  }
+  // A guest's input on the page it watches ('pages'): with both rights on
+  // that project now, within its own limit; what became of it comes back
+  // only when something was refused.
+  function onInput(g, msg) {
+    if (!g.features.has('pages') || typeof callbacks.pageInput !== 'function') return
+    const project = isProjectId(msg.project) ? msg.project : null
+    const page = typeof msg.page === 'string' && /^[\w-]{1,80}$/.test(msg.page) ? msg.page : null
+    if (!project || !page || !Array.isArray(msg.events)) return
+    const sub = g.subs.get(subKey('page', project, page))
+    if (!sub || !sub.stream) return
+    const mayUse = () => g.projects.has(project) && stillMay(g, project, 'pagesView') && stillMay(g, project, 'pagesUse')
+    if (!within(countsOf(g), 'pageInputs', PAGE_INPUTS_PER_MINUTE)) return
+    if (!mayUse()) return sub.stream.send('page', { state: 'input', code: 'forbidden', refused: [] })
+    Promise.resolve()
+      .then(() => callbacks.pageInput(sub.stream, project, page, msg.events.slice(0, 64), mayUse))
+      .then((r) => {
+        if (!r || typeof r !== 'object') return
+        const refused = Array.isArray(r.refused) ? r.refused.filter((c) => typeof c === 'string').slice(0, 12) : []
+        if (r.ok !== false && !refused.length && !r.notice) return
+        sub.stream.send('page', { state: 'input', refused, ...(r.notice === 'limit' ? { notice: 'limit' } : {}), ...(r.ok === false && typeof r.code === 'string' ? { code: r.code.slice(0, 24) } : {}) })
+      })
+      .catch(() => {})
+  }
+
   // News of one subscription to one guest: the latest only while its
   // connection is behind ('fs' news gather their paths).
   function pushTo(g, k, data) {
@@ -1466,6 +1547,8 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
         return onCancel(g, msg)
       case 'sub':
         return onSub(g, msg)
+      case 'input':
+        return onInput(g, msg)
       // The pane it has on screen now (presence, the host's eyes only): one
       // of its panes, or none; a couple a second at most. It gives nothing.
       case 'focus': {

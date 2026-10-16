@@ -1397,7 +1397,8 @@ app.on('will-quit', () => transcriptViews.closeAll())
 // The Conversations tab: what you and each terminal agent said in its
 // terminal, read from its conversation file (its account's folder for Claude
 // Code and Codex, resolved here; a host's file over its connection).
-createTerminalConversations({
+// Live Share guests read their own copy of a shared project's (liveShare.js).
+const terminalConversations = createTerminalConversations({
   log,
   homes: async (agent, accountId) => {
     const r = await accountSessions.roots({ agent, accountId })
@@ -1405,7 +1406,8 @@ createTerminalConversations({
   },
   sessionsDir: () => sessionsDir(),
   readAgentFile: (hostId, q) => (remoteHosts.get(hostId) ? remoteFs.readAgentFile(hostId, q) : { ok: false, error: 'unknown host' }) // i18n-ignore
-}).register(ipcMain)
+})
+terminalConversations.register(ipcMain)
 // The skills a terminal agent's chat view lists ("/" menu): its project's
 // (its open view's folder), the user's and its account's.
 createTerminalSkills({
@@ -3002,7 +3004,10 @@ const browserGuests = createBrowserGuests({
     if (isSafeExternal(url)) shell.openExternal(url).catch(() => {})
   },
   // Each page's console, for the agents' browser tools.
-  onGuest: (guest) => agentBrowser.watchGuest(guest)
+  onGuest: (guest) => agentBrowser.watchGuest(guest),
+  // A new window from a Live Share guest's click in a shared page: a new
+  // pane in the guest session, a few a minute (liveShare.js pagePopup).
+  guestPopup: (id) => (liveShare ? liveShare.pagePopup(id) : null)
 })
 browserGuests.register(ipcMain)
 // Importing cookies from another browser into Tessel's browser session, so the
@@ -3597,6 +3602,12 @@ liveShare = registerLiveShare({
   trashItem: (p) => shell.trashItem(p),
   // Taken back once this is the only Tessel running (below).
   resume: false,
+  // Phase 2c: a shared project's past conversations (masked there), what
+  // its terminal agents said, and its browser pages (any of the browser's
+  // sessions: the host's window lists them, checked against the share).
+  sessionHistory: { list: (q) => accountSessions.list(q), details: (q) => accountSessions.details(q) },
+  readTerminal: (q) => terminalConversations.read(q),
+  pageById: (id) => browserGuests.pageById(id),
   // The conversations guests watch (read only): a reader of their own, never
   // the window's chat views; no images or files (liveShare/shareChat.js).
   chatViews: (sendView) =>
