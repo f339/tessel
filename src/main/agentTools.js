@@ -9,7 +9,8 @@ import {
   jsonAgentConfig,
   configToEntry,
   setJsonAgentServer,
-  removeJsonAgentServer
+  removeJsonAgentServer,
+  secretNames
 } from './jsonAgents'
 import path, { join, dirname, basename } from 'path'
 import os from 'os'
@@ -113,8 +114,12 @@ export function codexServersFromList(list) {
   if (!Array.isArray(list)) return []
   return list.map((s) => {
     const t = s.transport || {}
+    // env_vars: the names Codex passes through from its own environment.
+    const passed = Array.isArray(t.env_vars) ? t.env_vars.filter((k) => typeof k === 'string') : []
     const cfg =
-      t.type === 'stdio' ? { command: t.command, args: t.args } : { type: 'http', url: t.url }
+      t.type === 'stdio'
+        ? { command: t.command, args: t.args, env: { ...(t.env || {}), ...Object.fromEntries(passed.map((k) => [k, ''])) } }
+        : { type: 'http', url: t.url, headers: t.http_headers }
     return { ...describeServer(s.name, cfg, 'user'), enabled: s.enabled !== false }
   })
 }
@@ -123,8 +128,9 @@ function describeServer(name, cfg = {}, scope) {
   const type = cfg.type === 'http' || cfg.type === 'sse' || cfg.url ? cfg.type || 'http' : 'stdio'
   const target =
     type === 'stdio' ? [cfg.command, ...(cfg.args || [])].filter(Boolean).join(' ') : cfg.url || ''
-  // Never expose env values or headers (they are usually secrets).
-  return { name, scope, type, target }
+  // Never expose env values or headers (they are usually secrets): their
+  // names only, for Settings > MCP servers.
+  return { name, scope, type, target, ...secretNames(cfg) }
 }
 
 function normPath(p) {
@@ -884,6 +890,36 @@ export async function testMcp(ref, baseEnv = process.env, spawnFn = spawn) {
   const started = Date.now()
   const res =
     cfg.transport === 'http' ? await testHttp(cfg, baseEnv) : await testStdio(cfg, baseEnv, spawnFn)
+  return { ...res, ms: Date.now() - started }
+}
+
+// Settings > MCP servers > Custom, "Test before adding": the same check as
+// testMcp, on the form's values instead of an agent's settings. Nothing is
+// written; the values never leave the main process.
+export async function testMcpSpec(spec = {}, baseEnv = process.env, spawnFn = spawn) {
+  let env
+  let headers
+  try {
+    env = parseKeyValueLines(spec.env)
+    headers = parseKeyValueLines(spec.headers, ':')
+  } catch (err) {
+    return { ok: false, status: 'error', error: err.message }
+  }
+  let cfg
+  if (spec.transport === 'http') {
+    const url = String(spec.url || '').trim()
+    if (!/^https?:\/\//i.test(url))
+      return { ok: false, status: 'error', error: t('main.mcp.urlRequired', 'Enter a URL starting with http:// or https://') }
+    const bearer = String(spec.bearerEnvVar || '').trim()
+    cfg = { transport: 'http', url, headers, sse: !!spec.sse, bearerEnvVar: /^[A-Za-z_][A-Za-z0-9_]*$/.test(bearer) ? bearer : null }
+  } else {
+    const words = splitCommandLine(spec.commandLine)
+    if (!words.length)
+      return { ok: false, status: 'error', error: t('main.mcp.commandRequired', 'Enter the command that starts the server.') }
+    cfg = { transport: 'stdio', command: words[0], args: words.slice(1), env }
+  }
+  const started = Date.now()
+  const res = cfg.transport === 'http' ? await testHttp(cfg, baseEnv) : await testStdio(cfg, baseEnv, spawnFn)
   return { ...res, ms: Date.now() - started }
 }
 

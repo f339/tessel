@@ -6,6 +6,8 @@
 //               'header' (HTTP header for Claude Code)
 // `requires` names a command that must be installed (see Tools).
 // `auth: 'oauth'` means the server asks you to sign in on first use.
+// `docs` is its documentation (checked to exist); an npx or uvx server
+// without one links to its package (catalogDocs).
 // Descriptions, labels and help are getters, so they read in the current
 // language when shown.
 import { t } from './i18n'
@@ -60,7 +62,8 @@ export const MCP_CATALOG = [
       return t('mcp.catalog.context7.desc', 'Up-to-date documentation and code examples for thousands of libraries.')
     },
     transport: 'http',
-    url: 'https://mcp.context7.com/mcp'
+    url: 'https://mcp.context7.com/mcp',
+    docs: 'https://github.com/upstash/context7',
   },
   {
     id: 'deepwiki',
@@ -71,7 +74,8 @@ export const MCP_CATALOG = [
       return t('mcp.catalog.deepwiki.desc', 'Ask questions about any public GitHub repository and read its generated docs.')
     },
     transport: 'http',
-    url: 'https://mcp.deepwiki.com/mcp'
+    url: 'https://mcp.deepwiki.com/mcp',
+    docs: 'https://docs.devin.ai/work-with-devin/deepwiki-mcp',
   },
   {
     id: 'cloudflare-docs',
@@ -82,7 +86,8 @@ export const MCP_CATALOG = [
       return t('mcp.catalog.cloudflare-docs.desc', 'Search Cloudflare developer documentation.')
     },
     transport: 'http',
-    url: 'https://docs.mcp.cloudflare.com/mcp'
+    url: 'https://docs.mcp.cloudflare.com/mcp',
+    docs: 'https://github.com/cloudflare/mcp-server-cloudflare',
   },
   {
     id: 'huggingface',
@@ -93,7 +98,8 @@ export const MCP_CATALOG = [
       return t('mcp.catalog.huggingface.desc', 'Search models, datasets, papers and Spaces on Hugging Face.')
     },
     transport: 'http',
-    url: 'https://huggingface.co/mcp'
+    url: 'https://huggingface.co/mcp',
+    docs: 'https://huggingface.co/docs/hub/hf-mcp-server',
   },
   {
     id: 'github',
@@ -105,6 +111,7 @@ export const MCP_CATALOG = [
     },
     transport: 'http',
     url: 'https://api.githubcopilot.com/mcp/',
+    docs: 'https://github.com/github/github-mcp-server',
     headers: 'Authorization: Bearer {token}', // i18n-ignore
     bearerEnvVar: 'GITHUB_PERSONAL_ACCESS_TOKEN',
     inputs: [
@@ -314,6 +321,7 @@ export const MCP_CATALOG = [
     },
     transport: 'http',
     url: 'https://mcp.sentry.dev/mcp',
+    docs: 'https://docs.sentry.io/product/sentry-mcp/',
     auth: 'oauth'
   },
   {
@@ -326,6 +334,7 @@ export const MCP_CATALOG = [
     },
     transport: 'http',
     url: 'https://mcp.notion.com/mcp',
+    docs: 'https://developers.notion.com/docs/mcp',
     auth: 'oauth'
   },
   {
@@ -338,6 +347,7 @@ export const MCP_CATALOG = [
     },
     transport: 'http',
     url: 'https://mcp.linear.app/mcp',
+    docs: 'https://linear.app/docs/mcp',
     auth: 'oauth'
   },
   {
@@ -350,6 +360,7 @@ export const MCP_CATALOG = [
     },
     transport: 'http',
     url: 'https://mcp.atlassian.com/v1/mcp',
+    docs: 'https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/',
     auth: 'oauth'
   },
   {
@@ -362,6 +373,7 @@ export const MCP_CATALOG = [
     },
     transport: 'http',
     url: 'https://mcp.stripe.com',
+    docs: 'https://docs.stripe.com/mcp',
     auth: 'oauth'
   },
   {
@@ -374,9 +386,21 @@ export const MCP_CATALOG = [
     },
     transport: 'http',
     url: 'https://mcp.vercel.com',
+    docs: 'https://vercel.com/docs/mcp/vercel-mcp',
     auth: 'oauth'
   }
 ]
+
+// The entry's documentation: its own link, else its npm or PyPI package.
+export function catalogDocs(entry) {
+  if (entry.docs) return entry.docs
+  const words = String(entry.command || '').split(/\s+/)
+  const pkg = words.find((w, i) => i > 0 && w && !w.startsWith('-') && !w.startsWith('"'))
+  if (!pkg) return null
+  if (words[0] === 'npx') return `https://www.npmjs.com/package/${pkg.replace(/(.)@[^/]*$/, '$1')}` // i18n-ignore
+  if (words[0] === 'uvx') return `https://pypi.org/project/${pkg}/` // i18n-ignore
+  return null
+}
 
 // Build the add-request for one agent from a catalog entry and the answers.
 export function catalogSpec(entry, answers, agent) {
