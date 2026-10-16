@@ -2,8 +2,8 @@
 // account a pane there runs on (header, menu), the accounts it can restart
 // on, and "Where you're signed in" grouped by account (signedInPlaces.js).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { applyHostAccounts, entryLabel, hostAccountChoices, hostEntry, hostPaneAccount, planName, refreshHostAccounts, validHostAccount } from '../hostAccounts'
-import { accountKey, groupAccounts, switchTarget, switchablePanes } from '../signedInPlaces'
+import { applyHostAccounts, entryLabel, hostAccountChoices, hostEntry, hostPaneAccount, hostWatchers, planName, refreshHostAccounts, unwatchHostAccounts, validHostAccount, watchHostAccounts } from '../hostAccounts'
+import { accountKey, groupAccounts, panesOnLogin, switchTarget, switchablePanes } from '../signedInPlaces'
 
 const own = { agent: 'claude', scope: 'default', dir: '/home/u/.claude', email: 'coreine13@gmail.com', org: "coreine13@gmail.com's Organization", plan: 'pro', cred: 'file', state: 'signed-in' }
 const work = { agent: 'claude', scope: 'tessel', id: 'abc123', dir: '/home/u/.tessel-server/accounts/claude/abc123', email: 'work@corp.example', org: 'Corp', plan: 'max', cred: 'file', state: 'signed-in' }
@@ -26,7 +26,8 @@ describe('hostAccounts', () => {
     expect(hostPaneAccount('ssh-1', 'claude', undefined, 'box')).toEqual({
       name: 'coreine13 · Pro',
       title: "coreine13@gmail.com · Pro · coreine13@gmail.com's Organization, on box",
-      signedIn: true
+      signedIn: true,
+      override: []
     })
     expect(hostPaneAccount('ssh-1', 'claude', 'abc123', 'box').name).toBe('work · Max')
     expect(hostPaneAccount('ssh-1', 'claude', 'new999', 'box')).toMatchObject({ name: 'not signed in yet', signedIn: false })
@@ -120,5 +121,97 @@ describe('Where you’re signed in: grouped by account', () => {
     expect(switchablePanes(host, own, { id: null }, panes).map((p) => p.id)).toEqual(['p2'])
     expect(switchablePanes(pc, pc.entries[1], { id: 'uuid-1' }, panes).map((p) => p.id)).toEqual(['p3'])
     expect(switchablePanes(host, work, null, panes)).toEqual([])
+  })
+})
+
+describe('one timer per host', () => {
+  let previous, detect, answer
+  beforeEach(() => {
+    previous = window.shellApi
+    vi.useFakeTimers()
+    answer = { ok: true, entries: [own] }
+    detect = vi.fn(async () => answer)
+    window.shellApi = { remoteAccounts: { detect } }
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    window.shellApi = previous
+  })
+
+  it('the panes of a host share one timer: every minute, stopped with its last pane', async () => {
+    watchHostAccounts('ssh-t1', 'p1', { agentId: 'claude' })
+    watchHostAccounts('ssh-t1', 'p2', { agentId: 'claude' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(hostWatchers().filter((w) => w.hostId === 'ssh-t1')).toEqual([{ hostId: 'ssh-t1', panes: 2, wait: 0 }])
+    expect(detect).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(detect).toHaveBeenCalledTimes(2)
+    expect(detect).toHaveBeenLastCalledWith('ssh-t1', { fresh: false })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(detect).toHaveBeenCalledTimes(3)
+    unwatchHostAccounts('ssh-t1', 'p1')
+    unwatchHostAccounts('ssh-t1', 'p2')
+    expect(hostWatchers().some((w) => w.hostId === 'ssh-t1')).toBe(false)
+    await vi.advanceTimersByTimeAsync(300_000)
+    expect(detect).toHaveBeenCalledTimes(3)
+  })
+
+  it('a pane waiting for a sign-in in its folder: sooner, then slower; the wait ends once it is signed in', async () => {
+    answer = { ok: true, entries: [own, fresh] }
+    watchHostAccounts('ssh-t2', 'p3', { agentId: 'claude', hostAccount: 'new999' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(hostWatchers().find((w) => w.hostId === 'ssh-t2').wait).toBe(15_000)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(detect).toHaveBeenLastCalledWith('ssh-t2', { fresh: true })
+    expect(hostWatchers().find((w) => w.hostId === 'ssh-t2').wait).toBe(30_000)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(hostWatchers().find((w) => w.hostId === 'ssh-t2').wait).toBe(60_000)
+    // Signed in now (not merely an email: its login is there).
+    answer = { ok: true, entries: [own, { ...fresh, email: 'n@example.com', state: 'profile' }] }
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(hostWatchers().find((w) => w.hostId === 'ssh-t2').wait).toBe(120_000)
+    answer = { ok: true, entries: [own, { ...fresh, email: 'n@example.com', cred: 'file', state: 'signed-in' }] }
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(hostWatchers().find((w) => w.hostId === 'ssh-t2').wait).toBe(0)
+    const n = detect.mock.calls.length
+    await vi.advanceTimersByTimeAsync(59_000)
+    expect(detect.mock.calls.length).toBe(n)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(detect).toHaveBeenLastCalledWith('ssh-t2', { fresh: false })
+    unwatchHostAccounts('ssh-t2', 'p3')
+  })
+
+  it('a folder that is gone is no wait (never polled fast forever)', async () => {
+    answer = { ok: true, entries: [own] }
+    watchHostAccounts('ssh-t3', 'p4', { agentId: 'codex', hostAccount: 'gone00' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(hostWatchers().find((w) => w.hostId === 'ssh-t3').wait).toBe(0)
+    unwatchHostAccounts('ssh-t3', 'p4')
+  })
+})
+
+describe('labels and logins', () => {
+  it('a key or token set on the host is flagged on the account it overrides', () => {
+    const l = entryLabel({ ...own, override: ['helper'] }, 'box', { claude: ['key'] })
+    expect(l.name).toBe('coreine13 · Pro ⚠')
+    expect(l.title).toContain('an API key helper, an API key')
+    expect(entryLabel(own, 'box', { codex: ['key'] }).name).toBe('coreine13 · Pro')
+  })
+
+  it('the panes on a login: on its folder; on the agent’s own sign-in, the panes on no folder (unless the login shell names another folder); chats too', () => {
+    const host = { kind: 'ssh', hostId: 'ssh-1', entries: [own, work] }
+    const panes = [
+      { id: 'p1', agentId: 'claude', remoteHostId: 'ssh-1' },
+      { id: 'p2', agentId: 'claude', remoteHostId: 'ssh-1', hostAccount: 'abc123' },
+      { id: 'c1', kind: 'chat', agentId: 'claude', remoteHostId: 'ssh-1', hostAccount: 'abc123' },
+      { id: 'p3', agentId: 'codex', remoteHostId: 'ssh-1' },
+      { id: 'p4', agentId: 'claude', remoteHostId: 'ssh-2' }
+    ]
+    expect(panesOnLogin(host, work, panes).map((p) => p.id)).toEqual(['p2', 'c1'])
+    expect(panesOnLogin(host, own, panes).map((p) => p.id)).toEqual(['p1'])
+    expect(panesOnLogin({ ...host, entries: [own, { ...own, scope: 'env' }] }, own, panes)).toEqual([])
+    expect(panesOnLogin({ kind: 'pc' }, own, panes)).toEqual([])
+    // A chat is stopped with its login, never switched from Settings.
+    expect(switchablePanes(host, own, { id: null }, panes).map((p) => p.id)).toEqual(['p2'])
   })
 })

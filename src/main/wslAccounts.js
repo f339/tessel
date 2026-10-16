@@ -8,6 +8,8 @@ import { spawn } from 'child_process'
 import { ACCOUNTS_SHELL, parseAccounts } from './remoteAgent/remoteAccounts'
 
 export const DISTRO = /^[\w.-]{1,64}$/
+// A folder put back in the script as an argument: no quote, no control.
+const SAFE_ARG = /^\/[\p{L}\p{N}._@+/ -]{1,1023}$/u
 // Docker Desktop's own distros hold no agent.
 const SKIPPED = new Set(['docker-desktop', 'docker-desktop-data'])
 const MAX_OUT = 256 * 1024
@@ -102,13 +104,17 @@ export function createWslAccounts({ wslExe, spawnImpl = spawn, exists = () => tr
   }
 
   // -> { ok: true, os, home, entries } | { ok: false, stopped?, timeout?, error? }
-  async function scan(name, { start = false } = {}) {
+  // dirs: what the distro's login shell said at its first check ({ claude,
+  // codex }): its profile is not run again (null: it is asked now).
+  async function scan(name, { start = false, dirs = null } = {}) {
     if (!available() || typeof name !== 'string' || !DISTRO.test(name)) return { ok: false }
     if (!start) {
       const now = await runOnce(['-l', '--running', '-q'], { ms: listTimeoutMs, cap: 64 * 1024 })
       if (!now.ok || !distroNames(now.out).includes(name)) return { ok: false, stopped: true }
     }
-    const res = await runOnce(['-d', name, '-e', 'sh', '-s'], { input: `${ACCOUNTS_SHELL}\n__t_accts login\n`, ms: timeoutMs })
+    const arg = (d) => (typeof d === 'string' && SAFE_ARG.test(d) ? `'${d}'` : '-')
+    const call = dirs ? `__t_accts dirs ${arg(dirs.claude)} ${arg(dirs.codex)}` : '__t_accts login'
+    const res = await runOnce(['-d', name, '-e', 'sh', '-s'], { input: `${ACCOUNTS_SHELL}\n${call}\n`, ms: timeoutMs })
     if (!res.ok) return { ok: false, ...(res.timeout ? { timeout: true } : {}) }
     return { ok: true, ...parseAccounts(res.out.toString('utf8')) }
   }

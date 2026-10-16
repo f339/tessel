@@ -101,9 +101,17 @@ server.cjs runs with cwd = the pane env's `TESSEL_PROJECT_DIR` (when absolute).
   installed; writes atomically (tmp + rename), keeps a `.tessel-bak` once,
   never removes the user's other entries. Prints one JSON line with what it did.
   Since 1.3.0 also the account folders below (marker checked): Claude's
-  `<folder>/.claude.json` (Tessel's server, plus the user's servers it lacks,
-  added once) and `<folder>/settings.json` hooks; Codex's `<folder>/config.toml`
-  and `hooks.json` (a missing one becomes a link to the default folder's first).
+  `<folder>/.claude.json` (Tessel's server, plus the user's MCP servers of this
+  same host's `~/.claude.json`) and `<folder>/settings.json` hooks; Codex's
+  `<folder>/config.toml` and `hooks.json` (a missing one becomes a link to the
+  default folder's first). The MCP servers: copied once and recorded in
+  `<folder>/.tessel-mcp.json` (0600: their names and a digest of what was
+  copied); while the account's copy is as Tessel left it, it follows the
+  default one (a rotated key in its env or headers, a changed command) and
+  goes when that one goes; one the user changed or removed in the account is
+  left as they made it, never copied again, never doubled. Their env/header
+  values (keys included) are the user's own config on that host already:
+  they never leave it.
 - `version` – prints VERSION.
 
 ### Account folders (remoteAccounts.js, remoteAccounts.sh)
@@ -120,7 +128,21 @@ server.cjs runs with cwd = the pane env's `TESSEL_PROJECT_DIR` (when absolute).
   AGENTS.md, skills are links into `~/.codex`; its sign-in and `sessions` are
   its own (`__t_tfile` and the shim's `sessions` look there too).
 - `__t_accts` prints identity fields only (email, organization, plan, login),
-  each taken by its key name; a token is only ever tested for presence.
+  each taken by its key name; a token is only ever tested for presence (and
+  whether a settings.json or the login shell sets an API key, a token, a key
+  helper or a gateway that Claude Code would use instead of the sign-in).
+  `__t_accts login` runs the login shell (6 s at most, its whole process tree
+  ended past that) to read its CLAUDE_CONFIG_DIR / CODEX_HOME and exports:
+  main asks it once per connection and on an explicit refresh, then passes
+  the folders back (`__t_accts dirs <claude|-> <codex|->`).
+- Removal (`__t_acctrm`): the window names the panes still on that login and
+  main stops them after the yes; on the host the sign-in file goes first,
+  Codex's sessions, archived sessions and either agent's history.jsonl go to
+  the agent's own folder, then the folder is moved to
+  `accounts/.trash-<agent>-<id>-<pid>` (a running agent can no longer write
+  into it) and deleted. A folder there without its marker that still holds
+  a sign-in (an agent wrote it again) is listed as `orphan` and removed only
+  as such (`__t_acctrm <agent> <id> orphan`).
 
 ## Parts
 1. Shim (`src/main/remoteAgent/tessel-shim.cjs` + tests) – Gauss.

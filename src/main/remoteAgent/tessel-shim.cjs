@@ -512,10 +512,19 @@ function install({ home = os.homedir(), shimPath = path.resolve(__filename), env
   // with CLAUDE_CONFIG_DIR / CODEX_HOME there reads its settings from that
   // folder): the same team tools and hooks. Their settings are the default
   // folder's (a link) when that one exists; a Claude account's .claude.json
-  // is its own (its sign-in's profile), with your MCP servers added once.
+  // is its own (its sign-in's profile), with your MCP servers of this host's
+  // ~/.claude.json kept in step (mergeAccountClaudeJson).
   for (const dir of accountFolders(home, 'claude')) {
     const system = readJsonObject(claudeJson) || {}
-    jsonStep(path.join(dir, '.claude.json'), (cfg) => mergeAccountClaudeJson(cfg, system, shimPath, node))
+    const recordFile = path.join(dir, MCP_RECORD)
+    const record = readJsonObject(recordFile) || {}
+    let nextRecord = null
+    jsonStep(path.join(dir, '.claude.json'), (cfg) => {
+      const r = mergeAccountClaudeJson(cfg, system, shimPath, node, record)
+      nextRecord = r.record
+      return r
+    })
+    if (nextRecord && JSON.stringify(nextRecord) !== JSON.stringify(record)) step(recordFile, () => (writeAtomic(recordFile, JSON.stringify(nextRecord, null, 2) + '\n'), { changed: true }))
     linkMissing(path.join(dir, 'settings.json'), path.join(claudeDir, 'settings.json'))
     jsonStep(path.join(dir, 'settings.json'), (s) => mergeHooks(s, CLAUDE_HOOK_EVENTS, 'claude', shimPath, node))
   }
@@ -568,16 +577,63 @@ function linkMissing(file, target) {
   }
 }
 
-// An account's .claude.json: Tessel's server, and your own servers of the
-// default ~/.claude.json it does not have yet (never one it has).
-function mergeAccountClaudeJson(cfg, system, shimPath, node) {
+// Which of an account's MCP servers Tessel copied from the default
+// ~/.claude.json, and the digest of what it copied ({ servers: { name:
+// digest } }), next to its .claude.json (mode 600).
+const MCP_RECORD = '.tessel-mcp.json'
+const stableJson = (v) =>
+  Array.isArray(v) ? `[${v.map(stableJson).join(',')}]` : isPlainObject(v) ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(',')}}` : JSON.stringify(v)
+const digestOf = (v) => require('crypto').createHash('sha256').update(stableJson(v)).digest('hex').slice(0, 32)
+
+// An account's .claude.json: Tessel's server, and your own servers of this
+// host's default ~/.claude.json (the user's own config on this same host:
+// their env or header values, keys included, never leave it). A server is
+// copied once; while the account's copy is as Tessel left it, it follows
+// the default one (a rotated key, a changed command) and goes when the
+// default one goes; one you changed or removed in the account is left as
+// you made it (never copied again, never doubled).
+// record: what Tessel copied before ({ servers }). -> { value, changed, record }
+function mergeAccountClaudeJson(cfg, system, shimPath, node, record = {}) {
   const value = isPlainObject(cfg) ? cfg : {}
   const own = isPlainObject(value.mcpServers) ? value.mcpServers : {}
   const theirs = isPlainObject(system.mcpServers) ? system.mcpServers : {}
-  const added = Object.keys(theirs).filter((k) => k !== SERVER_NAME && !Object.hasOwn(own, k) && isPlainObject(theirs[k]))
-  const base = added.length ? { ...value, mcpServers: { ...own, ...Object.fromEntries(added.map((k) => [k, theirs[k]])) } } : value
+  const copied = isPlainObject(record.servers) ? record.servers : {}
+  const next = { ...own }
+  const nextCopied = {}
+  let touched = false
+  for (const name of Object.keys(theirs)) {
+    if (name === SERVER_NAME || !isPlainObject(theirs[name])) continue
+    const want = digestOf(theirs[name])
+    if (!Object.hasOwn(own, name)) {
+      // Removed from the account after Tessel copied it: left out (and
+      // remembered, so it is never copied again).
+      if (Object.hasOwn(copied, name)) {
+        nextCopied[name] = copied[name]
+        continue
+      }
+      next[name] = theirs[name]
+      nextCopied[name] = want
+      touched = true
+    } else if (Object.hasOwn(copied, name) && digestOf(own[name]) === copied[name]) {
+      if (want !== copied[name]) {
+        next[name] = theirs[name]
+        touched = true
+      }
+      nextCopied[name] = want
+    }
+  }
+  // Gone from the default config: Tessel's untouched copy goes too.
+  for (const name of Object.keys(copied)) {
+    if (Object.hasOwn(theirs, name) || !Object.hasOwn(own, name)) continue
+    if (digestOf(own[name]) === copied[name]) {
+      delete next[name]
+      touched = true
+    }
+  }
+  const base = touched ? { ...value, mcpServers: next } : value
   const r = mergeClaudeJson(base, shimPath, node)
-  return r.changed || added.length ? { value: r.value, changed: true } : { value: cfg, changed: false }
+  const nextRecord = { servers: nextCopied }
+  return r.changed || touched ? { value: r.value, changed: true, record: nextRecord } : { value: cfg, changed: false, record: nextRecord }
 }
 
 // ---------------------------------------------------------------------------

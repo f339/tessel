@@ -9,8 +9,8 @@ import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 import { t } from '../i18n'
 import { agentLabel, timeAgo } from '../sessionHistory'
-import { groupAccounts, switchTarget, switchablePanes } from '../signedInPlaces'
-import { planName, applyHostAccounts } from '../hostAccounts'
+import { groupAccounts, switchTarget, switchablePanes, panesOnLogin } from '../signedInPlaces'
+import { planName, applyHostAccounts, overrideText } from '../hostAccounts'
 
 const panesApi = inject('accountPanes', null)
 const places = ref([])
@@ -60,7 +60,8 @@ async function scan(id, opts = {}) {
   }
 }
 
-// fresh: every place read again now (Refresh), not from the last minute.
+// fresh: every place read again now (Refresh), not from the last minute,
+// the login shells of the hosts and distros asked again too.
 async function load({ fresh = false } = {}) {
   if (!available.value) return
   const req = ++request
@@ -73,8 +74,8 @@ async function load({ fresh = false } = {}) {
     now.value = Date.now()
     for (const p of places.value) {
       if (p.kind === 'pc') continue
-      if (p.kind === 'ssh' && p.state !== 'not-connected' && (fresh || p.state === 'unknown')) scan(p.id, { fresh })
-      if (p.kind === 'wsl' && (p.state === 'unknown' || (fresh && p.state === 'ready'))) scan(p.id, { fresh })
+      if (p.kind === 'ssh' && p.state !== 'not-connected' && (fresh || p.state === 'unknown')) scan(p.id, fresh ? { fresh, relogin: true } : {})
+      if (p.kind === 'wsl' && (p.state === 'unknown' || (fresh && p.state === 'ready'))) scan(p.id, fresh ? { fresh, relogin: true } : {})
     }
   } catch {
     if (alive && req === request) error.value = t('signedIn.readFailed', 'The places could not be read.')
@@ -91,6 +92,7 @@ function placeName(place) {
 function scopeText(place, entry) {
   if (place.kind === 'pc') return entry.scope === 'system' ? t('signedIn.scope.system', 'its own sign-in') : entry.scope === 'tessel' ? t('signedIn.scope.added', 'added in Tessel') : t('signedIn.scope.own', 'its own sign-in')
   if (entry.scope === 'tessel') return t('signedIn.scope.folder', 'account folder made by Tessel')
+  if (entry.scope === 'orphan') return t('signedIn.scope.orphan', 'left by a removed account folder (its agent kept running)')
   if (entry.scope === 'env') return t('signedIn.scope.env', 'its folder from the login shell')
   return t('signedIn.scope.own', 'its own sign-in')
 }
@@ -100,6 +102,10 @@ function stateText(entry) {
   if (entry.state === 'missing') return t('signedIn.state.missing', 'sign-in needed')
   if (entry.state === 'unknown') return t('signedIn.state.unknown', 'not verified')
   return ''
+}
+// Something set on the host that is used instead of this sign-in.
+function overrideLine(entry) {
+  return Array.isArray(entry.override) && entry.override.length ? t('signedIn.override', 'uses {{what}} instead', { what: overrideText(entry.override) }) : ''
 }
 function seen(entry) {
   return Number.isFinite(entry.lastSeen) && entry.lastSeen > 0 ? t('signedIn.lastSeen', 'last change {{when}}', { when: timeAgo(entry.lastSeen, now.value) }) : ''
@@ -149,9 +155,20 @@ async function act(kind, row) {
   notice.value = ''
   try {
     // Main asks first (a dialog there): nothing changes without your yes.
-    const res = kind === 'remove' ? await api.remove(row.place.hostId, row.entry.agent, row.entry.id) : await api.signOut(row.place.hostId, row.entry.agent)
+    // The panes still on that login are named: main stops them first (a
+    // running agent would write the sign-in back).
+    const running = panesOnLogin(row.place, row.entry, panes.value).map((p) => p.id)
+    const res =
+      kind === 'remove'
+        ? await api.remove(row.place.hostId, row.entry.agent, row.entry.id, { panes: running, orphan: row.entry.scope === 'orphan' })
+        : await api.signOut(row.place.hostId, row.entry.agent, { panes: running })
     if (res && res.ok) {
-      notice.value = kind === 'remove' ? t('signedIn.removed', 'Removed from {{host}}.', { host: row.place.label }) : t('signedIn.signedOut', 'Signed out on {{host}}.', { host: row.place.label })
+      notice.value =
+        kind === 'remove'
+          ? t('signedIn.removed', 'Removed from {{host}}.', { host: row.place.label })
+          : res.keychain
+            ? t('signedIn.signedOutKeychain', 'Signed out of the sign-in file on {{host}}; the macOS Keychain login remains (sign out in Claude Code there to remove it).', { host: row.place.label })
+            : t('signedIn.signedOut', 'Signed out on {{host}}.', { host: row.place.label })
       await scan(row.place.id, { fresh: true })
     } else if (res && !res.cancelled) notice.value = res.error || t('signedIn.actionFailed', 'That could not be done.')
   } catch {
@@ -198,7 +215,7 @@ onBeforeUnmount(() => {
         <li v-for="row in g.rows" :key="`${row.place.id}:${row.entry.scope}:${row.entry.id || ''}`" class="si-row" data-test="signed-in-row">
           <div class="si-where">
             <span class="si-place">{{ placeName(row.place) }}</span>
-            <span class="si-detail">{{ [scopeText(row.place, row.entry), planName(row.entry.plan), stateText(row.entry), seen(row.entry)].filter(Boolean).join(' · ') }}</span>
+            <span class="si-detail">{{ [scopeText(row.place, row.entry), planName(row.entry.plan), stateText(row.entry), overrideLine(row.entry), seen(row.entry)].filter(Boolean).join(' · ') }}</span>
           </div>
           <div class="si-actions">
             <button

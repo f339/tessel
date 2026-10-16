@@ -254,6 +254,29 @@ describe('chat sessions on an SSH host', () => {
     await chat.close({ paneId })
   })
 
+  it('on an account folder of the host: that folder (checked in main) as CLAUDE_CONFIG_DIR / CODEX_HOME; unusable: never started on another account', async () => {
+    remote.accountFolder = vi.fn(async ({ agent, id }) =>
+      id === 'abc123' ? { ok: true, name: agent === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR', dir: `/home/me/.tessel-server/accounts/${agent}/abc123` } : { ok: false, error: 'This account’s folder is no longer on Box.' }
+    )
+    const chat = createChatSessions(deps)
+    const r = await chat.open({ paneId, cwd, projectDir: cwd, permissions: 'manual', hostAccount: 'abc123' })
+    expect(r.ok).toBe(true)
+    expect(remote.accountFolder).toHaveBeenCalledWith({ hostId: HOST, agent: 'claude', id: 'abc123' })
+    expect(remote.spawnFor).toHaveBeenCalledWith({ hostId: HOST, cwd: '/home/me/app', env: { TESSEL_PANE_ID: paneId, TESSEL_AGENT_PROVIDER: 'claude', CLAUDE_CONFIG_DIR: '/home/me/.tessel-server/accounts/claude/abc123' } })
+    await chat.close({ paneId })
+    const codex = await chat.open({ paneId: 'pane-r2', agent: 'codex', cwd, projectDir: cwd, permissions: 'manual', hostAccount: 'abc123' })
+    expect(codex.ok).toBe(true)
+    expect(remote.spawnFor).toHaveBeenLastCalledWith(expect.objectContaining({ env: expect.objectContaining({ CODEX_HOME: '/home/me/.tessel-server/accounts/codex/abc123' }) }))
+    await chat.close({ paneId: 'pane-r2' })
+    const spawns = remote.spawnFor.mock.calls.length
+    const gone = await chat.open({ paneId: 'pane-r3', cwd, projectDir: cwd, permissions: 'manual', hostAccount: 'zzz999' })
+    expect(gone).toMatchObject({ ok: false, code: 'account', error: expect.stringContaining('no longer on Box') })
+    expect(remote.spawnFor.mock.calls.length).toBe(spawns)
+    // Only a folder id, only on a host.
+    expect(await chat.open({ paneId: 'pane-r4', cwd, permissions: 'manual', hostAccount: '../x' })).toMatchObject({ ok: false, code: 'invalid' })
+    expect(await chat.open({ paneId: 'pane-r5', cwd: tmp, permissions: 'manual', hostAccount: 'abc123' })).toMatchObject({ ok: false, code: 'invalid' })
+  })
+
   it('asks to trust the host folder, and refuses OpenCode and a project on another host', async () => {
     deps.trust.isTrusted = vi.fn(() => false)
     deps.trust.ask = vi.fn(async () => false)

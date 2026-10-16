@@ -796,6 +796,13 @@
     "folderOn": "Un nouveau dossier de compte sur {{host}} : pas encore connecté",
     "onHost": "{{account}}, sur {{host}}",
     "signedOut": "{{account}} (déconnecté là-bas)",
-    "ownTitle": "La connexion propre de l’hôte : {{account}}"
+    "ownTitle": "La connexion propre de l’hôte : {{account}}",
+    "override": {
+      "helper": "un assistant de clé d’API",
+      "key": "une clé d’API",
+      "token": "un jeton de connexion",
+      "gateway": "une adresse de passerelle"
+    },
+    "overrideNote": "Attention : {{what}} défini sur l’hôte est utilisé à la place de cette connexion (settings.json ou le shell de connexion)."
   }
 }

@@ -44,7 +44,7 @@ import { promptShowsPlaceholder } from '../promptCheck'
 import { detectTaskDone } from '../agentLimit'
 import { modelLabel } from '../../../shared/modelLabel'
 import { paneAccount, accountChoices } from '../accountChoices'
-import { HOST_ACCOUNT_AGENTS, hostAccountChoices, hostEntry, hostPaneAccount, refreshHostAccounts } from '../hostAccounts'
+import { HOST_ACCOUNT_AGENTS, hostAccountChoices, hostPaneAccount, refreshHostAccounts, unwatchHostAccounts, watchHostAccounts } from '../hostAccounts'
 import { modelFromScreen, modelFromSwitchLine } from '../../../shared/screenModel'
 import { findFileRefs } from '../../../shared/fileLinks'
 import { osc52Text } from '../../../shared/osc52'
@@ -133,27 +133,33 @@ const accountInfo = computed(() => {
   return paneAccount(props.node.agentId, props.node.accountId)
 })
 const accountChipLabel = computed(() => (accountInfo.value ? t('pane.account.chip', 'Account: {{account}}', { account: accountInfo.value.title }) : ''))
-// An agent on an SSH host: its accounts there are read when it opens, after
-// a restart, and every minute while the window is on screen (every 15 s
-// while its account folder waits for a sign-in); one read per host for all
-// its panes (hostAccounts.js).
-function refreshHostAccount(fresh = false) {
-  const n = props.node
-  if (n.kind === 'agent' && n.remoteHostId && !n.notConnected) refreshHostAccounts(n.remoteHostId, { fresh })
-}
+// An agent on an SSH host follows its accounts there: read when it opens and
+// after a restart; then the host's one timer (hostAccounts.js: every minute,
+// sooner while a pane waits for a sign-in in its account folder).
+let watchedHost = null
 watch(
-  () => [props.node.kind, props.node.remoteHostId, props.node.hostAccount, props.node.launchedAt, !!props.node.notConnected],
-  () => refreshHostAccount(),
+  () => [props.node.kind, props.node.remoteHostId, props.node.agentId, props.node.hostAccount, !!props.node.notConnected],
+  ([kind, hostId, agentId, hostAccount, notConnected]) => {
+    if (watchedHost && watchedHost !== hostId) unwatchHostAccounts(watchedHost, props.node.id)
+    watchedHost = null
+    if (kind !== 'agent' || !hostId || notConnected) {
+      if (hostId) unwatchHostAccounts(hostId, props.node.id)
+      return
+    }
+    watchedHost = hostId
+    watchHostAccounts(hostId, props.node.id, { agentId, hostAccount })
+  },
   { immediate: true }
 )
-let hostAccountTick = 0
-const hostAccountTimer = setInterval(() => {
-  const n = props.node
-  if (n.kind !== 'agent' || !n.remoteHostId || document.visibilityState === 'hidden') return
-  const waiting = typeof n.hostAccount === 'string' && !(hostEntry(n.remoteHostId, n.agentId, n.hostAccount) || {}).email
-  if (waiting || ++hostAccountTick % 4 === 0) refreshHostAccount(waiting)
-}, 15000)
-onBeforeUnmount(() => clearInterval(hostAccountTimer))
+watch(
+  () => props.node.launchedAt,
+  () => {
+    if (watchedHost) refreshHostAccounts(watchedHost)
+  }
+)
+onBeforeUnmount(() => {
+  if (watchedHost) unwatchHostAccounts(watchedHost, props.node.id)
+})
 // An agent pane asks for its model list (missing or a day old) once it
 // opens: its pickers (header, chat view, Settings) all list from it, not
 // only the pane menu's.

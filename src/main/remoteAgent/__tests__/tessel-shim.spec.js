@@ -185,6 +185,42 @@ describe('install', () => {
     expect(shim.install({ home, shimPath: ABS, env }).changed).toEqual([])
   })
 
+  it('your MCP servers in an account: copied once, kept in step while untouched, gone when gone; one you changed or removed stays as you made it', () => {
+    const sys = (servers) => fs.writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: servers }))
+    const acct = join(home, '.tessel-server', 'accounts', 'claude', 'abc123')
+    fs.mkdirSync(acct, { recursive: true })
+    fs.writeFileSync(join(acct, '.tessel-account'), 'tessel-account claude abc123\n')
+    const servers = () => JSON.parse(fs.readFileSync(join(acct, '.claude.json'), 'utf8')).mcpServers
+    const setServers = (m) => {
+      const cfg = JSON.parse(fs.readFileSync(join(acct, '.claude.json'), 'utf8'))
+      cfg.mcpServers = m
+      fs.writeFileSync(join(acct, '.claude.json'), JSON.stringify(cfg))
+    }
+    sys({ a: { command: 'a', env: { TOKEN: 'v1' } }, b: { command: 'b' } })
+    shim.install({ home, shimPath: ABS, env })
+    expect(Object.keys(servers()).sort()).toEqual(['a', 'b', 'tessel-team'])
+    expect(JSON.parse(fs.readFileSync(join(acct, '.tessel-mcp.json'), 'utf8')).servers).toMatchObject({ a: expect.any(String), b: expect.any(String) })
+    // A key rotated in the default config: the untouched copy follows.
+    sys({ a: { command: 'a', env: { TOKEN: 'v2' } }, b: { command: 'b' } })
+    shim.install({ home, shimPath: ABS, env })
+    expect(servers().a.env.TOKEN).toBe('v2')
+    // Changed and removed in the account: left as made, never copied again.
+    const mine = servers()
+    delete mine.a
+    mine.b = { command: 'mine' }
+    setServers(mine)
+    sys({ a: { command: 'a', env: { TOKEN: 'v3' } }, b: { command: 'b2' }, c: { command: 'c' } })
+    shim.install({ home, shimPath: ABS, env })
+    expect(servers().a).toBeUndefined()
+    expect(servers().b).toEqual({ command: 'mine' })
+    expect(servers().c).toEqual({ command: 'c' })
+    // Gone from the default config: its untouched copy goes; yours stays.
+    sys({})
+    shim.install({ home, shimPath: ABS, env })
+    expect(Object.keys(servers()).sort()).toEqual(['b', 'tessel-team'])
+    expect(shim.install({ home, shimPath: ABS, env }).changed).toEqual([])
+  })
+
   it('writes the absolute node given with --node in every config', () => {
     const node = '/home/u/.nvm/versions/node/v22.1.0/bin/node'
     fs.writeFileSync(join(home, '.claude.json'), '{}')

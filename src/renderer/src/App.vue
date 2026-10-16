@@ -611,7 +611,9 @@ async function chatOpen(leaf, { askTrust = true } = {}) {
       idleMinutes: Number.isInteger(settings.chatIdleMinutes) ? settings.chatIdleMinutes : 30,
       extraEnv,
       accountEnv,
-      unsetEnv
+      unsetEnv,
+      // On an SSH host: the account folder its terminal ran on (checked in main).
+      ...(isRemotePath(leaf.cwd) && validHostAccount(leaf.hostAccount) ? { hostAccount: leaf.hostAccount } : {})
     })
   } catch (err) {
     res = { ok: false, code: 'failed', error: err && err.message }
@@ -1806,6 +1808,7 @@ function serializeNode(node) {
       model: node.model || null,
       effort: node.effort || null,
       accountId: node.accountId,
+      hostAccount: isRemotePath(node.cwd) ? validHostAccount(node.hostAccount) : undefined,
       team: node.team || null,
       worker: node.worker ? true : undefined,
       maxPermissions: node.maxPermissions === 'manual' ? 'manual' : undefined,
@@ -1930,6 +1933,7 @@ async function deserializeNode(snap, cwd = null) {
     if (snap.paneName) leaf.paneName = snap.paneName
     if (Number.isInteger(snap.num) && snap.num > 0) leaf.num = snap.num
     if (typeof snap.accountId === 'string' || snap.accountId === null) leaf.accountId = snap.accountId
+    if (isRemotePath(leaf.cwd) && validHostAccount(snap.hostAccount)) leaf.hostAccount = snap.hostAccount
     if (typeof snap.team === 'string') leaf.team = snap.team
     const flag = (v) => (typeof v === 'string' && /^[A-Za-z0-9._:[\]-]{1,60}$/.test(v) ? v : null)
     // OpenCode's models are provider/model.
@@ -2606,8 +2610,14 @@ provide('accountPanes', {
   list: () => {
     const out = []
     forEachWsLeaf((l) => {
+      if (l.kind === 'chat') {
+        // A chat on an SSH host: its login there (never switched from here).
+        const onHost = isRemotePath(l.cwd) ? parseRemotePath(l.cwd) : null
+        if (onHost) out.push({ id: l.id, kind: 'chat', name: l.paneName || l.title || l.agentId, agentId: l.agentId, remoteHostId: onHost.hostId, hostAccount: l.hostAccount, accountId: l.accountId })
+        return
+      }
       if (l.kind !== 'agent' || !l.agentCommand || l.notConnected) return
-      out.push({ id: l.id, name: l.paneName || l.title || l.agentId, agentId: l.agentId, remoteHostId: l.remoteHostId || null, hostAccount: l.hostAccount, accountId: l.accountId, detected: !!l.detected })
+      out.push({ id: l.id, kind: 'agent', name: l.paneName || l.title || l.agentId, agentId: l.agentId, remoteHostId: l.remoteHostId || null, hostAccount: l.hostAccount, accountId: l.accountId, detected: !!l.detected })
     })
     return out
   },
@@ -8649,7 +8659,7 @@ async function switchToTerminal(leafId) {
     // On a host: the agent launch there, in the chat's folder, resuming the
     // conversation by its id (its file is the host's, never looked up here).
     const where = onHost
-      ? [null, null, { remoteHostId: onHost.hostId, remotePath: onHost.path, remoteSession: true }]
+      ? [null, null, { remoteHostId: onHost.hostId, remotePath: onHost.path, remoteSession: true, ...(validHostAccount(old.hostAccount) ? { hostAccount: old.hostAccount } : {}) }]
       : [old.cwd || ws.cwd, old.worktree || null, { accountId: old.accountId }]
     const fresh = await createLeaf(selectedShell.value, agent, where[0], where[1], {
       id: leafId,
@@ -8753,6 +8763,8 @@ async function switchToChat(leafId) {
     leaf.num = old.num
     leaf.paneName = old.paneName
     leaf.accountId = old.accountId
+    // On an SSH host's account folder: the chat runs on it too.
+    if (hostRoot && validHostAccount(old.hostAccount)) leaf.hostAccount = old.hostAccount
     if (old.worktree) leaf.worktree = old.worktree
     const choice = old.modelChoice || old.sessionOptions || null
     if (choice && choice.model) leaf.model = choice.model

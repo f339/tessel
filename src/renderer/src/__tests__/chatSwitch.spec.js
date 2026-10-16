@@ -150,6 +150,17 @@ describe('chat to terminal', () => {
     expect(await bad.api.switchToTerminal('pane-1')).toBe(false)
     expect(bad.ctx.createLeaf).not.toHaveBeenCalled()
   })
+
+  it('a chat on an account folder of its host: the terminal starts on that folder too', async () => {
+    const { api, ctx } = load(chat({ cwd: 'ssh://ssh-box1/home/me/app', hostAccount: 'abc123' }))
+    ctx.agentById = (id) => ({ id, name: id, command: id })
+    expect(await api.switchToTerminal('pane-1')).toBe(true)
+    expect(ctx.createLeaf.mock.calls[0][4]).toMatchObject({ remoteHostId: 'ssh-box1', hostAccount: 'abc123' })
+    const plain = load(chat({ cwd: 'ssh://ssh-box1/home/me/app', hostAccount: '../x' }))
+    plain.ctx.agentById = (id) => ({ id, name: id, command: id })
+    await plain.api.switchToTerminal('pane-1')
+    expect('hostAccount' in plain.ctx.createLeaf.mock.calls[0][4]).toBe(false)
+  })
 })
 
 describe('terminal to chat', () => {
@@ -226,6 +237,13 @@ describe('terminal to chat', () => {
     home.ctx.window.shellApi.chat.remoteAvailable = vi.fn(async () => true)
     expect(await home.api.switchToChat('pane-2')).toBe(true)
     expect(home.ws.tree.cwd).toBe('ssh://ssh-box1/~')
+  })
+
+  it('on an account folder of its host: the chat runs on that folder too (never this PC’s account)', async () => {
+    const { api, ctx, ws } = load(term({ agentId: 'claude', sessionId: 's-9', remoteHostId: 'ssh-box1', remotePath: '/srv/app', hostAccount: 'abc123' }))
+    ctx.window.shellApi.chat.remoteAvailable = vi.fn(async () => true)
+    expect(await api.switchToChat('pane-2')).toBe(true)
+    expect(ws.tree).toMatchObject({ kind: 'chat', hostAccount: 'abc123', cwd: 'ssh://ssh-box1/srv/app' })
   })
 
   it('on an SSH host: chats not available there, the host not connected, or OpenCode: said so, the terminal kept', async () => {

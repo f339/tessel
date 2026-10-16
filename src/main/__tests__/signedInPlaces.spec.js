@@ -65,7 +65,7 @@ describe('rows', () => {
 })
 
 describe('createSignedInPlaces', () => {
-  function make({ connected = () => true, detect, cached = () => null, wsl = null } = {}) {
+  function make({ connected = () => true, detect, cached = () => null, wsl = null, confirmStart = async () => true } = {}) {
     const remoteAccounts = {
       detect: vi.fn(detect || (async (hostId) => ({ ok: true, hostId, at: 5, os: 'Linux', home: '/home/u', entries: hostEntries }))),
       cached: vi.fn(cached)
@@ -78,6 +78,7 @@ describe('createSignedInPlaces', () => {
       connected,
       remoteAccounts,
       wsl,
+      confirmStart,
       now: () => 100
     })
     return { places, remoteAccounts }
@@ -104,7 +105,7 @@ describe('createSignedInPlaces', () => {
   it('scans one host at a time on request; a host that is not connected is never asked', async () => {
     const { places, remoteAccounts } = make({ connected: (h) => h === 'ssh-a' })
     const a = await places.scan('ssh:ssh-a', { fresh: true })
-    expect(remoteAccounts.detect).toHaveBeenCalledWith('ssh-a', { fresh: true })
+    expect(remoteAccounts.detect).toHaveBeenCalledWith('ssh-a', { fresh: true, relogin: false })
     expect(a.place).toMatchObject({ state: 'ready', os: 'Linux' })
     expect(a.place.entries.find((e) => e.scope === 'tessel')).toMatchObject({ removable: true, email: 'work@corp.example' })
     const b = await places.scan('ssh:ssh-b')
@@ -141,11 +142,49 @@ describe('createSignedInPlaces', () => {
     const u = await places.scan('wsl:Ubuntu')
     expect(u.place).toMatchObject({ state: 'ready', entries: [{ agent: 'claude', removable: false, signOut: false }] })
     expect((await places.scan('wsl:Debian')).place.state).toBe('stopped')
-    expect(wsl.scan).toHaveBeenLastCalledWith('Debian', { start: false })
+    expect(wsl.scan).toHaveBeenLastCalledWith('Debian', { start: false, dirs: null })
     expect((await places.scan('wsl:Debian', { start: true })).place.state).toBe('ready')
     // The last scan is shown next time.
     expect((await places.places()).places.find((p) => p.id === 'wsl:Ubuntu').state).toBe('ready')
     expect(wsl.list).toHaveBeenCalledTimes(1)
+  })
+
+  it('a host: a folder left by a removed account can be removed; what its login shell exports counts for every row of that agent; a refresh asks the login shell again', async () => {
+    const entries = [
+      { agent: 'claude', scope: 'orphan', id: 'zzz999', dir: '/home/u/.tessel-server/accounts/claude/zzz999', email: 'b@example.com', cred: 'file' },
+      { agent: 'claude', scope: 'tessel', id: 'abc123', dir: '/home/u/.tessel-server/accounts/claude/abc123', email: 'w@example.com', cred: 'file', override: ['helper'] }
+    ]
+    const { places, remoteAccounts } = make({ detect: async (hostId) => ({ ok: true, hostId, at: 1, entries, envOverrides: { claude: ['key'], codex: [] } }) })
+    const res = await places.scan('ssh:ssh-a', { fresh: true, relogin: true })
+    expect(remoteAccounts.detect).toHaveBeenCalledWith('ssh-a', { fresh: true, relogin: true })
+    expect(res.place.entries.map((e) => [e.scope, e.removable, e.override])).toEqual([
+      ['orphan', true, ['key']],
+      ['tessel', true, ['helper', 'key']]
+    ])
+  })
+
+  it('WSL: the login shell asked at the first check only (then its folders passed back), again on a refresh; a stopped distro starts only after your yes', async () => {
+    const wsl = {
+      list: vi.fn(async () => ({ ok: true, distros: [{ name: 'Ubuntu', running: true }, { name: 'Debian', running: false }] })),
+      scan: vi.fn(async () => ({ ok: true, os: 'Linux', loginEnv: { claude: '/opt/c', codex: null }, envOverrides: { claude: ['token'], codex: [] }, entries: hostEntries.slice(0, 1) }))
+    }
+    let yes = false
+    const confirmStart = vi.fn(async () => yes)
+    const { places } = make({ wsl, confirmStart })
+    await places.places()
+    const first = await places.scan('wsl:Ubuntu')
+    expect(wsl.scan).toHaveBeenLastCalledWith('Ubuntu', { start: false, dirs: null })
+    expect(first.place.entries[0].override).toEqual(['token'])
+    await places.scan('wsl:Ubuntu', { fresh: true })
+    expect(wsl.scan).toHaveBeenLastCalledWith('Ubuntu', { start: false, dirs: { claude: '/opt/c', codex: null, overrides: { claude: ['token'], codex: [] } } })
+    await places.scan('wsl:Ubuntu', { fresh: true, relogin: true })
+    expect(wsl.scan).toHaveBeenLastCalledWith('Ubuntu', { start: false, dirs: null })
+    const calls = wsl.scan.mock.calls.length
+    expect((await places.scan('wsl:Debian', { start: true })).place.state).toBe('stopped')
+    expect(confirmStart).toHaveBeenCalledWith('Debian')
+    expect(wsl.scan.mock.calls.length).toBe(calls)
+    yes = true
+    expect((await places.scan('wsl:Debian', { start: true })).place.state).toBe('ready')
   })
 
   it('this PC unreadable: the others still show', async () => {
@@ -192,6 +231,15 @@ describe('wslAccounts', () => {
     expect(run.args).toEqual(['-d', 'Ubuntu', '-e', 'sh', '-s'])
     expect(run.input.join('')).toContain('__t_accts login')
     expect(await wsl.scan('bad name')).toEqual({ ok: false })
+  })
+
+  it('later scans pass back the login shell’s folders (its profile not run again); a folder that cannot be quoted is left out', async () => {
+    const { spawnImpl, calls } = fakeSpawn((args) => (args[0] === '-l' ? { out: utf16('Ubuntu\r\n') } : { out: '@h Linux /home/u\n' }))
+    const wsl = createWslAccounts({ wslExe: 'wsl.exe', spawnImpl })
+    await wsl.scan('Ubuntu', { dirs: { claude: '/opt/claude alt', codex: "/opt/it's" } })
+    const input = calls.find((c) => c.args[0] === '-d').input.join('')
+    expect(input).toContain("__t_accts dirs '/opt/claude alt' -\n")
+    expect(input).not.toContain('__t_accts login')
   })
 
   it('a stopped distro is not started by a scan; asked (start), it is', async () => {

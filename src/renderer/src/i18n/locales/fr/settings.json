@@ -888,7 +888,8 @@
       "added": "ajouté dans Tessel",
       "own": "sa propre connexion",
       "folder": "dossier de compte créé par Tessel",
-      "env": "son dossier venant du shell de connexion"
+      "env": "son dossier venant du shell de connexion",
+      "orphan": "laissé par un dossier de compte retiré (son agent a continué de tourner)"
     },
     "state": {
       "profile": "déconnecté (son profil est encore là)",
@@ -918,6 +919,8 @@
     "places": "Endroits vérifiés",
     "startHint": "Démarre cette distribution pour voir ses connexions",
     "check": "Vérifier",
-    "recheck": "Vérifier de nouveau"
+    "recheck": "Vérifier de nouveau",
+    "override": "utilise {{what}} à la place",
+    "signedOutKeychain": "Déconnecté du fichier de connexion sur {{host}} ; la connexion du trousseau macOS reste (déconnectez-vous dans Claude Code là-bas pour la retirer)."
   }
 }

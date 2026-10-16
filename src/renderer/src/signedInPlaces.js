@@ -64,12 +64,26 @@ export function switchTarget(place, entry, siblings = []) {
   return null
 }
 
+// The open panes still running on a login of an SSH host (before it is
+// removed or signed out of: main stops them, a running agent would write
+// its sign-in back). A folder: the panes on it; the agent's own sign-in:
+// its panes on no folder, unless the login shell names another folder for
+// them (then they do not use this one).
+export function panesOnLogin(place, entry, panes) {
+  if (!place || place.kind !== 'ssh' || !entry || !Array.isArray(panes)) return []
+  const mine = panes.filter((p) => p && p.agentId === entry.agent && p.remoteHostId === place.hostId)
+  if (entry.scope === 'tessel' || entry.scope === 'orphan') return mine.filter((p) => p.hostAccount === entry.id)
+  if (entry.scope !== 'default') return []
+  if ((place.entries || []).some((e) => e.agent === entry.agent && e.scope === 'env')) return []
+  return mine.filter((p) => typeof p.hostAccount !== 'string')
+}
+
 // The open panes (App's accountPanes.list) that can switch to that target:
 // the same agent, at that place, not on it already.
 export function switchablePanes(place, entry, target, panes) {
   if (!target || !Array.isArray(panes)) return []
   return panes.filter((p) => {
-    if (!p || p.agentId !== entry.agent || p.detected) return false
+    if (!p || p.agentId !== entry.agent || p.detected || p.kind === 'chat') return false
     if (place.kind === 'pc') return !p.remoteHostId && (p.accountId ?? null) !== target.id
     return p.remoteHostId === place.hostId && (p.hostAccount ?? null) !== target.id
   })

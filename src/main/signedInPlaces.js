@@ -12,7 +12,7 @@
 // only, never a token.
 import fs from 'fs/promises'
 import path from 'path'
-import { entryState, FOLDER_AGENTS } from './remoteAgent/remoteAccounts'
+import { entryState, FOLDER_AGENTS, OVERRIDES } from './remoteAgent/remoteAccounts'
 
 const PLACE = /^(pc|wsl:[\w.-]{1,64}|ssh:[\w-]{1,80})$/
 const LOCAL_SIGNINS = ['gemini', 'grok', 'cursor']
@@ -32,22 +32,29 @@ function row(e) {
     state: e.state,
     lastSeen: Number.isFinite(e.lastSeen) ? e.lastSeen : null,
     removable: !!e.removable,
-    signOut: !!e.signOut
+    signOut: !!e.signOut,
+    ...(Array.isArray(e.override) && e.override.length ? { override: e.override.filter((o) => OVERRIDES.includes(o)) } : {})
   }
 }
 
 // A host's or distro's detection (remoteAccounts.parseAccounts) -> rows.
-// actions: an SSH host's folders can be removed, its own sign-in signed out of.
-export function hostRows(entries, { actions = false } = {}) {
-  return (Array.isArray(entries) ? entries : []).map((e) =>
-    row({
+// actions: an SSH host's folders can be removed (one Tessel made, or one
+// that lost its marker but still holds a sign-in), its own sign-in signed
+// out of. envOverrides: the keys or tokens its login shell exports, which
+// count for every session of that agent there.
+export function hostRows(entries, { actions = false, envOverrides = null } = {}) {
+  return (Array.isArray(entries) ? entries : []).map((e) => {
+    const fromEnv = envOverrides && Array.isArray(envOverrides[e.agent]) ? envOverrides[e.agent] : []
+    const override = [...new Set([...(Array.isArray(e.override) ? e.override : []), ...fromEnv])]
+    return row({
       ...e,
+      override,
       state: entryState(e),
       lastSeen: e.mtimeMs,
-      removable: actions && e.scope === 'tessel',
+      removable: actions && (e.scope === 'tessel' || e.scope === 'orphan'),
       signOut: actions && e.scope === 'default' && FOLDER_AGENTS.includes(e.agent) && e.cred === 'file'
     })
-  )
+  })
 }
 
 const STATUS = { ready: 'signed-in', missing: 'missing', unknown: 'unknown' }
@@ -86,8 +93,13 @@ export async function copilotRows({ home }) {
 // signIn (Gemini, Grok, Cursor on this PC); localOthers(): more rows of this
 // PC (Copilot); hosts: remoteHosts.js; connected(hostId): remoteFs's
 // connectedQuietly; remoteAccounts: remoteAccounts.js; wsl: wslAccounts.js.
-export function createSignedInPlaces({ accounts, localSignIn = async () => null, localOthers = async () => [], hosts, connected = () => false, remoteAccounts, wsl = null, now = Date.now, wslTtlMs = 60_000 } = {}) {
+// confirmStart(name) -> true when you said yes to starting a stopped WSL
+// distro (a dialog in main).
+export function createSignedInPlaces({ accounts, localSignIn = async () => null, localOthers = async () => [], hosts, connected = () => false, remoteAccounts, wsl = null, confirmStart = async () => false, now = Date.now, wslTtlMs = 60_000 } = {}) {
   const wslScans = new Map() // name -> { at, place }
+  // name -> { claude, codex, overrides }: what a distro's login shell said
+  // (asked at its first check in this run, and when you ask for a refresh).
+  const wslLogins = new Map()
   let distros = { at: 0, list: null, pending: null }
 
   async function pcPlace() {
@@ -121,7 +133,7 @@ export function createSignedInPlaces({ accounts, localSignIn = async () => null,
       label: text(target.label, 120) || target.id,
       state,
       at: value && value.ok ? value.at : null,
-      entries: value && value.ok ? hostRows(value.entries, { actions: true }) : [],
+      entries: value && value.ok ? hostRows(value.entries, { actions: true, envOverrides: value.envOverrides }) : [],
       ...(value && value.ok && value.os ? { os: text(value.os, 40) } : {}),
       ...(value && !value.ok && value.error ? { error: text(value.error, 300) } : {})
     }
@@ -175,8 +187,10 @@ export function createSignedInPlaces({ accounts, localSignIn = async () => null,
     return { ok: true, at: now(), places: [pc, ...wslPlaces, ...ssh] }
   }
 
-  // One place checked now. -> its place
-  async function scan(id, { fresh = false, start = false } = {}) {
+  // One place checked now (fresh: not the last minute's answer; relogin: its
+  // login shell asked again, a refresh you asked for; start: a stopped WSL
+  // distro started, once you said yes here). -> its place
+  async function scan(id, { fresh = false, relogin = false, start = false } = {}) {
     if (typeof id !== 'string' || !PLACE.test(id)) return { ok: false }
     if (id === 'pc') return { ok: true, place: await pcPlace() }
     if (id.startsWith('ssh:')) {
@@ -184,15 +198,20 @@ export function createSignedInPlaces({ accounts, localSignIn = async () => null,
       const target = targets().find((h) => h.id === hostId)
       if (!target) return { ok: false }
       if (!isConnected(hostId)) return { ok: true, place: { ...sshPlace(target, remoteAccounts.cached(hostId), 'not-connected') } }
-      const value = await remoteAccounts.detect(hostId, { fresh })
+      const value = await remoteAccounts.detect(hostId, { fresh, relogin })
       return { ok: true, place: sshPlace(target, value, value && value.ok ? 'ready' : value && value.notConnected ? 'not-connected' : 'error') }
     }
     const name = id.slice(4)
     const d = (await distroList()).find((x) => x.name === name)
     if (!d || !wsl) return { ok: false }
-    const res = await wsl.scan(name, { start })
+    if (start && !d.running && !(await Promise.resolve().then(() => confirmStart(name)).then((v) => v === true, () => false)))
+      return { ok: true, place: wslPlace(d, null) }
+    const known = relogin ? null : wslLogins.get(name) || null
+    const res = await wsl.scan(name, { start, dirs: known })
+    if (res && res.ok && !known) wslLogins.set(name, { claude: res.loginEnv ? res.loginEnv.claude : null, codex: res.loginEnv ? res.loginEnv.codex : null, overrides: res.envOverrides || {} })
+    const login = wslLogins.get(name)
     const place = res && res.ok
-      ? { id, kind: 'wsl', distro: name, label: name, state: 'ready', at: now(), entries: hostRows(res.entries), ...(res.os ? { os: text(res.os, 40) } : {}) }
+      ? { id, kind: 'wsl', distro: name, label: name, state: 'ready', at: now(), entries: hostRows(res.entries, { envOverrides: login && login.overrides }), ...(res.os ? { os: text(res.os, 40) } : {}) }
       : { id, kind: 'wsl', distro: name, label: name, state: res && res.stopped ? 'stopped' : 'error', at: null, entries: [] }
     if (res && res.ok) wslScans.set(name, { at: now(), place })
     else if (res && res.stopped) wslScans.delete(name)
