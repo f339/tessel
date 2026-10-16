@@ -83,10 +83,10 @@ import NotificationsMenu from './components/NotificationsMenu.vue'
 import FileFinder from './components/FileFinder.vue'
 import UsageMenu from './components/UsageMenu.vue'
 import { acquirePassthrough, trackPointerDrag } from './browser/webviewPassthrough'
-import { pageOf } from './browser/pageHost'
+import { pageOf, pageGuests } from './browser/pageHost'
 import { paneDropZone, placeLeaf, sidePageFromLeaf, leafFromSidePage, saveSideBrowsers, restoreSideBrowsers, newSidePageId } from './browser/pageMove'
 import { createAgentBrowserTargets, addPageNear } from './browser/agentBrowserTargets'
-import { inheritsAgentSession } from './browser/agentSession'
+import { inheritsAgentSession, inheritsGuestSession } from './browser/agentSession'
 import { createAgentTerminalTargets, paneRunsYolo, placeNear, ownTerminalOf, MAX_OPEN_PANES } from './agentTerminal/agentTerminalTargets'
 import { onTerminalControl, onTerminalLog, forgetTerminal } from './agentTerminal/agentTerminalState'
 import { rulesOfAction } from '../../shared/terminalRules'
@@ -418,7 +418,7 @@ function makeBrowserLeaf(id = null, url = BLANK_URL) {
 // up. activate: false leaves the active pane and the tab on screen as they
 // are (a link opened in the background from a page, like a browser's
 // middle-click).
-function openInBrowser({ url = BLANK_URL, ws = currentWs.value, newPane = false, focusAddress = false, activate = true, agentSession = false } = {}) {
+function openInBrowser({ url = BLANK_URL, ws = currentWs.value, newPane = false, focusAddress = false, activate = true, agentSession = false, guestSession = false } = {}) {
   if (!ws) return null
   const target = allowedBrowserUrl(url) || BLANK_URL
   const active = ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
@@ -431,6 +431,9 @@ function openInBrowser({ url = BLANK_URL, ws = currentWs.value, newPane = false,
     leaf = makeBrowserLeaf(null, target)
     // Opened from a page of the agents' separate session: stays in it.
     if (agentSession) leaf.agentSession = true
+    // Opened by a Live Share guest's click (or from such a page): the
+    // browser's guest session, none of your logins.
+    if (guestSession) leaf.guestSession = true
     keepView(leaf, active, ws)
     ws.tree = addTabLeaf(ws.tree, leaf, makeSplit)
   } else if (target !== BLANK_URL) leaf.url = target
@@ -1803,7 +1806,9 @@ function serializeNode(node) {
       url: allowedBrowserUrl(node.url) || BLANK_URL,
       zoom: Number.isFinite(node.zoom) ? node.zoom : null,
       viewPath: node.viewPath || undefined,
-      agentSession: node.agentSession ? true : undefined
+      agentSession: node.agentSession ? true : undefined,
+      guestSession: node.guestSession ? true : undefined,
+      hiddenFromGuests: node.hiddenFromGuests ? true : undefined
     }
   }
   if (node.type === 'leaf') {
@@ -1932,6 +1937,8 @@ async function deserializeNode(snap, cwd = null) {
     if (Number.isFinite(snap.zoom) && (snap.zoom !== 0 || settings.compactDefaults)) leaf.zoom = Math.max(-3, Math.min(5, snap.zoom))
     if (validViewPath(snap.viewPath)) leaf.viewPath = snap.viewPath
     if (snap.agentSession === true) leaf.agentSession = true
+    if (snap.guestSession === true) leaf.guestSession = true
+    if (snap.hiddenFromGuests === true) leaf.hiddenFromGuests = true
     return leaf
   }
   if (snap.type === 'leaf') {
@@ -2447,6 +2454,11 @@ const liveShare = createLiveShareWindow({
   agentName: (id) => (agentById(id) || {}).name || null,
   activePaneId: () => activeId.value,
   layoutReady: () => layoutReady.value,
+  // Phase 2c: each browser pane's page (its webContents id once ready), and
+  // a shared project's activity for the guests who follow it.
+  pageGuest: (id) => (Number.isSafeInteger(pageGuests[id]) ? pageGuests[id] : null),
+  activityOf: (wsId) => projectActivity(wsId),
+  activityRev: () => activity.length,
   // This computer's board, for guests: read (each shared project's cards)
   // and changed when a guest with the right asks (liveShareWindow.js checks).
   // A card a guest added or renamed, an answer it gave: marked with its name,
@@ -2885,6 +2897,33 @@ const sideHistorySource = computed(() => {
 })
 // A host's task branch opened from its board's Review: read only.
 const guestReview = computed(() => liveShare.reviewSource())
+// ...its Agents tab: the host's past conversations of it; its Conversations
+// tab (and the Activity panel): the host's activity of it.
+const sideSessionSource = computed(() => {
+  const ws = currentWs.value
+  return ws && ws.liveShare ? liveShare.sessionSource(ws.liveShare.project) : null
+})
+const sideActivitySource = computed(() => {
+  const ws = currentWs.value
+  return ws && ws.liveShare ? liveShare.activitySource(ws.liveShare.project) : null
+})
+// A project's activity for Live Share guests who follow it: its own events,
+// its panes' and its teams' (newest last), with its teams' names.
+function projectActivity(wsId) {
+  const ws = wsById(wsId)
+  if (!ws) return { events: [], teams: [] }
+  const panes = new Set()
+  forEachLeaf(ws.tree, (l) => panes.add(l.id))
+  const own = teams.value.filter((tm) => teamWsId(tm.id) === wsId)
+  const teamIds = new Set(own.map((tm) => tm.id))
+  const events = []
+  for (let i = activity.length - 1; i >= 0 && events.length < 600; i--) {
+    const e = activity[i]
+    if (!e) continue
+    if (e.wsId === wsId || (e.wsId == null && ((e.paneId && panes.has(e.paneId)) || (e.teamId && teamIds.has(e.teamId))))) events.push(toRaw(e))
+  }
+  return { events: events.reverse(), teams: own.map((tm) => ({ id: tm.id, name: tm.name, color: tm.color || null })) }
+}
 const sideRemote = computed(() => {
   const ws = currentWs.value
   return ws && ws.remote ? { hostId: ws.remote.hostId, host: remoteHostLabel(ws.remote.hostId), path: ws.remote.path } : null
@@ -3166,6 +3205,12 @@ provide('panelCtx', {
   // and who watches, types in or reads each pane (LiveSharePresence).
   liveShareReaders: (id) => liveShare.readersOf(id),
   liveSharePresence: (id) => liveShare.presenceOf(id),
+  // ...a page of a shared project: its eye (guests watching) and "Hide this
+  // page from guests". As a guest: a host's page shown here (its frames,
+  // your input with the right).
+  liveSharePageShare: (id) => liveShare.pageShare(id),
+  setLiveSharePageHidden: (id, hidden) => liveShare.setPageHidden(id, hidden),
+  liveSharePageSource: (id) => liveShare.pageSource(id),
   // A terminal agent's chat view (nothing restarts): what you write there,
   // and its agent's real end (back to the terminal).
   sendFromChatView: (id, text, callbacks) => sendFromChatView(id, text, callbacks),
@@ -3231,10 +3276,13 @@ provide('panelCtx', {
   // A link a page opens in a new pane (middle-click, Ctrl+click, its menu),
   // in the workspace of the pane it came from, next to it.
   // A page of the agents' separate session opens its new panes in that session.
-  openBrowserPane: (url, { fromId = null, activate = false } = {}) => {
+  // A Live Share guest's click (guestSession), or a page of the guest
+  // session, opens its new panes in the guest session.
+  openBrowserPane: (url, { fromId = null, activate = false, guestSession = false } = {}) => {
     const ws = (fromId && wsOfLeaf(fromId)) || currentWs.value
     const from = fromId && ws ? findLeafIn(ws.tree, fromId) : null
-    return openInBrowser({ url, ws, newPane: true, activate, agentSession: inheritsAgentSession(from) })
+    const guest = guestSession === true || inheritsGuestSession(from)
+    return openInBrowser({ url, ws, newPane: true, activate, agentSession: !guest && inheritsAgentSession(from), guestSession: guest })
   },
   // A chat agent pane: open or resume its Claude (asks to trust its folder
   // the first time), and the permissions it runs with.
@@ -5149,7 +5197,8 @@ function moveSidePageToGrid(pageId, target) {
   }
   const anchorId = target.kind === 'pane' ? target.id : ws.activeId && findLeafIn(ws.tree, ws.activeId) ? ws.activeId : firstLeafId(ws.tree)
   const anchor = anchorId ? findLeafIn(ws.tree, anchorId) : null
-  const leaf = leafFromSidePage(page, (url) => makeBrowserLeaf(null, url))
+  // Hidden from guests when it never said, while that project is shared.
+  const leaf = leafFromSidePage(page, (url) => makeBrowserLeaf(null, url), { hiddenDefault: liveShare.isShared(ws.id) })
   keepView(leaf, anchor, ws)
   const next = placeLeaf(ws.tree, target, leaf, { anchorId, makeSplit })
   if (!next) return
@@ -6577,7 +6626,13 @@ const activityScopes = computed(() => {
   const ws = currentWs.value
   const out = []
   if (ws) {
-    out.push({ value: 'workspace', label: t('app.notify.workspace', 'Workspace: {{name}}', { name: ws.name }), wsId: ws.id, teamId: null, notesDir: ws.cwd || null })
+    out.push({ value: 'workspace', label: t('app.notify.workspace', 'Workspace: {{name}}', { name: ws.name }), wsId: ws.id, teamId: null, notesDir: (!ws.liveShare && ws.cwd) || null })
+  }
+  // A Live Share project: the host's project and its teams, nothing of yours.
+  if (ws && ws.liveShare) {
+    const src = sideActivitySource.value
+    for (const team of (src && src.teams) || []) out.push({ value: 'team:' + team.id, label: t('app.activity.team', 'Team: {{name}}', { name: team.name }), wsId: null, teamId: team.id, notesDir: null })
+    return out
   }
   for (const team of teams.value) {
     const home = wsById(teamWsId(team.id)) || ws
@@ -6586,6 +6641,17 @@ const activityScopes = computed(() => {
   out.push({ value: 'all', label: t('app.activity.all', 'All workspaces'), wsId: null, teamId: null, notesDir: (ws && ws.cwd) || null })
   return out
 })
+
+// A Live Share project: the host's activity of it (followed while the
+// panel is open), only its own scope.
+const activityEvents = computed(() => (activityOpen.value && sideActivitySource.value ? sideActivitySource.value.events : activity))
+watch(
+  () => (activityOpen.value && currentWs.value && currentWs.value.liveShare ? currentWs.value.liveShare.project : null),
+  (project, before) => {
+    if (before) liveShare.activitySource(before)?.follow(false)
+    if (project) liveShare.activitySource(project)?.follow(true)
+  }
+)
 
 function openActivity(scope = 'workspace') {
   closeMenus()
@@ -12955,6 +13021,8 @@ onBeforeUnmount(() => {
           :root="sideRoot"
           :task-source="sideTaskSource"
           :history-source="sideHistorySource"
+          :session-source="sideSessionSource"
+          :activity-source="sideActivitySource"
           :can-insert="canInsertPath"
           :agent-panes="agentPanes"
           :activity="activity"
@@ -13252,7 +13320,7 @@ onBeforeUnmount(() => {
     <ActivityPanel
       v-if="activityOpen"
       v-model:scope="activityScope"
-      :events="activity"
+      :events="activityEvents"
       :live="agentStates"
       :scopes="activityScopes"
       @focus-pane="(id) => ((activityOpen = false), focusPane(id))"

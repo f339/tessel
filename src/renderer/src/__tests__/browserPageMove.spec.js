@@ -96,7 +96,8 @@ describe('grid -> side panel -> grid', () => {
   it('a browser pane becomes a side page with its address, title and zoom', () => {
     const pane = leaf('pane-7', 'browser', { url: 'https://example.com/a?b=1', title: 'Example A', zoom: 1.5, openedBy: 'agent-1', viewPath: 'C:\\wt' })
     const page = sidePageFromLeaf(pane, 'web-abc', { blankUrl: 'about:blank', defaultTitle: 'Browser' })
-    expect(page).toEqual({ id: 'web-abc', url: 'https://example.com/a?b=1', title: 'Example A', zoom: 1.5 })
+    // (Whether guests may see it goes with it: a pane says, even when visible.)
+    expect(page).toEqual({ id: 'web-abc', url: 'https://example.com/a?b=1', title: 'Example A', zoom: 1.5, hiddenFromGuests: false })
   })
 
   it('a muted page stays muted both ways', () => {
@@ -109,7 +110,7 @@ describe('grid -> side panel -> grid', () => {
 
   it('a blank pane and its default name: a blank page with no title; an odd zoom clamped', () => {
     const pane = leaf('pane-8', 'browser', { url: 'about:blank', title: 'Browser', zoom: 42 })
-    expect(sidePageFromLeaf(pane, 'web-x', { blankUrl: 'about:blank', defaultTitle: 'Browser' })).toEqual({ id: 'web-x', url: '', title: '', zoom: 5 })
+    expect(sidePageFromLeaf(pane, 'web-x', { blankUrl: 'about:blank', defaultTitle: 'Browser' })).toEqual({ id: 'web-x', url: '', title: '', zoom: 5, hiddenFromGuests: false })
   })
 
   it('a side page becomes a browser pane: a new pane id, its address, title and zoom, opened by no agent', () => {

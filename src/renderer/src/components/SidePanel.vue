@@ -48,6 +48,10 @@ const props = defineProps({
   // The Task history tab's records when they are not this computer's (a
   // Live Share host's: TaskHistoryPanel.vue's source), else null.
   historySource: { type: Object, default: null },
+  // A Live Share host's project: its past conversations for the Agents tab,
+  // its activity for the Conversations tab (liveShareWindowFeeds.js), else null.
+  sessionSource: { type: Object, default: null },
+  activitySource: { type: Object, default: null },
   // A project on a remote host: { hostId, host, path }. Its root is then an
   // ssh://… path: Files and Changes read it over SSH (src/main/remoteFs.js),
   // under a small badge naming the host.
@@ -417,6 +421,7 @@ onBeforeUnmount(() => {
         :cwd="remote || isLsharePath(root) ? null : root"
         :remote="remote"
         :open-ids="openSessionIds"
+        :source="sessionSource"
         :active="current() === 'history'"
         @resume="(s) => emit('resume-session', s)"
         @focus-pane="focusPane"
@@ -428,6 +433,7 @@ onBeforeUnmount(() => {
         v-show="current() === 'conversations'"
         :events="activity"
         :teams="teams"
+        :source="activitySource"
         :projects="projects"
         :workspace-id="workspaceId"
         :now="now"

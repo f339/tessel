@@ -8,6 +8,12 @@ export function inheritsAgentSession(fromLeaf) {
   return !!(fromLeaf && fromLeaf.kind === 'browser' && fromLeaf.agentSession === true)
 }
 
+// The same for a page a Live Share guest opened (the browser's guest
+// session, none of the host's logins): its new panes stay in it.
+export function inheritsGuestSession(fromLeaf) {
+  return !!(fromLeaf && fromLeaf.kind === 'browser' && fromLeaf.guestSession === true)
+}
+
 // After a successful cookie import. The first one turns the separate agent
 // session on (imported cookies are the user's logins), unless it is on
 // already; later imports leave the user's choice alone. -> true when it was

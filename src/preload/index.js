@@ -738,6 +738,21 @@ const api = {
     request: ({ op, project, args } = {}) => ipcRenderer.invoke('liveShare:request', { op, project, args }),
     onPush: (cb) => subscribe('liveShare:push', cb),
     onGuestAction: (cb) => subscribe('liveShare:guestAction', cb),
+    // Phase 2c, host: the browser panes of the shared projects (their
+    // webContents ids, the host's "hide"), the activity guests follow, and
+    // which pages guests watch.
+    setPages: (list) => ipcRenderer.send('liveShare:pages', list),
+    setActivity: (list) => ipcRenderer.send('liveShare:activity', list),
+    onFeeds: (cb) => subscribe('liveShare:feeds', cb),
+    onPagesWatched: (cb) => subscribe('liveShare:pagesWatched', cb),
+    // Guest: the host's past conversations ({ op: list | details | terminal,
+    // project, args }), a host's page watched while its view is on screen,
+    // input on it, and its frames and news.
+    sessions: ({ op, project, args } = {}) => ipcRenderer.invoke('liveShare:sessions', { op, project, args }),
+    pageWatch: ({ id, on } = {}) => ipcRenderer.invoke('liveShare:pageWatch', { id, on: !!on }),
+    pageInput: ({ id, events } = {}) => ipcRenderer.send('liveShare:pageInput', { id, events }),
+    onPageFrame: (cb) => subscribe('liveShare:pageFrame', cb),
+    onPageEvent: (cb) => subscribe('liveShare:pageEvent', cb),
     // Guest: a host's agent pane's conversation watched here (read only),
     // which comes with onChat.
     chatWatch: ({ id, on } = {}) => ipcRenderer.invoke('liveShare:chatWatch', { id, on: !!on }),
