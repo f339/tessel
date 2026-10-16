@@ -188,6 +188,15 @@
       "noTerminal": "{{host}} a ce panneau en mode chat : il n'a pas de terminal à montrer. Sa conversation s'affiche en chat.",
       "showChatButton": "Afficher le chat"
     },
+    "textSize": {
+      "label": "Taille du texte",
+      "fit": "Ajustée",
+      "fitHint": "Tout le terminal de {{host}} dans ce panneau : texte plus grand ou plus petit, rien de coupé. Seulement sur votre écran",
+      "width": "Largeur",
+      "widthHint": "Aussi grand que ses colonnes le permettent dans la largeur du panneau : les lignes qui ne tiennent pas défilent, en suivant le curseur. Seulement sur votre écran",
+      "normal": "Normale",
+      "normalHint": "Votre taille de texte habituelle : un terminal plus grand défile. Seulement sur votre écran"
+    },
     "readers": {
       "title": "Lisent cette conversation dans Live Share : {{names}}"
     },

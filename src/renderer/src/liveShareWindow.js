@@ -53,6 +53,7 @@ import { buildGuestTree, hostLayoutFromWorkspace, hostChatsFromWorkspace, GUEST_
 import { cleanRights } from '../../shared/liveShareRights'
 import { shownRights } from './liveShareRights'
 import { initials, inviteName, personName, joinedGuests } from './liveShareAccess'
+import { LS_TEXT_SIZES } from './liveShareFit'
 
 // Typing shown on a pane is main's (typed in the last 3 s, said again every
 // 4 s while it goes on and when it ends); one main never said the end of (a
@@ -136,6 +137,9 @@ export function createLiveShareWindow(deps) {
   // Your own view of each host pane (local pane id -> 'chat' | 'terminal'),
   // for the session.
   const views = new Map()
+  // Your Text size for each host terminal (local pane id -> 'fit' | 'width'
+  // | 'normal', liveShareFit.js), for the session.
+  const textSizes = new Map()
   const chatListeners = new Set()
 
   const isGuestWs = (ws) => !!(ws && ws.liveShare)
@@ -615,7 +619,7 @@ export function createLiveShareWindow(deps) {
         sessionId: null,
         // The host's pane: its project, its size (the terminal shows it at
         // that size), what it runs there, and whether you may type in it.
-        liveShare: { session, project: p.project || null, cols: p.cols || 0, rows: p.rows || 0, kind: p.kind, agentId: p.agentId || null, canType: may('type'), host: state.guest.host || '', terminal: true, chat: chatOf(p), view: 'terminal' },
+        liveShare: { session, project: p.project || null, cols: p.cols || 0, rows: p.rows || 0, kind: p.kind, agentId: p.agentId || null, canType: may('type'), host: state.guest.host || '', terminal: true, chat: chatOf(p), view: 'terminal', textSize: textSizes.get(p.id) || 'fit' },
         // A new terminal here each time the host's pane starts again (or the
         // connection came back): SplitNode's key.
         gen: p.gen || 0,
@@ -751,6 +755,7 @@ export function createLiveShareWindow(deps) {
     for (const id of guestLeaves.keys()) deps.dropBuffer(id)
     guestLeaves.clear()
     views.clear()
+    textSizes.clear()
     // Its panes are not terminals of this computer: nothing to stop here.
     for (const ws of deps.workspaces().filter((w) => w.liveShare)) dropGuestWs(ws)
     follow.clear()
@@ -849,6 +854,18 @@ export function createLiveShareWindow(deps) {
     if (view === 'chat' && !leaf.liveShare.chat) return false
     leaf.liveShare.view = view
     views.set(id, view)
+    return true
+  }
+
+  // Your own text size for a host's terminal in its pane: 'fit' (all of it,
+  // larger or smaller text), 'width' (as large as its columns allow) or
+  // 'normal' (your usual size). On your screen only: nothing goes to the
+  // host; remembered for the session. -> done
+  function setGuestTextSize(id, size) {
+    const leaf = guestLeaves.get(id)
+    if (!leaf || !leaf.liveShare || !LS_TEXT_SIZES.includes(size)) return false
+    leaf.liveShare.textSize = size
+    textSizes.set(id, size)
     return true
   }
 
@@ -1013,6 +1030,7 @@ export function createLiveShareWindow(deps) {
     requestClose,
     leave,
     setGuestView,
+    setGuestTextSize,
     chatSource,
     readersOf,
     presenceOf,
