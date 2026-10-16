@@ -355,59 +355,480 @@ describe('Skills dialog', () => {
     wrapper.unmount()
   })
 
-  it('adds from GitHub: picks a skill, shows SKILL.md and files, installs for the chosen agents and scope', async () => {
-    const calls = api()
-    const agents = ['claude', 'codex'].map((id) => ({ id, available: true }))
+  // The Add tab, opened; a step by its heading.
+  async function openAdd(over = {}, props = {}) {
+    const calls = api({ skillsFromGithub: async (q) => (calls.github.push(q), pkg), ...over })
     const asked = []
     const wrapper = mount(SkillsDialog, {
-      props: { agents, cwd: '/p' },
+      props: { agents: ['claude', 'codex'].map((id) => ({ id, available: true })), cwd: '/p/artcraft', ...props },
       global: { provide: { askConfirm: (o) => (asked.push(o), Promise.resolve(true)) } },
       attachTo: document.body
     })
     await flushPromises()
-    await wrapper.findAll('.launch-seg-btn').find((b) => b.text() === 'Add').trigger('click')
-    await wrapper.find('input.mcp-input').setValue('o/r')
-    await wrapper.find('form').trigger('submit')
+    await wrapper.get('[data-test="skills-tab-add"]').trigger('click')
+    return { wrapper, calls, asked }
+  }
+  const steps = (w) => w.findAll('.skills-add .skills-step-title').map((s) => s.text())
+  async function lookUpRepo(w, text) {
+    await w.get('[data-test="skills-repo"]').setValue(text)
+    await w.get('.skills-source-form').trigger('submit')
     await flushPromises()
-    expect(wrapper.text()).toContain('several skills')
-    await wrapper.findAll('.skills-candidates .exit-btn')[0].trigger('click')
-    await flushPromises()
-    expect(calls.github[1]).toEqual({ input: 'o/r', pick: 'skills/pdf' })
-    expect(wrapper.find('.skills-md').text()).toContain('Use pdftk.')
-    expect(wrapper.text()).toContain('2 files')
-    expect(wrapper.text()).toContain('fill.py')
-    expect(wrapper.text()).toContain('Tessel never runs them')
+  }
+  const chip = (w, a) => w.get(`.skills-agent-chip[data-agent="${a}"]`)
 
-    // The setup command is offered, never run on its own.
-    await wrapper.findAll('.skills-setup .exit-btn')[0].trigger('click')
-    await flushPromises()
-    expect(asked[0].code).toBe('npx pdf-helper setup')
-    expect(wrapper.emitted('run')[0][0]).toMatchObject({ command: 'npx pdf-helper setup' })
+  it('Add: the source first; what was found and where it goes once a skill is found; an error says what went wrong', async () => {
+    const { wrapper } = await openAdd({
+      skillsFromGithub: async (q) => (q.input === 'x/missing' ? { ok: false, error: 'Not found on GitHub.' } : pkg)
+    })
+    // Step 1 only: GitHub or a folder, one box with its button inside.
+    expect(steps(wrapper)).toEqual(['Where it comes from'])
+    const sources = wrapper.get('.skills-sources')
+    expect(sources.attributes('role')).toBe('group')
+    expect(sources.findAll('.skills-source').map((b) => [b.text(), b.attributes('aria-pressed')])).toEqual([
+      ['GitHub', 'true'],
+      ['Folder', 'false']
+    ])
+    expect(wrapper.get('.skills-field [data-test="skills-look"]').attributes('disabled')).toBeDefined() // nothing typed yet
+    expect(wrapper.get('[data-test="skills-repo"]').attributes('aria-label')).toBe('Repository')
+    // The example fills the box.
+    await wrapper.get('.skills-example').trigger('click')
+    expect(wrapper.get('[data-test="skills-repo"]').element.value).toBe('anthropics/skills')
 
-    await wrapper.findAll('.set-seg .launch-seg-btn').find((b) => b.text() === 'This project').trigger('click')
-    await wrapper.find('.skills-preview form').trigger('submit')
+    await lookUpRepo(wrapper, 'x/missing')
+    const error = wrapper.get('.skills-add-error')
+    expect(error.attributes('role')).toBe('alert')
+    expect(error.text()).toBe('Not found on GitHub.')
+    expect(wrapper.get('[data-test="skills-repo"]').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.get('[data-test="skills-repo"]').attributes('aria-describedby')).toContain(error.attributes('id'))
+    expect(steps(wrapper)).toEqual(['Where it comes from'])
+
+    await lookUpRepo(wrapper, 'o/r/skills/pdf')
+    expect(wrapper.find('.skills-add-error').exists()).toBe(false)
+    expect(steps(wrapper)).toEqual(['Where it comes from', 'What it does', 'Where to install it'])
+    expect(wrapper.findAll('.skills-add .skills-step-num').map((n) => n.text())).toEqual(['1', '2', '3'])
+    // The skill: name, description, source (short, the commit cut), files and size; then Install at the bottom.
+    const card = wrapper.get('.skills-found .skills-item')
+    expect(card.get('.skills-row-name').text()).toBe('pdf')
+    expect(card.get('.skills-row-desc').text()).toBe('Fill PDF forms.')
+    expect(card.get('.skills-pv-source').text()).toBe('o/r/skills/pdf @ abcdef1')
+    expect(card.get('.skills-pv-source').attributes('title')).toBe('From GitHub: o/r/skills/pdf @ abcdef1234')
+    expect(card.get('.skills-pv-files').text()).toBe('2 files, 2 KB')
+    expect(card.text()).toContain('Read it before installing: an agent follows these instructions.')
+    expect(card.text()).toContain('Tessel never runs them')
+    expect(wrapper.get('[data-test="skills-install"]').text()).toBe('Install pdf')
+    // The files, on a click, each with its size next to it.
+    await card.get('.skills-pv-files').trigger('click')
+    expect(card.get('.skills-pv-files').attributes('aria-expanded')).toBe('true')
+    expect(card.findAll('.skills-files tr').map((r) => r.text())).toEqual(['SKILL.md30 B', 'fill.py2 KB'])
+    // No label squeezed beside its control: no setting row in the tab.
+    expect(wrapper.find('.skills-add .set-row').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('a repository with several skills: a card each with its files and size; one opened at a time, read from GitHub; keyboard', async () => {
+    const candidates = [
+      { path: 'skills/pdf', name: 'pdf', description: 'PDF things.', files: 2, bytes: 2078 },
+      { path: 'skills/docx', name: 'docx', description: 'Word things.', files: 5, bytes: 40960 },
+      { path: 'skills/xlsx', name: 'xlsx', description: null, files: 1, bytes: 900 }
+    ]
+    const { wrapper, calls } = await openAdd({
+      skillsFromGithub: async (q) => {
+        calls.github.push(q)
+        return q.pick ? { ...pkg, name: q.pick.split('/').pop(), id: q.pick } : { repo: 'o/r', commit: 'c'.repeat(40), candidates }
+      }
+    })
+    await lookUpRepo(wrapper, 'o/r')
+    expect(steps(wrapper)).toEqual(['Where it comes from', 'What it does']) // nothing to install before one is opened
+    expect(wrapper.get('.skills-step-aside').text()).toBe('3 skills in o/r @ ccccccc')
+    const rows = () => wrapper.findAll('.skills-found .skills-row')
+    expect(wrapper.findAll('.skills-found .skills-row-name').map((n) => n.text())).toEqual(['pdf', 'docx', 'xlsx'])
+    expect(wrapper.findAll('.skills-found .skills-row-size').map((n) => n.text())).toEqual(['2 files, 2 KB', '5 files, 40 KB', '1 file, 900 B'])
+    expect(wrapper.findAll('.skills-found .skills-row-path').map((n) => n.text())).toEqual(['skills/pdf', 'skills/docx', 'skills/xlsx'])
+    expect(rows()[2].get('.skills-row-desc').text()).toBe('No description.')
+
+    await rows()[1].trigger('click')
     await flushPromises()
-    expect(calls.install[0]).toMatchObject({ id: 'p1', agents: ['claude', 'codex'], scope: 'project', cwd: '/p', replace: null })
-    const results = wrapper.findAll('.mcp-add-results .mcp-agent')
-    expect(results.map((r) => r.find('.mcp-status').text())).toEqual(['Installed', 'Already there'])
-    await results[1].find('button').trigger('click')
+    expect(calls.github.at(-1)).toEqual({ input: 'o/r', pick: 'skills/docx' })
+    expect(rows()[1].attributes('aria-expanded')).toBe('true')
+    expect(rows()[1].attributes('aria-controls')).toBe(wrapper.get('.skills-found .skills-details').attributes('id'))
+    expect(wrapper.get('.skills-found .skills-details').attributes('role')).toBe('region')
+    expect(wrapper.get('[data-test="skills-install"]').text()).toBe('Install docx')
+    // Another: the first closes, the new one is read.
+    await rows()[0].trigger('click')
+    await flushPromises()
+    expect(calls.github.at(-1)).toEqual({ input: 'o/r', pick: 'skills/pdf' })
+    expect(rows().map((r) => r.attributes('aria-expanded'))).toEqual(['true', 'false', 'false'])
+    expect(wrapper.findAll('.skills-found .skills-details')).toHaveLength(1)
+    // A click on the open one closes it: nothing to install.
+    await rows()[0].trigger('click')
+    expect(wrapper.find('.skills-found .skills-details').exists()).toBe(false)
+    expect(wrapper.find('[data-test="skills-install"]').exists()).toBe(false)
+
+    // Keyboard: arrows between the cards, right opens, Escape closes (back on the card).
+    rows()[0].element.focus()
+    await rows()[0].trigger('keydown', { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(rows()[1].element)
+    await rows()[1].trigger('keydown', { key: 'End' })
+    expect(document.activeElement).toBe(rows()[2].element)
+    await rows()[2].trigger('keydown', { key: 'ArrowRight' })
+    await flushPromises()
+    expect(calls.github.at(-1)).toEqual({ input: 'o/r', pick: 'skills/xlsx' })
+    await wrapper.get('[data-test="skills-read"]').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(rows()[2].attributes('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(rows()[2].element)
+    expect(wrapper.emitted('close')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('an answer for a skill clicked before another one is dropped', async () => {
+    const answers = {}
+    const candidates = [
+      { path: 'a', name: 'a', files: 1, bytes: 1 },
+      { path: 'b', name: 'b', files: 1, bytes: 1 }
+    ]
+    const { wrapper } = await openAdd({
+      skillsFromGithub: (q) => (q.pick ? new Promise((resolve) => (answers[q.pick] = resolve)) : Promise.resolve({ repo: 'o/r', candidates }))
+    })
+    await lookUpRepo(wrapper, 'o/r')
+    const rows = wrapper.findAll('.skills-found .skills-row')
+    await rows[0].trigger('click')
+    await rows[1].trigger('click')
+    answers.b({ ...pkg, name: 'b', id: 'b' })
+    await flushPromises()
+    answers.a({ ...pkg, name: 'a', id: 'a' })
+    await flushPromises()
+    expect(wrapper.get('[data-test="skills-install"]').text()).toBe('Install b')
+    wrapper.unmount()
+  })
+
+  it('agent chips: each one on or off (no checkbox), all or none; the shared folder said only when it matters; Install needs one', async () => {
+    const agents = ['claude', 'codex', 'opencode', 'copilot'].map((id) => ({ id, available: true }))
+    const { wrapper, calls } = await openAdd({}, { agents })
+    await lookUpRepo(wrapper, 'o/r/skills/pdf')
+    expect(wrapper.find('.skills-add input[type="checkbox"]').exists()).toBe(false)
+    const group = wrapper.get('.skills-agent-chips')
+    expect(group.attributes('role')).toBe('group')
+    expect(wrapper.get(`#${group.attributes('aria-labelledby')}`).text()).toBe('Agents')
+    expect(group.findAll('.skills-agent-chip').map((c) => c.text())).toEqual(['Claude Code', 'Codex', 'OpenCode', 'Copilot CLI'])
+    expect(group.findAll('.skills-agent-chip .brand-icon')).toHaveLength(4)
+    expect(group.findAll('.skills-agent-chip').every((c) => c.attributes('aria-pressed') === 'true')).toBe(true) // the agents found
+    // Codex chosen: its shared .agents folder is explained.
+    expect(wrapper.get('.skills-info').text()).toBe('Codex gets it in the shared .agents folder, which OpenCode, Copilot CLI and Gemini CLI read too.')
+    await chip(wrapper, 'codex').trigger('click')
+    expect(chip(wrapper, 'codex').attributes('aria-pressed')).toBe('false')
+    expect(chip(wrapper, 'codex').classes()).not.toContain('on')
+    expect(wrapper.find('.skills-info').exists()).toBe(false)
+    expect(wrapper.get('.skills-foot-summary').text()).toBe('For 3 agents · All projects')
+
+    await wrapper.findAll('.skills-field-tools .skills-link').find((b) => b.text() === 'Select none').trigger('click')
+    expect(group.findAll('.skills-agent-chip').every((c) => c.attributes('aria-pressed') === 'false')).toBe(true)
+    expect(wrapper.get('.skills-info.warn').text()).toBe('Choose at least one agent.')
+    expect(wrapper.get('[data-test="skills-install"]').attributes('disabled')).toBeDefined()
+    await wrapper.findAll('.skills-field-tools .skills-link').find((b) => b.text() === 'Select all').trigger('click')
+    expect(group.findAll('.skills-agent-chip').every((c) => c.attributes('aria-pressed') === 'true')).toBe(true)
+    await chip(wrapper, 'opencode').trigger('click')
+    await chip(wrapper, 'copilot').trigger('click')
+    expect(wrapper.get('.skills-foot-summary').text()).toBe('For Claude Code and Codex · All projects')
+    await wrapper.get('.skills-add-foot').trigger('submit')
+    await flushPromises()
+    expect(calls.install[0]).toMatchObject({ agents: ['claude', 'codex'], scope: 'user' })
+
+    // The choice is kept for the next skill looked up.
+    await lookUpRepo(wrapper, 'o/r/skills/pdf')
+    expect(chip(wrapper, 'opencode').attributes('aria-pressed')).toBe('false')
+    wrapper.unmount()
+  })
+
+  it('an agent not found on this computer is offered, marked as such', async () => {
+    const { wrapper } = await openAdd({}, { agents: [{ id: 'claude', available: true }] })
+    await lookUpRepo(wrapper, 'o/r/skills/pdf')
+    // Codex is always offered; not found here, it starts off and says so.
+    expect(chip(wrapper, 'codex').classes()).toContain('missing')
+    expect(chip(wrapper, 'codex').attributes('aria-pressed')).toBe('false')
+    expect(chip(wrapper, 'codex').attributes('aria-label')).toBe('Codex (not found on this computer)')
+    wrapper.unmount()
+  })
+
+  it('scope: All projects or this project, named; this project only with a project open', async () => {
+    const { wrapper, calls } = await openAdd()
+    await lookUpRepo(wrapper, 'o/r/skills/pdf')
+    const opt = (s) => wrapper.get(`.skills-scope-opt[data-scope="${s}"]`)
+    expect(wrapper.get(`#${wrapper.get('.skills-scopes').attributes('aria-labelledby')}`).text()).toBe('Use it in')
+    expect(opt('user').attributes('aria-pressed')).toBe('true')
+    expect(opt('project').text()).toContain('This project')
+    expect(opt('project').get('.skills-scope-sub').text()).toBe('artcraft')
+    expect(opt('project').attributes('title')).toBe('/p/artcraft')
+    await opt('project').trigger('click')
+    expect(opt('project').attributes('aria-pressed')).toBe('true')
+    expect(opt('user').attributes('aria-pressed')).toBe('false')
+    // In a project, Codex shares the project's .agents with the Antigravity CLI.
+    expect(wrapper.get('.skills-info').text()).toContain("project's shared .agents folder")
+    expect(wrapper.get('.skills-foot-summary').text()).toBe('For Claude Code and Codex · This project')
+    await wrapper.get('.skills-add-foot').trigger('submit')
+    await flushPromises()
+    expect(calls.install[0]).toMatchObject({ scope: 'project', cwd: '/p/artcraft' })
+    wrapper.unmount()
+
+    // No project open (or a remote one): this project cannot be chosen.
+    for (const cwd of [null, 'ssh://host/p']) {
+      const other = await openAdd({}, { cwd })
+      await lookUpRepo(other.wrapper, 'o/r/skills/pdf')
+      const project = other.wrapper.get('.skills-scope-opt[data-scope="project"]')
+      expect(project.attributes('disabled')).toBeDefined()
+      expect(project.get('.skills-scope-sub').text()).toBe('No project open')
+      expect(other.wrapper.text()).toContain('Open a project folder to add it to one project only')
+      other.wrapper.unmount()
+    }
+  })
+
+  it('the instructions: formatted, the front matter as key/value pairs; or as source; no raw HTML, no image, links outside', async () => {
+    const md = [
+      '---',
+      'name: pdf',
+      'description: >',
+      '  Fill PDF forms',
+      '  and merge files.',
+      'allowed-tools:',
+      '  - Read',
+      '  - Bash',
+      '---',
+      '# PDF skill',
+      '',
+      'Use **pdftk** <script>alert(1)</script> <b onclick="x()">raw</b>.',
+      '',
+      '![logo](https://tracker.example/pixel.png)',
+      '',
+      'See [the docs](https://example.com/docs) or [a file](notes.md).'
+    ].join('\n')
+    const opened = []
+    const { wrapper } = await openAdd({ skillsFromGithub: async () => ({ ...pkg, skillMd: md }), openExternal: (url) => opened.push(url) })
+    await lookUpRepo(wrapper, 'o/r/skills/pdf')
+    // Closed at first: a long SKILL.md does not fill the page.
+    expect(wrapper.find('.skills-md-box').exists()).toBe(false)
+    const read = wrapper.get('[data-test="skills-read"]')
+    expect(read.text()).toBe('Read the instructions')
+    expect(read.attributes('aria-expanded')).toBe('false')
+    await read.trigger('click')
+    expect(read.attributes('aria-expanded')).toBe('true')
+    expect(read.text()).toBe('Hide the instructions')
+    expect(read.attributes('aria-controls')).toBe(wrapper.get('.skills-md-box').attributes('id'))
+
+    const fm = wrapper.get('.skills-fm')
+    expect(fm.findAll('dt').map((d) => d.text())).toEqual(['name', 'description', 'allowed-tools'])
+    expect(fm.findAll('dd').map((d) => d.text())).toEqual(['pdf', 'Fill PDF forms and merge files.', 'Read, Bash'])
+    const view = wrapper.get('.skills-md-view')
+    expect(view.get('h1').text()).toBe('PDF skill')
+    expect(view.get('strong').text()).toBe('pdftk')
+    expect(view.text()).not.toContain('name: pdf') // the front matter is not shown twice
+    // Raw HTML is shown as text, never run; the image is not loaded.
+    expect(view.find('script').exists()).toBe(false)
+    expect(view.find('b').exists()).toBe(false)
+    expect(view.text()).toContain('<script>alert(1)</script>')
+    expect(view.get('img').attributes('src')).toBeUndefined()
+    expect(view.get('img').attributes('alt')).toBe('logo')
+    // A web link opens in the browser; another link does nothing here.
+    const links = view.findAll('a')
+    await links[0].trigger('click')
+    await links[1].trigger('click')
+    expect(opened).toEqual(['https://example.com/docs'])
+
+    // View source: the file as it is.
+    const toggle = wrapper.get('[data-test="skills-source-toggle"]')
+    expect(toggle.text()).toBe('View source')
+    await toggle.trigger('click')
+    expect(toggle.attributes('aria-pressed')).toBe('true')
+    expect(toggle.text()).toBe('View formatted')
+    expect(wrapper.find('.skills-md-view').exists()).toBe(false)
+    expect(wrapper.get('pre.skills-md').text()).toBe(md)
+    await toggle.trigger('click')
+    expect(wrapper.find('.skills-md-view').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('the result per agent: installed, already there (Replace it), failed with its reason; then View it in Installed', async () => {
+    const results = [
+      { dir: '/h/.claude/skills/pdf', ok: true, seenBy: ['claude', 'opencode', 'copilot'], agents: ['claude'] },
+      { dir: '/h/.agents/skills/pdf', ok: false, exists: true, error: 'A skill with this name is already there.', seenBy: ['codex', 'opencode', 'copilot', 'gemini'], agents: ['codex'] },
+      { dir: '/h/.config/opencode/skills/pdf', ok: false, error: 'EPERM: operation not permitted', seenBy: ['opencode'], agents: ['opencode'] }
+    ]
+    const agents = ['claude', 'codex', 'opencode'].map((id) => ({ id, available: true }))
+    let installs = 0
+    const { wrapper, calls } = await openAdd(
+      {
+        skillsInstall: async (q) => {
+          calls.install.push(q)
+          installs++
+          if (q.replace) return { ok: true, name: 'pdf', results: [{ dir: q.replace, ok: true, seenBy: ['codex'], agents: ['codex'] }] }
+          return { ok: false, name: 'pdf', results }
+        }
+      },
+      { agents }
+    )
+    await lookUpRepo(wrapper, 'o/r/skills/pdf')
+    await wrapper.get('.skills-add-foot').trigger('submit')
+    await flushPromises()
+    const box = wrapper.get('.skills-results')
+    expect(box.attributes('aria-live')).toBe('polite')
+    expect(box.get('.skills-results-head').text()).toBe('1 of 3 done')
+    const lines = () => wrapper.findAll('.skills-result')
+    expect(lines().map((l) => l.classes().find((c) => ['ok', 'exists', 'failed'].includes(c)))).toEqual(['ok', 'exists', 'failed'])
+    expect(lines().map((l) => l.get('.skills-result-agents').text())).toEqual(['Claude Code', 'Codex', 'OpenCode'])
+    expect(lines().map((l) => l.get('.skills-result-state').text())).toEqual(['Installed', 'Already there', 'Failed'])
+    expect(lines()[0].text()).toContain('Also seen by OpenCode') // OpenCode reads Claude's folder
+    expect(lines()[2].get('.skills-result-error').text()).toBe('EPERM: operation not permitted')
+    expect(lines()[1].text()).toContain('already in this folder')
+    // Not every folder has it: Install stays; the one already there can be replaced.
+    expect(wrapper.find('[data-test="skills-install"]').exists()).toBe(true)
+    await lines()[1].get('button').trigger('click')
     await flushPromises()
     expect(calls.install[1]).toMatchObject({ replace: '/h/.agents/skills/pdf' })
+    expect(lines().map((l) => l.get('.skills-result-state').text())).toEqual(['Installed', 'Installed', 'Failed'])
+    expect(installs).toBe(2)
+
+    // View it in Installed: that tab, the skill open and focused.
+    await wrapper.get('[data-test="skills-view-installed"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.skills-add').exists()).toBe(false)
+    const row = rowOf(wrapper, 'pdf')
+    expect(row.get('.skills-row').attributes('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(row.get('.skills-row').element)
+    wrapper.unmount()
+  })
+
+  it('every folder has it: no Install button left; another choice brings it back; Add another skill starts again', async () => {
+    const { wrapper } = await openAdd({
+      skillsInstall: async (q) => ({ ok: true, name: 'pdf', results: q.agents.map((a) => ({ dir: `/h/.${a}/skills/pdf`, ok: true, seenBy: [a], agents: [a] })) })
+    })
+    await lookUpRepo(wrapper, 'o/r/skills/pdf')
+    await wrapper.get('.skills-add-foot').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('.skills-results-head').text()).toBe('2 of 2 done')
+    expect(wrapper.find('[data-test="skills-install"]').exists()).toBe(false)
+    expect(wrapper.get('.mcp-notice').text()).toBe('Installed "pdf" for Claude Code and Codex. Agents use it from their next session.')
+    await chip(wrapper, 'codex').trigger('click')
+    expect(wrapper.find('[data-test="skills-install"]').exists()).toBe(true)
+    await wrapper.findAll('.skills-results-foot .skills-link').find((b) => b.text() === 'Add another skill').trigger('click')
+    await flushPromises()
+    expect(steps(wrapper)).toEqual(['Where it comes from'])
+    expect(wrapper.get('[data-test="skills-repo"]').element.value).toBe('')
+    expect(document.activeElement).toBe(wrapper.get('[data-test="skills-repo"]').element)
+    wrapper.unmount()
+  })
+
+  it('a progress state while it installs', async () => {
+    let finish
+    const { wrapper } = await openAdd({ skillsInstall: () => new Promise((resolve) => (finish = resolve)) })
+    await lookUpRepo(wrapper, 'o/r/skills/pdf')
+    await wrapper.get('.skills-add-foot').trigger('submit')
+    await flushPromises()
+    const button = wrapper.get('[data-test="skills-install"]')
+    expect(button.text()).toBe('Installing…')
+    expect(button.attributes('disabled')).toBeDefined()
+    expect(button.find('.skills-spinner').exists()).toBe(true)
+    expect(wrapper.get('.skills-add').attributes('aria-busy')).toBe('true')
+    finish({ ok: true, name: 'pdf', results: [{ dir: '/h/.claude/skills/pdf', ok: true, seenBy: ['claude'], agents: ['claude'] }] })
+    await flushPromises()
+    expect(wrapper.get('.skills-add').attributes('aria-busy')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('from a folder: chosen with the picker, its path shown, previewed and installed', async () => {
+    const folderPkg = { ...pkg, id: 'f1', name: 'pdf-forms', source: { kind: 'folder', path: 'C:\\Users\\me\\skills\\pdf-forms' } }
+    const picked = []
+    const { wrapper, calls } = await openAdd({
+      skillsList: async () => ({ roots: [], skills: [], home: 'C:\\Users\\me' }),
+      pickFolder: async (o) => (picked.push(o), 'C:\\Users\\me\\skills\\pdf-forms'),
+      skillsFromFolder: async (dir) => (calls.github.push({ folder: dir }), folderPkg)
+    })
+    await wrapper.get('.skills-source[data-source="folder"]').trigger('click')
+    expect(wrapper.get('.skills-source[data-source="folder"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-test="skills-repo"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('A folder with a SKILL.md at its top')
+    await wrapper.get('[data-test="skills-choose-folder"]').trigger('click')
+    await flushPromises()
+    expect(picked[0]).toMatchObject({ defaultPath: '/p/artcraft' })
+    expect(calls.github).toEqual([{ folder: 'C:\\Users\\me\\skills\\pdf-forms' }])
+    expect(wrapper.get('.skills-folder-row .skills-path').text()).toBe('~\\skills\\pdf-forms')
+    expect(wrapper.get('.skills-pv-source').text()).toBe('~\\skills\\pdf-forms')
+    expect(wrapper.get('.skills-pv-meta .skills-origin').text()).toBe('Folder')
+    await wrapper.get('.skills-add-foot').trigger('submit')
+    await flushPromises()
+    expect(calls.install[0]).toMatchObject({ id: 'f1', agents: ['claude', 'codex'] })
+    wrapper.unmount()
+  })
+
+  it('Add tab: labels above their controls, one line each; it follows its own width', () => {
+    const css = fs.readFileSync(join(process.cwd(), 'src/renderer/src/components/SkillsDialog.vue'), 'utf8').replace(/\r\n/g, '\n')
+    const rule = (sel) => {
+      const at = css.indexOf(`\n${sel} {`)
+      return at < 0 ? '' : css.slice(at, css.indexOf('}', at))
+    }
+    for (const sel of ['.skills-source', '.skills-agent-chip', '.skills-field-label', '.skills-step-title', '.skills-scope-title', '.skills-result-state'])
+      expect(rule(sel), sel).toContain('white-space: nowrap')
+    for (const sel of ['.skills-source', '.skills-agent-chip']) expect(rule(sel), sel).toContain('flex: 0 0 auto')
+    expect(rule('.skills-agent-chips')).toContain('flex-wrap: wrap')
+    expect(rule('.skills-field-input')).toContain('min-width: 0')
+    expect(rule('.skills-add')).toContain('container-type: inline-size')
+    expect(css).toMatch(/@container \(max-width: 420px\)/)
+  })
+
+  it('speaks French: the Add tab', async () => {
+    setMessages('fr', fr)
+    const { wrapper } = await openAdd({
+      skillsInstall: async () => ({ ok: false, name: 'pdf', results: [{ dir: '/h/.agents/skills/pdf', ok: false, exists: true, seenBy: ['codex'], agents: ['codex'] }] })
+    })
+    expect(steps(wrapper)).toEqual(["D'où elle vient"])
+    expect(wrapper.get('.skills-source[data-source="folder"]').text()).toBe('Dossier')
+    expect(wrapper.get('[data-test="skills-look"]').text()).toBe('Rechercher')
+    await lookUpRepo(wrapper, 'o/r/skills/pdf')
+    expect(steps(wrapper)).toEqual(["D'où elle vient", "Ce qu'elle fait", "Où l'installer"])
+    expect(wrapper.get('[data-test="skills-read"]').text()).toBe('Lire les instructions')
+    expect(wrapper.get('.skills-pv-files').text()).toBe('2 fichiers, 2 Ko')
+    expect(wrapper.findAll('.skills-field-label').map((l) => l.text())).toEqual(['Agents', "L'utiliser dans"])
+    expect(wrapper.findAll('.skills-field-tools .skills-link').map((l) => l.text())).toEqual(['Tout sélectionner', 'Tout désélectionner'])
+    expect(wrapper.get('.skills-foot-summary').text()).toBe('Pour Claude Code et Codex · Tous les projets')
+    expect(wrapper.get('[data-test="skills-install"]').text()).toBe('Installer pdf')
+    await wrapper.get('[data-test="skills-read"]').trigger('click')
+    expect(wrapper.get('[data-test="skills-source-toggle"]').text()).toBe('Voir la source')
+    await wrapper.get('.skills-add-foot').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('.skills-results-head').text()).toBe('Terminé : 0 sur 1')
+    expect(wrapper.get('.skills-result-state').text()).toBe('Déjà présente')
+    expect(wrapper.get('.skills-result button').text()).toBe('La remplacer')
+    expect(wrapper.get('[data-test="skills-view-installed"]').text()).toBe('La voir dans Installées')
     wrapper.unmount()
   })
 
   it('Update shows the new version, then replaces that copy only', async () => {
-    const calls = api()
+    const calls = api({
+      skillsInstall: async (q) => (calls.install.push(q), { ok: true, name: 'pdf', results: [{ dir: q.replace, ok: true, seenBy: ['claude'], agents: ['claude'] }] })
+    })
     const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
     await flushPromises()
     await open(wrapper, 'pdf')
     await button(copyOf(wrapper, '/h/.claude/skills/pdf'), 'Update').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.skills-md').exists()).toBe(true)
-    expect(wrapper.find('.mcp-targets').exists()).toBe(false)
-    await wrapper.find('.skills-preview form').trigger('submit')
+    // What is updated instead of a source; the new version to read; no agents or scope to choose.
+    expect(wrapper.findAll('.skills-add .skills-step-title').map((s) => s.text())).toEqual(['Update pdf', 'The new version'])
+    expect(wrapper.get('.skills-updating .skills-path').attributes('title')).toBe('/h/.claude/skills/pdf')
+    expect(wrapper.find('[data-test="skills-read"]').exists()).toBe(true)
+    expect(wrapper.find('.skills-agent-chips').exists()).toBe(false)
+    expect(wrapper.find('.skills-scopes').exists()).toBe(false)
+    expect(wrapper.get('.skills-foot-summary').text()).toBe('Replaces the copy in /h/.claude/skills/pdf')
+    expect(wrapper.get('[data-test="skills-install"]').text()).toBe('Update pdf')
+    await wrapper.get('.skills-add-foot').trigger('submit')
     await flushPromises()
     expect(calls.install[0]).toMatchObject({ id: 'p1', replace: '/h/.claude/skills/pdf' })
+    // Done: its result, no button left, and the way back to the list.
+    expect(wrapper.find('[data-test="skills-install"]').exists()).toBe(false)
+    expect(wrapper.get('.skills-result-state').text()).toBe('Installed')
+    await wrapper.findAll('.skills-link').find((b) => b.text() === 'Back to the list').trigger('click')
+    expect(wrapper.find('.skills-add').exists()).toBe(false)
+    expect(wrapper.find('.skills-search').exists()).toBe(true)
+    // The Add tab again: a fresh start, not the finished update.
+    await wrapper.get('[data-test="skills-tab-add"]').trigger('click')
+    expect(wrapper.findAll('.skills-add .skills-step-title').map((s) => s.text())).toEqual(['Where it comes from'])
     wrapper.unmount()
   })
 
@@ -505,7 +926,7 @@ describe('Skills dialog', () => {
     expect(wrapper.find('.skills-skeleton').exists()).toBe(false)
     expect(wrapper.get('.mcp-empty').text()).toContain('No skills yet.')
     await button(wrapper.get('.mcp-empty'), 'Add a skill').trigger('click')
-    expect(wrapper.find('.skills-preview, input.mcp-input').exists()).toBe(true)
+    expect(wrapper.find('input.skills-field-input').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -615,11 +1036,11 @@ describe('Skills dialog', () => {
     expect(box.findAll('li').map((li) => li.find('.skills-commit-msg').text())).toEqual(['Fix tables', 'Add forms'])
     expect(box.findAll('li')[1].text()).toContain('Bob')
     expect(box.text()).toContain('only the 30 newest')
-    await wrapper.find('.skills-preview form').trigger('submit')
+    await wrapper.find('.skills-add-foot').trigger('submit')
     await flushPromises()
     expect(asked[0]).toMatchObject({ confirmLabel: 'Update anyway', danger: true })
     expect(calls.install).toHaveLength(0) // declined
-    await wrapper.find('.skills-preview form').trigger('submit')
+    await wrapper.find('.skills-add-foot').trigger('submit')
     await flushPromises()
     expect(calls.install[0]).toMatchObject({ replace: '/h/.claude/skills/pdf' })
     wrapper.unmount()
@@ -689,7 +1110,7 @@ describe('Skills dialog', () => {
     await open(wrapper, 'pdf')
     await button(copyOf(wrapper, '/h/.claude/skills/pdf'), 'Update').trigger('click')
     await flushPromises()
-    await wrapper.find('.skills-preview form').trigger('submit')
+    await wrapper.find('.skills-add-foot').trigger('submit')
     await flushPromises()
     expect(wrapper.find('.mcp-notice').text()).toBe('Updated "pdf". The old copy is in the Recycle Bin. Agents use it from their next session.')
     wrapper.unmount()
@@ -767,7 +1188,7 @@ describe('Skills dialog', () => {
     wrapper.unmount()
   })
 
-  it('Antigravity plugins: only with the Antigravity CLI installed; listed, turned off, uninstalled, installed in a pane', async () => {
+  it('Antigravity plugins: only with the Antigravity CLI installed; one row each, details on a click: turn off, uninstall; installed in a pane', async () => {
     const calls = api()
     calls.set = []
     calls.rm = []
@@ -798,26 +1219,80 @@ describe('Skills dialog', () => {
     await flushPromises()
     await wrapper.get('[data-test="skills-tab-plugins"]').trigger('click')
     await flushPromises()
-    const figma = wrapper.get('[data-test="agy-plugin-figma"]')
-    expect(figma.text()).toContain('1.2.0')
-    expect(figma.text()).toContain('2 skills · 1 MCP server')
-    expect(wrapper.get('[data-test="agy-plugin-old-kit"]').text()).toContain('Turned off')
-    await figma.findAll('button')[0].trigger('click')
+    // The same list as the skills: a row each, a count above it.
+    expect(wrapper.get('.skills-count').text()).toBe('2 plugins')
+    expect(wrapper.get('.skills-list').attributes('aria-label')).toBe('Installed plugins')
+    const row = (name) => wrapper.get(`[data-test="agy-plugin-${name}"]`)
+    expect(row('figma').get('.skills-row-name').text()).toBe('figma')
+    expect(row('figma').get('.skills-scope').text()).toBe('1.2.0')
+    expect(row('figma').get('.skills-row-desc').text()).toBe('2 skills · 1 MCP server')
+    expect(row('old-kit').get('.skills-off').text()).toBe('Turned off')
+    expect(row('old-kit').get('.skills-row-desc').text()).toBe('From antigravity')
+    expect(wrapper.find('.skills-details').exists()).toBe(false)
+
+    // Keyboard: arrows between rows, right opens, Escape closes (back on the row).
+    const rows = () => wrapper.findAll('.skills-list .skills-row')
+    rows()[0].element.focus()
+    await rows()[0].trigger('keydown', { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(rows()[1].element)
+    await rows()[1].trigger('keydown', { key: 'ArrowRight' })
+    expect(rows()[1].attributes('aria-expanded')).toBe('true')
+    await row('old-kit').get('[data-test="agy-plugin-toggle"]').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(rows()[1].attributes('aria-expanded')).toBe('false')
+    expect(document.activeElement).toBe(rows()[1].element)
+    expect(wrapper.emitted('close')).toBeUndefined()
+
+    // Its details: where it comes from, what it brings, turn off, uninstall.
+    await row('figma').get('.skills-row').trigger('click')
+    const details = row('figma').get('.skills-details')
+    expect(row('figma').get('.skills-row').attributes('aria-expanded')).toBe('true')
+    expect(details.attributes('role')).toBe('region')
+    expect(details.attributes('aria-labelledby')).toBe(row('figma').get('.skills-row').attributes('id'))
+    expect(details.text()).toContain('From antigravity-plugins-official')
+    expect(details.findAll('.skills-plugin-parts .skills-tag').map((t) => t.text())).toEqual(['2 skills', '1 MCP server'])
+    expect(details.text()).toContain('On: Antigravity CLI panes load it when they start.')
+    await details.get('[data-test="agy-plugin-toggle"]').trigger('click')
     await flushPromises()
     expect(calls.set).toEqual([{ name: 'figma', enabled: false }])
-    expect(wrapper.get('[data-test="agy-plugin-figma"]').text()).toContain('Turned off')
-    await wrapper.get('[data-test="agy-plugin-old-kit"]').find('button.danger').trigger('click')
+    expect(row('figma').get('.skills-off').text()).toBe('Turned off')
+    expect(row('figma').get('[data-test="agy-plugin-toggle"]').text()).toBe('Turn on')
+    await row('old-kit').get('.skills-row').trigger('click')
+    expect(row('figma').find('.skills-details').exists()).toBe(false) // one open at a time
+    expect(row('old-kit').get('.skills-details').text()).toContain('Nothing listed in it.')
+    await row('old-kit').get('[data-test="agy-plugin-remove"]').trigger('click')
     await flushPromises()
     expect(calls.rm).toEqual([{ name: 'old-kit' }])
     expect(wrapper.find('[data-test="agy-plugin-old-kit"]').exists()).toBe(false)
+    expect(wrapper.get('.skills-count').text()).toBe('1 plugin')
+
     // Installing runs in a pane the user sees; nothing a shell would read as more.
     await wrapper.get('[data-test="agy-plugin-target"]').setValue('figma@antigravity-plugins-official')
-    await wrapper.get('form.mcp-toolbar').trigger('submit')
+    await wrapper.get('form.skills-plugin-form').trigger('submit')
     expect(wrapper.emitted('run').at(-1)[0].command).toBe('agy plugin install "figma@antigravity-plugins-official"')
     await wrapper.get('[data-test="agy-plugin-target"]').setValue('x; rm -rf /')
-    await wrapper.get('form.mcp-toolbar').trigger('submit')
+    await wrapper.get('form.skills-plugin-form').trigger('submit')
     expect(wrapper.emitted('run')).toHaveLength(1)
-    expect(wrapper.text()).toContain('Enter a plugin name')
+    expect(wrapper.get('.skills-add-error').attributes('role')).toBe('alert')
+    expect(wrapper.get('.skills-add-error').text()).toContain('Enter a plugin name')
+    expect(wrapper.get('[data-test="agy-plugin-target"]').attributes('aria-invalid')).toBe('true')
+    expect(wrapper.get('[data-test="agy-plugin-target"]').attributes('aria-label')).toBe('Plugin name or folder')
+    wrapper.unmount()
+  })
+
+  it('Antigravity plugins: loading, then none', async () => {
+    let answer
+    api({ agyPluginsList: () => new Promise((resolve) => (answer = resolve)) })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'antigravity', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[data-test="skills-tab-plugins"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.skills-skeleton')).toHaveLength(2)
+    expect(wrapper.get('.skills-count').text()).toBe('Loading…')
+    answer({ plugins: [] })
+    await flushPromises()
+    expect(wrapper.find('.skills-skeleton').exists()).toBe(false)
+    expect(wrapper.get('.mcp-empty').text()).toBe('No Antigravity CLI plugins installed.')
     wrapper.unmount()
   })
 
@@ -831,6 +1306,11 @@ describe('Skills dialog', () => {
     await flushPromises()
     expect(wrapper.get('[data-test="agy-plugin-figma"]').text()).toContain('Désactivé')
     expect(wrapper.get('[data-test="agy-plugin-figma"]').text()).toContain('1 skill')
+    expect(wrapper.get('.skills-count').text()).toBe('1 plugin')
+    await wrapper.get('[data-test="agy-plugin-figma"] .skills-row').trigger('click')
+    expect(wrapper.get('[data-test="agy-plugin-toggle"]').text()).toBe('Activer')
+    expect(wrapper.get('[data-test="agy-plugin-remove"]').text()).toBe('Désinstaller')
+    expect(wrapper.get('.skills-plugin-state').text()).toBe('Désactivé : les panneaux Antigravity CLI ne le chargent pas.')
     wrapper.unmount()
   })
 
@@ -858,28 +1338,47 @@ describe('Skills dialog', () => {
         return { ok: true }
       }
     })
+    list[0].description = 'A forecast skill.'
     const agents = [{ id: 'antigravity', available: true }, { id: 'muse', available: true }]
     const wrapper = mount(SkillsDialog, { props: { agents }, attachTo: document.body, global: { provide: { askConfirm: () => Promise.resolve(true) } } })
     await flushPromises()
     expect(wrapper.get('[data-test="skills-tab-plugins"]').text()).toBe('Antigravity plugins')
+    expect(wrapper.get('[data-test="skills-tab-muse-plugins"]').text()).toBe('Muse plugins')
     await wrapper.get('[data-test="skills-tab-muse-plugins"]').trigger('click')
     await flushPromises()
+    expect(wrapper.get('[data-test="skills-tab-muse-plugins"]').classes()).toContain('on')
+    expect(wrapper.get('[data-test="skills-tab-plugins"]').classes()).not.toContain('on')
     expect(wrapper.text()).toContain('Muse Code plugins bundle skills, commands, hooks and MCP servers.')
-    const weather = wrapper.get('[data-test="muse-plugin-weather"]')
-    expect(weather.text()).toContain('Weather')
-    expect(weather.text()).toContain('1 skill · hooks · 1 command')
-    expect(weather.text()).toContain('Turned off')
-    await weather.findAll('button')[0].trigger('click')
+    // The same list as Antigravity's: a row each, a count above it.
+    expect(wrapper.get('.skills-count').text()).toBe('2 plugins')
+    const row = (name) => wrapper.get(`[data-test="muse-plugin-${name}"]`)
+    expect(row('weather').get('.skills-row-name').text()).toBe('Weather')
+    expect(row('weather').get('.skills-row-desc').text()).toBe('1 skill · hooks · 1 command')
+    expect(row('weather').get('.skills-off').text()).toBe('Turned off')
+    expect(row('docs-kit').get('.skills-row-name').text()).toBe('docs-kit')
+    // Its details: its description, its words, turn on, uninstall.
+    await row('weather').get('.skills-row').trigger('click')
+    const details = row('weather').get('.skills-details')
+    expect(details.text()).toContain('A forecast skill.')
+    expect(details.text()).toContain('Off: Muse Code panes do not load it.')
+    await details.get('[data-test="muse-plugin-toggle"]').trigger('click')
     await flushPromises()
     expect(calls.set).toEqual([{ name: 'weather', enabled: true }])
     expect(wrapper.text()).toContain('Turned on "weather". Muse Code panes use the change from their next start.')
-    await wrapper.get('[data-test="muse-plugin-docs-kit"]').find('button.danger').trigger('click')
+    await row('docs-kit').get('.skills-row').trigger('click')
+    await row('docs-kit').get('[data-test="muse-plugin-remove"]').trigger('click')
     await flushPromises()
     expect(calls.rm).toEqual([{ name: 'docs-kit' }])
     expect(wrapper.find('[data-test="muse-plugin-docs-kit"]').exists()).toBe(false)
+    // Installing: muse's own command, in a pane the user sees.
     await wrapper.get('[data-test="muse-plugin-target"]').setValue('weather@local')
-    await wrapper.get('form.mcp-toolbar').trigger('submit')
+    await wrapper.get('form.skills-plugin-form').trigger('submit')
     expect(wrapper.emitted('run').at(-1)[0]).toEqual({ label: 'Muse plugin: weather@local', command: 'muse plugins install "weather@local"' })
+    // Back to Antigravity's tab: its own list again.
+    await wrapper.get('[data-test="skills-tab-plugins"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="muse-plugin-weather"]').exists()).toBe(false)
+    expect(wrapper.get('.mcp-empty').text()).toBe('No Antigravity CLI plugins installed.')
     wrapper.unmount()
   })
 
@@ -894,6 +1393,9 @@ describe('Skills dialog', () => {
     await flushPromises()
     expect(wrapper.get('[data-test="muse-plugin-weather"]').text()).toContain('Désactivé')
     expect(wrapper.text()).toContain('Les plugins de Muse Code')
+    await wrapper.get('[data-test="muse-plugin-weather"] .skills-row').trigger('click')
+    expect(wrapper.get('[data-test="muse-plugin-toggle"]').text()).toBe('Activer')
+    expect(wrapper.get('.skills-plugin-state').text()).toBe('Désactivé : les panneaux Muse Code ne le chargent pas.')
     wrapper.unmount()
   })
 })

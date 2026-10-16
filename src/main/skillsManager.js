@@ -593,16 +593,33 @@ export async function packageFromGithub(input, { fetchFn = fetch, pick = null, f
     const where = `${spec.owner}/${spec.repo}${base ? '/' + base : ''}` // i18n-ignore path
     if (!found.length) throw fail(t('main.skills.noSkillInRepo', 'No SKILL.md found in {{where}}.', { where }), 'SKILL_NO_MD')
     if (found.length === 1) chosen = found[0]
-    else
+    else {
+      // Each skill's files and size, as its package would hold them (a skill
+      // inside another counts in both): one pass, each file up its folders.
+      const shown = found.slice(0, 300)
+      const sizes = new Map(shown.map((dir) => [dir, { files: 0, bytes: 0 }]))
+      for (const e of entries) {
+        if (e.kind !== 'file') continue
+        const parts = e.rel.split('/')
+        for (let i = parts.length - 1; i > 0; i--) {
+          const size = sizes.get(parts.slice(0, i).join('/'))
+          if (size) {
+            size.files++
+            size.bytes += e.data.length
+          }
+        }
+      }
       return {
-        candidates: found.slice(0, 300).map((dir) => {
+        candidates: shown.map((dir) => {
           const md = entries.find((e) => e.kind === 'file' && e.rel === `${dir}/SKILL.md`)
           const fallback = path.posix.basename(dir)
           const meta = md ? skillFrontmatter(md.data.subarray(0, 64 * 1024).toString('utf8'), fallback) : null
-          return { path: dir, name: (meta && meta.name) || fallback, description: (meta && meta.description) || null }
+          return { path: dir, name: (meta && meta.name) || fallback, description: (meta && meta.description) || null, ...sizes.get(dir) }
         }),
-        repo: where
+        repo: where,
+        commit: tar.comment && /^[0-9a-f]{40}$/i.test(tar.comment) ? tar.comment : null
       }
+    }
   }
   const prefix = chosen ? chosen + '/' : ''
   const files = []
@@ -707,7 +724,10 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
   const results = []
   const hash = contentHash(pkg.files)
   for (const { root, dest } of targets) {
-    const result = { dir: dest, seenBy: root.seenBy, scope: root.scope }
+    // agents: the chosen agents this folder is for (the window says which
+    // agent each result is about); seenBy: every agent that reads it.
+    const forAgents = replace ? [...root.installFor] : [...new Set(agents)].filter((a) => root.installFor.includes(a))
+    const result = { dir: dest, seenBy: root.seenBy, scope: root.scope, agents: forAgents }
     const tmp = path.join(root.path, `.${path.basename(dest)}.tessel-${randomBytes(4).toString('hex')}`)
     const key = sameKey(dest)
     installing.add(key)

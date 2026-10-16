@@ -270,8 +270,10 @@ describe('install from a folder', () => {
     const src = path.join(tmp, 'src', 'p')
     write(path.join(src, 'SKILL.md'), skillMd('p', 'x'))
     const pkg = await packageFromFolder(src)
-    const res = await installSkill({ id: pkg.id, agents: ['claude', 'codex', 'copilot'], scope: 'project', cwd, home, env })
+    const res = await installSkill({ id: pkg.id, agents: ['claude', 'codex', 'copilot', 'antigravity'], scope: 'project', cwd, home, env })
     expect(res.ok).toBe(true)
+    // Codex and the Antigravity CLI share the project's .agents folder: one copy, for both.
+    expect(res.results.map((r) => r.agents)).toEqual([['claude'], ['codex', 'antigravity'], ['copilot']])
     expect(fs.existsSync(path.join(cwd, '.claude', 'skills', 'p', 'SKILL.md'))).toBe(true)
     expect(fs.existsSync(path.join(cwd, '.agents', 'skills', 'p', 'SKILL.md'))).toBe(true)
     expect(fs.existsSync(path.join(cwd, '.github', 'skills', 'p', 'SKILL.md'))).toBe(true)
@@ -323,6 +325,11 @@ describe('install from GitHub', () => {
     const list = await packageFromGithub('o/r', { fetchFn })
     expect(fetchFn.calls[0]).toBe('https://github.com/o/r/archive/HEAD.tar.gz')
     expect(list.candidates.map((c) => c.name).sort()).toEqual(['docx', 'pdf'])
+    // Each one with its files and size (as its package holds them), and the commit.
+    const pdfMd = Buffer.byteLength(skillMd('pdf', 'PDF things.'))
+    expect(list.candidates.find((c) => c.name === 'pdf')).toMatchObject({ path: 'skills/pdf', description: 'PDF things.', files: 2, bytes: pdfMd + 'print(2)'.length })
+    expect(list.candidates.find((c) => c.name === 'docx')).toMatchObject({ files: 1, bytes: Buffer.byteLength(skillMd('docx', 'Word things.')) })
+    expect(list).toMatchObject({ repo: 'o/r', commit: 'a'.repeat(40) })
     const pkg = await packageFromGithub('o/r', { fetchFn, pick: 'skills/pdf' })
     expect(fetchFn.calls).toHaveLength(1) // the archive is kept while choosing
     expect(pkg.files.map((f) => f.path).sort()).toEqual(['SKILL.md', 'forms/fill.py'])
@@ -331,6 +338,8 @@ describe('install from GitHub', () => {
     const sources = createSkillSources(path.join(tmp, 'sources.json'))
     const res = await installSkill({ id: pkg.id, agents: ['codex'], scope: 'user', home, env, sources })
     expect(res.ok).toBe(true)
+    // Each result says which chosen agent it is for, and who else reads that folder.
+    expect(res.results[0]).toMatchObject({ agents: ['codex'], seenBy: ['codex', 'opencode', 'copilot', 'gemini'] })
     const dest = path.join(home, '.agents', 'skills', 'pdf')
     expect(fs.readFileSync(path.join(dest, 'forms', 'fill.py'), 'utf8')).toBe('print(2)')
     expect(sources.get(dest)).toMatchObject({ kind: 'github', repo: 'r', path: 'skills/pdf' })
