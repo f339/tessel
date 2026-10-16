@@ -60,6 +60,7 @@ import { antigravityListed, antigravityModelOnScreen } from '../../../shared/ant
 import { codexModelOnScreen } from '../../../shared/codexScreen'
 import { paneModels } from '../paneModels'
 import { modelsFor, refreshIfStale } from '../agentModels'
+import { afterStartup, isStartupFinished } from '../startupIdle'
 import { CLAUDE_PRICING } from '../../../shared/claudePricing'
 import { modelChoiceLabel, sessionPillLabel } from '../sessionOptionLabels'
 import { switchClaudeModel, typeCommand } from '../claudeModelSwitch'
@@ -211,11 +212,12 @@ onBeforeUnmount(() => {
 })
 // An agent pane asks for its model list (missing or a day old) once it
 // opens: its pickers (header, chat view, Settings) all list from it, not
-// only the pane menu's.
+// only the pane menu's. While Tessel starts, once it has started (asking
+// runs the agent's CLI: startupIdle.js).
 watch(
   () => (props.node.kind === 'agent' ? props.node.agentId : null),
   (agentId) => {
-    if (agentId) refreshIfStale(agentId)
+    if (agentId) afterStartup(() => refreshIfStale(agentId))
   },
   { immediate: true }
 )
@@ -778,11 +780,29 @@ onBeforeUnmount(() => {
   clearTimeout(pickRefresh)
   if (stopModelChanged) stopModelChanged()
 })
+// Its first read while Tessel starts waits for the pane to be mounted: read
+// at once when it is on screen, else once Tessel has started (each read is a
+// file read in the main process, which then answered the terminals'
+// re-attaches late: startupIdle.js).
+let firstModelRead = false
 watch(
   () => [props.node.kind, props.node.agentId, props.node.sessionId, props.node.detectedCommand],
-  () => refreshModel(),
+  (_now, before) => {
+    if (!before && !isStartupFinished()) {
+      firstModelRead = true
+      return
+    }
+    refreshModel()
+  },
   { immediate: true }
 )
+function readModelAtMount() {
+  if (!firstModelRead) return
+  firstModelRead = false
+  const hidden = !!(hostEl.value && hostEl.value.closest('.ws-layer.hidden'))
+  if (hidden && !isStartupFinished()) afterStartup(() => mounted && refreshModel())
+  else refreshModel()
+}
 
 // Hook observations own supported launches. Older panes and other providers
 // retain their explicitly estimated output-based display.
@@ -3310,6 +3330,7 @@ onMounted(() => {
   // Not under the floating terminal while it has the keyboard (typing would
   // reach a pane the user cannot see).
   if (isActive.value && !(ctx.floatingHasKeyboard && ctx.floatingHasKeyboard())) termFocus()
+  readModelAtMount()
 })
 
 watch(isActive, (a) => {

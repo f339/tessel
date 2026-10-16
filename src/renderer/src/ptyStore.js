@@ -9,8 +9,9 @@
 // window when agents printed a lot.)
 
 import { ChunkBuffer } from '../../shared/chunkBuffer'
+import { PANE_HISTORY_CHARS } from '../../shared/paneHistory'
 
-const MAX = 200_000 // ~200 KB of recent output kept per pane
+const MAX = PANE_HISTORY_CHARS // ~200 KB of recent output kept per pane
 const buffers = new Map() // id -> ChunkBuffer
 let started = false
 

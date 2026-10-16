@@ -158,6 +158,43 @@ describe('guardIpc', () => {
     expect(log.warn.mock.calls[0][1]).toMatch(/refused files:open from webContents 5 webview https:\/\/evil\.example/)
   })
 
+  it('times each handler’s synchronous part when asked (ipcTiming.js), never a refused one', async () => {
+    const ipc2 = fakeIpcMain()
+    const measure = vi.fn()
+    guardIpc(ipc2, { isTrustedSender: mainFrameSender(() => win), log, exempt: ['browser:*'], measure })
+    const busy = (ms) => {
+      const until = performance.now() + ms
+      while (performance.now() < until) {
+        /* holds the loop */
+      }
+    }
+    ipc2.handle('agents:children', async () => {
+      busy(30)
+      await Promise.resolve()
+      busy(200) // after its first await: not holding the loop for the caller
+      return 'list'
+    })
+    await expect(ipc2.invoke('agents:children', trusted())).resolves.toBe('list')
+    expect(measure).toHaveBeenCalledTimes(1)
+    const [channel, ms] = measure.mock.calls[0]
+    expect(channel).toBe('agents:children')
+    expect(ms).toBeGreaterThanOrEqual(25)
+    expect(ms).toBeLessThan(200)
+    ipc2.on('layout:save', () => busy(5))
+    ipc2.emit('layout:save', trusted())
+    expect(measure.mock.calls[1][0]).toBe('layout:save')
+    // Refused: not run, not timed.
+    ipc2.emit('layout:save', guest())
+    await ipc2.invoke('agents:children', guest()).catch(() => {})
+    expect(measure).toHaveBeenCalledTimes(2)
+    // An exempt channel is timed too; a throwing handler still is.
+    ipc2.handle('browser:pick', () => {
+      throw new Error('own failure')
+    })
+    await expect(ipc2.invoke('browser:pick', guest())).rejects.toThrow('own failure')
+    expect(measure.mock.calls[2][0]).toBe('browser:pick')
+  })
+
   it('a throwing check refuses', async () => {
     const ipc2 = fakeIpcMain()
     guardIpc(ipc2, { isTrustedSender: () => { throw new Error('boom') }, log })

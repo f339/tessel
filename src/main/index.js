@@ -101,6 +101,8 @@ import { guardIpc, mainFrameSender } from './ipcGuard'
 import { cleanEnv } from './cleanEnv'
 import { createPtyClient } from './ptyClient'
 import { watchLoopLag } from './loopLag'
+import { createIpcTiming } from './ipcTiming'
+import { PANE_HISTORY_CHARS } from '../shared/paneHistory'
 import { registerLiveShare } from './liveShare'
 import { listProcesses, treeOf, waitForExit, killPids, listProcessNames, runningWork, stopProcessSnapshots, pidRunning } from './processTree'
 import { pipeName } from './ptyProtocol'
@@ -353,15 +355,24 @@ if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 // Logs: %APPDATA%\\tessel\\logs\\tessel.log (rotated, 1 MB x 4).
 const log = createLogger({ dir: join(app.getPath('userData'), 'logs') })
 
+// When this process started (the startup line in the log, pty:reconcile),
+// and when it reached the terminal host.
+const processStartedAt = Date.now() - Math.round(process.uptime() * 1000)
+let hostConnectedAt = 0
+
+// How long each IPC handler holds this process (ipcTiming.js): a long one is
+// named in the log, and in the stall reports below.
+const ipcTiming = createIpcTiming({ log: (msg) => log.warn('app', `main process: ${msg}`) })
+
 // This process's stalls in the log (loopLag.js), next to the terminal host's
 // in pty-host.log: both at once point at the whole PC, one alone at it.
-watchLoopLag({ log: (msg) => log.warn('app', `main process: ${msg}`) })
+watchLoopLag({ log: (msg) => log.warn('app', `main process: ${msg}`), extra: () => ipcTiming.slowestRecent() })
 
 // Every IPC channel below (and the register*(ipcMain) modules') answers only
 // the main window's own page, never a browser page or a frame (ipcGuard.js).
 // Installed before the first channel is registered. The built-in browser's
 // channels too (they check the window again themselves, browserGuest.js).
-guardIpc(ipcMain, { isTrustedSender: mainFrameSender(() => mainWindow), log })
+guardIpc(ipcMain, { isTrustedSender: mainFrameSender(() => mainWindow), log, measure: ipcTiming.measure })
 
 // Kept for older call sites: everything it reports is an error.
 function logCrashContext(message) {
@@ -3890,10 +3901,22 @@ ipcMain.handle('install:showLog', (_evt, file) => {
 
 const pendingData = new Map() // id -> string
 let flushTimer = null
+// Panes whose re-attach answer (their snapshot) is on its way to the window:
+// their output waits here until it has gone (pty:attach), so the window gets
+// the snapshot first and what followed it after, never the other way round
+// (output sent first was replaced by the snapshot when it came, and lost).
+const heldData = new Set()
 function flushData() {
   flushTimer = null
-  for (const [id, data] of pendingData) send('pty:data', { id, data })
-  pendingData.clear()
+  for (const [id, data] of pendingData) {
+    if (heldData.has(id)) continue
+    send('pty:data', { id, data })
+    pendingData.delete(id)
+  }
+}
+function releaseData(id) {
+  heldData.delete(id)
+  if (pendingData.has(id) && !flushTimer) flushTimer = setTimeout(flushData, 8)
 }
 function queueData(id, data) {
   pendingData.set(id, (pendingData.get(id) || '') + data)
@@ -3926,6 +3949,7 @@ const host = createPtyClient({
     sshAskpass.paneExited(id)
     remoteHosts.paneExited(id, exitCode)
     remoteAgentCheck.paneExited(id)
+    heldData.delete(id)
     flushData() // deliver the last output before the exit notice
     liveShare?.onPtyExit(id, exitCode)
     if (exitCode && info) {
@@ -3943,6 +3967,7 @@ const host = createPtyClient({
     sshRemote.onEvent(msg)
   },
   onConnected: (h) => {
+    if (!hostConnectedAt) hostConnectedAt = Date.now()
     hostPtysAtConnect = h && Array.isArray(h.ptys) ? h.ptys : []
     void sshRemote.onConnected()
   },
@@ -4399,19 +4424,47 @@ async function createSshPane(opts, target, spec, shell, startedAt) {
   }
 }
 
+// The re-attaches since this process started, for the startup line in the
+// log (pty:reconcile): how many, how long the host took, how much was sent.
+const attachStats = { count: 0, hostMs: 0, slowest: 0, chars: 0, sent: 0, firstAt: 0, lastAt: 0 }
+
 // Re-attach to a terminal that kept running in the host (after a restart,
 // crash or reload). Returns its recent output to replay.
 ipcMain.handle('pty:attach', async (_evt, id) => {
   if (liveShare?.isGuestPane(id)) return liveShare.guestAttach(id)
   let res
+  const asked = Date.now()
   try {
-    res = await host.request('attach', { id })
+    // Output queued here but not sent yet is in the snapshot already: dropped
+    // the moment the answer is read, before the output that follows it in the
+    // same read (that output comes after the snapshot and is kept).
+    res = await host.request('attach', { id, maxChars: PANE_HISTORY_CHARS }, undefined, (reply) => {
+      if (!reply || !reply.ok) return
+      pendingData.delete(id)
+      heldData.add(id)
+    })
   } catch (err) {
+    releaseData(id)
     return { ok: false, error: err.message }
   }
-  if (!res.ok) return { ok: false }
-  // Output queued here but not sent yet is in the snapshot already.
-  pendingData.delete(id)
+  if (!res.ok) {
+    releaseData(id)
+    return { ok: false }
+  }
+  try {
+    return await attached(id, res, asked)
+  } finally {
+    // Its answer goes to the window now; its output follows it.
+    releaseData(id)
+  }
+})
+async function attached(id, res, asked) {
+  const answered = Date.now()
+  attachStats.count++
+  attachStats.hostMs += answered - asked
+  attachStats.slowest = Math.max(attachStats.slowest, answered - asked)
+  attachStats.firstAt = attachStats.firstAt || asked
+  attachStats.lastAt = answered
   ptyInfo.set(id, { shellId: res.shellId, shellName: res.shellName, backend: res.backend, pid: res.pid, agentLaunchToken: res.agentLaunchToken, agentCodexHome: typeof res.agentCodexHome === 'string' ? res.agentCodexHome : null })
   // Still running since before: its team secret comes back from the host.
   if (res.exited) revokeTeamSecret(id)
@@ -4430,14 +4483,42 @@ ipcMain.handle('pty:attach', async (_evt, id) => {
     cwd: res.cwd,
     exited: !!res.exited,
     exitCode: res.exitCode,
-    buffer: res.buffer || '',
+    buffer: replayOf(res.buffer),
     agentLaunchToken: res.agentLaunchToken || null,
     remoteHostId: res.remoteHostId || null
   }
-})
+}
+// One line in the log once the window has restored its layout: when the
+// terminal host answered, the re-attaches, and the IPC handlers that held
+// this process longest since it started (ipcTiming.js).
+function logStartupMain() {
+  const sec = (ms) => `${(ms / 1000).toFixed(1)} s`
+  const mb = (n) => `${(n / 1048576).toFixed(1)} MB`
+  const a = attachStats
+  const attach = a.count
+    ? `${a.count} terminal(s) re-attached in ${sec(a.lastAt - a.firstAt)} (host ${Math.round(a.hostMs / a.count)} ms each on average, slowest ${a.slowest} ms; ${mb(a.chars)} of screens, ${mb(a.sent)} sent to the window)`
+    : 'no terminal re-attached'
+  const connected = hostConnectedAt ? `terminal host connected ${sec(hostConnectedAt - processStartedAt)} after start` : 'terminal host not connected'
+  log.info('app', `startup: ${connected}; ${attach}; window restored ${sec(Date.now() - processStartedAt)} after start; IPC that held this process longest: ${ipcTiming.busiest(6) || 'none'}`)
+}
+// What the window keeps of a pane's output (ptyStore.js), so no more is sent:
+// an older terminal host sends its whole history.
+function replayOf(buffer) {
+  const text = typeof buffer === 'string' ? buffer : ''
+  const kept = text.length > PANE_HISTORY_CHARS ? text.slice(-PANE_HISTORY_CHARS) : text
+  attachStats.chars += text.length
+  attachStats.sent += kept.length
+  return kept
+}
 
 // After the interface restores its panes: close host terminals no pane uses.
+let startupLogged = false
 ipcMain.handle('pty:reconcile', async (_evt, liveIds = []) => {
+  // The window restored its layout: this process's side of the start, once.
+  if (!startupLogged) {
+    startupLogged = true
+    logStartupMain()
+  }
   let hello
   try {
     hello = await host.ensure()

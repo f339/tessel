@@ -12,6 +12,7 @@ import { computed, reactive, ref } from 'vue'
 import * as launcher from '../projectLauncher'
 import { viewKey, leafViewPath } from '../paneViews'
 import { validHostAccount, hostAccountChoice, defaultHostAccount } from '../hostAccounts'
+import { prefetchAttaches, terminalLeafIds } from '../restoreAttach'
 
 // App.vue's Live Share helper (liveShareWindow.js): nothing shared or joined.
 const noLiveShare = { isGuestWs: () => false, isGuestLeaf: () => false, state: { host: { state: 'off', guests: [] }, guest: { state: 'off' } } }
@@ -296,7 +297,7 @@ describe('the last pane of a project closed', () => {
 })
 
 describe('a restored layout', () => {
-  function restore(snaps, deserialize) {
+  function restore(snaps, deserialize, { currentIndex = 0, attachPty = null, onCtx = null } = {}) {
     const workspaces = ref([])
     const ctx = {
       workspaces,
@@ -308,12 +309,70 @@ describe('a restored layout', () => {
       createLeaf: vi.fn(async () => ({ type: 'leaf', id: 'pane-fresh' })),
       selectedShell: ref('powershell'),
       wsLeafOpts: (_ws, o = {}) => o,
-      firstAwakeLeafId: (tree) => tree.id
+      firstAwakeLeafId: (tree) => tree.id,
+      currentWsId: ref(null),
+      restoreReport: { shownAt: null, attach: null },
+      prefetchAttaches,
+      terminalLeafIds,
+      restoresTerminal: (leaf) => leaf.type === 'leaf',
+      seedBuffer: vi.fn(),
+      performance,
+      window: { shellApi: attachPty ? { attachPty } : {} }
     }
     vm.createContext(Object.assign(ctx, { liveShare: noLiveShare }))
-    vm.runInContext(`this.run = async function (snaps) {\n${slice('    for (const snap of snaps) {', '    if (workspaces.value.length) {')}\n}`, ctx)
-    return ctx.run(snaps).then(() => ctx)
+    vm.runInContext(`this.run = async function (snaps, saved) {\n${slice('    // Every project as saved, in the saved order', '    if (workspaces.value.length) {')}\n}`, ctx)
+    if (onCtx) onCtx(ctx)
+    return ctx.run(snaps, { currentIndex }).then(() => ctx)
   }
+
+  it('the project you were in comes back first and shows at once; the others in their saved place', async () => {
+    const leaf = (id) => ({ type: 'leaf', id })
+    const snaps = [
+      { id: 'ws-a', name: 'A', cwd: 'C:\a', tree: { type: 'split', children: [leaf('pane-a1'), leaf('pane-a2')] } },
+      { id: 'ws-b', name: 'B', cwd: 'C:\b', tree: leaf('pane-b1') },
+      { id: 'ws-c', name: 'C', cwd: 'C:\c', tree: { type: 'split', children: [leaf('pane-c1'), leaf('pane-c2')] } }
+    ]
+    const seen = []
+    const attachPty = vi.fn(async () => ({ ok: false }))
+    let live = null
+    const ctx = await restore(
+      snaps,
+      async (tree, _cwd, attaching) => {
+        const name = tree === snaps[0].tree ? 'a' : tree === snaps[1].tree ? 'b' : 'c'
+        // Which project shows while this one is rebuilt, and the projects listed.
+        seen.push([name, live.currentWsId.value, live.workspaces.value.map((w) => w.id).join(','), typeof (attaching && attaching.get)])
+        return tree.type === 'leaf' ? { ...tree } : { ...tree.children[0] }
+      },
+      { currentIndex: 2, attachPty, onCtx: (c) => (live = c) }
+    )
+    // Its terminals asked first, then the others in the saved order.
+    expect(attachPty.mock.calls.map((c) => c[0])).toEqual(['pane-c1', 'pane-c2', 'pane-a1', 'pane-a2', 'pane-b1'])
+    expect(seen).toEqual([
+      ['c', null, '', 'function'],
+      // Shown, before the others are rebuilt; each then put in its place.
+      ['a', 'ws-c', 'ws-c', 'function'],
+      ['b', 'ws-c', 'ws-a,ws-c', 'function']
+    ])
+    expect(ctx.workspaces.value.map((w) => w.id)).toEqual(['ws-a', 'ws-b', 'ws-c'])
+    expect(ctx.currentWsId.value).toBe('ws-c')
+    expect(ctx.restoreReport.shownAt).toBeGreaterThan(0)
+    expect(ctx.restoreReport.attach).toMatchObject({ count: 5, attached: 0 })
+  })
+
+  it('the project you were in could not come back: the one at its place is shown, as before', async () => {
+    const ctx = await restore(
+      [
+        { id: 'ws-a', name: 'A', tree: { type: 'leaf', id: 'pane-a' } },
+        { id: 'ws-b', name: 'B', tree: { type: 'leaf', id: 'pane-b' } }
+      ],
+      async (tree) => (tree.id === 'pane-b' ? null : { ...tree }),
+      // Not even a shell could start for it.
+      { currentIndex: 1, onCtx: (c) => c.createLeaf.mockImplementation(async () => null) }
+    )
+    expect(ctx.workspaces.value.map((w) => w.id)).toEqual(['ws-a'])
+    // Left to the end of the restore (App.vue: the one now at its place).
+    expect(ctx.currentWsId.value).toBe(null)
+  })
 
   it('its panes come back as before; nothing new is started', async () => {
     const ctx = await restore([{ id: 'ws-a', name: 'A', cwd: 'C:\\a', tree: { type: 'leaf', id: 'pane-1' } }], async (snap) => ({ ...snap }))

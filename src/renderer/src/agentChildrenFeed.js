@@ -5,6 +5,7 @@
 // conversation or older than the last request is dropped, nothing is asked
 // while the window is hidden; every 5 s while one runs, else every 20 s.
 import { reactive } from 'vue'
+import { afterStartup } from './startupIdle'
 
 const feeds = new Map() // key -> feed
 
@@ -63,7 +64,12 @@ export function acquireChildren(args, { api = typeof window !== 'undefined' ? wi
   if (!feed) {
     feed = makeFeed(key, args, api, doc)
     feeds.set(key, feed)
-    feed.refresh().then(() => feed.schedule())
+    // Its first read (files read by the main process): once Tessel has
+    // started (startupIdle.js), not while every row asks at once.
+    const made = feed
+    afterStartup(() => {
+      if (!made.disposed) made.refresh().then(() => made.schedule())
+    })
   }
   feed.refs++
   let released = false

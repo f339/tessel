@@ -16,6 +16,8 @@ const MAX_EVENT = 32 * 1024
 const MAX_SNAPSHOT = 4 * 1024 * 1024
 const MAX_PANES = 128
 const MAX_SCAN = 128
+// Waiting events kept parsed between scans (see waitingEvents), at most.
+const MAX_WAITING = 1024
 const TTL = 24 * 60 * 60 * 1000
 const RETAIN_STATE = 7 * TTL
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
@@ -243,6 +245,15 @@ export function createAgentStateStore({ dir, now = Date.now, onChange = () => {}
     scanFlight = null,
     disposeFlight = null
   let lastPublished = ''
+  // Events whose pane is not registered (yet): read once and kept by file
+  // name with the file's identity, not read again by every scan while the
+  // file stays the same (one lstat instead of two path checks and a read).
+  // About 110 such files were read again every 500 ms, some 200 ms of file
+  // work each time, which every register (a terminal re-attached) waited
+  // behind (2026-10-16).
+  const waitingEvents = new Map() // file name -> { event, stat }
+  const sameFile = (a, b) =>
+    a.isFile() && !a.isSymbolicLink() && a.ino === b.ino && a.dev === b.dev && a.size === b.size && a.mtimeMs === b.mtimeMs
 
   const warn = (message) => {
     if (warnings.length < 24 && !warnings.includes(message)) warnings.push(message)
@@ -444,19 +455,31 @@ export function createAgentStateStore({ dir, now = Date.now, onChange = () => {}
         }
         const path = join(eventsDir, entry.name)
         try {
-          const raw = await readBounded(path, MAX_EVENT)
-          let parsed
-          try {
-            parsed = JSON.parse(raw.text)
-          } catch {
-            parsed = null
+          let event = null
+          let stat = null
+          const known = waitingEvents.get(entry.name)
+          if (known) {
+            const now = await fs.lstat(path).catch(() => null)
+            if (now && sameFile(now, known.stat)) ({ event, stat } = known)
+            else waitingEvents.delete(entry.name)
           }
-          const event = hookEvent(parsed, clock())
-          if (!event || clock() - event.at > TTL || clock() - raw.stat.mtimeMs > TTL) {
+          if (!stat) {
+            const raw = await readBounded(path, MAX_EVENT)
+            let parsed
+            try {
+              parsed = JSON.parse(raw.text)
+            } catch {
+              parsed = null
+            }
+            event = hookEvent(parsed, clock())
+            stat = raw.stat
+          }
+          if (!event || clock() - event.at > TTL || clock() - stat.mtimeMs > TTL) {
             stats.rejected++
-            removals.push({ path, stat: raw.stat, independent: true })
+            waitingEvents.delete(entry.name)
+            removals.push({ path, stat, independent: true })
             warn('An invalid or expired agent event was discarded.')
-          } else candidates.push({ event, path, stat: raw.stat })
+          } else candidates.push({ event, path, stat, name: entry.name })
         } catch (error) {
           stats.rejected++
           if (error.code === 'ESIZE') {
@@ -483,8 +506,13 @@ export function createAgentStateStore({ dir, now = Date.now, onChange = () => {}
       const current = active.get(event.paneId)
       if (!current) {
         stats.deferred++
+        // Kept for the next scans (bounded: the oldest name goes first).
+        waitingEvents.delete(candidate.name)
+        waitingEvents.set(candidate.name, { event, stat: candidate.stat })
+        if (waitingEvents.size > MAX_WAITING) waitingEvents.delete(waitingEvents.keys().next().value)
         continue
       }
+      waitingEvents.delete(candidate.name)
       if (
         current.state.launchToken !== event.launchToken ||
         current.state.provider !== event.provider

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
@@ -73,6 +73,35 @@ describe("a Claude Code conversation's sub-agents", () => {
     )
     const c = claudeSubagents(SID, claudeDir, now).find((a) => a.id === 'big')
     expect(c.state).toBe('done')
+  })
+
+  it('reads a transcript again only when it changed (size or time), not at every ask', () => {
+    const dir = join(claudeDir, 'projects', 'C--proj', SID, 'subagents')
+    fs.mkdirSync(dir, { recursive: true })
+    const now = Date.parse('2026-09-28T10:30:00Z')
+    const file = join(dir, 'agent-ccc.jsonl')
+    fs.writeFileSync(file, line({ type: 'user', timestamp: '2026-09-28T10:20:00Z' }) + '\n' + event(Date.parse('2026-09-28T10:21:00Z'), 'tool_use'))
+    fs.utimesSync(file, new Date('2026-09-28T10:21:00Z'), new Date('2026-09-28T10:21:00Z'))
+    const opened = []
+    const original = fs.openSync
+    const spy = vi.spyOn(fs, 'openSync').mockImplementation((p, ...args) => {
+      opened.push(String(p))
+      return original(p, ...args)
+    })
+    try {
+      expect(claudeSubagents(SID, claudeDir, now)[0]).toMatchObject({ id: 'ccc', state: 'running' })
+      const first = opened.filter((p) => p === file).length
+      expect(first).toBeGreaterThan(0)
+      expect(claudeSubagents(SID, claudeDir, now)[0]).toMatchObject({ id: 'ccc', state: 'running' })
+      expect(opened.filter((p) => p === file).length).toBe(first)
+      // It wrote its end: read again.
+      fs.appendFileSync(file, event(Date.parse('2026-09-28T10:22:00Z'), 'end_turn'))
+      fs.utimesSync(file, new Date('2026-09-28T10:22:00Z'), new Date('2026-09-28T10:22:00Z'))
+      expect(claudeSubagents(SID, claudeDir, now)[0]).toMatchObject({ id: 'ccc', state: 'done' })
+      expect(opened.filter((p) => p === file).length).toBeGreaterThan(first)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it("one Claude started in the background says so (its meta's requestShape)", () => {

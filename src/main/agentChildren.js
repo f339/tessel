@@ -135,6 +135,27 @@ export function summarizeTail(lines) {
   return { done, last, tokens, model, decided }
 }
 
+// What a sub-agent's transcript said (its start, its tail's summary), kept by
+// file with its size and time: a file that did not change is not read again.
+// Each pane header and sidebar row asks every 5 to 20 s, and a conversation
+// can have 50 sub-agents with long transcripts: up to a quarter of a second
+// of reading per answer, during which the main process answered nothing
+// (2026-10-16).
+const subagentReads = new Map() // file -> { size, mtimeMs, startedAt, tail }
+const SUBAGENT_READS_MAX = 2000
+function readSubagent(file, st) {
+  const kept = subagentReads.get(file)
+  if (kept && kept.size === st.size && kept.mtimeMs === st.mtimeMs) return kept
+  const startedAt = readStart(file)
+  let tail = summarizeTail(readTail(file, st.size))
+  if (!tail.decided && st.size > TAIL_BYTES) tail = summarizeTail(readTail(file, st.size, WIDE_TAIL_BYTES))
+  const read = { size: st.size, mtimeMs: st.mtimeMs, startedAt, tail }
+  subagentReads.delete(file)
+  subagentReads.set(file, read)
+  if (subagentReads.size > SUBAGENT_READS_MAX) subagentReads.delete(subagentReads.keys().next().value)
+  return read
+}
+
 // -> [{ id, type, title, state: 'running'|'done'|'quiet', startedAt, endedAt,
 // lastAt, tokens }] newest first. endedAt only for a finished one; a quiet one
 // (nothing written for 15 min, not finished) keeps when it last wrote.
@@ -177,9 +198,7 @@ export function claudeSubagents(sessionId, claudeDir = join(os.homedir(), '.clau
     let startedAt = null
     let tail = { done: false, last: null, tokens: null, model: null }
     try {
-      startedAt = readStart(file)
-      tail = summarizeTail(readTail(file, st.size))
-      if (!tail.decided && st.size > TAIL_BYTES) tail = summarizeTail(readTail(file, st.size, WIDE_TAIL_BYTES))
+      ;({ startedAt, tail } = readSubagent(file, st))
     } catch {
       // being written: next time
     }

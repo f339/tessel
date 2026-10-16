@@ -25,7 +25,9 @@ export function mainFrameSender(getWindow) {
 
 // exempt: channels that check their sender themselves ('browser:pick', or
 // every channel of a prefix: 'browser:*').
-export function guardIpc(ipcMain, { isTrustedSender, log, exempt = [] } = {}) {
+// measure(channel, ms): how long each handler held the process before its
+// first await (ipcTiming.js), every channel's, exempt ones included.
+export function guardIpc(ipcMain, { isTrustedSender, log, exempt = [], measure = null } = {}) {
   if (typeof isTrustedSender !== 'function') throw new TypeError('guardIpc: isTrustedSender is required') // i18n-ignore programming error
   const exact = new Set()
   const prefixes = []
@@ -84,27 +86,48 @@ export function guardIpc(ipcMain, { isTrustedSender, log, exempt = [] } = {}) {
   const origPrepend = ipcMain.prependListener
   const origPrependOnce = ipcMain.prependOnceListener
 
+  // fn's synchronous part, timed when measure is given.
+  function timed(channel, fn, self, args) {
+    if (typeof measure !== 'function') return fn.apply(self, args)
+    const started = performance.now()
+    try {
+      return fn.apply(self, args)
+    } finally {
+      try {
+        measure(channel, performance.now() - started)
+      } catch {
+        /* timing never breaks IPC */
+      }
+    }
+  }
   function guardedHandler(channel, fn, once) {
     return function (event, ...args) {
       // The caller's invoke() fails; the text never reaches a person.
       if (!allowed(channel, event)) return Promise.reject(new Error(`IPC channel ${channel} refused for this sender`)) // i18n-ignore internal
       if (once) ipcMain.removeHandler(channel)
-      return fn.call(this, event, ...args)
+      return timed(channel, fn, this, [event, ...args])
     }
   }
   function guardedListener(channel, listener, remove) {
     const wrapped = function (event, ...args) {
       if (!allowed(channel, event)) return drop(event)
       if (remove) this.removeListener(channel, wrapped)
-      return listener.call(this, event, ...args)
+      return timed(channel, listener, this, [event, ...args])
     }
     // removeListener(channel, listener) still finds it, as with once().
     wrapped.listener = listener
     return wrapped
   }
 
+  // An exempt channel's handler, only timed.
+  const timedOnly = (channel, fn) =>
+    typeof measure === 'function' && typeof fn === 'function'
+      ? function (...args) {
+          return timed(channel, fn, this, args)
+        }
+      : fn
   ipcMain.handle = function (channel, fn) {
-    if (isExempt(channel) || typeof fn !== 'function') return origHandle.call(this, channel, fn)
+    if (isExempt(channel) || typeof fn !== 'function') return origHandle.call(this, channel, timedOnly(channel, fn))
     return origHandle.call(this, channel, guardedHandler(channel, fn, false))
   }
   // Removed only after a trusted call (a refused one does not use it up).
