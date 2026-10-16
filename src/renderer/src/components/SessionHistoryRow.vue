@@ -1,5 +1,5 @@
 <script setup>
-// One past conversation in the Agent Session History panel: its title, agent,
+// One past conversation in Past conversations: its title, agent,
 // time and folder; hover actions (jump to the pane it is open in, or resume
 // it), its details when expanded (first prompt, latest turns, sub-agents,
 // working directory) and its action menu (also on right-click): resume, open
@@ -43,7 +43,7 @@ const title = computed(() => maskSecrets(s.value.title || '') || t('app.sessions
 const fromIde = computed(() => s.value.agent === 'antigravity' && s.value.origin === 'ide')
 const guest = computed(() => !!props.source)
 const canResume = computed(() => !guest.value && !!s.value.id && (!!s.value.cwd || fromIde.value))
-const actionText = computed(() => (fromIde.value ? t('sessionHistory.row.continueInCli', 'Continue in CLI') : t('sessionHistory.row.resumeInNewPane', 'Resume in New Pane')))
+const actionText = computed(() => (fromIde.value ? t('sessionHistory.row.continueInCli', 'Continue in CLI') : t('sessionHistory.row.resumeInNewPane', 'Resume in a new pane')))
 const resumeLabel = computed(() => {
   if (!canResume.value) return t('app.sessions.resumeUnavailable', 'The saved project folder is unavailable. You can still copy the session ID.')
   if (fromIde.value && !s.value.cwd)
@@ -52,7 +52,7 @@ const resumeLabel = computed(() => {
     ? t('sessionHistory.row.continueInCliHint', 'Start a new Antigravity CLI conversation in its folder, from the end of this IDE conversation')
     : actionText.value
 })
-const detailsTooltip = computed(() => (props.expanded ? t('sessionHistory.row.hideDetails', 'Hide Details') : t('sessionHistory.row.showDetails', 'Show Details')))
+const detailsTooltip = computed(() => (props.expanded ? t('sessionHistory.row.hideDetails', 'Hide details') : t('sessionHistory.row.showDetails', 'Show details')))
 const detailsId = computed(() => `sh-details-${String(s.value.id).replace(/[^A-Za-z0-9_-]/g, '-')}`) // i18n-ignore
 const when = computed(() => timeAgo(s.value.updated, props.now))
 const messagesLabel = computed(() => {
@@ -215,7 +215,7 @@ function onRowClick(event) {
       <div class="sh-row-title" :class="expanded ? 'clamp2' : 'clamp1'" :title="title">{{ title }}</div>
       <div class="sh-row-actions" @pointerdown.stop @click.stop @dblclick.stop>
         <div v-if="!guest" class="sh-hover">
-          <button v-if="paneId" class="sh-icon-btn" :title="t('sessionHistory.row.jumpToOriginalPane', 'Jump to Original Pane')" :aria-label="t('sessionHistory.row.jumpToOriginalPane', 'Jump to Original Pane')" data-test="session-jump" @click="emit('focus-pane', paneId)">
+          <button v-if="paneId" class="sh-icon-btn" :title="t('sessionHistory.row.jumpToOriginalPane', 'Go to its pane')" :aria-label="t('sessionHistory.row.jumpToOriginalPane', 'Go to its pane')" data-test="session-jump" @click="emit('focus-pane', paneId)">
             <LocateFixed :size="14" aria-hidden="true" />
           </button>
           <button v-else class="sh-icon-btn" :disabled="!canResume" :title="resumeLabel" :aria-label="resumeLabel" data-test="session-resume" @click="emit('resume')">
@@ -235,22 +235,22 @@ function onRowClick(event) {
         </button>
         <DropdownMenu v-if="!guest" v-model:open="menuOpen">
           <DropdownMenuTrigger as-child>
-            <button class="sh-icon-btn" :title="t('sessionHistory.row.moreActions', 'More Actions')" :aria-label="t('sessionHistory.row.moreSessionActions', 'More Session Actions')" data-test="session-more">
+            <button class="sh-icon-btn" :title="t('sessionHistory.row.moreActions', 'More actions')" :aria-label="t('sessionHistory.row.moreSessionActions', 'More actions for this conversation')" data-test="session-more">
               <MoreHorizontal :size="14" aria-hidden="true" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" :side-offset="4" class="sh-menu">
-            <DropdownMenuItem v-if="paneId" data-test="menu-jump" @select="emit('focus-pane', paneId)"><LocateFixed :size="14" /> {{ t('sessionHistory.row.jumpToOriginalPane', 'Jump to Original Pane') }}</DropdownMenuItem>
+            <DropdownMenuItem v-if="paneId" data-test="menu-jump" @select="emit('focus-pane', paneId)"><LocateFixed :size="14" /> {{ t('sessionHistory.row.jumpToOriginalPane', 'Go to its pane') }}</DropdownMenuItem>
             <DropdownMenuItem v-else :disabled="!canResume" data-test="menu-resume" @select="emit('resume')"><SquareTerminal v-if="fromIde" :size="14" /><Play v-else :size="14" /> {{ actionText }}</DropdownMenuItem>
             <template v-if="logActions || (session.cwd && !onHost)">
               <DropdownMenuSeparator />
-              <DropdownMenuItem v-if="logActions" data-test="menu-open-log" @select="openLog"><FileJson :size="14" /> {{ t('sessionHistory.row.openLog', 'Open Log') }}</DropdownMenuItem>
-              <DropdownMenuItem v-if="logActions" data-test="menu-reveal-log" @select="revealLog"><FolderOpen :size="14" /> {{ t('sessionHistory.row.revealLog', 'Reveal Log') }}</DropdownMenuItem>
-              <DropdownMenuItem v-if="session.cwd && !onHost" data-test="menu-open-cwd" @select="openCwd"><FolderOpen :size="14" /> {{ t('sessionHistory.row.openWorkingDirectory', 'Open Working Directory') }}</DropdownMenuItem>
+              <DropdownMenuItem v-if="logActions" data-test="menu-open-log" @select="openLog"><FileJson :size="14" /> {{ t('sessionHistory.row.openLog', 'Open log') }}</DropdownMenuItem>
+              <DropdownMenuItem v-if="logActions" data-test="menu-reveal-log" @select="revealLog"><FolderOpen :size="14" /> {{ t('sessionHistory.row.revealLog', 'Show log in folder') }}</DropdownMenuItem>
+              <DropdownMenuItem v-if="session.cwd && !onHost" data-test="menu-open-cwd" @select="openCwd"><FolderOpen :size="14" /> {{ t('sessionHistory.row.openWorkingDirectory', 'Open working directory') }}</DropdownMenuItem>
             </template>
             <DropdownMenuSeparator />
-            <DropdownMenuItem data-test="menu-copy-id" @select="copyId">{{ t('sessionHistory.row.copySessionId', 'Copy Session ID') }}</DropdownMenuItem>
-            <DropdownMenuItem v-if="logActions" data-test="menu-copy-path" @select="copyPath">{{ t('sessionHistory.row.copyLogPath', 'Copy Log Path') }}</DropdownMenuItem>
+            <DropdownMenuItem data-test="menu-copy-id" @select="copyId">{{ t('sessionHistory.row.copySessionId', 'Copy session ID') }}</DropdownMenuItem>
+            <DropdownMenuItem v-if="logActions" data-test="menu-copy-path" @select="copyPath">{{ t('sessionHistory.row.copyLogPath', 'Copy log path') }}</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" :disabled="!!deleteReason" :title="deleteReason || undefined" :aria-label="deleteReason ? `${t('sessionHistory.row.delete', 'Delete')}. ${deleteReason}` : undefined" data-test="menu-delete" @select="requestDelete">
               <Trash2 :size="14" /> {{ t('sessionHistory.row.delete', 'Delete') }}
@@ -282,9 +282,9 @@ function onRowClick(event) {
 
     <div v-if="expanded" :id="detailsId" class="sh-details" data-test="session-details" @pointerdown.stop @click.stop @dblclick.stop>
       <div v-if="!guest" class="sh-details-actions">
-        <button v-if="paneId" class="exit-btn" data-test="details-jump" @click="emit('focus-pane', paneId)"><LocateFixed :size="13" aria-hidden="true" /> {{ t('sessionHistory.row.jumpToOriginalPane', 'Jump to Original Pane') }}</button>
+        <button v-if="paneId" class="exit-btn" data-test="details-jump" @click="emit('focus-pane', paneId)"><LocateFixed :size="13" aria-hidden="true" /> {{ t('sessionHistory.row.jumpToOriginalPane', 'Go to its pane') }}</button>
         <button v-else class="exit-btn primary" :disabled="!canResume" :title="resumeLabel" data-test="details-resume" @click="emit('resume')"><SquareTerminal v-if="fromIde" :size="13" aria-hidden="true" /><Play v-else :size="13" aria-hidden="true" /> {{ actionText }}</button>
-        <button v-if="logActions" class="exit-btn subtle" data-test="details-view-log" @click="openLog"><FileJson :size="13" aria-hidden="true" /> {{ t('sessionHistory.details.viewLog', 'View Log') }}</button>
+        <button v-if="logActions" class="exit-btn subtle" data-test="details-view-log" @click="openLog"><FileJson :size="13" aria-hidden="true" /> {{ t('sessionHistory.details.viewLog', 'View log') }}</button>
       </div>
       <div class="sh-details-body">
         <section class="sh-section">

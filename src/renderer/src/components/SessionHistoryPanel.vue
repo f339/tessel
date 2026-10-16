@@ -1,14 +1,16 @@
 <script setup>
-// Agent Session History: a tab of the right side panel listing the past
-// conversations of every agent on this computer (src/main/agentSessions.js),
-// newest first, to resume one in a new pane or jump to the pane it is open
-// in. A header with view options (agents, grouping, history depth) and
-// Refresh; a scope switch (Workspace: this folder; Project: this folder and
-// below; All); a search box that filters the list by title, id, agent and
-// folder, or, with session search turned on (the opt-in index of what was
-// said, src/main/sessionSearch), searches the conversations themselves; a
-// bar with the count and the sort; the rows (SessionHistoryRow.vue) under
-// collapsible group headers; Show more at the end.
+// Past conversations: the past conversations of every agent on this computer
+// (src/main/agentSessions.js), newest first, to resume one in a new pane or
+// jump to the pane it is open in. A tab of the right side panel, and the
+// Resume a session dialog (SessionsDialog.vue, `embedded`): one surface.
+// A header with view options (agents, grouping, history depth, session
+// search) and Refresh; a scope switch (Workspace: this folder; Project: this
+// folder and below; All); a search box that filters the list by title, id,
+// agent and folder, or, with session search turned on (the opt-in index of
+// what was said, src/main/sessionSearch), searches the conversations
+// themselves; a bar with the count and the sort; the rows
+// (SessionHistoryRow.vue) under collapsible group headers; Show more at the
+// end.
 // In a Live Share project (source): the host's past conversations of that
 // project, read only (no resume, no log, no search of what was said: the
 // host's Tessel masks what it sends, liveShareWindowFeeds.js sessionSource).
@@ -69,7 +71,10 @@ const props = defineProps({
   active: { type: Boolean, default: true },
   // A Live Share host's project: { project, host, state, list({ limit }),
   // details(ref) }; its conversations instead of this computer's.
-  source: { type: Object, default: null }
+  source: { type: Object, default: null },
+  // In the Resume a session dialog: the search box takes the keyboard, and
+  // Escape in an empty one reaches the dialog (it closes).
+  embedded: { type: Boolean, default: false }
 })
 const emit = defineEmits(['resume', 'focus-pane', 'open-editor', 'toast'])
 const api = () => (typeof window !== 'undefined' && window.shellApi) || null
@@ -107,7 +112,7 @@ const scopes = computed(() => [
   { id: 'all', label: t('sessionHistory.scope.all', 'All'), disabled: false }
 ])
 const scopeAria = computed(() =>
-  t('sessionHistory.scope.aria', 'Session History scope: {{scope}}', {
+  t('sessionHistory.scope.aria', 'Past conversations scope: {{scope}}', {
     scope:
       scope.value === 'workspace'
         ? t('sessionHistory.scope.currentWorkspaceLower', 'current workspace')
@@ -125,6 +130,8 @@ const sessions = ref([])
 const loading = ref(false)
 const loaded = ref(false)
 const error = ref('')
+// The raw message behind an error (behind Details, never shown first).
+const errorDetail = ref('')
 const now = ref(Date.now())
 let loadSeq = 0
 let loadedAt = 0
@@ -135,6 +142,7 @@ async function load() {
   const seq = ++loadSeq
   loading.value = true
   error.value = ''
+  errorDetail.value = ''
   try {
     const remote = props.remote && props.remote.hostId ? props.remote : null
     // A Live Share host's project: its sessions, from the host.
@@ -155,10 +163,12 @@ async function load() {
     if (remote) {
       waitingHost.value = !!(res && !res.ok && res.notConnected)
       sessions.value = res && res.ok && Array.isArray(res.sessions) ? res.sessions : []
-      if (res && !res.ok)
+      if (res && !res.ok) {
         error.value = res.notConnected
           ? t('sessionHistory.remoteNotConnected', 'Connect to {{host}} (open a terminal there) to see its sessions.', { host: remote.host || remote.hostId })
-          : (res.error || t('sessionHistory.remoteFailed', 'The sessions of {{host}} could not be read.', { host: remote.host || remote.hostId }))
+          : t('sessionHistory.remoteFailed', 'The sessions of {{host}} could not be read.', { host: remote.host || remote.hostId })
+        errorDetail.value = !res.notConnected && typeof res.error === 'string' ? res.error : ''
+      }
     } else {
       waitingHost.value = false
       sessions.value = Array.isArray(res) ? res : []
@@ -166,7 +176,8 @@ async function load() {
   } catch (err) {
     if (seq !== loadSeq) return
     sessions.value = []
-    error.value = t('sessionHistory.loadFailed', 'The sessions could not be read: {{error}}', { error: (err && err.message) || String(err) })
+    error.value = t('sessionHistory.loadFailedShort', 'The conversations could not be read.')
+    errorDetail.value = (err && err.message) || String(err)
   } finally {
     if (seq === loadSeq) {
       loading.value = false
@@ -219,6 +230,7 @@ watch(
       loadSeq++
       sessions.value = []
       error.value = ''
+      errorDetail.value = ''
       waitingHost.value = false
       expanded.clear()
     }
@@ -267,10 +279,12 @@ let statusTimer = null
 let searchTimer = null
 let searchSeq = 0
 const hasQuery = computed(() => query.value.trim().length > 0)
+// Turn on… in the view menu: the consent shows without a query.
+const consentAsked = ref(false)
 // The conversation-text index holds this computer's sessions only: a remote
 // project's list is filtered by title and folder instead.
 const searching = computed(() => hasQuery.value && !props.remote && !props.source && !!(index.value && index.value.enabled))
-const needsConsent = computed(() => hasQuery.value && !props.source && !!(index.value && index.value.available && !index.value.enabled))
+const needsConsent = computed(() => (hasQuery.value || consentAsked.value) && !props.source && !props.remote && !!(index.value && index.value.available && !index.value.enabled))
 async function refreshIndex() {
   const a = searchApi()
   if (!a) return
@@ -293,8 +307,27 @@ async function enableSearch() {
     // the status below says what it is now
   }
   indexBusy.value = false
+  consentAsked.value = false
   await refreshIndex()
   runSearch()
+}
+// The view menu's session search: Keep (history days), Turn off, Clear index.
+async function indexAction(name, arg) {
+  const a = searchApi()
+  if (!a || typeof a[name] !== 'function' || indexBusy.value) return
+  indexBusy.value = true
+  try {
+    await a[name](arg)
+  } catch {
+    // the status below says what it is now
+  }
+  indexBusy.value = false
+  await refreshIndex()
+  runSearch()
+}
+function askConsent() {
+  consentAsked.value = true
+  setTimeout(() => searchEl.value && searchEl.value.focus(), 0)
 }
 async function runSearch() {
   const a = searchApi()
@@ -344,11 +377,37 @@ const indexLine = computed(() => {
   if (i.phase === 'paused') return t('app.sessions.indexPaused', 'Indexing waits while the window is hidden ({{due}} left)', { due: i.filesDue })
   return ''
 })
+// The index as the view menu shows it, while it is on.
+const indexStatus = computed(() => {
+  const i = index.value
+  if (!i || !i.enabled) return ''
+  const size = sizeText(i.sizeBytes)
+  if (i.phase === 'indexing') return t('app.sessions.indexing', 'Indexing… {{due}} conversations left ({{size}})', { due: i.filesDue, size })
+  if (i.phase === 'paused') return t('app.sessions.indexPaused', 'Indexing waits while the window is hidden ({{due}} left)', { due: i.filesDue })
+  return t('app.sessions.indexCurrent', 'Index up to date: {{count}} conversations ({{size}})', { count: i.sessions, size })
+})
+// Session search in the view menu: this computer's conversations only.
+const indexMenu = computed(() => !props.source && !props.remote && !!(index.value && index.value.available))
+const keepOptions = computed(() => [
+  { days: 30, label: t('app.sessions.keep30', 'Last 30 days') },
+  { days: 90, label: t('app.sessions.keep90', 'Last 90 days') },
+  { days: 365, label: t('app.sessions.keep365', 'Last year') },
+  { days: 0, label: t('app.sessions.keepAll', 'Everything') }
+])
+const keepLabel = computed(() => {
+  const days = index.value ? index.value.historyDays : 90
+  const k = keepOptions.value.find((o) => o.days === days) || keepOptions.value[1]
+  return t('sessionHistory.index.keep', 'Keep: {{value}}', { value: k.label })
+})
+const indexLeft = computed(() => (index.value && !index.value.enabled && index.value.sizeBytes > 0 ? sizeText(index.value.sizeBytes) : ''))
+// (Vue closes an interpolation at the first }}: the text is made here.)
+const clearLeftLabel = computed(() => t('sessionHistory.index.clearLeft', 'Clear the index left ({{size}})', { size: indexLeft.value }))
 // The notice above the list while a query is typed, as Orca's consent /
-// result messages: the opt-in, no agents, a failed search, no match.
+// result messages: the opt-in (one line, the rest behind Learn more), no
+// agents, a failed search, no match.
 const searchMessage = computed(() => {
+  if (needsConsent.value) return t('sessionHistory.optin.line', 'Find a conversation by what was said in it: turn on session search.')
   if (!hasQuery.value) return ''
-  if (needsConsent.value) return t('app.sessions.optinText', 'Find a conversation by what was said in it. Tessel builds a search index of your agents’ conversations on this computer; nothing is sent anywhere. Before you turn it on:')
   if (!view.agents.length) return t('sessionHistory.empty.noAgentsSelected', 'No agents selected')
   if (!searching.value) return ''
   if (searchFailed.value) return t('sessionHistory.searching.failed', 'Could not search this computer. Try again.')
@@ -397,10 +456,23 @@ const showLoading = computed(() => loading.value && !searching.value && !filtere
 const emptyTitle = computed(() => {
   if (searching.value) return ''
   if (loading.value) return ''
-  if (!sessions.value.length) return error.value ? '' : t('sessionHistory.empty.noSessions', 'No agent sessions found')
+  if (!sessions.value.length) return error.value ? '' : t('sessionHistory.empty.noSessions', 'No past conversations found')
   if (!filtered.value.length) return view.agents.length ? t('sessionHistory.empty.noMatch', 'No sessions match the current filters') : t('sessionHistory.empty.noAgentsSelected', 'No agents selected')
   return ''
 })
+
+const searchEl = ref(null)
+const searchPlaceholder = computed(() =>
+  index.value && index.value.enabled && !props.remote && !props.source ? t('app.sessions.searchFull', 'Search in what was said') : t('sessionHistory.search', 'Search conversations')
+)
+// Escape empties the search; an empty one leaves Escape to the dialog
+// around it (embedded), else it stops here as before.
+function onSearchEscape(e) {
+  if (query.value) {
+    e.stopPropagation()
+    query.value = ''
+  } else if (!props.embedded) e.stopPropagation()
+}
 
 function onResume(s) {
   emit('resume', { agent: s.agent, id: s.id, cwd: s.cwd, title: s.title, ...(s.origin ? { origin: s.origin } : {}), ...(s.accountId !== undefined ? { accountId: s.accountId } : {}) })
@@ -415,6 +487,7 @@ function onDeleted(s) {
 onMounted(() => {
   load()
   refreshIndex()
+  if (props.embedded && searchEl.value) searchEl.value.focus()
   clock = setInterval(() => (now.value = Date.now()), 60_000)
 })
 onBeforeUnmount(() => {
@@ -430,16 +503,16 @@ onBeforeUnmount(() => {
       <div class="sh-head-row">
         <div class="sh-head-text">
           <div class="sh-title">
-            <span class="sh-title-full">{{ t('sessionHistory.title', 'Agent Session History') }}</span>
-            <span class="sh-title-short">{{ t('sessionHistory.titleShort', 'Agents') }}</span>
+            <span class="sh-title-full">{{ t('sessionHistory.title', 'Past conversations') }}</span>
+            <span class="sh-title-short">{{ t('sessionHistory.titleShort', 'History') }}</span>
           </div>
           <div v-if="source" class="sh-subtitle">{{ hostSubtitle }}</div>
-          <div v-else class="sh-subtitle">{{ searching || loaded ? t('sessionHistory.indexedHistory', 'Indexed history') : t('sessionHistory.resumePastSessions', 'Resume past sessions') }}</div>
+          <div v-else class="sh-subtitle">{{ searching ? t('sessionHistory.indexedHistory', 'Indexed history') : t('sessionHistory.resumeWhereLeft', 'Resume one where it left off') }}</div>
         </div>
         <div class="sh-head-actions">
           <DropdownMenu>
             <DropdownMenuTrigger as-child>
-              <button class="sh-icon-btn sh-view-btn" :title="t('sessionHistory.view.options', 'View options')" :aria-label="t('sessionHistory.view.aria', 'Session History view options')" data-test="session-view">
+              <button class="sh-icon-btn sh-view-btn" :title="t('sessionHistory.view.options', 'View options')" :aria-label="t('sessionHistory.view.aria', 'Past conversations view options')" data-test="session-view">
                 <ListFilter :size="14" aria-hidden="true" />
                 <span v-if="adjustments" class="sh-view-count" aria-hidden="true">{{ adjustments }}</span>
               </button>
@@ -483,21 +556,44 @@ onBeforeUnmount(() => {
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
               </template>
+              <!-- Session search (the index of what was said), on this computer. -->
+              <template v-if="indexMenu">
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>{{ t('sessionHistory.index.title', 'Search in what was said') }}</DropdownMenuLabel>
+                <template v-if="index.enabled">
+                  <DropdownMenuLabel class="sh-menu-note" data-test="index-status">{{ indexStatus }}</DropdownMenuLabel>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger data-test="index-keep">{{ keepLabel }}</DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent class="sh-menu">
+                      <DropdownMenuRadioGroup :model-value="index.historyDays" @update:model-value="(d) => indexAction('setHistoryDays', Number(d))">
+                        <DropdownMenuRadioItem v-for="k in keepOptions" :key="k.days" :value="k.days" :data-test="'keep-' + k.days">{{ k.label }}</DropdownMenuRadioItem>
+                      </DropdownMenuRadioGroup>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuItem :disabled="indexBusy" :title="t('app.sessions.disableTitle', 'Stop indexing; the index is kept until you clear it')" data-test="index-disable" @select="indexAction('disable')">{{ t('sessionHistory.index.turnOff', 'Turn off session search') }}</DropdownMenuItem>
+                  <DropdownMenuItem :disabled="indexBusy" :title="t('app.sessions.clearRebuildTitle', 'Delete the search index (never your conversations); while the search is on, it is built again from nothing')" data-test="index-clear" @select="indexAction('clear')">{{ t('app.sessions.clear', 'Clear index') }}</DropdownMenuItem>
+                </template>
+                <template v-else>
+                  <DropdownMenuItem data-test="index-enable" @select="askConsent">{{ t('sessionHistory.index.turnOn', 'Turn on session search…') }}</DropdownMenuItem>
+                  <DropdownMenuItem v-if="indexLeft" :disabled="indexBusy" :title="t('app.sessions.clearTitle', 'Delete the search index (never your conversations)')" data-test="index-clear" @select="indexAction('clear')">{{ clearLeftLabel }}</DropdownMenuItem>
+                </template>
+              </template>
               <template v-if="adjustments">
                 <DropdownMenuSeparator />
                 <DropdownMenuItem data-test="reset-view" @select="resetView">{{ t('sessionHistory.view.reset', 'Reset view') }}</DropdownMenuItem>
               </template>
             </DropdownMenuContent>
           </DropdownMenu>
-          <button class="sh-icon-btn" :disabled="loading || searchLoading" :aria-busy="loading ? 'true' : 'false'" :title="t('sessionHistory.refresh', 'Refresh Session History')" :aria-label="t('sessionHistory.refresh', 'Refresh Session History')" data-test="session-refresh" @click="refresh">
+          <button class="sh-icon-btn" :disabled="loading || searchLoading" :aria-busy="loading ? 'true' : 'false'" :title="t('sessionHistory.refresh', 'Refresh past conversations')" :aria-label="t('sessionHistory.refresh', 'Refresh past conversations')" data-test="session-refresh" @click="refresh">
             <LoaderCircle v-if="loading || searchLoading" :size="13" class="sh-spin" aria-hidden="true" />
             <RefreshCw v-else :size="13" aria-hidden="true" />
           </button>
+          <slot name="actions" />
         </div>
       </div>
 
       <div v-if="!source" class="sh-scope" role="group" :aria-label="scopeAria" data-test="session-scopes">
-        <button v-for="sc in scopes" :key="sc.id" class="sh-scope-btn" :class="{ on: scope === sc.id }" :disabled="sc.disabled" :aria-pressed="scope === sc.id ? 'true' : 'false'" :data-test="'scope-' + sc.id" @click="scope = sc.id">
+        <button v-for="sc in scopes" :key="sc.id" class="sh-scope-btn" :class="{ on: scope === sc.id }" :disabled="sc.disabled" :aria-pressed="scope === sc.id ? 'true' : 'false'" :title="sc.label" :data-test="'scope-' + sc.id" @click="scope = sc.id">
           {{ sc.label }}
         </button>
       </div>
@@ -505,13 +601,14 @@ onBeforeUnmount(() => {
       <div class="sh-search">
         <Search :size="13" class="sh-search-icon" aria-hidden="true" />
         <input
+          ref="searchEl"
           v-model="query"
           class="sh-search-input"
           data-test="session-query"
-          :placeholder="t('sessionHistory.search', 'Search sessions')"
-          :aria-label="t('sessionHistory.search', 'Search sessions')"
+          :placeholder="searchPlaceholder"
+          :aria-label="t('sessionHistory.search', 'Search conversations')"
           spellcheck="false"
-          @keydown.escape.stop="query = ''"
+          @keydown.escape="onSearchEscape"
         />
         <LoaderCircle v-if="searching && searchLoading" :size="12" class="sh-spin sh-search-busy" aria-hidden="true" />
         <button v-if="query" class="sh-search-clear" :aria-label="t('sessionHistory.clearSearch', 'Clear search')" :title="t('sessionHistory.clearSearch', 'Clear search')" data-test="session-clear" @click="query = ''">
@@ -521,18 +618,29 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="error && !searching" class="sh-error" role="alert" data-test="session-error">
-      <span>{{ error }}</span>
-      <button class="exit-btn sh-error-retry" :disabled="loading" data-test="session-load-retry" @click="load">{{ t('changes.compare.retry', 'Retry') }}</button>
+      <span class="sh-error-text">{{ error }}</span>
+      <details v-if="errorDetail" class="set-more sh-error-more" data-test="session-error-detail">
+        <summary>{{ t('sessionHistory.errorDetails', 'Details') }}</summary>
+        <p>{{ errorDetail }}</p>
+      </details>
+      <button class="exit-btn small sh-error-retry" :disabled="loading" data-test="session-load-retry" @click="load">{{ t('changes.compare.retry', 'Retry') }}</button>
     </div>
 
-    <div v-if="searchMessage || indexLine" class="sh-notice" role="status" data-test="session-notice">
+    <div v-if="searchMessage || indexLine" class="sh-notice" :class="{ 'sh-consent': needsConsent }" role="status" data-test="session-notice">
       <p v-if="searchMessage">{{ searchMessage }}</p>
-      <ul v-if="needsConsent" class="sh-notice-points">
-        <li v-for="(p, i) in optinPoints" :key="i">{{ p }}</li>
-      </ul>
+      <details v-if="needsConsent" class="set-more sh-consent-more" data-test="session-consent-more">
+        <summary>{{ t('sessionHistory.optin.learnMore', 'Learn more') }}</summary>
+        <p>{{ t('app.sessions.optinText', 'Find a conversation by what was said in it. Tessel builds a search index of your agents’ conversations on this computer; nothing is sent anywhere. Before you turn it on:') }}</p>
+        <ul class="sh-notice-points">
+          <li v-for="(p, i) in optinPoints" :key="i">{{ p }}</li>
+        </ul>
+      </details>
       <p v-if="indexLine">{{ indexLine }}</p>
-      <button v-if="needsConsent" class="exit-btn primary" :disabled="indexBusy" data-test="session-enable-search" @click="enableSearch">{{ t('app.sessions.optinEnable', 'Turn on session search') }}</button>
-      <button v-else-if="searching && searchFailed" class="exit-btn" :disabled="searchLoading" data-test="session-retry" @click="runSearch">{{ t('sessionHistory.searching.retry', 'Try again') }}</button>
+      <span v-if="needsConsent" class="sh-notice-actions">
+        <button class="exit-btn small primary" :disabled="indexBusy" data-test="session-enable-search" @click="enableSearch">{{ t('app.sessions.optinEnable', 'Turn on session search') }}</button>
+        <button v-if="consentAsked && !hasQuery" class="exit-btn small" data-test="session-consent-cancel" @click="consentAsked = false">{{ t('sessionHistory.optin.notNow', 'Not now') }}</button>
+      </span>
+      <button v-else-if="searching && searchFailed" class="exit-btn small" :disabled="searchLoading" data-test="session-retry" @click="runSearch">{{ t('sessionHistory.searching.retry', 'Try again') }}</button>
     </div>
 
     <div v-if="barShown" class="sh-bar" data-test="session-bar">

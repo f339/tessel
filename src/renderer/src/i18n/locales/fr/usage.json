@@ -153,7 +153,8 @@
       "noIndividual": "Le fournisseur n'a pas renvoyé le détail des crédits.",
       "noRecords": "Aucun crédit renvoyé par le fournisseur.",
       "grantedExpires": "Octroyé {{granted}} · Expire {{expires}}",
-      "truncated": "Affichage des 500 premiers crédits du fournisseur."
+      "truncated": "Affichage des 500 premiers crédits du fournisseur.",
+      "details": "Détails"
     },
     "report": {
       "invalidDate": "Choisissez une date d'utilisation valide.",
@@ -183,7 +184,6 @@
   "stats": {
     "overviewTab": "Vue d'ensemble",
     "detecting": "Recherche des agents installés…",
-    "catalogError": "Impossible de détecter les fournisseurs d'utilisation installés. Actualisez pour réessayer.",
     "activityError": "Impossible de lire les statistiques d'activité.",
     "providerError": "Impossible de lire l'utilisation de {{id}}.",
     "localError": "Impossible de lire l'utilisation locale.",
@@ -194,7 +194,7 @@
     "prsCreated": "PRs créées",
     "trackingSince": "Suivi depuis {{date}}",
     "retry": "Réessayer",
-    "noCollector": "Aucun agent installé ne dispose d'un collecteur d'historique d'utilisation local. Les quotas d'abonnement sont disponibles dans le menu Utilisation.",
+    "noCollector": "Aucun de vos agents installés ne garde un historique d'utilisation que Tessel peut lire. Les limites de vos forfaits sont dans le menu Utilisation.",
     "analytics": "Statistiques d'utilisation",
     "providerSelect": "Fournisseur de statistiques d'utilisation : {{name}}",
     "providerMenu": "Fournisseur de statistiques d'utilisation",
@@ -244,7 +244,7 @@
       "readError": "L'utilisation locale n'a pas pu être lue. Vérifiez les erreurs des fournisseurs ci-dessous et actualisez.",
       "activeDays": "Jours actifs",
       "cacheShare": "Part du cache",
-      "noData": "Aucune utilisation locale de Claude ou Codex trouvée pour l'instant. La vue d'ensemble se remplira dès que la prochaine session d'agent écrira des journaux de tokens.",
+      "noData": "La vue d'ensemble se remplit dès qu'une session d'agent écrit ses journaux de tokens.",
       "intensity": "Intensité quotidienne",
       "intensityHint": "Activité récente combinée des tokens Claude et Codex.",
       "heatmap": "Heatmap d'activité récente des tokens",
@@ -257,7 +257,11 @@
       "enable": "Activer",
       "noModel": "Aucun modèle pour l'instant",
       "off": "Les statistiques d'utilisation locales sont désactivées.",
-      "lastScan": "Affichage de la dernière analyse réussie."
+      "lastScan": "Affichage de la dernière analyse réussie.",
+      "emptyTitle": "Aucune utilisation enregistrée pour l'instant",
+      "providerEmpty": "Aucune utilisation trouvée pour l'instant.",
+      "notRead": "Non lu",
+      "readFailed": "Tessel n'a pas pu lire cet historique d'utilisation."
     },
     "noReader": "Aucun lecteur d'utilisation locale de {{name}} n'est disponible dans Tessel.",
     "scanning": "Analyse des journaux d'utilisation locaux...",
@@ -288,7 +292,6 @@
       "rowEvents": "{{sessions}} sessions · {{count}} événements",
       "title": "Suivi de l'utilisation {{name}}",
       "intro": "Lit les journaux locaux d'utilisation de {{name}} pour afficher les statistiques de tokens, de modèles et de sessions.",
-      "scanError": "Dernière erreur d'analyse : {{error}}",
       "empty": "Aucune utilisation locale de {{name}} trouvée pour l'instant dans ce périmètre.",
       "cacheReuseValue": "Taux de réutilisation du cache : {{value}}",
       "recentCodex": "Sessions locales Codex les plus récentes dans ce périmètre.",
@@ -315,7 +318,9 @@
       "unknownProject": "Projet inconnu",
       "unknown": "Inconnu",
       "opencodeCost": "Le coût est celui qu’OpenCode a enregistré pour chaque réponse, pas votre facture d’abonnement.",
-      "recentOther": "Sessions locales {{name}} les plus récentes dans ce périmètre."
+      "recentOther": "Sessions locales {{name}} les plus récentes dans ce périmètre.",
+      "about": "À propos de ces chiffres",
+      "readFailed": "Impossible de lire l'utilisation de {{name}}."
     },
     "share": {
       "title": "Partager l'utilisation",
@@ -345,6 +350,11 @@
       "days": "{{d}} j {{h}} h",
       "hours": "{{h}} h {{m}} min",
       "minutes": "{{m}} min"
-    }
+    },
+    "catalogFailed": "Impossible de savoir quels agents gardent un historique d'utilisation.",
+    "loadingActivity": "Chargement des statistiques d'activité…",
+    "details": "Détails",
+    "noHistoryTitle": "Aucun historique d'utilisation à afficher",
+    "allHidden": "Les fournisseurs qui gardent un historique d'utilisation sont désactivés dans Fournisseurs affichés, plus haut."
   }
 }

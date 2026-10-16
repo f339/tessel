@@ -64,20 +64,20 @@ describe('sidebar and status bar settings', () => {
     expect(settings.agentActivityDisplayMode).toBe('full')
   })
 
-  it('Settings > Appearance > Window & Sidebar has Orca\'s rows', async () => {
+  it('Settings > Appearance > Left sidebar and Status bar have Orca\'s rows', async () => {
     const w = mount(SettingsDialog, { props: { section: 'appearance' } })
     const text = w.find('section[data-page="appearance"]').text()
     for (const s of [
-      'Window & sidebar',
+      'Left sidebar',
       'Left sidebar appearance',
-      'Make the left sidebar match your terminal, stay default, or use a tint.',
+      'Like your terminal, the default, or with a tint.',
       'Status bar',
-      'Choose which indicators appear in the status bar.',
+      'The bar at the bottom of the window, and the indicators it shows.',
       'Remote Hosts',
       'Resource Manager',
-      'Show live workspace ports. Click it for workspace-scoped ports and external listeners.',
+      'Show live workspace ports. Click it for every port and external listener.',
       'Workspace card layout',
-      'Workspace cards can use compact or detailed layouts.'
+      'A compact card shows its details on hover.'
     ])
       expect(text).toContain(s)
     const ports = w.find('[aria-label="Ports"]')

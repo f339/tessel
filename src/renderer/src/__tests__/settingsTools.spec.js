@@ -23,8 +23,6 @@ const appSource = readFileSync(join(__dirname, '..', 'App.vue'), 'utf8').replace
 
 // What each row must do in App.vue (the palette's or toolbar's own call).
 const EXPECTED_ACTION = {
-  tools: 'openTools()',
-  sessions: 'openSessions()',
   dashboard: "showSideTab('dashboard')",
   history: "showSideTab('history')",
   tasks: "showSideTab('tasks')",
@@ -61,10 +59,10 @@ describe('settingsTools', () => {
   })
 
   it('runSettingsTool runs the matching action only', () => {
-    const actions = { tools: vi.fn(), sessions: vi.fn() }
+    const actions = { history: vi.fn(), sessions: vi.fn() }
     expect(runSettingsTool('sessions', actions)).toBe(true)
     expect(actions.sessions).toHaveBeenCalledTimes(1)
-    expect(actions.tools).not.toHaveBeenCalled()
+    expect(actions.history).not.toHaveBeenCalled()
     expect(runSettingsTool('nope', actions)).toBe(false)
     expect(runSettingsTool('toString', actions)).toBe(false)
   })
@@ -90,6 +88,23 @@ describe('settingsTools', () => {
     // Skills and MCP servers are pages now: no rows for them.
     expect(entries.mcp).toBeUndefined()
     expect(entries.skills).toBeUndefined()
+  })
+
+  // Install tools is Settings > Developer tools, installing agents and adding
+  // your own is Settings > Agents: the Tools window is gone, its ways in stay.
+  it('App.vue opens the old Install tools ways in Settings', () => {
+    expect(appSource).not.toContain('ToolsDialog')
+    expect(appSource).not.toContain('toolsOpen')
+    const tools = appSource.match(/function openTools\(\) \{\n([\s\S]*?)\n\}/)
+    expect(tools[1]).toContain("openSettingsAt('devtools')")
+    const installs = appSource.match(/function openAgentInstalls\(\) \{\n([\s\S]*?)\n\}/)
+    expect(installs[1]).toContain("openSettingsAt('agents', 'set-agents-missing')")
+    // The palette's Install tools, the New menu's link, MCP's Open Tools, the approval card's Configure.
+    expect(appSource).toContain("t('app.cmd.installTools', 'Install tools'), openTools,")
+    expect(appSource).toMatch(/@tools="openAgentInstalls"/)
+    expect(appSource).toMatch(/mcpOpen = false\n\s+openTools\(\)/)
+    expect(appSource).toContain(`@configure="openSettingsAt('agents', 'set-agent-terminal')"`)
+    expect(appSource).toContain('tools: () => openTools()')
   })
 
   it("App.vue opens the status bar's popovers through its ref, showing the bar first", () => {
@@ -138,9 +153,17 @@ describe('Settings > Windows and tools', { timeout: 30_000 }, () => {
 
   it('each row sits in its page and emits open-tool with its id', async () => {
     for (const [page, rows] of Object.entries(SETTINGS_TOOLS)) {
-      const group = wrapper.get(`.set-page[data-page="${page}"] [data-tools="${page}"]`)
-      expect(group.findAll('[data-open-tool]').map((b) => b.attributes('data-open-tool'))).toEqual(rows.map((r) => r.id))
+      // A page can show its rows in more than one group (General: Troubleshooting).
+      const groups = wrapper.findAll(`.set-page[data-page="${page}"] [data-tools="${page}"]`)
+      expect(groups.length).toBeGreaterThan(0)
+      const ids = groups.flatMap((g) => g.findAll('[data-open-tool]').map((b) => b.attributes('data-open-tool')))
+      expect([...ids].sort()).toEqual(rows.map((r) => r.id).sort())
     }
+    // General: logs and diagnostics under Troubleshooting, with the reset.
+    const trouble = wrapper.get('.set-page[data-page="general"] [data-group="troubleshooting"]')
+    expect(trouble.get('.set-group-title').text()).toBe('Troubleshooting')
+    expect(trouble.findAll('[data-open-tool]').map((b) => b.attributes('data-open-tool'))).toEqual(['logs', 'diagnostics'])
+    expect(trouble.find('[data-test="reset-settings"]').exists()).toBe(true)
     for (const id of SETTINGS_TOOL_IDS) await wrapper.get(`[data-open-tool="${id}"]`).trigger('click')
     expect(wrapper.emitted('open-tool').map((e) => e[0])).toEqual(SETTINGS_TOOL_IDS)
   })
@@ -152,9 +175,9 @@ describe('Settings > Windows and tools', { timeout: 30_000 }, () => {
       await nextTick()
       await nextTick()
     }
-    await find('install tools')
+    await find('past conversations')
     expect(visiblePages(wrapper)).toContain('agents')
-    expect(wrapper.get('[data-open-tool="tools"]').element.closest('[hidden]')).toBeNull()
+    expect(wrapper.get('[data-open-tool="history"]').element.closest('[hidden]')).toBeNull()
     await find('clean up worktrees')
     expect(visiblePages(wrapper)).toEqual(['git'])
     expect(wrapper.get('[data-open-tool="cleanupWorktrees"]').element.closest('[hidden]')).toBeNull()
@@ -173,7 +196,7 @@ describe('Settings > Windows and tools', { timeout: 30_000 }, () => {
     await setUiLanguage('fr')
     await nextTick()
     expect(wrapper.get('[data-tools="agents"]').text()).toContain('Fenêtres et outils')
-    expect(wrapper.get('[data-open-tool="tools"]').text()).toBe('Ouvrir…')
+    expect(wrapper.get('[data-open-tool="history"]').text()).toBe('Afficher')
     expect(wrapper.get('[data-open-tool="files"]').text()).toBe('Afficher')
     expect(wrapper.get('[data-tools="editor"]').text()).toContain('Explorateur de fichiers')
   })
@@ -299,7 +322,7 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     expect(wrapper.findComponent(SkillsDialog).emitted('close')).toBeUndefined()
   })
 
-  it('MCP servers shows its window in the page; run, Install tools and Skills reach Settings', async () => {
+  it('MCP servers shows its window in the page; run goes to App, Install tools and Skills to their pages', async () => {
     wrapper = mountAt('mcp')
     await flushPromises()
     expect(visiblePages(wrapper)).toEqual(['mcp'])
@@ -312,8 +335,13 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
 
     mcp.vm.$emit('run', { label: 'Sign in: x', command: 'codex mcp login x' })
     expect(wrapper.emitted('run-job')[0][0]).toEqual({ label: 'Sign in: x', command: 'codex mcp login x' })
+    // Install tools is the Developer tools page now.
     mcp.vm.$emit('tools')
-    expect(wrapper.emitted('open-tool')).toEqual([['tools']])
+    await flushPromises()
+    expect(wrapper.emitted('open-tool')).toBeUndefined()
+    expect(visiblePages(wrapper)).toEqual(['devtools'])
+    await wrapper.get('.set-nav-item[data-page="mcp"]').trigger('click')
+    await flushPromises()
 
     await page.get('.mcp-skills-link').trigger('click')
     await flushPromises()
@@ -330,15 +358,28 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     expect(visiblePages(wrapper)).toEqual(['orchestration'])
   })
 
-  it("Orchestration's Details opens the MCP servers page (its team connections are no tab there any more)", async () => {
+  it('Orchestration holds the team connections in its Agent hooks group (no jump to MCP servers)', async () => {
+    let reads = 0
+    window.shellApi.teamHooksStatus = async () => {
+      reads++
+      return { node: { found: true }, backups: [], agents: [{ id: 'claude', hooks: 'installed', approval: null, lastSignal: null }] }
+    }
     wrapper = mountAt('orchestration')
     await flushPromises()
-    const details = wrapper.get('.set-page[data-page="orchestration"]').findAll('button').find((b) => b.text() === 'Details')
-    await details.trigger('click')
+    const page = wrapper.get('.set-page[data-page="orchestration"]')
+    expect(page.findAll('button').some((b) => b.text() === 'Details')).toBe(false)
+    const hooks = page.get('[data-agent-hooks]')
+    // Folded under its row until asked for: the Team group shows each agent's state.
+    expect(hooks.find('.mcp-connections').exists()).toBe(false)
+    const show = hooks.get('[data-orch-connections]')
+    expect(show.attributes('aria-expanded')).toBe('false')
+    await show.trigger('click')
     await flushPromises()
-    expect(visiblePages(wrapper)).toEqual(['mcp'])
-    expect(wrapper.find('.set-page[data-page="mcp"] .mcp-connections').exists()).toBe(false)
-    expect(wrapper.get('.set-page[data-page="mcp"] [role="tab"][aria-selected="true"]').text()).toContain('Installed')
+    expect(show.attributes('aria-expanded')).toBe('true')
+    expect(hooks.find('.mcp-connections').exists()).toBe(true)
+    expect(hooks.text()).toContain('Claude Code')
+    expect(reads).toBe(2) // the page's own read, then the connections'
+    expect(visiblePages(wrapper)).toEqual(['orchestration'])
   })
 
   it('search finds both pages by name, without loading their windows', async () => {
@@ -388,9 +429,13 @@ describe('Settings: the sidebar and Source Control menu options', { timeout: 30_
     expect(settings.sidebarGroupBy).toBe('repo')
     expect(wrapper.find('#settings-project-order').exists()).toBe(true)
 
-    await wrapper.get('[data-card-property="ports"]').setValue(false)
+    // Card properties: toggle chips, pressed while shown.
+    const ports = wrapper.get('[data-card-property="ports"]')
+    expect(ports.attributes('aria-pressed')).toBe('true')
+    await ports.trigger('click')
     expect(settings.worktreeCardProperties).not.toContain('ports')
-    await wrapper.get('[data-card-property="ports"]').setValue(true)
+    expect(ports.attributes('aria-pressed')).toBe('false')
+    await ports.trigger('click')
     expect(settings.worktreeCardProperties).toContain('ports')
 
     await wrapper.findAll('[data-setting="agentActivityDisplayMode"] button')[1].trigger('click')

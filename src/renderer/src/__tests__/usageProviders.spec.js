@@ -103,10 +103,11 @@ describe('provider capability visibility', () => {
     expect(wrapper.find('[data-test="stats-provider-cursor"]').exists()).toBe(false)
     expect(api.providerUsage.read).not.toHaveBeenCalled()
     expect(api.codexUsageReport).toHaveBeenCalledTimes(1)
-    await wrapper.get('[data-test="usage-visible-codex"]').setValue(false)
+    // Hidden in Settings > Stats & Usage > Providers shown.
+    settings.hiddenUsageProviders = ['codex']
     await flushPromises()
     expect(wrapper.find('[data-test="stats-provider-codex"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('No installed agents with a local usage history collector')
+    expect(wrapper.get('[data-test="stats-no-collector"]').text()).toContain('turned off in Providers shown')
   })
   it('says it is looking for the agents while it does, not that none keeps a history', async () => {
     let answer
@@ -114,11 +115,11 @@ describe('provider capability visibility', () => {
     wrapper = mount(StatsUsage)
     await flushPromises()
     expect(wrapper.text()).toContain('Looking for installed agents…')
-    expect(wrapper.text()).not.toContain('No installed agents with a local usage history collector')
+    expect(wrapper.text()).not.toContain('keeps a usage history Tessel can read')
     answer({ ok: true, providers: [] })
     await flushPromises()
     expect(wrapper.text()).not.toContain('Looking for installed agents…')
-    expect(wrapper.text()).toContain('No installed agents with a local usage history collector')
+    expect(wrapper.text()).toContain('None of your installed agents keeps a usage history Tessel can read.')
   })
   it('normalizes saved visibility to known unique IDs', () => {
     expect(validHiddenUsageProviders(['kimi', 'kimi', 'qwen', null, {}, 'minimax'])).toEqual([

@@ -418,7 +418,7 @@
       "files": "Fichiers",
       "changes": "Modifications",
       "tasks": "Tâches",
-      "history": "Historique des sessions d'agent",
+      "history": "Conversations passées",
       "panel": "Panneau latéral",
       "changedFiles_one": "{{count}} fichier modifié",
       "changedFiles_other": "{{count}} fichiers modifiés",

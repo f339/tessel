@@ -371,7 +371,7 @@ onMounted(async () => {
             stroke-linejoin="round"
           />
         </svg>
-        <span class="launch-name">{{ t('pane.launch.tools', 'Add your own agent or install tools…') }}</span>
+        <span class="launch-name">{{ t('pane.launch.tools', 'Install agents or add your own…') }}</span>
       </button>
     </div>
 

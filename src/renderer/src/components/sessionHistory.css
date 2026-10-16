@@ -1,7 +1,8 @@
-/* Agent Session History (SessionHistoryPanel.vue, SessionHistoryRow.vue), a
-   tab of the right side panel, drawn after Orca's AiVaultPanel (MIT,
-   Copyright (c) 2026 Lovecast Inc.): a compact header, a scope switch, a
-   search box, a count bar, then the rows under sticky group headers. */
+/* Past conversations (SessionHistoryPanel.vue, SessionHistoryRow.vue), a
+   tab of the right side panel and the Resume a session dialog, drawn after
+   Orca's AiVaultPanel (MIT, Copyright (c) 2026 Lovecast Inc.): a compact
+   header, a scope switch, a search box, a count bar, then the rows under
+   sticky group headers. */
 .sh-panel {
   display: flex;
   flex-direction: column;
@@ -128,7 +129,10 @@
   flex: 1 1 0;
   min-width: 0;
   height: 22px;
+  overflow: hidden;
   padding: 0 6px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
@@ -604,10 +608,8 @@
   align-items: center;
   gap: 6px;
   color: var(--text-dim);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 .sh-card {
   padding: 6px 10px;
@@ -632,10 +634,8 @@
   align-items: center;
   gap: 6px;
   color: var(--text-dim);
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 .sh-card > .sh-card-role {
   margin-bottom: 4px;
@@ -810,13 +810,34 @@
 }
 .sh-error {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
 }
-.sh-error > span {
-  flex: 1 1 auto;
+.sh-error > .sh-error-text {
+  flex: 1 1 140px;
   min-width: 0;
 }
 .sh-error-retry {
   flex: 0 0 auto;
+}
+/* The raw message under the sentence, behind Details. */
+.sh-error-more {
+  flex-basis: 100%;
+  order: 3;
+}
+.sh-error-more p {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+/* Session search's consent: one line, Learn more, Turn on. */
+.sh-notice-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sh-consent-more p {
+  margin: 4px 0 0;
 }

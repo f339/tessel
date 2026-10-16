@@ -216,7 +216,10 @@ describe('agents in Yolo: their own terminal without asking', () => {
     const w = mount(S, { global: { provide: { askConfirm: async () => true } } })
     const box = w.find('[data-setting="agentTerminalYoloNoAsk"]')
     expect(box.exists()).toBe(true)
-    expect(box.element.closest('label').textContent).toContain('Agents in Yolo run commands in their own terminal without asking')
+    expect(box.element.closest('.set-row').textContent).toContain('Agents in Yolo run commands in their own terminal without asking')
+    // Its label names the switch (the row also holds a Learn more disclosure).
+    expect(w.get('label[for="settings-agent-terminal-yolo"]').text()).toBe('Agents in Yolo run commands in their own terminal without asking')
+    expect(box.attributes('id')).toBe('settings-agent-terminal-yolo')
     const before = settings.agentTerminalYoloNoAsk
     await box.setValue(false)
     expect(settings.agentTerminalYoloNoAsk).toBe(false)

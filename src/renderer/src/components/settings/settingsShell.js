@@ -4,6 +4,9 @@
 //   shown(id)   whether a page shows now (its own page, or a search match)
 //   go(id)      open another page
 //   openMcpTab(tab), mcpTab   the MCP servers page, on one of its tabs
+//   anchor      the part of a page Settings was opened on (a ref: an element
+//               id, e.g. 'set-agent-terminal'), for a page with tabs to show
+//               the tab that holds it
 //   emit        the shell's emit: App.vue listens on SettingsDialog only, so
 //               a page reports there (emit('open-tool', 'tools'), …)
 // Every page renders all the time (hidden when not shown) so the search can

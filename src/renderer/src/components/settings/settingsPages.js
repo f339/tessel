@@ -1,6 +1,6 @@
 // Settings: its pages and the sidebar's groups (SettingsDialog.vue shows
 // them; each page is a Settings<Page>.vue beside this file).
-import { Cable } from 'lucide-vue-next'
+import { Cable, Wrench } from 'lucide-vue-next'
 import { t } from '../../i18n'
 
 // The pages, grouped as in the sidebar. `icon` is a 16x16 stroke path.
@@ -11,7 +11,7 @@ export const PAGES = {
       return t('settings.pages.stats.title', 'Stats & Usage')
     },
     get desc() {
-      return t('settings.pages.stats.desc', 'Tessel stats plus local agent token analytics.')
+      return t('settings.pages.stats.desc', 'The Usage menu, Tessel stats and local agent token analytics.')
     }
   },
   agents: {
@@ -94,25 +94,16 @@ export const PAGES = {
       return t('settings.pages.appearance.title', 'Appearance')
     },
     get desc() {
-      return t('settings.pages.appearance.desc', 'The colors of the whole app, the sidebar and the status bar.')
+      return t('settings.pages.appearance.desc', 'The language, theme and size of the app, the panes, the left sidebar and the status bar.')
     },
     icon: 'M8 2a6 6 0 100 12A6 6 0 008 2zM8 2v12'
-  },
-  text: {
-    get title() {
-      return t('settings.pages.text.title', 'Text')
-    },
-    get desc() {
-      return t('settings.pages.text.desc', 'The font, size and cursor of every terminal.')
-    },
-    icon: 'M3 4.5V3h10v1.5M8 3v10M6 13h4'
   },
   terminal: {
     get title() {
       return t('settings.pages.terminal.title', 'Terminal')
     },
     get desc() {
-      return t('settings.pages.terminal.desc', 'Shell, scrollback, drawing, copy and paste.')
+      return t('settings.pages.terminal.desc', 'Shell, font and cursor, drawing, copy and paste, mouse.')
     },
     icon: 'M2.5 3.5h11v9h-11zM5 6.5l2 1.5-2 1.5M8.5 10H11'
   },
@@ -121,7 +112,7 @@ export const PAGES = {
       return t('settings.pages.editor.title', 'Editor')
     },
     get desc() {
-      return t('settings.pages.editor.desc', 'The code editor in Tessel panes: saving, wrapping, tabs and changes.')
+      return t('settings.pages.editor.desc', 'The code editor in Tessel panes, its diffs, and the Files panel.')
     },
     icon: 'M5 4L1.5 8 5 12M11 4l3.5 4-3.5 4M9.5 2.5l-3 11'
   },
@@ -151,6 +142,17 @@ export const PAGES = {
       return t('settings.pages.git.desc', 'Branch naming and Source Control.')
     },
     icon: 'M5 3v7M5 10a2 2 0 100 4 2 2 0 000-4zM11 3a2 2 0 100 4 2 2 0 000-4zM11 7c0 2.5-2 3-6 3'
+  },
+  // The developer tools agents use (Git, Node.js, …), found or installed
+  // with winget: SettingsDevtools.vue (once the Install tools window).
+  devtools: {
+    get title() {
+      return t('settings.pages.devtools.title', 'Developer tools')
+    },
+    get desc() {
+      return t('settings.pages.devtools.desc', 'Git, Node.js and the other tools agents use: install them and finish their setup.')
+    },
+    lucide: Wrench
   },
   // Scheduled automations (Orca's Automations page): AutomationsPage.vue.
   automations: {
@@ -207,14 +209,14 @@ export const GROUPS = [
     get title() {
       return t('settings.groups.workspace', 'Workspace')
     },
-    pages: ['general', 'appearance', 'text', 'terminal', 'editor', 'browser', 'alerts', 'voice']
+    pages: ['general', 'appearance', 'terminal', 'editor', 'browser', 'alerts', 'voice']
   },
   {
     id: 'workflows',
     get title() {
       return t('settings.groups.workflows', 'Workflows')
     },
-    pages: ['git', 'automations', 'quick-commands', 'ssh']
+    pages: ['git', 'devtools', 'automations', 'quick-commands', 'ssh']
   },
   {
     id: 'insights',
@@ -231,6 +233,20 @@ export const GROUPS = [
     pages: ['updates']
   }
 ]
+// Pages that moved: their old id still opens where they are now (Settings >
+// Text is Terminal's Font group), from a link or the page remembered, and the
+// search finds that group by the old page's title (in the interface's
+// language or in English) or by its English names.
+export const PAGE_ALIASES = {
+  text: {
+    page: 'terminal',
+    anchor: 'set-terminal-font',
+    get title() {
+      return t('settings.pages.text.title', 'Text')
+    },
+    namesEn: ['Text', 'Font'] // i18n-ignore
+  }
+}
 // The pages' English titles, so a search in English finds them in any language.
 export const PAGE_TITLES_EN = {
   stats: 'Stats & Usage', // i18n-ignore
@@ -243,12 +259,12 @@ export const PAGE_TITLES_EN = {
   voice: 'Voice typing', // i18n-ignore
   general: 'General', // i18n-ignore
   appearance: 'Appearance', // i18n-ignore
-  text: 'Text', // i18n-ignore
   terminal: 'Terminal', // i18n-ignore
   editor: 'Editor', // i18n-ignore
   browser: 'Browser', // i18n-ignore
   alerts: 'Notifications', // i18n-ignore
   git: 'Git & Source Control', // i18n-ignore
+  devtools: 'Developer tools', // i18n-ignore
   automations: 'Automations', // i18n-ignore
   'quick-commands': 'Quick commands', // i18n-ignore
   updates: 'Updates', // i18n-ignore

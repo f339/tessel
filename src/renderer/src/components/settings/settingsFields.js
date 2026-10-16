@@ -1,4 +1,4 @@
-// Settings: the number fields several pages share (Appearance, Text, Terminal).
+// Settings: the number fields and sliders several pages share (Appearance, Terminal).
 import { settings, limitNumber } from '../../settings'
 
 // A number setting typed in a field: kept in its range (Orca's), shown back.
