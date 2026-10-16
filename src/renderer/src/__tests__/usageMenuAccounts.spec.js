@@ -64,6 +64,15 @@ describe('usage menu account switching', () => {
     await flushPromises()
     expect(api.accounts.select).toHaveBeenLastCalledWith('codex', null)
   })
+  it('names every account in the list: the system one by its address, a saved one by its label', async () => {
+    state.providers[0].system = { label: 'System default', status: 'ready', email: 'me@home.test' }
+    state.providers[0].accounts.push({ id: 'old', label: '', email: 'old@work.test', status: 'missing' })
+    await open()
+    const labels = (await selectOptions(wrapper.get('[data-test="usage-account-codex"]'))).map((o) => o.text().trim())
+    expect(labels).toEqual(['me@home.test', 'Work', 'old@work.test - sign-in needed'])
+    expect(wrapper.get('[data-test="usage-account-toggle"]').text()).toContain('me@home.test')
+    expect(wrapper.text()).not.toContain('System default')
+  })
   it('retains the confirmed account on failed selection and permits a retry', async () => {
     api.accounts.select.mockResolvedValueOnce({ ok: false, error: 'Could not save selection' })
     await open()
