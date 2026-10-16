@@ -139,6 +139,23 @@ describe('shown where team messages appear', () => {
     w.unmount()
   })
 
+  it('the activity timeline: an agent reporting a card, with the model it ran with', () => {
+    const report = { t: Date.now() - 500, type: 'task', action: 'reported', paneId: 'pane-1', agent: { title: 'Ada', agentId: 'claude' }, title: 'Fix the build', by: 'Ada', detail: 'succeeded', sender }
+    const w = mount(ActivityPanel, { props: { events: [report] } })
+    expect(w.find('[data-test="act-sender"]').text()).toBe('Ada · Claude Code · Opus 5.5 high · local · claude/t2')
+    w.unmount()
+  })
+
+  it('App.vue records who reported a card, asked a decision or answered in its chat', () => {
+    const report = APP.slice(APP.indexOf('function applyReport('), APP.indexOf('function askDecision('))
+    expect(report).toMatch(/const reporter = senderSnapshotOf\(from/)
+    expect(report.match(/reporter \? \{ sender: reporter \}/g).length).toBe(2)
+    const gate = APP.slice(APP.indexOf('function askDecision('), APP.indexOf('function askDecision(') + 2500)
+    expect(gate.match(/asker \? \{ sender: asker \}/g).length).toBe(2)
+    const chat = APP.slice(APP.indexOf('function flushChatReplies('), APP.indexOf('function flushChatReplies(') + 1200)
+    expect(chat).toMatch(/speaker \? \{ sender: speaker \}/)
+  })
+
   it('the activity timeline: an older event without a sender still shows', () => {
     const w = mount(ActivityPanel, { props: { events: [event()] } })
     expect(w.text()).toMatch(/Ada/)

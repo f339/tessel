@@ -296,7 +296,10 @@ export function summarize(events, opts = {}) {
         task: e.title || '',
         branch: e.branch || '',
         detail: e.detail || '',
-        by: e.by || ''
+        by: e.by || '',
+        // The agent that reported it or asked a decision, as Tessel recorded
+        // it (its model and effort then); older events and others have none.
+        ...(e.sender && typeof e.sender === 'object' ? { sender: e.sender } : {})
       })
       continue
     }

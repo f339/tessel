@@ -1,22 +1,28 @@
 // Which model an agent pane uses, for the pane header.
 //
 // Best first:
-// 1. The running session (Claude Code, Codex, Copilot, Antigravity CLI, Muse
-//    Code: its conversation file; Cline: its sessions database), so a change
-//    with /model shows up.
-// 2. A --model / -m option in the agent's command.
-// 3. What the agent remembers or its settings file (OpenCode's last picked
-//    model, Cline's provider settings, the folder's settings, the user's).
+// 1. The running session (Claude Code, OpenClaude, Qoder, Codex, Copilot,
+//    Antigravity CLI, Muse Code, Gemini CLI, Qwen Code, Kimi Code, Pi, OMP,
+//    Droid: its conversation file; Cline, OpenCode, Kilo, ZCode: their
+//    database; OpenClaw: its sessions index), so a change with /model shows up.
+// 2. A --model / -m option in the agent's command (and its --effort,
+//    --reasoning-effort or --thinking).
+// 3. What the agent remembers or its settings file (OpenCode's and Kilo's last
+//    picked model, Cline's provider settings, the folder's settings, the
+//    user's: agentModelSources.js has the other agents').
 // Nothing found: null (the header shows nothing rather than a guess).
 // watchModelFiles tells when one of these files changes.
 import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
-import { isUuid } from './agentSessions'
+import { isUuid, qoderDir, qoderTranscriptIn } from './agentSessions'
 import { clineDataDir } from './jsonAgents'
 import { normDir, readHead, readRows, readTail as readTailBytes, readText } from './fileRead'
+import { latestInFile } from './latestInFile'
 import { antigravityLabelParts } from '../shared/antigravityModels'
+import { effortLevel } from '../shared/modelLabel'
 import { museConfigDir, museEffort, museModelFromText, museModelId, museSessionLog, museSessionsDir, museSettingsFile } from './museSessions'
+import { ampModeFromCommand, effortFlag, modelWatchTargets, opencodePicked, sessionModelOf, settingsModelOf } from './agentModelSources'
 
 const TAIL = 256 * 1024
 const readTail = (file) => readTailBytes(file, TAIL)
@@ -151,65 +157,10 @@ export function codexModelFromText(text) {
   return null
 }
 
-// The model of a Codex rollout file: its latest model line, wherever it is.
-// A turn's web results and tool outputs can write megabytes after that line
-// (a fixed tail missed it, and the header fell back to config.toml), so the
-// file is read back in chunks until one shows. Remembered per file: a grown
-// file is read only from where the last read stopped (its last whole line),
-// and keeps what it said when the new part names no model.
-const CODEX_CHUNK = 512 * 1024
-const CODEX_MAX_SCAN = 64 * 1024 * 1024
-const CODEX_SEEN_MAX = 200
-const codexSeen = new Map() // file -> { size, lineEnd, found }
-export function codexModelFromFile(file) {
-  let fd
-  try {
-    fd = fs.openSync(file, 'r')
-    const size = fs.fstatSync(fd).size
-    const prev = codexSeen.get(file)
-    if (prev && prev.size === size) return prev.found
-    // Shrank (rewritten): read it all again.
-    const floor = prev && prev.size < size ? prev.lineEnd : 0
-    let found = null
-    let lineEnd = floor
-    let end = size
-    let carry = Buffer.alloc(0) // the cut first line of the chunk read before
-    while (end > floor && size - end < CODEX_MAX_SCAN) {
-      const start = Math.max(floor, end - CODEX_CHUNK)
-      const buf = Buffer.alloc(end - start)
-      const n = fs.readSync(fd, buf, 0, buf.length, start)
-      if (end === size) {
-        const nl = buf.subarray(0, n).lastIndexOf(10)
-        if (nl >= 0) lineEnd = start + nl + 1
-      }
-      const whole = Buffer.concat([buf.subarray(0, n), carry])
-      let from = 0
-      if (start > floor) {
-        // Its first line can be cut: kept for the next (earlier) chunk.
-        const nl = whole.indexOf(10)
-        if (nl === -1) {
-          carry = whole
-          end = start
-          continue
-        }
-        carry = whole.subarray(0, nl)
-        from = nl + 1
-      }
-      found = codexModelFromText(whole.subarray(from).toString('utf8'))
-      if (found) break
-      end = start
-    }
-    if (!found && prev && floor) found = prev.found
-    codexSeen.delete(file)
-    codexSeen.set(file, { size, lineEnd, found })
-    while (codexSeen.size > CODEX_SEEN_MAX) codexSeen.delete(codexSeen.keys().next().value)
-    return found
-  } catch {
-    return null
-  } finally {
-    if (fd !== undefined) fs.closeSync(fd)
-  }
-}
+// The model of a Codex rollout file: its latest model line, wherever it is
+// (a turn's web results and tool outputs can write megabytes after it), read
+// back in chunks and remembered per file (latestInFile.js).
+export const codexModelFromFile = latestInFile(codexModelFromText)
 
 const fileCache = new Map() // folder + session id -> transcript path
 
@@ -296,24 +247,58 @@ function codexRollout(id, home, now = Date.now()) {
 
 // The model of the latest answer (or /model change) in a Copilot session's
 // events.jsonl. "auto" until the first answer says which model it picked.
+// Its effort: the one the latest /model set (session.model_change
+// reasoningEffort), which the answers after it run with (they do not say).
 export function copilotModelFromText(text) {
+  return copilotFinish(copilotRecords(text))
+}
+// -> { answer, change } of a text: its newest /model (change: { model,
+// effort, at }) and the newest answer after it (answer: { model, at }), or null.
+function copilotRecords(text) {
   const lines = String(text || '').split('\n')
+  let answer = null
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]
-    if (!line.includes('"model') || !line.includes('"type":"')) continue
+    // An answer names "model"; a /model is a "session.model_change" (newModel).
+    if (!(line.includes('"model"') || line.includes('"session.model_change"')) || !line.includes('"type":"')) continue
     try {
       const o = JSON.parse(line)
       const d = o && o.data
       if (!d) continue
-      if (o.type === 'assistant.message' && typeof d.model === 'string' && d.model) return { model: d.model, effort: null }
+      const at = Date.parse(o.timestamp)
+      const when = Number.isFinite(at) ? { at } : {}
+      if (o.type === 'assistant.message' && typeof d.model === 'string' && d.model) {
+        if (!answer) answer = { model: d.model, ...when }
+        continue
+      }
       if (o.type === 'session.model_change' && typeof d.newModel === 'string' && d.newModel) {
-        return { model: d.newModel, effort: typeof d.reasoningEffort === 'string' ? d.reasoningEffort : null }
+        return { answer, change: { model: d.newModel, effort: effortLevel(d.reasoningEffort), ...when } }
       }
     } catch {
       /* a line cut by the tail read */
     }
   }
-  return null
+  return answer ? { answer, change: null } : null
+}
+// A newer part's /model is what holds; else its answer, at the effort of the
+// older part's /model.
+const copilotMerge = (newer, older) => {
+  if (!newer || newer.change || !older) return newer || older
+  return { answer: newer.answer || older.answer, change: older.change }
+}
+function copilotFinish(r) {
+  if (!r) return null
+  const { answer, change } = r
+  if (answer) return { model: answer.model, effort: change ? change.effort : null, ...(answer.at ? { at: answer.at } : {}) }
+  return change ? { model: change.model, effort: change.effort, ...(change.at ? { at: change.at } : {}) } : null
+}
+const copilotFromFile = latestInFile(copilotRecords, { merge: copilotMerge, done: (r) => !!r.change, finish: copilotFinish })
+
+// The pane's own session (its id found after it started), when it has one.
+function copilotSessionFile(id, home) {
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{6,80}$/.test(id)) return null
+  const file = join(home, '.copilot', 'session-state', id, 'events.jsonl')
+  return fs.existsSync(file) ? file : null
 }
 
 function pidAlive(pid) {
@@ -400,6 +385,18 @@ export function antigravityModelFromText(text) {
   return null
 }
 
+// Each model agy noted, oldest first: [{ t, model, effort }] (Conversations:
+// the model each line ran with, as its model list names it).
+export function antigravityModelTimeline(lines) {
+  const out = []
+  for (const line of lines || []) {
+    if (!String(line).includes('Model Selection')) continue
+    const m = antigravityModelFromText(line)
+    if (m && m.at) out.push({ t: m.at, model: m.name, effort: m.effort || null })
+  }
+  return out
+}
+
 export function antigravityTranscript(id, home = os.homedir()) {
   if (!isUuid(id)) return null
   const f = join(home, '.gemini', 'antigravity-cli', 'brain', id, '.system_generated', 'logs', 'transcript.jsonl')
@@ -460,22 +457,6 @@ export function museSettingsModel(home = os.homedir()) {
   return { model, effort: effort || null }
 }
 
-// OpenCode remembers the models last picked in its model list (newest first).
-function opencodeRecent(home) {
-  const dir = process.env.XDG_STATE_HOME || join(home, '.local', 'state')
-  const file = join(dir, 'opencode', 'model.json')
-  const o = parseLoose(readText(file))
-  const r = o && Array.isArray(o.recent) ? o.recent[0] : null
-  if (!r || typeof r.modelID !== 'string' || !r.modelID) return null
-  let mtime = 0
-  try {
-    mtime = fs.statSync(file).mtimeMs
-  } catch {
-    /* read just above */
-  }
-  return { model: r.providerID ? `${r.providerID}/${r.modelID}` : r.modelID, mtime }
-}
-
 // Cline 3 lists its sessions in <data>/db/sessions.db (SQLite), each with
 // the process running it, its folder, provider and model. The pane's: one
 // still open whose process runs, in the pane's folder first.
@@ -499,21 +480,24 @@ function clineLive(cwd, home) {
   return rows.length ? clineSessionModel(rows, cwd) : null
 }
 
-// Cline's provider settings: the provider in use and its model (none set:
-// the provider's own default, which is not written anywhere).
+// Cline's provider settings: the provider in use, its model (none set: the
+// provider's own default, which is not written anywhere) and its reasoning
+// effort ({ reasoning: { enabled, effort } }; turned off: none).
 function clineSettings(home) {
   const file = join(clineDataDir(home), 'settings', 'providers.json')
   const o = parseLoose(readText(file))
   const p = o && o.lastUsedProvider && o.providers && o.providers[o.lastUsedProvider]
   const m = p && p.settings && p.settings.model
   if (typeof m !== 'string' || !m) return null
+  const r = p.settings.reasoning && typeof p.settings.reasoning === 'object' ? p.settings.reasoning : null
+  const effort = r ? (r.enabled === false ? 'none' : effortLevel(r.effort)) : null
   let mtime = 0
   try {
     mtime = fs.statSync(file).mtimeMs
   } catch {
     /* read just above */
   }
-  return { model: m, mtime }
+  return { model: m, effort, mtime }
 }
 
 // --- 2. The command's own option ----------------------------------------------
@@ -646,6 +630,12 @@ function settingsModel(agentId, cwd, home, codexDir = null) {
     }
     return null
   }
+  if (agentId === 'openclaude') {
+    // A Claude Code fork: its own settings.json { model, effortLevel }.
+    const o = parseLoose(readText(join(home, '.openclaude', 'settings.json')))
+    const m = o && typeof o.model === 'string' && o.model.trim() ? o.model.trim() : null
+    return m ? { model: m, effort: CLAUDE_EFFORTS.includes(o.effortLevel) ? o.effortLevel : null } : null
+  }
   if (agentId === 'codex') return codexModelFromToml(readText(join(codexDir || join(home, '.codex'), 'config.toml')))
   if (agentId === 'cursor') return cursorConfigModel(readText(join(home, '.cursor', 'cli-config.json')))
   if (agentId === 'gemini' || agentId === 'qwen') {
@@ -717,18 +707,22 @@ export function effortFromCommand(command) {
 function agentModelFound({ agentId, sessionId, command, cwd, launchedAt = 0, codexDir = null } = {}, home = os.homedir()) {
   if (!agentId) return null
   if (agentId === 'copilot') {
-    const f = copilotLiveSession(cwd, home)
-    const m = f && copilotModelFromText(readTail(f))
-    if (m) return { ...m, source: 'session' }
+    // The pane's own session, else one a running Copilot has open (in the
+    // pane's folder first).
+    const f = copilotSessionFile(sessionId, home) || copilotLiveSession(cwd, home)
+    const m = f && copilotFromFile(f)
+    if (m) return { ...m, effort: m.effort || effortFlag(command), source: 'session' }
   }
   if (agentId === 'cline') {
     const live = clineLive(cwd, home)
     const set = clineSettings(home)
+    // Its effort: the provider's reasoning setting, for the model set there.
+    const effortOf = (model) => (set && set.model === model ? set.effort : null)
     // A model picked in Cline after its session was written: that one.
-    if (live && !(set && set.mtime > live.at)) return { model: live.model, effort: null, source: 'session' }
+    if (live && !(set && set.mtime > live.at)) return { model: live.model, effort: effortOf(live.model), source: 'session' }
     const flag = modelFromCommand(command)
-    if (flag) return { model: flag, effort: null, source: 'command' }
-    return set ? { model: set.model, effort: null, source: 'settings' } : null
+    if (flag) return { model: flag, effort: effortFlag(command) || effortOf(flag), source: 'command' }
+    return set ? { model: set.model, effort: set.effort, source: 'settings' } : null
   }
   if (agentId === 'antigravity') {
     // Its conversation (a /model or /effort shows with the next prompt; the
@@ -768,24 +762,36 @@ function agentModelFound({ agentId, sessionId, command, cwd, launchedAt = 0, cod
         const same = big && m.toLowerCase().includes(big[1].toLowerCase())
         return { model: same ? m + '[1m]' : m, effort: turn.effort || claudeSettingsEffort(m, cwd, home), source: 'session', ...(turn.at ? { at: turn.at } : {}) }
       }
+    } else if (agentId === 'openclaude' || agentId === 'qoder') {
+      // Claude Code's transcript format, in their own folders (the effort as
+      // Claude Code writes it on each answer, when they do).
+      const f = agentId === 'openclaude' ? claudeTranscriptIn(join(home, '.openclaude'), sessionId) : qoderTranscriptIn(qoderDir(home), sessionId)
+      const turn = f && claudeTurnFromText(readTail(f))
+      if (turn && turn.model) return { model: turn.model, effort: turn.effort || effortFlag(command), source: 'session', ...(turn.at ? { at: turn.at } : {}) }
     } else if (agentId === 'codex') {
       const f = codexDir ? codexRolloutIn(codexDir, sessionId) : codexRollout(sessionId, home)
       const m = f && codexModelFromFile(f)
       if (m) return { ...m, source: 'session' }
     }
   }
-  // A model picked in OpenCode (its /models picker) since the pane started
-  // beats even the --model it was launched with.
-  const picked = agentId === 'opencode' ? opencodeRecent(home) : null
-  if (picked && launchedAt && picked.mtime >= launchedAt) return { model: picked.model, effort: null, source: 'picked' }
-  const flag = modelFromCommand(command)
-  if (flag) return { model: flag, effort: null, source: 'command' }
-  const s = settingsModel(agentId, cwd, home, codexDir)
+  // The other agents' own session (agentModelSources.js: Gemini, Qwen, Kimi,
+  // Pi, OMP, Droid, OpenCode, Kilo, ZCode, OpenClaw). A model picked in
+  // OpenCode's or Kilo's model list after the session's latest message is
+  // newer; one picked since the pane started beats even its --model.
+  const flagEffort = effortFlag(command)
+  const picked = agentId === 'opencode' || agentId === 'kilo' ? opencodePicked(home, agentId) : null
+  const session = sessionModelOf(agentId, { sessionId, cwd, launchedAt }, home)
+  if (session && session.model && !(picked && session.at && picked.mtime > session.at + 1000)) return { ...session, effort: session.effort || flagEffort, source: 'session' }
+  if (picked && launchedAt && picked.mtime >= launchedAt) return { model: picked.model, effort: picked.effort, source: 'picked' }
+  // Amp runs a mode (smart, rush, large, deep) rather than a model.
+  const flag = (agentId === 'amp' && ampModeFromCommand(command)) || modelFromCommand(command)
+  if (flag) return { model: flag, effort: flagEffort, source: 'command' }
+  const s = settingsModel(agentId, cwd, home, codexDir) || settingsModelOf(agentId, cwd, home)
   if (s) {
-    const effort = s.effort || (agentId === 'claude' ? claudeSettingsEffort(s.model, cwd, home) : null)
+    const effort = flagEffort || s.effort || (agentId === 'claude' ? claudeSettingsEffort(s.model, cwd, home) : null)
     return { model: s.model, effort, source: 'settings', ...(s.name ? { name: s.name } : {}) }
   }
-  return picked ? { model: picked.model, effort: null, source: 'picked' } : null
+  return picked ? { model: picked.model, effort: picked.effort, source: 'picked' } : null
 }
 
 // --- Watching: a model change shows right away ---------------------------------
@@ -817,15 +823,21 @@ export function watchModelFiles(onChange, home = os.homedir()) {
     // Muse Code: its settings' defaults, and its session logs (each /models
     // and /effort is a record there).
     { agent: 'muse', dir: museConfigDir(home), match: /^settings\.json$/ },
-    { agent: 'muse', dir: museSessionsDir(home), match: /^session\.jsonl$/, recursive: true }
+    { agent: 'muse', dir: museSessionsDir(home), match: /^session\.jsonl$/, recursive: true },
+    // The other agents' sessions and settings (agentModelSources.js): Gemini,
+    // Qwen, Kimi, Pi, OMP, Droid, OpenCode's and Kilo's databases, ZCode,
+    // OpenClaw, Continue, OpenClaude, Mistral Vibe.
+    ...modelWatchTargets(home)
   ]
   const watchers = new Map() // target -> fs.FSWatcher
   const timers = new Map() // agent -> timeout
   const last = new Map() // agent -> last call (ms)
   let closed = false
-  const fire = (agent) => {
+  // every: the least time between two calls for that file (a database being
+  // written while its agent streams an answer: every 5 s).
+  const fire = (agent, every = 1000) => {
     if (closed || timers.has(agent)) return
-    const wait = Math.max(300, 1000 - (Date.now() - (last.get(agent) || 0)))
+    const wait = Math.max(300, every - (Date.now() - (last.get(agent) || 0)))
     timers.set(
       agent,
       setTimeout(() => {
@@ -840,7 +852,7 @@ export function watchModelFiles(onChange, home = os.homedir()) {
       if (watchers.has(t) || !fs.existsSync(t.dir)) continue
       try {
         const w = fs.watch(t.dir, { recursive: !!t.recursive, persistent: false }, (_ev, name) => {
-          if (!name || t.match.test(String(name).replace(/\\/g, '/').split('/').pop())) fire(t.agent)
+          if (!name || t.match.test(String(name).replace(/\\/g, '/').split('/').pop())) fire(t.agent, t.every)
         })
         w.on('error', () => {
           // The folder went away: watch it again when it is back.

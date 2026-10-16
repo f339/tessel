@@ -752,6 +752,16 @@
   text-overflow: ellipsis;
   user-select: text;
 }
+/* The model it ran with last: a name, as a pane header shows it. */
+.sh-model {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  user-select: text;
+}
 
 /* --- Show more --- */
 .sh-more {

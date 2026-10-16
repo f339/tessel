@@ -8,6 +8,7 @@
 // change time alone when nothing changed); each file at most once per
 // minGapMs, one request at a time per file.
 import { claudeTurnFromText, codexModelFromText, modelFromCommand, effortFromCommand, sameClaudeModel } from './agentModel'
+import { effortFlag } from './agentModelSources'
 
 const HOST_ID = /^ssh-[\w-]{1,60}$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -93,8 +94,10 @@ export function createRemoteModelReader({ readAgentFile, now = Date.now, minGapM
 export async function remoteAgentModel(q = {}, reader) {
   const agentId = q.agentId
   if (agentId !== 'claude' && agentId !== 'codex') {
+    // The others' files are not read on a host: their --model, with its
+    // --effort / --reasoning-effort / --thinking.
     const flag = modelFromCommand(q.command)
-    return flag ? { model: flag, effort: null, source: 'command' } : null
+    return flag ? { model: flag, effort: effortFlag(q.command), source: 'command' } : null
   }
   let res = null
   const turn = reader ? await reader.read({ hostId: q.remoteHostId, agent: agentId, sessionId: q.sessionId }) : null

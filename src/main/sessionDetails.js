@@ -13,10 +13,11 @@
 import fs from 'fs'
 import os from 'os'
 import { basename, dirname, join } from 'path'
-import { claudeTranscriptIn, codexRolloutIn } from './agentModel'
+import { claudeTranscriptIn, claudeTurnFromText, codexModelFromText, codexRolloutIn } from './agentModel'
+import { piModelFromWire } from './agentModelSources'
 import { isUuid, qoderDir, qoderTranscriptIn } from './agentSessions'
 import { insideDir, ompSessions, ompSessionsDir, piSessions, piSessionsDir, plainId, sessionDirs } from './agentSessionSources'
-import { museSessionLog } from './museSessions'
+import { museModelFromText, museSessionLog } from './museSessions'
 import { readLastLines } from './chat/transcriptHistory'
 import { readHead } from './fileRead'
 import { rowsFromLines } from './sessionSearch/indexer'
@@ -130,7 +131,8 @@ const lines = (text) =>
 const spoken = (r) => r.role === 'user' || r.role === 'assistant'
 
 // -> { ok: true, file, size, firstPrompt, turns: [{ role, text, at }],
-//      messageCount (null when the file was not read whole) } | { ok: false }
+//      messageCount (null when the file was not read whole), model?, effort? }
+//    | { ok: false }
 export function sessionDetails(q = {}, home = os.homedir(), roots = {}) {
   const found = findSessionFile(q, home, roots)
   if (!found) return { ok: false }
@@ -149,7 +151,7 @@ export function sessionDetails(q = {}, home = os.homedir(), roots = {}) {
 // read from its start; its last one is dropped when the file goes on) and,
 // when it was not read whole, its last lines. Also for a file read on an SSH
 // host (chat/remoteTranscripts.js remoteSessionDetails).
-// -> { firstPrompt, turns, messageCount }
+// -> { firstPrompt, turns, messageCount, model?, effort? }
 export function detailsFromLines(agent, id, headLines, tailLines, whole) {
   const head = [...(Array.isArray(headLines) ? headLines : [])]
   // The last line of a window is cut (or still being written).
@@ -161,10 +163,33 @@ export function detailsFromLines(agent, id, headLines, tailLines, whole) {
     .filter(spoken)
     .slice(-LATEST_TURNS)
     .map((r) => ({ role: r.role, text: clip(r.text, TURN_MAX), at: Number.isFinite(r.ts) ? r.ts : null }))
+  // The model it ran with last (its end, else its start), and its effort.
+  const used = latestModel(agent, whole ? head : Array.isArray(tailLines) ? tailLines : [], whole ? [] : head)
   return {
     firstPrompt: first ? clip(first.text, PROMPT_MAX) : '',
     turns,
-    messageCount: whole ? headRows.filter(spoken).length : null
+    messageCount: whole ? headRows.filter(spoken).length : null,
+    ...(used ? { model: used.model, ...(used.effort ? { effort: used.effort } : {}) } : {})
+  }
+}
+
+// The model a conversation ran with last, as the pane header reads it
+// (agentModel.js): Claude Code's (and its forks') latest answer, Codex's latest
+// turn, Muse's log, Pi's and OMP's model changes and answers. Grok's file
+// names none. -> { model, effort } | null
+const MODEL_TEXT = { claude: claudeTurnFromText, openclaude: claudeTurnFromText, qoder: claudeTurnFromText, codex: codexModelFromText, muse: museModelFromText }
+export function latestModel(agent, lines, headLines = []) {
+  try {
+    if (agent === 'pi' || agent === 'omp') {
+      const m = piModelFromWire(lines.join('\n'), headLines.join('\n'))
+      return m ? { model: m.model, effort: m.effort || null } : null
+    }
+    const read = MODEL_TEXT[agent]
+    if (!read) return null
+    const m = read(lines.join('\n')) || (headLines.length ? read(headLines.join('\n')) : null)
+    return m && typeof m.model === 'string' && m.model ? { model: m.model.slice(0, 120), effort: m.effort || null } : null
+  } catch {
+    return null
   }
 }
 export const DETAILS_TAIL_BYTES = TAIL_BYTES

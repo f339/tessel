@@ -157,7 +157,11 @@ export function createShareHistory({ listSessions, sessionDetails, readTerminal 
     const masked = await masker(where)([firstPrompt, ...events.map((e) => e.text)])
     const turns = events.map((e, i) => ({ role: e.type === 'user' ? 'user' : 'assistant', text: masked[i + 1], at: time(e.at) }))
     const messageCount = Number.isSafeInteger(d.messageCount) && d.messageCount >= 0 ? d.messageCount : null
-    return { ok: true, data: assertNoHostPaths({ firstPrompt: masked[0], turns, messageCount }, rawRoots).value }
+    // The model it ran with last (an id, and its effort word), as the host's
+    // own Past conversations shows it.
+    const model = /^[\w.:/@[\]-]{1,120}$/.test(str(d.model)) ? d.model : null
+    const effort = model && /^[a-z]{1,20}$/.test(str(d.effort)) ? d.effort : null
+    return { ok: true, data: assertNoHostPaths({ firstPrompt: masked[0], turns, messageCount, ...(model ? { model } : {}), ...(effort ? { effort } : {}) }, rawRoots).value }
   }
 
   // What was said in the project's terminal agents. panes: the project's

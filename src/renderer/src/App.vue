@@ -10223,6 +10223,8 @@ function applyReport(task, r, from, teamId) {
   })
   if (blocked && teamId && from.team === teamId)
     tellAgents([from], `[Tessel] Your report on card ${task.id} is kept, but the card stays in ${task.column}: ${blocked}.`, teamId) // i18n-ignore
+  // Who reported it, as Tessel sees the pane now (its model and effort).
+  const reporter = senderSnapshotOf(from, teamId ? teamById(teamId) : null)
   recordActivity({
     type: 'task',
     action: 'reported',
@@ -10231,7 +10233,8 @@ function applyReport(task, r, from, teamId) {
     title: task.title,
     wsId: task.wsId,
     by: paneLabel(from),
-    detail: r.outcome === 'succeeded' ? 'succeeded' : 'failed'
+    detail: r.outcome === 'succeeded' ? 'succeeded' : 'failed',
+    ...(reporter ? { sender: reporter } : {})
   })
   const giver = task.createdBy && task.createdBy !== from.id ? findLeaf(task.createdBy) : null
   const filesLine = r.files && r.files.length ? `
@@ -10249,7 +10252,8 @@ Files: ${r.files.slice(0, 20).join(', ')}${r.files.length > 20 ? ' …' : ''}` :
     teamId: teamId || from.team || null,
     taskTitle: task.title,
     taskId: task.id,
-    ...(giver ? { toPaneId: giver.id, to: paneLabel(giver) } : {})
+    ...(giver ? { toPaneId: giver.id, to: paneLabel(giver) } : {}),
+    ...(reporter ? { sender: reporter } : {})
   })
   if (giver && teamId && giver.team === teamId) {
     const files = filesLine
@@ -10265,7 +10269,8 @@ ${r.summary}${files}`, teamId, { wake: true }) // i18n-ignore
 // its choices; the answer goes back to the agent that asked.
 function askDecision(task, r, from) {
   updateTask(task.id, { gate: { question: r.question, options: r.options || [], status: 'pending', by: from.id, askedAt: Date.now() } })
-  recordActivity({ type: 'task', action: 'gate', paneId: from.id, agent: agentInfo(from), title: task.title, wsId: task.wsId, by: paneLabel(from), detail: r.question })
+  const asker = senderSnapshotOf(from)
+  recordActivity({ type: 'task', action: 'gate', paneId: from.id, agent: agentInfo(from), title: task.title, wsId: task.wsId, by: paneLabel(from), detail: r.question, ...(asker ? { sender: asker } : {}) })
   recordActivity({
     type: 'reply',
     paneId: from.id,
@@ -10276,7 +10281,8 @@ function askDecision(task, r, from) {
     wsId: task.wsId,
     teamId: from.team || null,
     taskTitle: task.title,
-    taskId: task.id
+    taskId: task.id,
+    ...(asker ? { sender: asker } : {})
   })
   const needs = t('app.board.needsDecision', '{{pane}} needs your decision', { pane: paneLabel(from) })
   inboxNote('attention', needs, r.question, from.id)
@@ -11609,6 +11615,8 @@ function flushChatReplies(paneId) {
   chatReplies.delete(paneId)
   const leaf = findLeaf(paneId)
   if (!leaf || leaf.kind !== 'chat') return
+  // Who answered, with the model and effort its header shows.
+  const speaker = senderSnapshotOf(leaf)
   for (const raw of replies.values()) {
     const text = raw.trim()
     if (!text) continue
@@ -11620,7 +11628,8 @@ function flushChatReplies(paneId) {
       text: text.slice(0, 8000),
       preview: chatPreview(text),
       wsId: wsOfLeaf(paneId)?.id || null,
-      teamId: leaf.team || null
+      teamId: leaf.team || null,
+      ...(speaker ? { sender: speaker } : {})
     })
   }
 }

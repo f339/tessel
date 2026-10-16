@@ -267,10 +267,11 @@ function taskLine(x) {
   }
 }
 
-// A message's sender, recorded by Tessel from the sending pane: one compact
-// line, every detail on hover (null for older events, which have none).
+// A message's sender (or the agent that reported a card or asked a
+// decision), recorded by Tessel from its pane: one compact line, every detail
+// on hover (null for older events, which have none).
 function senderOf(x) {
-  if (x.kind !== 'message' || !x.sender) return null
+  if ((x.kind !== 'message' && x.kind !== 'task') || !x.sender) return null
   const line = senderSummary(x.sender)
   return line ? { line, details: senderDetails(x.sender) } : null
 }
