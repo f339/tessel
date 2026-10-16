@@ -8,7 +8,9 @@
 // layer (teleported to <body>, placed next to the indicator and kept inside
 // the window), so it is never hidden under a neighbouring pane or clipped.
 // A chat pane gives its list itself (items: the engine's roster, from its
-// events): nothing is read from files then.
+// events): nothing is read from files then. A Live Share host's pane gives a
+// source instead ({ read() -> Promise<list> }: the host reads its agent's
+// files, its session stays there), read on the same schedule.
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { childTime, formatTokens, childrenSummary, childShownState } from '../agentChildrenView'
 import { listsChildren } from '../agentChildrenFeed'
@@ -24,7 +26,10 @@ const props = defineProps({
   parentIdleSince: { type: Number, default: null },
   // The list as the pane knows it ([{ id, title, type, model, effort, state,
   // startedAt, endedAt, tokens, lastAt }]), or null to read the agent's files.
-  items: { type: Array, default: null }
+  items: { type: Array, default: null },
+  // Another computer's list: { read() -> Promise<[the same rows]> }, or
+  // null to read this computer's files.
+  source: { type: Object, default: null }
 })
 
 const list = ref([])
@@ -40,7 +45,9 @@ let disposed = false
 // another one, or older than the last request, is dropped.
 let seq = 0
 let shownKey = null
-const keyOf = () => JSON.stringify([props.agentId, props.sessionId, props.accountId === undefined ? null : props.accountId])
+// One more for each source given (another host pane's list).
+let sourceTurn = 0
+const keyOf = () => JSON.stringify([props.agentId, props.sessionId, props.accountId === undefined ? null : props.accountId, sourceTurn])
 
 async function refresh() {
   if (disposed) return
@@ -54,6 +61,22 @@ async function refresh() {
   if (props.items) {
     list.value = props.items
     now.value = Date.now()
+    return
+  }
+  if (props.source) {
+    if (typeof props.source.read !== 'function') {
+      list.value = []
+      return
+    }
+    if (document.visibilityState !== 'visible') return
+    try {
+      const res = await props.source.read()
+      if (disposed || my !== seq || keyOf() !== key) return
+      list.value = Array.isArray(res) ? res : []
+      now.value = Date.now()
+    } catch {
+      // next time
+    }
     return
   }
   if (!listsChildren(props.agentId) || !props.sessionId || !window.shellApi.agentChildren) {
@@ -165,6 +188,13 @@ watch(
 )
 watch(keyOf, refresh)
 watch(() => props.items, refresh)
+watch(
+  () => props.source,
+  () => {
+    sourceTurn++
+    refresh()
+  }
+)
 function tokensLabel(tokens) {
   return t('pane.subAgents.tokens', '{{tokens}}', { tokens: formatTokens(tokens) })
 }

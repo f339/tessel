@@ -1,0 +1,55 @@
+{
+  "liveShare": {
+    "access": {
+      "noAccess": "Vous n'avez plus accès à ce projet.",
+      "outdatedHost": "Le Tessel de l'hôte est trop ancien pour cela : l'hôte doit mettre Tessel à jour.",
+      "ended": "La session Live Share est terminée.",
+      "localOnly": "Cela ne fonctionne que sur l'ordinateur de l'hôte."
+    }
+  },
+  "explorer": {
+    "readOnly": "Lecture seule : l'hôte ne vous a pas permis de modifier les fichiers ici.",
+    "readOnlyTag": "Lecture seule"
+  },
+  "changes": {
+    "readOnly": "Lecture seule : l'hôte ne vous a pas permis d'indexer, de faire un commit ni d'abandonner des modifications ici.",
+    "readOnlyNote": "Lecture seule : l'hôte ne vous a pas permis d'indexer, de faire un commit ni d'abandonner des modifications."
+  },
+  "editor": {
+    "doc": {
+      "disconnected": "La session Live Share de {{name}} est terminée : copiez votre texte pour le garder.",
+      "readOnly": "{{name}} est en lecture seule : l'hôte ne vous a pas permis de modifier les fichiers."
+    },
+    "lshare": {
+      "disconnected": "Déconnecté : la session Live Share est terminée. Vous pouvez toujours sélectionner et copier le texte.",
+      "readOnly": "Lecture seule : l'hôte ne vous a pas permis de modifier les fichiers.",
+      "disconnectedTag": "Déconnecté",
+      "readOnlyTag": "Lecture seule"
+    },
+    "close": {
+      "readOnlyText": "« {{name}} » a des modifications non enregistrées qui ne peuvent plus être enregistrées : copiez-les d'abord pour les garder. Le fermer quand même ?",
+      "closeAnyway": "Fermer"
+    }
+  },
+  "tasks": {
+    "board": {
+      "readOnly": "Lecture seule : l'hôte ne vous a pas permis de gérer les tâches.",
+      "sourceFailed": "Le tableau des tâches de l'hôte n'a pas pu être lu : {{error}}"
+    }
+  },
+  "taskHistory": {
+    "sourceFailed": "L'historique des tâches de l'hôte n'a pas pu être lu : {{error}}",
+    "detail": {
+      "modelsTokens": "Tokens par modèle"
+    }
+  },
+  "usage": {
+    "menu": {
+      "hostUsage": "Utilisation de {{host}}",
+      "theHost": "l'hôte",
+      "hostSignIn": "L'hôte doit se reconnecter",
+      "hostNoReading": "Pas encore de relevé",
+      "hostEmpty": "L'hôte n'a pas encore d'utilisation à afficher."
+    }
+  }
+}

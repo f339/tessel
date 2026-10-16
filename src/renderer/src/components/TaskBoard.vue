@@ -4,10 +4,14 @@
 // column layout; each task is a TaskCard that talks to the store itself. Tasks
 // are bucketed once per change (O(n)) and rendered with a stable :key, so a
 // single task update re-renders just that card, not the whole board.
+// Given a source (a Live Share host's board, taskBoardSource.js), it shows
+// that board's cards and offers only what the source lets you do.
 
 import { ref, computed, inject, watch } from 'vue'
 import { COLUMNS } from '../../../shared/taskModel'
 import { tasks, addTask, moveTask, removeTask, boardState } from '../taskBoardStore'
+import { cardsOf, canOf } from '../taskBoardSource'
+import { accessStateText } from '../liveShareAccess'
 import PanelState from './ui/PanelState.vue'
 import TaskCard from './TaskCard.vue'
 import OrchestrationCard from './OrchestrationCard.vue'
@@ -21,18 +25,29 @@ const props = defineProps({
   agentPanes: { type: Array, default: () => [] },
   // Each workspace has its own board: show and add tasks for this one.
   // (null shows every task.)
-  workspaceId: { type: String, default: null }
+  workspaceId: { type: String, default: null },
+  // Another board than this computer's (taskBoardSource.js): its cards, and
+  // only what it lets you do. null: this computer's board.
+  source: { type: Object, default: null }
 })
 
 const emit = defineEmits(['new-task', 'focus-pane', 'review'])
 const newTitle = ref('')
 
+// The cards shown and what may be done to them: a source's (only its
+// project's cards, nothing of this computer's), else the store's.
+const cards = computed(() => (props.source ? cardsOf(props.source) : tasks))
+const can = computed(() => canOf(props.source))
+const loaded = computed(() => (props.source ? props.source.loaded !== false : boardState.loaded))
+const loadError = computed(() => (props.source ? props.source.error || '' : boardState.error))
+const sourceState = computed(() => (props.source && props.source.state && props.source.state !== 'ok' ? props.source.state : null))
+
 // One pass over tasks → { todo: [...], doing: [...], ... }. Reads only each
 // task's column, so renaming/assigning a task doesn't invalidate the grouping.
 const grouped = computed(() => {
   const groups = Object.fromEntries(COLUMNS.map((c) => [c, []]))
-  for (const task of tasks) {
-    if (props.workspaceId && task.wsId !== props.workspaceId) continue
+  for (const task of cards.value) {
+    if (!props.source && props.workspaceId && task.wsId !== props.workspaceId) continue
     if (groups[task.column]) groups[task.column].push(task)
   }
   // Each column in the order cards arrived in it (Done: the order they were
@@ -46,16 +61,17 @@ const grouped = computed(() => {
 // for the cards on this board, again when a card moves or changes agent, and
 // when the main process says the figures changed (jobCost.js, throttled).
 const visibleTasks = computed(() => COLUMNS.flatMap((c) => grouped.value[c]))
-const fetchedCost = useJobCost('cards', () => visibleTasks.value.map((task) => task.id))
+// A source's cards are not this computer's: no figures asked for them.
+const fetchedCost = useJobCost('cards', () => (props.source ? [] : visibleTasks.value.map((task) => task.id)))
 // A card in Doing: its time goes on between two reads (a clock only while one is).
 const clock = useNow(15000, () => visibleTasks.value.some((task) => task.column === 'doing'))
-const costOf = (task) => withLiveTime(fetchedCost(task.id), task, clock.value)
+const costOf = (task) => (props.source ? null : withLiveTime(fetchedCost(task.id), task, clock.value))
 watch(
   () => visibleTasks.value.map((task) => `${task.id}:${task.column}:${task.paneId || ''}`).join('|'), // i18n-ignore
   () => refreshJobCost()
 )
 // The total of the visible cards, at the top of the board.
-const costTotal = computed(() => sumJobCosts(visibleTasks.value.map((task) => costOf(task))))
+const costTotal = computed(() => sumJobCosts(props.source ? [] : visibleTasks.value.map((task) => costOf(task))))
 const costTotalTitle = computed(() => {
   const total = costTotal.value
   const lines = [total.count === 1
@@ -70,8 +86,9 @@ function onAdd() {
   const title = newTitle.value.trim()
   // Guard before calling the store — createTask throws on an empty title, and a
   // blank submit should simply be a no-op.
-  if (!title) return
-  addTask({ title, wsId: props.workspaceId })
+  if (!title || !can.value.add) return
+  if (props.source) props.source.add({ title })
+  else addTask({ title, wsId: props.workspaceId })
   newTitle.value = ''
 }
 
@@ -81,7 +98,7 @@ const TASK_DRAG_TYPE = 'application/x-tessel-task'
 // the board, in the template).
 const dropColumn = ref(null)
 function isTaskDrag(e) {
-  return !!e.dataTransfer && [...e.dataTransfer.types].includes(TASK_DRAG_TYPE)
+  return can.value.move && !!e.dataTransfer && [...e.dataTransfer.types].includes(TASK_DRAG_TYPE)
 }
 function onDragOver(e, column) {
   if (!isTaskDrag(e)) return
@@ -98,8 +115,10 @@ function onDrop(e, column) {
   if (!isTaskDrag(e)) return
   e.preventDefault()
   const id = e.dataTransfer.getData(TASK_DRAG_TYPE)
-  const task = tasks.find((t) => t.id === id)
-  if (task && task.column !== column) moveTask(id, column)
+  const task = cards.value.find((t) => t.id === id)
+  if (!task || task.column === column) return
+  if (props.source) props.source.move(id, column)
+  else moveTask(id, column)
 }
 
 // Done > Select: tick finished cards and delete them together.
@@ -124,6 +143,12 @@ function pickAll() {
 async function deletePicked() {
   const ids = picked.value.slice()
   if (!ids.length) return
+  // A source's board: its host deletes them (and asks nothing here).
+  if (props.source) {
+    if (!can.value.remove) return
+    ids.forEach((id) => props.source.remove(id))
+    return stopSelect()
+  }
   // The app asks once and cleans up copies; alone (tests), direct.
   const done = deleteTasks ? await deleteTasks(ids) : (ids.forEach((id) => removeTask(id)), true)
   if (done) stopSelect()
@@ -135,6 +160,13 @@ watch(
   (ids) => {
     picked.value = picked.value.filter((id) => ids.includes(id))
     if (!ids.length) selecting.value = false
+  }
+)
+// Deleting taken away (a source's): the selection ends.
+watch(
+  () => can.value.remove,
+  (on) => {
+    if (!on) stopSelect()
   }
 )
 
@@ -157,7 +189,7 @@ const deleteLabel = computed(() =>
 
 <template>
   <div class="task-board" @dragend="dropColumn = null" @keydown.escape="selecting && stopSelect()">
-    <div class="task-board-head">
+    <div v-if="!source" class="task-board-head">
       <button
         class="task-board-new"
         type="button"
@@ -171,7 +203,10 @@ const deleteLabel = computed(() =>
       <span class="job-cost">{{ t('jobCost.total.label', 'Total:') }}</span>
       <JobCostLine :entry="costTotal" />
     </div>
-    <form class="task-board-add" data-test="add-task-form" @submit.prevent="onAdd">
+    <p v-if="source && !sourceState && !can.any" class="task-board-readonly" data-test="board-read-only">
+      {{ t('tasks.board.readOnly', 'Read-only: the host has not let you manage tasks.') }}
+    </p>
+    <form v-if="can.add && !sourceState" class="task-board-add" data-test="add-task-form" @submit.prevent="onAdd">
       <input
         v-model="newTitle"
         class="task-board-input"
@@ -183,19 +218,21 @@ const deleteLabel = computed(() =>
     </form>
 
     <!-- Orchestration: a lead's workers (allow, stop, go to them). -->
-    <OrchestrationCard :workspace-id="workspaceId" />
+    <OrchestrationCard v-if="!source" :workspace-id="workspaceId" />
 
+    <!-- A source's board the host no longer shares (or cannot). -->
+    <PanelState v-if="sourceState" kind="error" :retry="false" :text="accessStateText(sourceState)" data-test="board-access" />
     <!-- The saved board is still being read at launch: not "No tasks" yet. -->
-    <PanelState v-if="!boardState.loaded" :rows="2" data-test="board-loading" />
+    <PanelState v-else-if="!loaded" :rows="2" data-test="board-loading" />
     <PanelState
-      v-else-if="boardState.error"
+      v-else-if="loadError"
       kind="error"
       :retry="false"
-      :text="t('tasks.board.loadFailed', 'The saved task board could not be read: {{error}}', { error: boardState.error })"
+      :text="source ? t('tasks.board.sourceFailed', 'The host’s task board could not be read: {{error}}', { error: loadError }) : t('tasks.board.loadFailed', 'The saved task board could not be read: {{error}}', { error: loadError })"
       data-test="board-error"
     />
 
-    <div v-if="boardState.loaded" class="task-board-columns">
+    <div v-if="loaded && !sourceState" class="task-board-columns">
       <section
         v-for="column in COLUMNS"
         :key="column"
@@ -210,7 +247,7 @@ const deleteLabel = computed(() =>
         <header class="task-column-head">
           <span class="task-column-title">{{ columnLabel(column) }}</span>
           <span class="task-column-count">{{ grouped[column].length }}</span>
-          <span v-if="column === 'done' && grouped.done.length" class="task-column-tools">
+          <span v-if="column === 'done' && grouped.done.length && can.remove" class="task-column-tools">
             <template v-if="!selecting">
               <button type="button" class="task-head-btn" data-test="select-done" :title="t('tasks.board.selectHint', 'Pick finished tasks to delete them together')" @click="startSelect">
                 {{ t('tasks.board.select', 'Select') }}
@@ -242,6 +279,7 @@ const deleteLabel = computed(() =>
             :selectable="selecting && column === 'done'"
             :selected="picked.includes(task.id)"
             :cost="costOf(task)"
+            :source="source"
             @toggle-select="togglePick"
             @focus-pane="(id) => emit('focus-pane', id)"
             @review="(id) => emit('review', id)"

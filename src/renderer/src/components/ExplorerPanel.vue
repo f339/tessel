@@ -14,6 +14,8 @@ import { buildRows, toggledPaths, soleSubfolder, activeGuide, segmentOf, rowPadd
 import { statusMatters, foldersToReload, sameEntries, sameStatus, rememberIgnored, inGitDir, parentOf } from '../explorerChanges'
 import { settings } from '../settings'
 import { isRemotePath, remoteHostPath } from '../../../shared/remotePath'
+import { isVirtualPath, isLsharePath, parseLsharePath } from '../../../shared/liveSharePath'
+import { accessOf, stateOfAnswer, accessStateText, localOnlyText } from '../liveShareAccess'
 import { t } from '../i18n'
 import FileIcon from './FileIcon.vue'
 import Codicon from './Codicon.vue'
@@ -28,7 +30,13 @@ const props = defineProps({
   // files and pages.
   openEditors: { type: Array, default: () => [] },
   // The SSH host of a remote project, shown in the folder's header.
-  remoteLabel: { type: String, default: '' }
+  remoteLabel: { type: String, default: '' },
+  // The folder's header instead of its last name (a Live Share project:
+  // the host's name for it; its path only holds its id).
+  rootTitle: { type: String, default: '' },
+  // Nothing can be created, renamed or moved to the Recycle Bin (a Live
+  // Share host's project without "Edit files" is read-only by itself).
+  readOnly: { type: Boolean, default: false }
 })
 const emit = defineEmits(['open', 'open-editor', 'open-external', 'terminal-here', 'insert-path', 'toast', 'close', 'activate-editor', 'close-editor', 'save-all', 'close-all', 'open-diff'])
 
@@ -55,7 +63,7 @@ const unsavedLabel = computed(() => t('explorer.unsaved', '{{count}} unsaved', {
 // An open file's git letter, when it is in this project.
 const editorLetter = (ed) => (ed.kind === 'file' && ed.path ? statusOf(status.value, key(ed.path)) : '')
 const folderTitle = computed(() => {
-  const name = rootName.value || t('explorer.side.files', 'Files')
+  const name = props.rootTitle || rootName.value || t('explorer.side.files', 'Files')
   return props.remoteLabel ? t('explorer.remoteTitle', '{{name}} [SSH: {{host}}]', { name, host: props.remoteLabel }) : name
 })
 
@@ -79,9 +87,76 @@ const api = () => window.shellApi.explorer
 const key = (p) => String(p || '').toLowerCase()
 const rootName = computed(() => (props.root ? props.root.split(/[\\/]/).filter(Boolean).pop() : ''))
 // A project on a remote host (its root is an ssh://… path): the same tree,
-// read over ssh; paths shown, copied or typed are the host's (POSIX).
-const remote = computed(() => isRemotePath(props.root))
-const hostPath = (p) => (remote.value ? remoteHostPath(p) || p : p)
+// read over ssh; paths shown, copied or typed are the host's (POSIX). A Live
+// Share host's project (lshare://…) is read through the session the same way;
+// its paths are only ever relative to the project (the host's folder is
+// never sent).
+const remote = computed(() => isVirtualPath(props.root))
+const lshare = computed(() => isLsharePath(props.root))
+const hostPath = (p) => {
+  if (isRemotePath(p)) return remoteHostPath(p) || p
+  if (isLsharePath(p)) return parseLsharePath(p)?.rel || ''
+  return p
+}
+
+// --- A Live Share host's project: what the host lets this guest do ----------------
+// Read-only unless the host gave "Edit files" for this project and its last
+// answer did not say read-only; the access taken away, or a host's Tessel
+// too old to share files, shows that instead of the tree. Both follow the
+// host live (liveShareAccess.js).
+const access = computed(() => accessOf(props.root))
+// The host's last word for the project shown: { root, readOnly, state }.
+const answered = ref({ root: null, readOnly: false, state: null })
+const answeredNow = computed(() => (answered.value.root === props.root ? answered.value : { readOnly: false, state: null }))
+const accessState = computed(() => {
+  if (!lshare.value) return null
+  if (access.value && access.value.state !== 'ok') return access.value.state
+  return answeredNow.value.state
+})
+const accessText = computed(() => accessStateText(accessState.value))
+const readOnly = computed(
+  () => props.readOnly || (lshare.value && (answeredNow.value.readOnly || !access.value || !access.value.edit || !!accessState.value))
+)
+// A host's answer: whether it says read-only, or why it refused.
+function noteAnswer(res) {
+  if (!lshare.value || !res) return
+  const next = { ...answeredNow.value, root: props.root }
+  if (typeof res.readOnly === 'boolean') next.readOnly = res.readOnly
+  const state = stateOfAnswer(res)
+  if (state) next.state = state
+  else if (res.ok) next.state = null
+  answered.value = next
+}
+// Access taken away: nothing of the host's project stays on screen, and
+// what was being named or moved to the Recycle Bin is dropped; given back:
+// read again.
+let shownRoot = null
+watch(accessState, (state, before) => {
+  if (state) {
+    // Answers still on their way are dropped.
+    viewRevision++
+    directoryRequests.clear()
+    for (const k of Object.keys(nodes)) delete nodes[k]
+    status.value = {}
+    Object.assign(search, { busy: false, results: [], truncated: false, error: '', done: false })
+  } else if (before && shownRoot === props.root) showRoot()
+})
+watch(readOnly, (ro) => {
+  if (!ro) return
+  edit.value = null
+  confirmTrash.value = null
+})
+// Edit files given back: the host is asked again (its answer may still say
+// read-only).
+watch(
+  () => !!(access.value && access.value.edit),
+  (on) => {
+    if (on && lshare.value && props.root) loadDir(props.root, { background: true })
+  }
+)
+function refuseReadOnly() {
+  emit('toast', t('explorer.readOnly', 'Read-only: the host has not let you edit files here.'))
+}
 
 // --- Sparse checkout ----------------------------------------------------------------
 // After Orca's sparse-scoped file tree (file-explorer-display-root.ts, MIT,
@@ -155,6 +230,7 @@ async function loadDir(dir, { background = false } = {}) {
       if (background) backgroundLoads.value = Math.max(0, backgroundLoads.value - 1)
     })
   if (!stillCurrent(revision, root) || directoryRequests.get(dir) !== request) return
+  noteAnswer(res)
   applyListing(dir, res, cur)
   doneLoading(dir, request)
 }
@@ -190,6 +266,7 @@ async function loadDirs(dirs, { background = false, chain = false } = {}) {
       if (background) backgroundLoads.value = Math.max(0, backgroundLoads.value - 1)
     })
   if (!stillCurrent(revision, root)) return
+  noteAnswer(res)
   const got = new Set()
   for (const r of res && res.ok && Array.isArray(res.results) ? res.results : []) {
     if (!r || typeof r.dir !== 'string') continue
@@ -236,6 +313,7 @@ async function loadStatus({ background = false } = {}) {
   const revision = viewRevision, root = props.root, request = ++statusRequest
   const res = await api().status({ root, ignored: true, ...(background ? { background: true } : {}) }).catch(() => null)
   if (!stillCurrent(revision, root) || request !== statusRequest) return
+  if (res && !res.ok && stateOfAnswer(res) === 'no-access') noteAnswer(res)
   if (!res || !res.ok) return
   const out = {}
   for (const [p, l] of Object.entries(res.files || {})) out[key(p)] = l
@@ -436,7 +514,7 @@ async function runSearch() {
   clearTimeout(searchTimer)
   const q = query.value.trim()
   const seq = ++searchSeq
-  if (!q || !props.root || !api()) {
+  if (!q || !props.root || !api() || accessState.value) {
     Object.assign(search, { busy: false, results: [], truncated: false, error: '', done: false })
     return
   }
@@ -448,6 +526,8 @@ async function runSearch() {
     ? await fn({ root: props.root, ...within, query: mode.value === 'content' ? query.value : q, dotfiles: dotfiles.value }).catch((err) => ({ ok: false, error: err.message }))
     : { ok: false, error: t('explorer.search.unavailable', 'Search is not available.') }
   if (seq !== searchSeq) return // a newer search is on its way
+  // (A host too old for search alone still shows its tree.)
+  if (res && !res.ok && stateOfAnswer(res) === 'no-access') noteAnswer(res)
   Object.assign(search, {
     busy: false,
     results: res && res.ok ? res.results : [],
@@ -712,8 +792,8 @@ function onTreeKey(ev) {
   } else if (k === 'Enter') {
     if (row.dir) toggleRow(row)
     else emit('open', row.path)
-  } else if (k === 'F2') startRename(row.chain[seg])
-  else if (k === 'Delete') trashIt(row.chain[seg])
+  } else if (k === 'F2' && !readOnly.value) startRename(row.chain[seg])
+  else if (k === 'Delete' && !readOnly.value) trashIt(row.chain[seg])
   else done = false
   if (done) ev.preventDefault()
 }
@@ -788,9 +868,15 @@ function copy(text) {
   if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {})
   emit('toast', t('explorer.copied', 'Copied.'))
 }
+// What runs on this computer (a Live Share host's file is not on it), and
+// what changes the host's files.
+const LOCAL_ONLY = ['external', 'terminal', 'reveal']
+const WRITES = ['new-file', 'new-folder', 'rename', 'trash']
 async function act(what) {
   const e = menu.entry
   closeMenu()
+  if (lshare.value && LOCAL_ONLY.includes(what)) return emit('toast', localOnlyText())
+  if (readOnly.value && WRITES.includes(what)) return refuseReadOnly()
   if (what === 'open' && e) emit('open', e.path)
   else if (what === 'editor' && e) emit('open-editor', e.path)
   else if (what === 'external' && e) emit('open-external', e.path)
@@ -822,6 +908,7 @@ function openBefore(path) {
   if (row && row.chain.length > 1) for (const c of row.chain.slice(0, segmentOf(row, path))) open[c.path] = true
 }
 async function startNew(dir, folder) {
+  if (readOnly.value) return refuseReadOnly()
   openBefore(dir)
   if (dir !== displayRoot.value && !open[dir]) {
     open[dir] = true
@@ -831,6 +918,7 @@ async function startNew(dir, folder) {
   nextTick(() => editEl.value && editEl.value.focus())
 }
 async function startRename(e) {
+  if (readOnly.value) return refuseReadOnly()
   // From the search results: shown in the tree first.
   if (searching.value) await revealInTree(e.path.replace(/[\\/][^\\/]*$/, ''))
   openBefore(e.path)
@@ -846,6 +934,10 @@ async function startRename(e) {
 async function commitEdit() {
   const ed = edit.value
   if (!ed) return
+  if (readOnly.value) {
+    edit.value = null
+    return refuseReadOnly()
+  }
   const name = ed.value.trim()
   if (!name || (ed.mode === 'rename' && name === ed.entry.name)) {
     edit.value = null
@@ -878,12 +970,14 @@ const trashLabel = computed(() =>
   remote.value ? t('explorer.trash.actionRemote', 'Move to the host’s trash') : t('explorer.trash.action', 'Move to Recycle Bin')
 )
 function trashIt(e) {
+  if (readOnly.value) return refuseReadOnly()
   confirmTrash.value = e
 }
 async function doTrash() {
   const e = confirmTrash.value
   confirmTrash.value = null
   if (!e) return
+  if (readOnly.value) return refuseReadOnly()
   const res = await api().trash({ root: props.root, path: e.path }).catch((err) => ({ ok: false, error: err.message }))
   const why = (res && res.error) || t('explorer.unknownError', 'unknown error')
   if (res && res.ok)
@@ -924,7 +1018,11 @@ async function showRoot() {
   edit.value = null
   sparseDirs.value = []
   scope.value = WHOLE
+  shownRoot = props.root
   if (!props.root || !api()) return
+  // A Live Share project the window says this guest cannot read: nothing is
+  // asked.
+  if (access.value && access.value.state !== 'ok') return
   api().watch(props.root)
   await Promise.all([loadDir(props.root), loadSparse()])
   if (!stillCurrent(revision, root)) return
@@ -978,7 +1076,7 @@ function rowTitle(e) {
   <div class="explorer" :aria-label="t('explorer.side.files', 'Files')" @keydown.escape="closeMenu">
     <!-- Search (by name or content) first, then VS Code's explorer: "Open
          Editors", then the project's folder. -->
-    <div v-if="root" class="explorer-tools">
+    <div v-if="root && !accessState" class="explorer-tools">
       <div class="explorer-search">
         <Codicon class="explorer-search-icon" name="search" :size="14" />
         <input
@@ -1025,7 +1123,7 @@ function rowTitle(e) {
         <span class="explorer-section-title">{{ t('explorer.openEditors', 'Open Editors') }}</span>
         <span v-if="unsavedCount" class="explorer-badge" data-test="open-editors-unsaved">{{ unsavedLabel }}</span>
         <span class="explorer-actions" @click.stop>
-          <button class="tb-icon" :title="t('explorer.newFile', 'New file')" :aria-label="t('explorer.newFile', 'New file')" data-test="open-editors-new-file" :disabled="!root" @click="newFromHead(false)">
+          <button v-if="!readOnly" class="tb-icon" :title="t('explorer.newFile', 'New file')" :aria-label="t('explorer.newFile', 'New file')" data-test="open-editors-new-file" :disabled="!root" @click="newFromHead(false)">
             <Codicon name="new-file" />
           </button>
           <button class="tb-icon" :title="t('explorer.saveAll', 'Save all')" :aria-label="t('explorer.saveAll', 'Save all')" data-test="open-editors-save-all" :disabled="!unsavedCount" @click="emit('save-all')">
@@ -1082,11 +1180,12 @@ function rowTitle(e) {
       <span class="explorer-twistie" :class="{ open: folderShown }" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10.072 8.024L5.715 3.667l.618-.62L11 7.716v.618L6.333 13l-.618-.619 4.357-4.357z" /></svg></span>
       <span class="explorer-title explorer-section-title" :title="root || ''">{{ folderTitle }}</span>
       <span v-if="backgroundLoads > 0 && !rootLoading" class="explorer-spinner explorer-head-spinner" role="status" :aria-label="t('explorer.loading', 'Loading…')" data-test="explorer-reloading"></span>
+      <span v-if="readOnly && lshare && !accessState" class="explorer-badge explorer-readonly" :title="t('explorer.readOnly', 'Read-only: the host has not let you edit files here.')" data-test="explorer-read-only">{{ t('explorer.readOnlyTag', 'Read-only') }}</span>
       <span class="explorer-actions" @click.stop>
-        <button class="tb-icon" :title="t('explorer.newFile', 'New file')" :aria-label="t('explorer.newFile', 'New file')" data-test="explorer-head-new-file" :disabled="!root" @click="newFromHead(false)">
+        <button v-if="!readOnly" class="tb-icon" :title="t('explorer.newFile', 'New file')" :aria-label="t('explorer.newFile', 'New file')" data-test="explorer-head-new-file" :disabled="!root" @click="newFromHead(false)">
           <Codicon name="new-file" />
         </button>
-        <button class="tb-icon" :title="t('explorer.newFolder', 'New folder')" :aria-label="t('explorer.newFolder', 'New folder')" data-test="explorer-head-new-folder" :disabled="!root" @click="newFromHead(true)">
+        <button v-if="!readOnly" class="tb-icon" :title="t('explorer.newFolder', 'New folder')" :aria-label="t('explorer.newFolder', 'New folder')" data-test="explorer-head-new-folder" :disabled="!root" @click="newFromHead(true)">
           <Codicon name="new-folder" />
         </button>
         <button class="tb-icon" :title="t('explorer.refresh', 'Refresh')" :aria-label="t('explorer.refresh', 'Refresh')" data-test="explorer-refresh" :disabled="!root" @click="refresh">
@@ -1098,7 +1197,7 @@ function rowTitle(e) {
       </span>
     </div>
     <template v-if="folderShown">
-    <div v-if="root && sparseDirs.length" class="explorer-scope" data-test="explorer-scope" :title="scopeHelp">
+    <div v-if="root && sparseDirs.length && !accessState" class="explorer-scope" data-test="explorer-scope" :title="scopeHelp">
       <span class="explorer-scope-label">{{ t('explorer.sparse.label', 'Sparse checkout') }}</span>
       <ThemedSelect
         class="explorer-scope-select"
@@ -1120,6 +1219,14 @@ function rowTitle(e) {
         )
       }}
     </div>
+    <PanelState
+      v-else-if="accessState"
+      kind="error"
+      :text="accessText"
+      :retry="!access || access.state === 'ok'"
+      data-test="explorer-access"
+      @retry="showRoot"
+    />
     <div v-else-if="searching" class="explorer-tree explorer-results" data-test="explorer-results" :data-mode="mode">
       <div v-if="search.error" class="explorer-empty">{{ search.error }}</div>
       <div
@@ -1314,25 +1421,27 @@ function rowTitle(e) {
         <template v-if="menu.entry && !menu.entry.dir">
           <button role="menuitem" class="ctx-menu-item" @click="act('open')">{{ t('explorer.menu.open', 'Open') }}</button>
           <button role="menuitem" class="ctx-menu-item" @click="act('editor')">{{ t('explorer.menu.openInEditor', 'Open in editor') }}</button>
-          <button v-if="!remote" role="menuitem" class="ctx-menu-item" @click="act('external')">{{ t('explorer.menu.openInVsCode', 'Open in VS Code') }}</button>
+          <button v-if="!remote" role="menuitem" class="ctx-menu-item" data-test="explorer-menu-external" @click="act('external')">{{ t('explorer.menu.openInVsCode', 'Open in VS Code') }}</button>
         </template>
-        <button role="menuitem" class="ctx-menu-item" @click="act('terminal')">{{ t('explorer.menu.terminalHere', 'Open a terminal here') }}</button>
+        <button v-if="!lshare" role="menuitem" class="ctx-menu-item" data-test="explorer-menu-terminal" @click="act('terminal')">{{ t('explorer.menu.terminalHere', 'Open a terminal here') }}</button>
         <button v-if="menu.entry && canInsert" role="menuitem" @click="act('insert')">
           {{ t('explorer.menu.insertPath', 'Insert path in the active pane') }}
         </button>
-        <div class="ctx-menu-sep"></div>
-        <button role="menuitem" class="ctx-menu-item" @click="act('new-file')">{{ t('explorer.newFile', 'New file') }}</button>
-        <button role="menuitem" class="ctx-menu-item" @click="act('new-folder')">{{ t('explorer.newFolder', 'New folder') }}</button>
-        <template v-if="menu.entry">
-          <button role="menuitem" class="ctx-menu-item" @click="act('rename')">{{ t('explorer.menu.rename', 'Rename') }}</button>
-          <button role="menuitem" class="ctx-menu-item danger" @click="act('trash')">{{ trashLabel }}</button>
+        <template v-if="!readOnly">
+          <div class="ctx-menu-sep"></div>
+          <button role="menuitem" class="ctx-menu-item" data-test="explorer-menu-new-file" @click="act('new-file')">{{ t('explorer.newFile', 'New file') }}</button>
+          <button role="menuitem" class="ctx-menu-item" @click="act('new-folder')">{{ t('explorer.newFolder', 'New folder') }}</button>
+          <template v-if="menu.entry">
+            <button role="menuitem" class="ctx-menu-item" data-test="explorer-menu-rename" @click="act('rename')">{{ t('explorer.menu.rename', 'Rename') }}</button>
+            <button role="menuitem" class="ctx-menu-item danger" data-test="explorer-menu-trash" @click="act('trash')">{{ trashLabel }}</button>
+          </template>
         </template>
         <div class="ctx-menu-sep"></div>
         <template v-if="menu.entry">
           <button role="menuitem" class="ctx-menu-item" @click="act('copy')">{{ t('explorer.menu.copyPath', 'Copy path') }}</button>
           <button role="menuitem" class="ctx-menu-item" @click="act('copy-rel')">{{ t('explorer.menu.copyRelPath', 'Copy relative path') }}</button>
         </template>
-        <button v-if="!remote" role="menuitem" class="ctx-menu-item" @click="act('reveal')">{{ t('explorer.menu.reveal', 'Reveal in File Explorer') }}</button>
+        <button v-if="!remote" role="menuitem" class="ctx-menu-item" data-test="explorer-menu-reveal" @click="act('reveal')">{{ t('explorer.menu.reveal', 'Reveal in File Explorer') }}</button>
         <div class="ctx-menu-sep"></div>
         <button role="menuitemcheckbox" class="ctx-menu-item" :aria-checked="dotfiles" data-test="explorer-dotfiles" @click="act('dotfiles')">
           <span class="explorer-check">{{ dotfiles ? '✓' : '' }}</span>{{ t('explorer.showDotfiles', 'Show dotfiles') }}

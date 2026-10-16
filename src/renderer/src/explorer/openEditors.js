@@ -5,11 +5,18 @@
 // draws the rows.
 import { docPathOf, fileName, samePath } from '../editor/editorTabs'
 import { isRemotePath, remoteHostPath } from '../../../shared/remotePath'
+import { isLsharePath, parseLsharePath } from '../../../shared/liveSharePath'
 
 // As VS Code labels them: "C:\p\src\a.ts" under "C:\p" -> "src"; at the
 // root -> the root itself ("C:\p"); elsewhere: its folder, the home folder as
 // "~". Windows paths keep their backslashes, a host's its slashes.
 export function folderLabel(path, root, home = '') {
+  // A Live Share host's file: its folder in the project (the host's own
+  // folder is never known), nothing at the project's root.
+  if (isLsharePath(path)) {
+    const rel = parseLsharePath(path)?.rel || ''
+    return rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : ''
+  }
   const shown = (p) => (isRemotePath(p) ? remoteHostPath(p) || p : String(p || ''))
   const norm = (p) => shown(p).replace(/\\/g, '/').replace(/\/+$/, '')
   const windows = /^[a-z]:[\\/]/i.test(shown(root) || shown(path))

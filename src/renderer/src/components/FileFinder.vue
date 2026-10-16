@@ -4,6 +4,7 @@
 // Ctrl+Enter puts its path in the active pane, e.g. to point an agent at it.
 import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { fuzzyFilter } from '../../../shared/fuzzy'
+import { accessOf, accessStateText, stateOfAnswer } from '../liveShareAccess'
 import { t } from '../i18n'
 import FileIcon from './FileIcon.vue'
 
@@ -33,10 +34,17 @@ onMounted(async () => {
     error.value = t('app.finder.noFolder', 'This workspace has no project folder.')
     return
   }
+  // A Live Share host's project this guest can no longer read: said, not asked.
+  const access = accessOf(props.root)
+  if (access && access.state !== 'ok') {
+    state.value = 'error'
+    error.value = accessStateText(access.state)
+    return
+  }
   const res = await window.shellApi.listFiles(props.root).catch((e) => ({ ok: false, error: e.message }))
   if (!res || !res.ok) {
     state.value = 'error'
-    error.value = (res && res.error) || t('app.finder.listFailed', 'Could not list the files.')
+    error.value = (access && accessStateText(stateOfAnswer(res))) || (res && res.error) || t('app.finder.listFailed', 'Could not list the files.')
     return
   }
   files.value = res.files

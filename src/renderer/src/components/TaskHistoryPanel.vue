@@ -9,6 +9,9 @@
 // and kept in the records (taskHistoryView.js). Each row is a component of
 // its own (TaskHistoryRow.vue) and only the rows in view are drawn: opening
 // one re-renders that row, not hundreds.
+// Given a source (a Live Share host's history), it shows that history's
+// records as they come, figures included (nothing is read here), costs in
+// dollars only when the source says so.
 import { ref, computed, watch, onBeforeUnmount, onUpdated, nextTick } from 'vue'
 import { History, Download, Search } from 'lucide-vue-next'
 import ThemedSelect from './ui/ThemedSelect.vue'
@@ -18,6 +21,7 @@ import { boardState } from '../taskBoardStore'
 import PanelState from './ui/PanelState.vue'
 import { filterHistory, sortHistory, historyTotals, filterOptions, historyCsv, loadHistoryCosts, forgetAsked, rowTops, visibleRange, PERIODS, ROW_ESTIMATE, VIRTUAL_MIN } from '../taskHistoryView'
 import { formatTokens } from '../jobCost'
+import { accessStateText } from '../liveShareAccess'
 import { duration, tokensTitle, estimateHint, usdText } from '../taskHistoryText'
 import { t } from '../i18n'
 import './sessionHistory.css'
@@ -29,7 +33,11 @@ const props = defineProps({
   active: { type: Boolean, default: false },
   now: { type: Number, default: () => Date.now() },
   // The workspace shown: its own tasks by default, All for every workspace.
-  workspaceId: { type: String, default: null }
+  workspaceId: { type: String, default: null },
+  // Another history than this computer's: { records (array or function),
+  // loaded?, error?, state?, usd? } (usd: costs in dollars may be shown).
+  // null: this computer's.
+  source: { type: Object, default: null }
 })
 const emit = defineEmits(['focus-pane'])
 
@@ -53,9 +61,24 @@ const SORT_LABELS = {
   time: () => t('taskHistory.sort.time', 'Longest time')
 }
 
+// A source's records (only its project's), else this computer's.
+const records = computed(() => {
+  if (!props.source) return taskHistory
+  const list = typeof props.source.records === 'function' ? props.source.records() : props.source.records
+  return Array.isArray(list) ? list : []
+})
+const loaded = computed(() => (props.source ? props.source.loaded !== false : boardState.loaded))
+const loadError = computed(() => (props.source ? props.source.error || '' : boardState.error))
+const sourceState = computed(() => (props.source && props.source.state && props.source.state !== 'ok' ? props.source.state : null))
+const showUsd = computed(() => !props.source || props.source.usd === true)
+const sorts = computed(() => (showUsd.value ? ['date', 'cost', 'time'] : ['date', 'time']))
+watch(showUsd, (on) => {
+  if (!on && sortBy.value === 'cost') sortBy.value = 'date'
+})
+
 // This workspace's tasks, or all of them (a workspace unknown: all).
 const inScope = computed(() =>
-  scope.value === 'workspace' && props.workspaceId ? taskHistory.filter((r) => r.wsId === props.workspaceId) : taskHistory
+  !props.source && scope.value === 'workspace' && props.workspaceId ? taskHistory.filter((r) => r.wsId === props.workspaceId) : records.value
 )
 const options = computed(() => filterOptions(inScope.value))
 const shown = computed(() =>
@@ -76,7 +99,8 @@ const api = () => (typeof window !== 'undefined' && window.shellApi && window.sh
 let loading = false
 let again = false
 async function load() {
-  if (!props.active) return
+  // A source's records come with their figures.
+  if (!props.active || props.source) return
   if (loading) {
     again = true
     return
@@ -103,7 +127,7 @@ function listen(on) {
     off = null
   }
   const a = api()
-  if (!on || !a || typeof a.onChanged !== 'function') return
+  if (!on || props.source || !a || typeof a.onChanged !== 'function') return
   try {
     const stop = a.onChanged(() => {
       // Something was written: the figures not final yet are read again.
@@ -282,7 +306,7 @@ function exportCsv() {
       </button>
     </div>
 
-    <div class="sh-scope th-scope" role="group" :aria-label="t('taskHistory.scope.aria', 'Which tasks')" data-test="history-scopes">
+    <div v-if="!source" class="sh-scope th-scope" role="group" :aria-label="t('taskHistory.scope.aria', 'Which tasks')" data-test="history-scopes">
       <button
         v-for="sc in ['workspace', 'all']"
         :key="sc"
@@ -311,7 +335,7 @@ function exportCsv() {
         <span class="th-stat-value" data-test="total-tokens">{{ formatTokens(totals.tokens) }}</span>
         <span class="th-stat-label">{{ t('taskHistory.total.tokens', 'tokens') }}</span>
       </div>
-      <div class="th-stat" :title="estimateHint()">
+      <div v-if="showUsd" class="th-stat" :title="estimateHint()">
         <span class="th-stat-value" data-test="total-cost">{{ totals.priced ? usdText(totals.usd) : '—' }}</span>
         <span class="th-stat-label">{{ t('taskHistory.total.cost', 'est. cost') }}</span>
       </div>
@@ -334,7 +358,7 @@ function exportCsv() {
         <option v-for="a in options.agents" :key="a" :value="a">{{ a }}</option>
       </ThemedSelect>
       <ThemedSelect v-model="sortBy" class="th-select" :title="t('taskHistory.filter.sort', 'Sort')" data-test="history-sort">
-        <option v-for="s in ['date', 'cost', 'time']" :key="s" :value="s">{{ SORT_LABELS[s]() }}</option>
+        <option v-for="s in sorts" :key="s" :value="s">{{ SORT_LABELS[s]() }}</option>
       </ThemedSelect>
       <label class="th-search">
         <Search :size="12" aria-hidden="true" />
@@ -349,25 +373,27 @@ function exportCsv() {
     </div>
 
     <div ref="listEl" class="th-list" role="list" data-test="history-list" @scroll="onListScroll">
-      <PanelState v-if="!boardState.loaded" data-test="history-loading" />
+      <PanelState v-if="sourceState" kind="error" :retry="false" :text="accessStateText(sourceState)" data-test="history-access" />
+      <PanelState v-else-if="!loaded" data-test="history-loading" />
       <PanelState
-        v-else-if="boardState.error && !taskHistory.length"
+        v-else-if="loadError && !records.length"
         kind="error"
         :retry="false"
-        :text="t('tasks.board.loadFailed', 'The saved task board could not be read: {{error}}', { error: boardState.error })"
+        :text="source ? t('taskHistory.sourceFailed', 'The host’s task history could not be read: {{error}}', { error: loadError }) : t('tasks.board.loadFailed', 'The saved task board could not be read: {{error}}', { error: loadError })"
         data-test="history-error"
       />
-      <div v-else-if="!taskHistory.length" class="th-empty" data-test="history-empty">
+      <div v-else-if="!records.length" class="th-empty" data-test="history-empty">
         {{ t('taskHistory.empty', 'No finished task yet. Tasks moved to Done on the task board appear here.') }}
       </div>
       <div v-else-if="!shown.length" class="th-empty" data-test="history-none">{{ t('taskHistory.noMatch', 'No task matches these filters.') }}</div>
       <div v-if="windowed.before" class="th-spacer" aria-hidden="true" :style="{ height: windowed.before + 'px' }"></div>
       <TaskHistoryRow
-        v-for="r in windowed.list"
+        v-for="r in sourceState ? [] : windowed.list"
         :key="r.id"
         :record="r"
         :open="openId === r.id"
         :alive="paneAlive(r)"
+        :usd="showUsd"
         @toggle="toggle"
         @focus-pane="(id) => emit('focus-pane', id)"
       />
