@@ -7,7 +7,7 @@
 // its README.md); this file is the shell: the sidebar, the search and which
 // page shows.
 import { t } from '../i18n'
-import { ref, computed, watch, nextTick, onMounted, onUnmounted, onUpdated, provide } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted, onUpdated, provide, toRef } from 'vue'
 import { BarChart3 } from 'lucide-vue-next'
 import { PAGES, GROUPS, PAGE_TITLES_EN, PAGE_ALIASES } from './settings/settingsPages'
 import { SETTINGS_SHELL } from './settings/settingsShell'
@@ -25,6 +25,7 @@ import SettingsNotifications from './settings/SettingsNotifications.vue'
 import SettingsEditor from './settings/SettingsEditor.vue'
 import SettingsBrowser from './settings/SettingsBrowser.vue'
 import SettingsGit from './settings/SettingsGit.vue'
+import SettingsDevtools from './settings/SettingsDevtools.vue'
 import SettingsAutomations from './settings/SettingsAutomations.vue'
 import SettingsQuickCommands from './settings/SettingsQuickCommands.vue'
 import SettingsSsh from './settings/SettingsSsh.vue'
@@ -265,7 +266,7 @@ const emit = defineEmits([
 
 // What every page gets from the shell (settings/settingsShell.js). A page's
 // own re-render runs the search again, as this file's onUpdated does for it.
-provide(SETTINGS_SHELL, { page, searching, shown, go, openMcpTab, mcpTab, emit, refreshSearch: applySearch })
+provide(SETTINGS_SHELL, { page, searching, shown, go, openMcpTab, mcpTab, anchor: toRef(props, 'anchor'), emit, refreshSearch: applySearch })
 
 const cardEl = ref(null)
 let previousFocus
@@ -441,6 +442,7 @@ onUnmounted(() => {
         <SettingsNotifications />
         <SettingsVoice />
         <SettingsGit />
+        <SettingsDevtools />
         <SettingsAutomations />
         <SettingsQuickCommands />
         <SettingsSsh />

@@ -28,7 +28,7 @@ const { page, searching, shown, go, mcpTab, emit } = useSettingsShell()
           :agents="agents"
           :initial-tab="mcpTab"
           @run="emit('run-job', $event)"
-          @tools="emit('open-tool', 'tools')"
+          @tools="go('devtools')"
           @skills="go('skills')"
           @orchestration="go('orchestration')"
         />

@@ -442,7 +442,7 @@
       "noAgents": "Aucun agent IA installé pour l'instant.",
       "install": "Installer :",
       "installHint": "Installer {{name}} ({{steps}}), puis le démarrer",
-      "tools": "Ajouter votre propre agent ou installer des outils…",
+      "tools": "Installer des agents ou ajouter le vôtre…",
       "keysMove": "pour naviguer,",
       "keysOpen": "pour ouvrir,",
       "keysClose": "pour fermer",

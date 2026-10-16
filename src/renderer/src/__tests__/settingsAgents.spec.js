@@ -69,14 +69,17 @@ describe('Settings > Agents', () => {
     expect(await opts()).toEqual(['', 'claude'])
   })
 
-  it('Yolo shows a warning; Customize saves command, arguments and variables; Reset clears them', async () => {
+  it('Yolo shows a warning; the details save command, arguments and variables; Reset clears them', async () => {
     expect(wrapper.find('.agents-warn').exists()).toBe(false)
-    await wrapper.findAll('#set-agents .launch-seg-btn')[1].trigger('click')
+    await wrapper.findAll('[data-setting="agentPermissions"] button')[1].trigger('click')
     expect(settings.agentPermissions).toBe('yolo')
     expect(wrapper.find('.agents-warn').exists()).toBe(true)
 
     const row = wrapper.get('[data-agent="claude"]')
-    await row.findAll('button').find((b) => b.text() === 'Customize').trigger('click')
+    expect(row.get('.sl-details').element.style.display).toBe('none')
+    await row.get('.sl-row').trigger('click')
+    expect(row.get('.sl-row').attributes('aria-expanded')).toBe('true')
+    expect(row.get('.sl-details').element.style.display).toBe('')
     const inputs = row.findAll('.agent-custom input')
     await change(inputs[0], 'C:\\tools\\claude.cmd')
     await change(inputs[1], '--model sonnet')
@@ -85,7 +88,7 @@ describe('Settings > Agents', () => {
     await change(row.get('textarea'), 'ANTHROPIC_MODEL=x')
     expect(row.text()).not.toMatch(/not a valid/)
     expect(settings.agentPrefs.claude).toEqual({ command: 'C:\\tools\\claude.cmd', args: '--model sonnet', env: 'ANTHROPIC_MODEL=x' })
-    expect(row.text()).toMatch(/customized/)
+    expect(row.get('.sl-row').text()).toMatch(/Customized/)
 
     await row.findAll('button').find((b) => b.text() === 'Reset').trigger('click')
     expect(settings.agentPrefs.claude).toBeUndefined()

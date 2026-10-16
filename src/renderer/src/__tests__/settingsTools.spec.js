@@ -23,7 +23,6 @@ const appSource = readFileSync(join(__dirname, '..', 'App.vue'), 'utf8').replace
 
 // What each row must do in App.vue (the palette's or toolbar's own call).
 const EXPECTED_ACTION = {
-  tools: 'openTools()',
   dashboard: "showSideTab('dashboard')",
   history: "showSideTab('history')",
   tasks: "showSideTab('tasks')",
@@ -60,10 +59,10 @@ describe('settingsTools', () => {
   })
 
   it('runSettingsTool runs the matching action only', () => {
-    const actions = { tools: vi.fn(), sessions: vi.fn() }
+    const actions = { history: vi.fn(), sessions: vi.fn() }
     expect(runSettingsTool('sessions', actions)).toBe(true)
     expect(actions.sessions).toHaveBeenCalledTimes(1)
-    expect(actions.tools).not.toHaveBeenCalled()
+    expect(actions.history).not.toHaveBeenCalled()
     expect(runSettingsTool('nope', actions)).toBe(false)
     expect(runSettingsTool('toString', actions)).toBe(false)
   })
@@ -89,6 +88,23 @@ describe('settingsTools', () => {
     // Skills and MCP servers are pages now: no rows for them.
     expect(entries.mcp).toBeUndefined()
     expect(entries.skills).toBeUndefined()
+  })
+
+  // Install tools is Settings > Developer tools, installing agents and adding
+  // your own is Settings > Agents: the Tools window is gone, its ways in stay.
+  it('App.vue opens the old Install tools ways in Settings', () => {
+    expect(appSource).not.toContain('ToolsDialog')
+    expect(appSource).not.toContain('toolsOpen')
+    const tools = appSource.match(/function openTools\(\) \{\n([\s\S]*?)\n\}/)
+    expect(tools[1]).toContain("openSettingsAt('devtools')")
+    const installs = appSource.match(/function openAgentInstalls\(\) \{\n([\s\S]*?)\n\}/)
+    expect(installs[1]).toContain("openSettingsAt('agents', 'set-agents-missing')")
+    // The palette's Install tools, the New menu's link, MCP's Open Tools, the approval card's Configure.
+    expect(appSource).toContain("t('app.cmd.installTools', 'Install tools'), openTools,")
+    expect(appSource).toMatch(/@tools="openAgentInstalls"/)
+    expect(appSource).toMatch(/mcpOpen = false\n\s+openTools\(\)/)
+    expect(appSource).toContain(`@configure="openSettingsAt('agents', 'set-agent-terminal')"`)
+    expect(appSource).toContain('tools: () => openTools()')
   })
 
   it("App.vue opens the status bar's popovers through its ref, showing the bar first", () => {
@@ -159,9 +175,9 @@ describe('Settings > Windows and tools', { timeout: 30_000 }, () => {
       await nextTick()
       await nextTick()
     }
-    await find('install tools')
+    await find('past conversations')
     expect(visiblePages(wrapper)).toContain('agents')
-    expect(wrapper.get('[data-open-tool="tools"]').element.closest('[hidden]')).toBeNull()
+    expect(wrapper.get('[data-open-tool="history"]').element.closest('[hidden]')).toBeNull()
     await find('clean up worktrees')
     expect(visiblePages(wrapper)).toEqual(['git'])
     expect(wrapper.get('[data-open-tool="cleanupWorktrees"]').element.closest('[hidden]')).toBeNull()
@@ -180,7 +196,7 @@ describe('Settings > Windows and tools', { timeout: 30_000 }, () => {
     await setUiLanguage('fr')
     await nextTick()
     expect(wrapper.get('[data-tools="agents"]').text()).toContain('Fenêtres et outils')
-    expect(wrapper.get('[data-open-tool="tools"]').text()).toBe('Ouvrir…')
+    expect(wrapper.get('[data-open-tool="history"]').text()).toBe('Afficher')
     expect(wrapper.get('[data-open-tool="files"]').text()).toBe('Afficher')
     expect(wrapper.get('[data-tools="editor"]').text()).toContain('Explorateur de fichiers')
   })
@@ -306,7 +322,7 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     expect(wrapper.findComponent(SkillsDialog).emitted('close')).toBeUndefined()
   })
 
-  it('MCP servers shows its window in the page; run, Install tools and Skills reach Settings', async () => {
+  it('MCP servers shows its window in the page; run goes to App, Install tools and Skills to their pages', async () => {
     wrapper = mountAt('mcp')
     await flushPromises()
     expect(visiblePages(wrapper)).toEqual(['mcp'])
@@ -319,8 +335,13 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
 
     mcp.vm.$emit('run', { label: 'Sign in: x', command: 'codex mcp login x' })
     expect(wrapper.emitted('run-job')[0][0]).toEqual({ label: 'Sign in: x', command: 'codex mcp login x' })
+    // Install tools is the Developer tools page now.
     mcp.vm.$emit('tools')
-    expect(wrapper.emitted('open-tool')).toEqual([['tools']])
+    await flushPromises()
+    expect(wrapper.emitted('open-tool')).toBeUndefined()
+    expect(visiblePages(wrapper)).toEqual(['devtools'])
+    await wrapper.get('.set-nav-item[data-page="mcp"]').trigger('click')
+    await flushPromises()
 
     await page.get('.mcp-skills-link').trigger('click')
     await flushPromises()

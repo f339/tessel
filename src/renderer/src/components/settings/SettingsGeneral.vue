@@ -3,6 +3,7 @@
 import { t } from '../../i18n'
 import CliSettings from '../CliSettings.vue'
 import SettingsToolRows from '../SettingsToolRows.vue'
+import SetupCheck from './SetupCheck.vue'
 import { settings, resetSettings } from '../../settings'
 import { PAGES } from './settingsPages'
 import { useSettingsShell } from './settingsShell'
@@ -36,6 +37,8 @@ async function resetAll() {
       <h2 id="set-general-title">{{ PAGES.general.title }}</h2>
       <p class="set-page-desc">{{ PAGES.general.desc }}</p>
     </header>
+    <!-- What Tessel needs on this computer: problems first (SetupCheck.vue). -->
+    <SetupCheck />
     <div class="set-group">
       <div class="set-card">
         <label class="set-row">
