@@ -26,8 +26,8 @@
 // asks the host. With 'presence', focus(id) tells the host which of its panes
 // this guest has on screen (only for the host's eyes; at most twice a second,
 // the latest).
-// The guest's identity key (identityKey: shareIdentity.js, made once on this
-// computer): its public half and a proof that it holds it (shareCrypto.js
+// The guest's identity key (identityKey: made once on this computer, kept in
+// liveshare-identity.json by liveShare.js): its public half and a proof that it holds it (shareCrypto.js
 // signIdentity, bound to this connection) go with a new join, so a host that
 // trusts it lets it in without asking. An older host ignores them.
 //

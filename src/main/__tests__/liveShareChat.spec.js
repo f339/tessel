@@ -14,7 +14,7 @@ import { join } from 'path'
 import { createShareHost } from '../liveShare/shareHost'
 import { createShareGuest } from '../liveShare/shareGuest'
 import { newSecret, newSigningKey } from '../liveShare/shareCrypto'
-import { guestChatPayload, cleanChatMessage, mergeChatEvents, guestText, cleanRoots, CHAT_LIMITS, SHARE_FEATURES } from '../liveShare/shareChat'
+import { guestChatPayload, cleanChatMessage, mergeChatEvents, guestText, cleanRoots, CHAT_LIMITS } from '../liveShare/shareChat'
 import WebSocket from 'ws'
 import { registerLiveShare, cleanHostChats } from '../liveShare'
 
@@ -190,8 +190,8 @@ describe('Live Share conversations over the wire', () => {
     t.answers = { Alex: { yes: true, projects: ['ws-a'] } }
     const conn = await share(t)
     const alex = await joined(conn, 'Alex')
-    // What this host speaks (no agents listed here).
-    expect(alex.features).toEqual(SHARE_FEATURES.filter((f) => f !== 'agents'))
+    // What this host speaks (no agents listed, no presence shown here).
+    expect(alex.features).toEqual(['chat'])
     expect(alex.projects.map((p) => [p.id, p.chats.map((c) => c.id)])).toEqual([['ws-a', ['a1', 'a2']]])
 
     // Not asked: nothing read, nothing sent.

@@ -1,0 +1,435 @@
+// @vitest-environment node
+// Live Share's access model (liveShare/shareAccess.js), its trusted people
+// (shareTrust.js) and its rights catalog (src/shared/liveShareRights.js), on
+// their own: invitations, codes, people, grants, trust, saving and taking a
+// share back. The wire is liveShareInvites.spec.js's.
+import { describe, it, expect } from 'vitest'
+import crypto from 'crypto'
+import { createAccess, pathOfUrl, cleanInviteSpec, secretId, keyHash, personId, LIFETIMES, MAX_INVITES, UNFINISHED_MAX, ROOM_FULL_FREE, OFFLINE_KEEP_MS } from '../liveShare/shareAccess'
+import { createTrustStore, MAX_TRUSTED, trustId, isTrustId } from '../liveShare/shareTrust'
+import { SHARE_RIGHTS, RIGHT_IDS, cleanRights, defaultRights, NO_RIGHTS, isRightId, sameRights } from '../../shared/liveShareRights'
+import { newSigningKey, identityFingerprint } from '../liveShare/shareCrypto'
+
+const NONE = { type: false, open: false, close: false }
+const key = () => newSigningKey().publicRaw
+
+// An access model over a clock and a set of shared projects.
+function model({ shared = ['ws-a', 'ws-b'], trust = createTrustStore(), saved = null, legacy = null, online = new Set() } = {}) {
+  const clock = { now: 1_000_000 }
+  const sharedSet = { ids: new Set(shared) }
+  const changes = []
+  const logs = []
+  const access = createAccess({
+    now: () => clock.now,
+    trust,
+    isOnline: (hash) => online.has(hash),
+    sharedIds: () => sharedSet.ids,
+    onChange: (kind) => changes.push(kind),
+    log: (line) => logs.push(line),
+    saved,
+    legacy
+  })
+  return { access, clock, sharedSet, changes, logs, trust, online }
+}
+
+describe('the rights catalog', () => {
+  it('is one list of ids with their defaults, all off', () => {
+    expect(RIGHT_IDS).toEqual(['type', 'open', 'close'])
+    expect(SHARE_RIGHTS.every((r) => r.default === false)).toBe(true)
+    expect(defaultRights()).toEqual(NONE)
+    expect(NO_RIGHTS).toEqual(NONE)
+    expect(Object.isFrozen(NO_RIGHTS) && Object.isFrozen(SHARE_RIGHTS)).toBe(true)
+  })
+
+  it('keeps only the rights it knows, each on only when exactly true (a peer’s unknown ids are never granted)', () => {
+    expect(cleanRights({ type: true, open: 'yes', close: 1, files: true, __proto__: { type: true } })).toEqual({ type: true, open: false, close: false })
+    expect(cleanRights(Object.create({ open: true }))).toEqual(NONE)
+    expect(cleanRights(null)).toEqual(NONE)
+    expect(cleanRights('type')).toEqual(NONE)
+    for (const id of ['__proto__', 'constructor', 'toString', 'files', '', null, ['type']]) expect(isRightId(id)).toBe(false)
+    expect(isRightId('open')).toBe(true)
+    expect(sameRights({ type: true }, { type: true, open: false, extra: true })).toBe(true)
+    expect(sameRights({ type: true }, NONE)).toBe(false)
+  })
+})
+
+describe('invitations', () => {
+  it('each one has its own code at its own address; the rest of an address reaches nothing', () => {
+    const { access } = model()
+    const a = access.createInvite({ label: 'Simpa', projects: ['ws-a'] }).invite
+    const b = access.createInvite({ label: 'Dev team', projects: ['ws-b'] }).invite
+    const ca = access.codeOf(a.id)
+    const cb = access.codeOf(b.id)
+    expect(ca.path).toMatch(/^[A-Za-z0-9_-]{16}$/)
+    expect(ca.path).not.toBe(cb.path)
+    expect(ca.secret.equals(cb.secret)).toBe(false)
+    expect(access.codesAt(pathOfUrl(`/i/${ca.path}`))).toEqual([ca])
+    expect(access.codesAt(pathOfUrl(`/i/${cb.path}/`))).toEqual([cb])
+    expect(access.liveInvite(ca)).toBe(a)
+    expect(access.codesAt(pathOfUrl('/'))).toEqual([]) // no root code in a new share
+    for (const url of ['/x', '/i/short', `/i/${ca.path}/more`, `/I/${ca.path}`, '//evil/', null]) expect(access.codesAt(pathOfUrl(url))).toEqual([])
+    // A query is not part of the address.
+    expect(pathOfUrl(`/i/${ca.path}?x=1`)).toBe(ca.path)
+    expect(pathOfUrl('/')).toBe('')
+  })
+
+  it('has a label, a lifetime (an hour by default, a day, a week or none), optional uses, and what it offers (shared projects only)', () => {
+    const { access, clock } = model()
+    const hour = access.createInvite({ label: '  Simpa\u0007 ', projects: ['ws-a', 'ws-gone', '../x'], rights: { type: true, files: true } }).invite
+    expect(hour).toMatchObject({ label: 'Simpa', lifetime: 'hour', expiresAt: clock.now + LIFETIMES.hour, maxUses: 0, uses: 0, later: false, grant: { projects: ['ws-a'], rights: { type: true, open: false, close: false } } })
+    expect(access.createInvite({ lifetime: 'day' }).invite.expiresAt).toBe(clock.now + LIFETIMES.day)
+    expect(access.createInvite({ lifetime: 'week', maxUses: 1 }).invite).toMatchObject({ expiresAt: clock.now + 7 * 24 * 3600 * 1000, maxUses: 1 })
+    const never = access.createInvite({ lifetime: 'never', later: true }).invite
+    expect(never.expiresAt).toBe(null)
+    expect(never.later).toBe(true)
+  })
+
+  it('refuses what it does not know, never guesses: lifetimes, uses, and "let them in without asking"', () => {
+    const shared = new Set(['ws-a'])
+    for (const lifetime of ['forever', 'month', 0, null, 3600000, '__proto__']) expect(cleanInviteSpec({ lifetime }, shared)).toEqual({ error: 'lifetime' })
+    for (const maxUses of [-1, 1.5, '3', 1001, NaN]) expect(cleanInviteSpec({ maxUses }, shared)).toEqual({ error: 'uses' })
+    expect(cleanInviteSpec({ autoAllow: true }, shared)).toEqual({ error: 'auto-allow' })
+    expect(cleanInviteSpec({ autoAllow: true, lifetime: 'never' }, shared)).toEqual({ error: 'auto-allow' })
+    const { access } = model()
+    expect(access.createInvite({ lifetime: 'never', autoAllow: true })).toEqual({ ok: false, reason: 'auto-allow' })
+    const inv = access.createInvite({ lifetime: 'never' }).invite
+    expect(access.updateInvite(inv.id, { autoAllow: true })).toEqual({ ok: false, reason: 'auto-allow' })
+    expect(access.updateInvite(inv.id, { lifetime: 'forever' })).toEqual({ ok: false, reason: 'lifetime' })
+    expect(access.updateInvite('iv-0000000000', { label: 'x' })).toEqual({ ok: false, reason: 'missing' })
+  })
+
+  it('at most MAX_INVITES at once (an expired one makes room)', () => {
+    const { access, clock } = model()
+    for (let i = 0; i < MAX_INVITES; i++) expect(access.createInvite({ label: `n${i}`, lifetime: i === 0 ? 'hour' : 'week' }).ok).toBe(true)
+    expect(access.createInvite({})).toEqual({ ok: false, reason: 'full', max: MAX_INVITES })
+    clock.now += LIFETIMES.hour + 1
+    expect(access.createInvite({}).ok).toBe(true)
+  })
+
+  it('lets no new guest in once expired, used up, blocked or revoked; no expiry is never, even years later', () => {
+    const { access, clock } = model()
+    const hour = access.createInvite({ lifetime: 'hour' }).invite
+    const never = access.createInvite({ lifetime: 'never' }).invite
+    const once = access.createInvite({ lifetime: 'week', maxUses: 1 }).invite
+    expect([hour, never, once].map(access.usable)).toEqual([null, null, null])
+    expect(access.used(once)).toBe(true)
+    expect(access.usable(once)).toBe('used')
+    clock.now += LIFETIMES.hour + 1
+    expect(access.usable(hour)).toBe('expired')
+    clock.now += 10 * 365 * 24 * 3600 * 1000
+    expect(access.usable(never)).toBe(null)
+    // Expired ones go; no expiry stays.
+    access.prune()
+    expect(access.invites().map((i) => i.id)).toEqual([never.id])
+    access.revokeInvite(never.id)
+    expect(access.usable(never)).toBe('revoked')
+  })
+
+  it('each invitation has its own block: connections that stop after the keys block that one only', () => {
+    const { access, logs } = model()
+    const a = access.createInvite({ lifetime: 'never' }).invite
+    const b = access.createInvite({}).invite
+    for (let i = 0; i < UNFINISHED_MAX - 1; i++) expect(access.noteUnfinished(a.id)).toBe(false)
+    expect(access.noteUnfinished(a.id)).toBe(true)
+    expect(access.noteUnfinished(a.id)).toBe(false) // already
+    expect(access.usable(a)).toBe('blocked')
+    expect(access.usable(b)).toBe(null)
+    expect(access.publicInvite(a).state).toBe('blocked')
+    // A blocked no-expiry code stays blocked until it gets a new code.
+    expect(access.rotateInvite(a.id).ok).toBe(true)
+    expect(access.usable(a)).toBe(null)
+    expect(a.expiresAt).toBe(null)
+    expect(logs.join('\n')).toContain(`invitation ${a.id} blocked`)
+  })
+
+  it('each invitation has its own pause after a no and its own full-room count', () => {
+    const { access, clock } = model()
+    const a = access.createInvite({}).invite
+    const b = access.createInvite({}).invite
+    access.noteDenied(a.id)
+    expect(access.pausing(a.id)).toBe(true)
+    expect(access.pausing(b.id)).toBe(false)
+    clock.now += 15001
+    expect(access.pausing(a.id)).toBe(false)
+    for (let i = 0; i < ROOM_FULL_FREE; i++) expect(access.noteRoomFull(a.id)).toBe(true)
+    expect(access.noteRoomFull(a.id)).toBe(false)
+    expect(access.noteRoomFull(b.id)).toBe(true)
+  })
+
+  it('a new code keeps its label, grant and uses, lifts the block and starts its lifetime again; the old code stays only for its people', () => {
+    const { access, clock } = model()
+    const inv = access.createInvite({ label: 'Dev team', lifetime: 'day', projects: ['ws-a'], rights: { type: true } }).invite
+    const old = access.codeOf(inv.id)
+    access.used(inv)
+    clock.now += 1000
+    access.rotateInvite(inv.id)
+    const fresh = access.codeOf(inv.id)
+    expect(fresh.path).not.toBe(old.path)
+    expect(inv).toMatchObject({ label: 'Dev team', uses: 1, expiresAt: clock.now + LIFETIMES.day, grant: { projects: ['ws-a'], rights: { type: true, open: false, close: false } } })
+    // No one let in with the old code: it is gone.
+    expect(access.codesAt(old.path)).toEqual([])
+    // Someone let in with the new one keeps it after another new code.
+    access.addPerson({ key: key(), name: 'Bea', sid: fresh.sid, via: inv.id, grant: inv.grant })
+    access.rotateInvite(inv.id)
+    expect(access.codesAt(fresh.path)).toHaveLength(1)
+    expect(access.liveInvite(access.codesAt(fresh.path)[0])).toBe(null)
+  })
+
+  it('duplicating copies its settings with a code of its own and no uses', () => {
+    const { access } = model()
+    const inv = access.createInvite({ label: 'Simpa', lifetime: 'never', maxUses: 2, projects: ['ws-b'], later: true, rights: { open: true } }).invite
+    access.used(inv)
+    const copy = access.duplicateInvite(inv.id).invite
+    expect(copy.id).not.toBe(inv.id)
+    expect(copy).toMatchObject({ label: 'Simpa', lifetime: 'never', expiresAt: null, maxUses: 2, uses: 0, later: true, grant: { projects: ['ws-b'], rights: { type: false, open: true, close: false } } })
+    expect(access.codeOf(copy.id).sid).not.toBe(access.codeOf(inv.id).sid)
+  })
+})
+
+describe('a group invitation and the people who joined with it', () => {
+  function group() {
+    const m = model({ shared: ['ws-a', 'ws-b', 'ws-c'] })
+    const inv = m.access.createInvite({ label: 'Dev team', projects: ['ws-a', 'ws-b'], rights: { type: true } }).invite
+    const sid = m.access.codeOf(inv.id).sid
+    const people = ['Ann', 'Bob', 'Cid'].map((name) => m.access.addPerson({ key: key(), name, sid, via: inv.id, grant: inv.grant }))
+    for (let i = 0; i < 3; i++) m.access.used(inv)
+    return { ...m, inv, people }
+  }
+
+  it('each person has a grant of its own: one changed, the others not', () => {
+    const { access, people, inv } = group()
+    expect(people[0].grant).not.toBe(people[1].grant)
+    expect(people[0].grant.projects).not.toBe(inv.grant.projects)
+    access.change({ person: people[0].hash }, { project: 'ws-a', on: false })
+    expect(people.map((p) => p.grant.projects)).toEqual([['ws-b'], ['ws-a', 'ws-b'], ['ws-a', 'ws-b']])
+    expect(inv.grant.projects).toEqual(['ws-a', 'ws-b'])
+    expect(access.publicInvite(inv)).toMatchObject({ uses: 3, joined: 3 })
+  })
+
+  it('an edit takes away what it no longer gives (by default), and gives what it now gives only when asked', () => {
+    const { access, people, inv, changes } = group()
+    changes.length = 0
+    const r = access.updateInvite(inv.id, { projects: ['ws-b', 'ws-c'], rights: { open: true } })
+    expect(r).toEqual({ ok: true, applied: 3 })
+    expect(changes).toContain('grants')
+    expect(people.map((p) => p.grant)).toEqual(people.map(() => ({ projects: ['ws-b'], rights: NONE })))
+    // Now asked to give the additions too.
+    access.updateInvite(inv.id, { projects: ['ws-b', 'ws-c', 'ws-a'], rights: { open: true, close: true } }, { applyRemovals: true, applyAdditions: true })
+    expect(people.map((p) => p.grant)).toEqual(people.map(() => ({ projects: ['ws-b', 'ws-a'], rights: { type: false, open: false, close: true } })))
+    // Neither: the invitation changes, its people do not.
+    expect(access.updateInvite(inv.id, { projects: [] }, { applyRemovals: false })).toEqual({ ok: true, applied: 0 })
+    expect(people[0].grant.projects).toEqual(['ws-b', 'ws-a'])
+  })
+
+  it('revoking keeps its people (their code too) unless they are removed', () => {
+    const { access, people, inv } = group()
+    const sid = access.codeOf(inv.id).sid
+    const r = access.revokeInvite(inv.id)
+    expect(r.ok).toBe(true)
+    expect(r.people.sort()).toEqual(people.map((p) => p.hash).sort())
+    expect(access.invites()).toEqual([])
+    expect(access.hasCode(sid)).toBe(true)
+    for (const p of people) access.removePerson(p.hash)
+    expect(access.hasCode(sid)).toBe(false)
+    expect(access.viaOf(people[0])).toEqual({ id: null, label: 'Dev team' })
+  })
+})
+
+describe('people and trust', () => {
+  it('trusting a person links its grant to the trusted entry: changed from either side, one place', () => {
+    const trust = createTrustStore()
+    const { access, changes } = model({ trust })
+    const identity = key()
+    const p = access.addPerson({ key: key(), name: 'Simpa', sid: 's', identity, grant: { projects: ['ws-a'], rights: { type: true } } })
+    const e = access.trustPerson(p.hash)
+    expect(e.fp).toBe(identityFingerprint(identity))
+    expect(access.grantOf(p)).toBe(trust.get(e.fp).grant)
+    changes.length = 0
+    expect(access.change({ person: p.hash }, { project: 'ws-b', on: true })).toBe(true)
+    expect(trust.get(e.fp).grant.projects).toEqual(['ws-a', 'ws-b'])
+    expect(access.change({ trust: e.fp }, { right: 'open', on: true })).toBe(true)
+    expect(access.effective(p).rights).toEqual({ type: true, open: true, close: false })
+    expect(changes).toContain('grants')
+    // A person without an identity key (an older Tessel) can't be trusted.
+    const old = access.addPerson({ key: key(), name: 'Old', sid: 's', grant: { projects: [] } })
+    expect(access.trustPerson(old.hash)).toBe(null)
+  })
+
+  it('no longer trusted: its people keep what they had, as their own', () => {
+    const trust = createTrustStore()
+    const { access } = model({ trust })
+    const p = access.addPerson({ key: key(), name: 'Simpa', sid: 's', identity: key(), grant: { projects: ['ws-a'], rights: { close: true } } })
+    const e = access.trustPerson(p.hash)
+    expect(access.untrust(e.fp)).toBe(true)
+    expect(trust.list()).toEqual([])
+    expect(p.trust).toBe(null)
+    expect(access.grantOf(p)).toEqual({ projects: ['ws-a'], rights: { type: false, open: false, close: true } })
+  })
+
+  it('a trusted person’s projects stay when they are not shared (seen again when shared); a person’s and an invitation’s go', () => {
+    const trust = createTrustStore()
+    const { access, sharedSet } = model({ trust })
+    const inv = access.createInvite({ projects: ['ws-a', 'ws-b'], later: true }).invite
+    const fixed = access.createInvite({ projects: ['ws-a'] }).invite
+    const plain = access.addPerson({ key: key(), name: 'Bea', sid: 's', grant: { projects: ['ws-a', 'ws-b'] } })
+    const t = access.addPerson({ key: key(), name: 'Simpa', sid: 's', identity: key(), grant: { projects: ['ws-a', 'ws-b'] } })
+    access.trustPerson(t.hash)
+    sharedSet.ids = new Set(['ws-a'])
+    access.sharedChanged(['ws-a'])
+    expect(plain.grant.projects).toEqual(['ws-a'])
+    expect(inv.grant.projects).toEqual(['ws-a'])
+    expect(access.grantOf(t).projects).toEqual(['ws-a', 'ws-b'])
+    expect([...access.effective(t).projects]).toEqual(['ws-a'])
+    // Shared again: the trusted one sees it at once; the person does not;
+    // the invitation that takes projects shared later offers it.
+    sharedSet.ids = new Set(['ws-a', 'ws-b', 'ws-c'])
+    access.sharedChanged(['ws-a', 'ws-b', 'ws-c'])
+    expect([...access.effective(t).projects]).toEqual(['ws-a', 'ws-b'])
+    expect(plain.grant.projects).toEqual(['ws-a'])
+    expect(inv.grant.projects).toEqual(['ws-a', 'ws-b', 'ws-c'])
+    expect(fixed.grant.projects).toEqual(['ws-a'])
+    // Setting a trusted person's projects from the share keeps those not shared.
+    sharedSet.ids = new Set(['ws-a'])
+    access.sharedChanged(['ws-a'])
+    access.setGrant({ person: t.hash }, { projects: [] })
+    expect(access.grantOf(t).projects).toEqual(['ws-b'])
+  })
+
+  it('a project is given only while shared; ids and rights are checked', () => {
+    const { access } = model()
+    const p = access.addPerson({ key: key(), name: 'Bea', sid: 's', grant: { projects: [] } })
+    expect(access.change({ person: p.hash }, { project: 'ws-z', on: true })).toBe(false)
+    expect(access.change({ person: p.hash }, { project: '../x', on: true })).toBe(false)
+    expect(access.change({ person: p.hash }, { right: 'files', on: true })).toBe(false)
+    expect(access.change({ person: p.hash }, { right: '__proto__', on: true })).toBe(false)
+    expect(access.change({ person: 'nobody' }, { project: 'ws-a', on: true })).toBe(false)
+    expect(access.change({ person: p.hash }, { project: 'ws-a', on: true })).toBe(true)
+    expect(access.change({ person: p.hash }, { project: 'ws-a', on: true })).toBe(true) // twice: the same
+    expect(p.grant.projects).toEqual(['ws-a'])
+  })
+
+  it('people offline for 15 minutes are forgotten (with the codes only they needed); at most MAX_PEOPLE', () => {
+    const online = new Set()
+    const { access, clock } = model({ online })
+    const inv = access.createInvite({}).invite
+    const sid = access.codeOf(inv.id).sid
+    const a = access.addPerson({ key: key(), name: 'A', sid, grant: {} })
+    const b = access.addPerson({ key: key(), name: 'B', sid, grant: {} })
+    online.add(b.hash)
+    clock.now += OFFLINE_KEEP_MS + 1
+    access.forgetOld()
+    expect(access.people().map((p) => p.name)).toEqual(['B'])
+    expect(access.personById(personId(b.hash))).toBe(b)
+    expect(access.personById(personId(a.hash))).toBe(null)
+  })
+})
+
+describe('saving and taking a share back', () => {
+  it('keeps invitations (no expiry as null), codes, people and their counts, each invitation’s block', () => {
+    const trust = createTrustStore()
+    const { access, clock } = model({ trust })
+    const never = access.createInvite({ label: 'Dev team', lifetime: 'never', projects: ['ws-a'], rights: { type: true } }).invite
+    const hour = access.createInvite({ label: 'Simpa', maxUses: 1 }).invite
+    for (let i = 0; i < UNFINISHED_MAX; i++) access.noteUnfinished(hour.id)
+    const p = access.addPerson({ key: key(), name: 'Ann', sid: access.codeOf(never.id).sid, via: never.id, identity: key(), grant: never.grant })
+    p.opened = 5
+    p.opens = [clock.now - 1000]
+    const saved = JSON.parse(JSON.stringify(access.toJSON()))
+    expect(saved.invites.find((i) => i.id === never.id).expiresAt).toBe(null)
+    expect(JSON.stringify(saved)).not.toContain('undefined')
+    clock.now += 5000
+    const next = model({ trust, saved })
+    const back = next.access.invite(never.id)
+    expect(back).toMatchObject({ label: 'Dev team', lifetime: 'never', expiresAt: null, grant: { projects: ['ws-a'], rights: { type: true, open: false, close: false } } })
+    expect(next.access.codeOf(never.id).path).toBe(access.codeOf(never.id).path)
+    expect(next.access.usable(next.access.invite(hour.id))).toBe('blocked')
+    const ann = next.access.person(p.hash)
+    expect(ann).toMatchObject({ name: 'Ann', opened: 5, via: never.id, idfp: identityFingerprint(p.identity) })
+    // No expiry, a long time later and after a restart: still good.
+    next.clock.now += 400 * 24 * 3600 * 1000
+    next.access.prune()
+    expect(next.access.usable(next.access.invite(never.id))).toBe(null)
+  })
+
+  it('what a saved share had that is not shared any more is no one’s (shared again, not given back)', () => {
+    const { access } = model({ shared: ['ws-a', 'ws-b'] })
+    const inv = access.createInvite({ projects: ['ws-a', 'ws-b'] }).invite
+    access.addPerson({ key: key(), name: 'Ann', sid: access.codeOf(inv.id).sid, grant: { projects: ['ws-a', 'ws-b'] } })
+    const next = model({ shared: ['ws-a'], saved: access.toJSON() })
+    expect(next.access.invite(inv.id).grant.projects).toEqual(['ws-a'])
+    expect(next.access.people()[0].grant.projects).toEqual(['ws-a'])
+  })
+
+  it('a saved share is checked: bad codes, invitations and people are dropped', () => {
+    const { access } = model()
+    const inv = access.createInvite({}).invite
+    access.addPerson({ key: key(), name: 'Ann', sid: access.codeOf(inv.id).sid, grant: {} })
+    const saved = access.toJSON()
+    saved.codes.push({ secret: 'short', path: 'x', invite: inv.id }, { secret: crypto.randomBytes(32).toString('base64'), path: '../../x', invite: null })
+    saved.invites.push({ id: 'iv-bad', sid: 'nope', lifetime: 'hour' }, { ...saved.invites[0], id: 'iv-1111111111', lifetime: 'forever' })
+    saved.people.push({ key: 'AAAA', sid: saved.people[0].sid, name: 'x' }, { ...saved.people[0], key: key().toString('base64'), sid: 'unknown' })
+    const next = model({ saved })
+    expect(next.access.invites().map((i) => i.id)).toEqual([inv.id])
+    expect(next.access.toJSON().codes).toHaveLength(1)
+    expect(next.access.people().map((p) => p.name)).toEqual(['Ann'])
+  })
+
+  it('a share saved before invitations: its one code is a root invitation offering every shared project, its earlier secrets kept for its guests', () => {
+    const secret = crypto.randomBytes(32)
+    const earlier = crypto.randomBytes(32)
+    const unused = crypto.randomBytes(32)
+    const alex = key()
+    const sam = key()
+    const legacy = {
+      secret,
+      expiresAt: 2_000_000,
+      secrets: [earlier, unused],
+      guard: { blocked: true, unfinished: [999_000] },
+      known: [
+        { key: alex.toString('base64'), name: 'Alex', rights: { type: true }, projects: ['ws-a'], sid: secretId(secret), opened: 3, lastSeen: 1_000_000 },
+        { key: sam.toString('base64'), name: 'Sam', rights: {}, projects: ['ws-b', 'ws-gone'], sid: secretId(earlier), lastSeen: 1_000_000 }
+      ]
+    }
+    const { access } = model({ legacy })
+    const [root] = access.invites()
+    expect(root).toMatchObject({ root: true, label: '', later: true, expiresAt: 2_000_000, grant: { projects: ['ws-a', 'ws-b'], rights: NONE } })
+    expect(access.usable(root)).toBe('blocked')
+    expect(access.codesAt('').map((c) => c.sid).sort()).toEqual([secretId(secret), secretId(earlier)].sort())
+    const people = access.people()
+    expect(people.map((p) => [p.name, p.via, p.grant.projects])).toEqual([
+      ['Alex', root.id, ['ws-a']],
+      ['Sam', null, ['ws-b']]
+    ])
+    expect(access.person(keyHash(alex)).opened).toBe(3)
+  })
+})
+
+describe('the trusted people (shareTrust.js)', () => {
+  it('kept by identity key, saved at every change, read back; weak keys refused; bounded', () => {
+    let file = null
+    const store = createTrustStore({ save: (entries) => (file = entries) })
+    const k = key()
+    const e = store.add({ key: k, name: ' Simpa ', projects: ['ws-a', 'x y'], rights: { type: true, files: true } })
+    expect(e).toMatchObject({ fp: identityFingerprint(k), name: 'Simpa', grant: { projects: ['ws-a'], rights: { type: true, open: false, close: false } } })
+    expect(store.add({ key: k, name: 'Again' })).toBe(e) // already trusted
+    expect(store.add({ key: Buffer.alloc(32) })).toBe(null) // a weak key
+    expect(store.add({ key: Buffer.alloc(5) })).toBe(null)
+    expect(isTrustId(trustId(e.fp))).toBe(true)
+    expect(store.byId(trustId(e.fp))).toBe(e)
+    expect(store.byId('t-nope')).toBe(null)
+    expect(file).toHaveLength(1)
+    expect(JSON.stringify(file)).not.toMatch(/private/i)
+    store.change(e.fp, { project: 'ws-b', on: true })
+    store.change(e.fp, { right: 'close', on: true })
+    expect(store.change(e.fp, { right: 'files', on: true })).toBe(false)
+    store.rename(e.fp, 'Simpa (laptop)')
+    const again = createTrustStore({ entries: file })
+    expect(again.get(e.fp)).toMatchObject({ name: 'Simpa (laptop)', grant: { projects: ['ws-a', 'ws-b'], rights: { type: true, open: false, close: true } } })
+    expect(again.remove(e.fp)).toBe(true)
+    const many = createTrustStore()
+    for (let i = 0; i < MAX_TRUSTED; i++) expect(many.add({ key: key(), name: `p${i}` })).not.toBe(null)
+    expect(many.add({ key: key(), name: 'one more' })).toBe(null)
+    // A file with bad entries: they are left out.
+    expect(createTrustStore({ entries: [{ key: 'AAAA' }, null, { key: Buffer.alloc(32).toString('base64') }] }).list()).toEqual([])
+  })
+})

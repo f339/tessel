@@ -1439,9 +1439,11 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       let removed = 0
       if (removePeople) {
         for (const hash of r.people) {
+          if (!access.person(hash)) continue
           const g = connectionOf(hash)
           if (g) drop(g, 'removed')
-          if (access.removePerson(hash)) removed++
+          access.removePerson(hash)
+          removed++
         }
       }
       return { ok: true, removed }

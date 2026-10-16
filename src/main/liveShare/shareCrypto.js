@@ -1,9 +1,10 @@
 // Live Share: the invite code and the encryption of a shared session.
 //
-// The host makes a random 32-byte secret when it starts sharing and puts it
-// in the invite code with the session's address. The secret never travels
-// over the connection: whoever relays it (the Cloudflare tunnel, a proxy)
-// only sees the handshake and then ciphertext.
+// The host makes a random 32-byte secret for each invitation and puts it in
+// the invitation's code with its address (the share's, with the
+// invitation's path: shareAccess.js). The secret never travels over the
+// connection: whoever relays it (the Cloudflare tunnel, a proxy) only sees
+// the handshake and then ciphertext.
 //
 // The handshake (shareHost.js, shareGuest.js): the guest first commits to a
 // random nonce and a fresh X25519 key (their hash), then the host sends its
@@ -54,7 +55,8 @@ export function newNonce() {
   return crypto.randomBytes(NONCE_BYTES)
 }
 
-// "TS1.<address>.<secret>", both base64url: one line to paste in a chat.
+// "TS1.<address>.<secret>", both base64url: one line to paste in a chat. The
+// address may have a path (an invitation's): it is kept as it is.
 export function encodeInvite({ url, secret }) {
   return PREFIX + b64u(Buffer.from(String(url), 'utf8')) + '.' + b64u(secret)
 }
@@ -197,7 +199,7 @@ export function bindingSigned(publicRaw, binding, signature) {
 }
 
 // A guest's identity key (Ed25519, made once on its computer and kept in its
-// data folder, shareIdentity.js): what a host trusts across sessions. The
+// data folder, liveshare-identity.json): what a host trusts across sessions. The
 // guest proves it holds it by signing this connection's binding under a label
 // of its own, so a reconnect signature can never pass for an identity proof
 // (or the other way round), and a proof made for one connection fits no

@@ -692,7 +692,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       pushHost()
       s.server = makeServer(s)
       const first = s.server.createInvite({ ...(invite && typeof invite === 'object' ? invite : {}), projects: s.projects })
-      if (!first.ok) throw new Error(t('main.liveShare.badInviteSpec', 'The first invitation could not be made ({{reason}}).', { reason: first.reason }))
+      if (!first.ok) throw new Error(t('main.liveShare.badInviteSpec', 'The first invitation could not be made: check its lifetime and number of uses.'))
       s.port = await s.server.start()
       if (s.cancelled) return { ok: false }
       s.tunnel = await startTunnel({
