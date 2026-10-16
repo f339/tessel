@@ -41,7 +41,7 @@ import SkillsDialog from './components/SkillsDialog.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ToolsDialog from './components/ToolsDialog.vue'
 import SessionsDialog from './components/SessionsDialog.vue'
-import { OWN_ID_AGENTS, FOUND_IN_FILES, resumeArgs, safeSessionId } from './agentResumeLine'
+import { OWN_ID_AGENTS, FOUND_IN_FILES, resumeArgs, resumeLine, safeSessionId } from './agentResumeLine'
 import { getPane } from './paneRegistry'
 import { installChain, nodeStep, NVM_INSTALL_URL } from './shellChain'
 import {
@@ -1283,7 +1283,7 @@ async function agentStartLine(agent, sessionId, resume, accountId, { known = fal
     return { line: `${agent.command} --session-id ${id}`, sessionId: id, resumed: false } // i18n-ignore
   }
   const args = sessionId && resume ? await resumeArgs(kind, sessionId, window.shellApi) : null
-  if (args) return { line: [agent.command, ...args].join(' '), sessionId, resumed: true }
+  if (args) return { line: resumeLine(kind, agent.command, args), sessionId, resumed: true }
   return { line: agent.command, sessionId: null, resumed: false }
 }
 
@@ -8241,7 +8241,7 @@ let teamToolsReady = false
 // every 30 s (teamMcp/server.cjs, .tessel/agents/<pane>.json). An agent of a
 // team with no such sign for a minute after it started gets a warning on its
 // row and a message once; both go when the tools are back.
-const MCP_AGENT_IDS = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode', 'cline', 'antigravity']
+const MCP_AGENT_IDS = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode', 'cline', 'antigravity', 'muse']
 const toolsDown = reactive({}) // paneId -> true
 const toolsWarned = new Set()
 let toolsCheckAt = 0

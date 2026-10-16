@@ -437,6 +437,53 @@ export const ANTIGRAVITY_SESSION_OPTION_CATALOG = {
   probed: true
 }
 
+// --- Muse Code (agent-session-option-catalog-muse.ts) -------------------------
+// `muse --model <id> --reasoning-effort <level>` (--effort is its alias); in
+// a running session /model <id> switches at once (Muse 1.4.5) and /effort
+// <level> changes the effort. Its eight tiers; a model `muse serve` lists
+// (model/list) names the ones it takes and its default. Meta's own models do
+// not take "none".
+
+const MUSE_EFFORT_CHOICES = [
+  { value: 'none', label: 'None' },
+  { value: 'minimal', label: 'Minimal' },
+  ...STANDARD_EFFORT_CHOICES,
+  { value: 'xhigh', label: 'Extra high' },
+  { value: 'max', label: 'Max' },
+  { value: 'ultra', label: 'Ultra' }
+]
+function museEffort(choices, defaultValue) {
+  return {
+    id: 'effort',
+    label: 'Reasoning effort',
+    category: 'thought_level',
+    kind: { type: 'select', choices, defaultValue },
+    apply: {
+      launchArgs: (value) => ['--reasoning-effort', String(value)],
+      agentArgsOverride: (tokens) => hasFlag(tokens, ['--reasoning-effort', '--effort']),
+      removeAgentArgs: (tokens) => removeAgentArgOption(tokens, ['--reasoning-effort', '--effort']),
+      midSession: { kind: 'command', build: (value) => `/effort ${String(value)}` }
+    }
+  }
+}
+const MUSE_EFFORT = museEffort(MUSE_EFFORT_CHOICES.filter((choice) => choice.value !== 'none'), 'high')
+
+// A listed model's efforts (and its default), only those.
+export function createMuseCatalogOptions(levels, defaultEffort) {
+  const choices = MUSE_EFFORT_CHOICES.filter((choice) => (levels || []).includes(choice.value))
+  if (!choices.length) return []
+  const fallback = choices.some((choice) => choice.value === 'high') ? 'high' : choices[0].value
+  return [museEffort(choices, choices.some((choice) => choice.value === defaultEffort) ? defaultEffort : fallback)]
+}
+
+export const MUSE_SESSION_OPTION_CATALOG = {
+  // Its models depend on the account (plan, contributor mode): no seed.
+  models: [],
+  modelApply: flagApply('--model', ['--model'], { kind: 'command', build: (value) => `/model ${String(value)}` }),
+  unknownModelOptions: [MUSE_EFFORT],
+  probed: true
+}
+
 // --- OpenCode (Orca's commit-message-agent-specs-primary.ts: `--model
 // provider/model`, models from `opencode models`) ---------------------------
 
@@ -539,7 +586,8 @@ const CATALOGS = {
   gemini: GEMINI_SESSION_OPTION_CATALOG,
   cursor: CURSOR_SESSION_OPTION_CATALOG,
   grok: GROK_SESSION_OPTION_CATALOG,
-  opencode: OPENCODE_SESSION_OPTION_CATALOG
+  opencode: OPENCODE_SESSION_OPTION_CATALOG,
+  muse: MUSE_SESSION_OPTION_CATALOG
 }
 
 export function getAgentSessionOptionCatalog(agent) {

@@ -489,6 +489,9 @@ export async function listMcp(cwd) {
 // guide: the legacy HTTP+SSE transport is not supported).
 const antigravityNoSse = () =>
   t('main.mcp.antigravityNoSse', 'The Antigravity CLI only connects to streamable HTTP servers, not SSE ones.')
+// Muse Code too (its MCP guide: stdio or streamable HTTP).
+const museNoSse = () => t('main.mcp.museNoSse', 'Muse Code only connects to streamable HTTP servers, not SSE ones.')
+const noSse = (agent) => (agent === 'antigravity' ? antigravityNoSse() : agent === 'muse' ? museNoSse() : null)
 
 // spec: { agent: 'claude'|'codex', name, transport: 'stdio'|'http',
 //         commandLine, url, env: 'K=V lines', headers: 'Name: value lines',
@@ -568,7 +571,7 @@ export async function addMcp(spec, deps = {}) {
     if (transport === 'http') {
       if (!/^https?:\/\//i.test(spec.url || ''))
         return { ok: false, error: t('main.mcp.urlRequired', 'Enter a URL starting with http:// or https://') }
-      if (spec.sse && agent === 'antigravity') return { ok: false, error: antigravityNoSse() }
+      if (spec.sse && noSse(agent)) return { ok: false, error: noSse(agent) }
       cfg = { transport: 'http', url: spec.url, headers, sse: !!spec.sse }
     } else {
       const words = splitCommandLine(spec.commandLine)
@@ -894,7 +897,7 @@ export async function copyMcp({ from, to, name, scope, cwd }) {
   const cfg = await fullConfig({ agent: from, name, scope, cwd })
   if (!cfg) return { ok: false, error: t('main.mcp.serverNotFound', 'Server not found.') }
   if (JSON_AGENTS.includes(to)) {
-    if (to === 'antigravity' && cfg.transport === 'http' && cfg.sse) return { ok: false, error: antigravityNoSse() }
+    if (cfg.transport === 'http' && cfg.sse && noSse(to)) return { ok: false, error: noSse(to) }
     const res = setJsonAgentServer(to, name, configToEntry(to, { ...cfg, args: cfg.args || [], env: cfg.env || {}, headers: cfg.headers || {} }))
     return res.ok ? { ok: true, note: null } : res
   }

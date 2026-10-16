@@ -449,6 +449,10 @@ const api = {
   agyPluginsList: () => ipcRenderer.invoke('agyPlugins:list'),
   agyPluginsSet: (q) => ipcRenderer.invoke('agyPlugins:set', q),
   agyPluginsRemove: (q) => ipcRenderer.invoke('agyPlugins:remove', q),
+  // Muse Code's plugins (src/main/musePlugins.js).
+  musePluginsList: () => ipcRenderer.invoke('musePlugins:list'),
+  musePluginsSet: (q) => ipcRenderer.invoke('musePlugins:set', q),
+  musePluginsRemove: (q) => ipcRenderer.invoke('musePlugins:remove', q),
   notify: (payload) => ipcRenderer.send('app:notify', payload),
   // The language the interface shows ('en', 'fr'): the main process uses it
   // for its dialogs, notifications and messages (src/main/i18n.js).

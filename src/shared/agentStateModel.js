@@ -43,7 +43,8 @@ export const STATUS_PROVIDERS = [
   'amp',
   'pi',
   'qoder',
-  'dsh'
+  'dsh',
+  'muse'
 ]
 export const SCREEN_READY_PROVIDERS = ['claude', 'codex']
 export const hooksAlone = (provider) =>

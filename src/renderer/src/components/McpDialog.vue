@@ -1,7 +1,7 @@
 <script setup>
 // MCP servers for every agent CLI (Claude Code, Codex, Gemini CLI, Qwen Code,
-// Copilot CLI, OpenCode, Cline, Kimi Code, Cursor CLI, Antigravity CLI), in
-// one place:
+// Copilot CLI, OpenCode, Cline, Kimi Code, Cursor CLI, Antigravity CLI, Muse
+// Code), in one place:
 //   Installed - every server, which agents have it, a live connection test,
 //               copy to the other agent, sign-in help, remove.
 //   Catalog   - popular servers, searchable, added in one click (asks only
@@ -27,7 +27,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['close', 'run', 'tools', 'skills'])
 
-const ALL_AGENTS = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode', 'cline', 'kimi', 'cursor', 'antigravity']
+const ALL_AGENTS = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode', 'cline', 'kimi', 'cursor', 'antigravity', 'muse']
 const AGENT_NAME = {
   claude: 'Claude Code', // i18n-ignore
   codex: 'Codex', // i18n-ignore
@@ -38,7 +38,8 @@ const AGENT_NAME = {
   cline: 'Cline', // i18n-ignore
   kimi: 'Kimi Code', // i18n-ignore
   cursor: 'Cursor CLI', // i18n-ignore
-  antigravity: 'Antigravity CLI' // i18n-ignore
+  antigravity: 'Antigravity CLI', // i18n-ignore
+  muse: 'Muse Code' // i18n-ignore
 }
 function scopeLabel(scope) {
   if (scope === 'user') return t('mcp.scope.user', 'All projects')

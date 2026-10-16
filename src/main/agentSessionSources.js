@@ -1,5 +1,6 @@
 // Read-only session readers for the agents that pick their own conversation
-// id: Droid, Grok, Pi, Antigravity, Devin, Cursor, Copilot, Kimi, Cline and ZCode.
+// id: Droid, Grok, Pi, Antigravity, Devin, Cursor, Copilot, Kimi, Cline, ZCode
+// and Muse Code.
 // Each one lists { agent, id, cwd, started, updated, title } from the agent's
 // own session folder, for the Sessions dialog (history) and to find the
 // conversation a pane started (resume).
@@ -21,6 +22,7 @@ import { basename, dirname, join, isAbsolute, relative, resolve, sep, win32 } fr
 import { fileURLToPath } from 'url'
 import { normDir, readHead, readTail, readRows } from './fileRead'
 import { clineDataDir } from './jsonAgents'
+import { museSessionFolders, museSessionStart, museSessionsDir, parseMuseHead } from './museSessions'
 
 const HEAD_BYTES = 256 * 1024
 const JSON_MAX = 1024 * 1024
@@ -177,7 +179,8 @@ export function sessionDirs(home = os.homedir(), env = process.env) {
     copilot: join(envDir(env.COPILOT_HOME) || join(home, '.copilot'), 'session-state'),
     kimi: envDir(env.KIMI_CODE_HOME) || join(home, '.kimi-code'),
     cline: join(clineDataDir(home), 'sessions'),
-    zcode: join(home, '.zcode', 'cli', 'db')
+    zcode: join(home, '.zcode', 'cli', 'db'),
+    muse: museSessionsDir(home, env)
   }
 }
 
@@ -817,6 +820,33 @@ export function clineHistorySessions(home = os.homedir(), { since = 0 } = {}) {
   return out
 }
 
+// --- Muse Code -------------------------------------------------------------------
+// <XDG_DATA_HOME or ~/.local/share>/muse/sessions/YYYY/MM/DD/<id>/session.jsonl
+// (museSessions.js): its folder from the session's metadata record, its title
+// from the first prompt you typed. A sub-agent's log (subagent/ inside a
+// session's folder) is part of its parent's session, never listed alone. The
+// newest days first: the cap keeps the most recent sessions.
+
+export function museHistorySessions(home = os.homedir(), { since = 0 } = {}) {
+  const root = sessionDirs(home).muse
+  const out = []
+  for (const { id, file } of museSessionFolders(root, { since, max: 400 })) {
+    const s = stat(file)
+    if (!s || !s.isFile() || s.mtimeMs < since - SLACK) continue
+    const head = parseMuseHead(headIn(root, file), realPrompt)
+    out.push({
+      agent: 'muse',
+      id,
+      cwd: head.cwd,
+      started: head.started || museSessionStart(id) || s.birthtimeMs || s.mtimeMs,
+      updated: s.mtimeMs,
+      title: title(head.prompt),
+      file
+    })
+  }
+  return out
+}
+
 // --- History for all of them ---------------------------------------------------------
 
 const READERS = {
@@ -830,7 +860,8 @@ const READERS = {
   omp: ompSessions,
   antigravity: antigravitySessions,
   devin: devinSessions,
-  zcode: zcodeSessions
+  zcode: zcodeSessions,
+  muse: museHistorySessions
 }
 export const HISTORY_AGENTS = Object.keys(READERS)
 

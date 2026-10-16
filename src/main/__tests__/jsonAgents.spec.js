@@ -160,7 +160,10 @@ describe('MCP server formats, per agent', () => {
     kimi: { file: ['.kimi-code', 'mcp.json'], key: 'mcpServers', http: { transport: 'http', url: http.url, headers: { K: 'v' } }, sse: { transport: 'sse', url: sse.url }, stdio: { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } } },
     cursor: { file: ['.cursor', 'mcp.json'], key: 'mcpServers', http: { url: http.url, headers: { K: 'v' } }, sse: { url: sse.url }, stdio: { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } } },
     // What `agy mcp add` writes (checked with agy 1.3.5); it has no SSE (refused before, see agentTools).
-    antigravity: { file: ['.gemini', 'config', 'mcp_config.json'], key: 'mcpServers', http: { serverUrl: http.url, headers: { K: 'v' } }, sse: { serverUrl: sse.url }, stdio: { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } } }
+    antigravity: { file: ['.gemini', 'config', 'mcp_config.json'], key: 'mcpServers', http: { serverUrl: http.url, headers: { K: 'v' } }, sse: { serverUrl: sse.url }, stdio: { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } } },
+    // Muse Code's settings (its MCP guide): no type (an entry with url is
+    // streamable HTTP); no SSE (refused before, see agentTools).
+    muse: { file: ['.config', 'muse', 'settings.json'], key: 'mcpServers', http: { url: http.url, headers: { K: 'v' } }, sse: { url: sse.url }, stdio: { command: 'npx', args: ['-y', 'srv'], env: { A: '1' } } }
   }
   const saved = {}
   beforeEach(() => {
@@ -193,7 +196,7 @@ describe('MCP server formats, per agent', () => {
     ])
     // Read back as it was written (OpenCode and Cursor find SSE by themselves).
     expect(jsonAgentConfig(agent, 'web', home)).toEqual({ ...http, sse: false })
-    expect(jsonAgentConfig(agent, 'old', home).sse).toBe(!['opencode', 'cursor', 'antigravity'].includes(agent))
+    expect(jsonAgentConfig(agent, 'old', home).sse).toBe(!['opencode', 'cursor', 'antigravity', 'muse'].includes(agent))
     expect(jsonAgentConfig(agent, 'cmd', home)).toEqual(stdio)
     expect(removeJsonAgentServer(agent, 'web', home).changed).toBe(true)
     expect(Object.keys(read(...c.file)[c.key])).toEqual(['old', 'cmd'])

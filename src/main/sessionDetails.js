@@ -16,11 +16,12 @@ import { basename, dirname, join } from 'path'
 import { claudeTranscriptIn, codexRolloutIn } from './agentModel'
 import { isUuid, qoderDir, qoderTranscriptIn } from './agentSessions'
 import { insideDir, ompSessions, ompSessionsDir, piSessions, piSessionsDir, plainId, sessionDirs } from './agentSessionSources'
+import { museSessionLog } from './museSessions'
 import { readLastLines } from './chat/transcriptHistory'
 import { readHead } from './fileRead'
 import { rowsFromLines } from './sessionSearch/indexer'
 
-export const CONTENT_AGENTS = ['claude', 'openclaude', 'codex', 'grok', 'pi', 'omp', 'qoder']
+export const CONTENT_AGENTS = ['claude', 'openclaude', 'codex', 'grok', 'pi', 'omp', 'qoder', 'muse']
 // Deleted whole: a Claude Code transcript with its <id>/ sidecar folder (the
 // sub-agents), Grok's session folder, a Pi or OMP file. Codex is left out
 // (its session_index.jsonl would keep naming the file), as are the agents
@@ -100,6 +101,10 @@ export function findSessionFile({ agent, id } = {}, home = os.homedir(), roots =
   } else if (agent === 'grok') {
     root = sessionDirs(home).grok
     file = grokChatFile(root, id)
+  } else if (agent === 'muse') {
+    // Muse Code: by its id's day (museSessions.js).
+    root = sessionDirs(home).muse
+    file = museSessionLog(id, root)
   } else {
     root = agent === 'pi' ? piSessionsDir(home) : ompSessionsDir(home)
     let rows = []

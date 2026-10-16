@@ -6,6 +6,8 @@ export const USAGE_PROVIDERS = Object.freeze([
   { id: 'gemini', name: 'Gemini', agents: ['gemini'], report: false },
   // The Antigravity CLI's own /usage answer (antigravityCliUsage.js).
   { id: 'antigravity', name: 'Antigravity', agents: ['antigravity'], report: false },
+  // Muse Code's own usage/read over `muse serve` (museUsage.js).
+  { id: 'muse', name: 'Muse Code', agents: ['muse'], report: false },
   { id: 'kimi', name: 'Kimi', agents: ['kimi'], report: false },
   { id: 'cursor', name: 'Cursor', agents: ['cursor'], report: false },
   { id: 'grok', name: 'Grok', agents: ['grok'], report: false },

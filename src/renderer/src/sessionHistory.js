@@ -8,7 +8,7 @@
 import { t } from './i18n'
 import { maskSecrets } from './chat/chatModel'
 
-export const AGENTS = ['claude', 'codex', 'gemini', 'qwen', 'opencode', 'openclaude', 'copilot', 'kimi', 'cline', 'cursor', 'droid', 'grok', 'pi', 'omp', 'antigravity', 'devin', 'zcode', 'qoder']
+export const AGENTS = ['claude', 'codex', 'gemini', 'qwen', 'opencode', 'openclaude', 'copilot', 'kimi', 'cline', 'cursor', 'droid', 'grok', 'pi', 'omp', 'antigravity', 'devin', 'zcode', 'qoder', 'muse']
 export const AGENT_NAME = {
   claude: 'Claude Code', // i18n-ignore
   codex: 'Codex',
@@ -27,14 +27,15 @@ export const AGENT_NAME = {
   antigravity: 'Antigravity',
   devin: 'Devin',
   zcode: 'ZCode',
-  qoder: 'Qoder CLI' // i18n-ignore
+  qoder: 'Qoder CLI', // i18n-ignore
+  muse: 'Muse Code' // i18n-ignore
 }
 export const agentLabel = (agent) => AGENT_NAME[agent] || agent
 
 // The agents whose transcript Tessel reads (a log, a first prompt, latest
 // turns) and the ones it can delete: the same lists as src/main/sessionDetails.js
 // (the main process checks again).
-export const CONTENT_AGENTS = ['claude', 'openclaude', 'codex', 'grok', 'pi', 'omp', 'qoder']
+export const CONTENT_AGENTS = ['claude', 'openclaude', 'codex', 'grok', 'pi', 'omp', 'qoder', 'muse']
 export const DELETABLE_AGENTS = ['claude', 'openclaude', 'grok', 'pi', 'omp']
 export const hasLog = (agent) => CONTENT_AGENTS.includes(agent)
 
@@ -61,7 +62,7 @@ export function defaultViewOptions() {
 }
 // The agents listed before a save said which ones it knew (`known`): a save
 // that chose all of them chose the ones added since too.
-const AGENTS_BEFORE_KNOWN = AGENTS.filter((a) => a !== 'qoder')
+const AGENTS_BEFORE_KNOWN = AGENTS.filter((a) => a !== 'qoder' && a !== 'muse')
 
 // Whatever was saved, made valid: unknown agents dropped, unknown choices
 // back to their default. An agent added since the save is shown when the

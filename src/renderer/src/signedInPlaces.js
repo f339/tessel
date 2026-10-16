@@ -2,7 +2,7 @@
 // signedInPlaces.js: the places' rows grouped by account (an agent and its
 // email, account id or login), and the panes that can switch to one.
 
-const AGENT_ORDER = ['claude', 'codex', 'gemini', 'copilot', 'grok', 'cursor', 'kimi', 'qwen', 'opencode']
+const AGENT_ORDER = ['claude', 'codex', 'gemini', 'copilot', 'grok', 'cursor', 'kimi', 'qwen', 'opencode', 'muse']
 
 // An account's key, from what names it; null when nothing does (OpenCode's
 // providers, a login file with no name in it).

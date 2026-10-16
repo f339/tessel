@@ -117,6 +117,7 @@ import {
   runAgentCommand
 } from './agentTools'
 import { listAgyPlugins, setAgyPlugin, removeAgyPlugin } from './agyPlugins'
+import { createMusePlugins } from './musePlugins'
 import {
   listSkills,
   packageFromFolder,
@@ -2258,7 +2259,7 @@ const sessionLister = createSessionLister({
   log
 })
 app.on('will-quit', () => sessionLister.close())
-const accountSessions = createAccountSessions({ accounts, listSessions: sessionLister.list })
+const accountSessions = createAccountSessions({ accounts, listSessions: sessionLister.list, sessionsDir })
 const accountUsage = createAccountUsage({ accounts, userData: app.getPath('userData') })
 // Tokens, time and estimated cost of each job (task card) and pane session,
 // from the agents' session files in every account's folder (jobCost.js).
@@ -2772,6 +2773,22 @@ ipcMain.handle(
 ipcMain.handle(
   'agyPlugins:remove',
   safe((q) => removeAgyPlugin({ name: q && q.name }, runAgentCommand))
+)
+
+// Muse Code's plugins, the same way with its own commands (musePlugins.js):
+// its binary started directly, with Tessel's fresh PATH.
+const musePlugins = createMusePlugins({ env: () => freshEnv() })
+ipcMain.handle(
+  'musePlugins:list',
+  safe(() => musePlugins.list())
+)
+ipcMain.handle(
+  'musePlugins:set',
+  safe((q) => musePlugins.set({ name: q && q.name, enabled: !!(q && q.enabled) }))
+)
+ipcMain.handle(
+  'musePlugins:remove',
+  safe((q) => musePlugins.remove({ name: q && q.name }))
 )
 
 // "An agent needs you": native notification + taskbar flash. Clicking the

@@ -524,4 +524,67 @@ describe('Skills dialog', () => {
     expect(wrapper.get('[data-test="agy-plugin-figma"]').text()).toContain('1 skill')
     wrapper.unmount()
   })
+
+  it("Muse plugins: a tab of their own beside Antigravity's; listed, turned on, uninstalled, installed in a pane with muse's own command", async () => {
+    const calls = api()
+    calls.set = []
+    calls.rm = []
+    let list = [
+      { name: 'weather', label: 'Weather', enabled: false, version: '0.1.0', source: 'native-local', counts: { skills: 1, commands: 1, hooks: 1 } },
+      { name: 'docs-kit', label: '', enabled: true, version: '2.0.0', source: 'marketplace-user-added', counts: { mcpServers: 2 } }
+    ]
+    Object.assign(window.shellApi, {
+      agyPluginsList: async () => ({ plugins: [] }),
+      agyPluginsSet: async () => ({ ok: true }),
+      agyPluginsRemove: async () => ({ ok: true }),
+      musePluginsList: async () => ({ plugins: list }),
+      musePluginsSet: async (q) => {
+        calls.set.push(q)
+        list = list.map((p) => (p.name === q.name ? { ...p, enabled: q.enabled } : p))
+        return { ok: true }
+      },
+      musePluginsRemove: async (q) => {
+        calls.rm.push(q)
+        list = list.filter((p) => p.name !== q.name)
+        return { ok: true }
+      }
+    })
+    const agents = [{ id: 'antigravity', available: true }, { id: 'muse', available: true }]
+    const wrapper = mount(SkillsDialog, { props: { agents }, attachTo: document.body, global: { provide: { askConfirm: () => Promise.resolve(true) } } })
+    await flushPromises()
+    expect(wrapper.get('[data-test="skills-tab-plugins"]').text()).toBe('Antigravity plugins')
+    await wrapper.get('[data-test="skills-tab-muse-plugins"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Muse Code plugins bundle skills, commands, hooks and MCP servers.')
+    const weather = wrapper.get('[data-test="muse-plugin-weather"]')
+    expect(weather.text()).toContain('Weather')
+    expect(weather.text()).toContain('1 skill · hooks · 1 command')
+    expect(weather.text()).toContain('Turned off')
+    await weather.findAll('button')[0].trigger('click')
+    await flushPromises()
+    expect(calls.set).toEqual([{ name: 'weather', enabled: true }])
+    expect(wrapper.text()).toContain('Turned on "weather". Muse Code panes use the change from their next start.')
+    await wrapper.get('[data-test="muse-plugin-docs-kit"]').find('button.danger').trigger('click')
+    await flushPromises()
+    expect(calls.rm).toEqual([{ name: 'docs-kit' }])
+    expect(wrapper.find('[data-test="muse-plugin-docs-kit"]').exists()).toBe(false)
+    await wrapper.get('[data-test="muse-plugin-target"]').setValue('weather@local')
+    await wrapper.get('form.mcp-toolbar').trigger('submit')
+    expect(wrapper.emitted('run').at(-1)[0]).toEqual({ label: 'Muse plugin: weather@local', command: 'muse plugins install "weather@local"' })
+    wrapper.unmount()
+  })
+
+  it('Muse plugins: French', async () => {
+    api({ musePluginsList: async () => ({ plugins: [{ name: 'weather', enabled: false, version: '0.1.0', source: 'x', counts: { skills: 1 } }] }), musePluginsSet: async () => ({ ok: true }), musePluginsRemove: async () => ({ ok: true }) })
+    setMessages('fr', fr)
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'muse', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    expect(wrapper.find('[data-test="skills-tab-plugins"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="skills-tab-muse-plugins"]').text()).toBe('Plugins Muse')
+    await wrapper.get('[data-test="skills-tab-muse-plugins"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="muse-plugin-weather"]').text()).toContain('Désactivé')
+    expect(wrapper.text()).toContain('Les plugins de Muse Code')
+    wrapper.unmount()
+  })
 })

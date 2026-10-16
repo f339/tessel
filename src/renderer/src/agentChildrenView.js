@@ -6,8 +6,9 @@ import { t, intlLocale } from './i18n'
 // (projects/<p>/<session>/subagents), Codex (spawned threads' rollouts),
 // OpenCode and Cline (child sessions in their databases), Antigravity (child
 // conversations in agy's index), Gemini CLI (chats/<session>/), Copilot and
-// Kimi Code (the session's event logs) and Cursor (child chats).
-export const CHILD_AGENTS = ['claude', 'codex', 'opencode', 'cline', 'antigravity', 'gemini', 'copilot', 'kimi', 'cursor']
+// Kimi Code (the session's event logs), Cursor (child chats) and Muse Code
+// (the child sessions its hooks announce, from their own logs).
+export const CHILD_AGENTS = ['claude', 'codex', 'opencode', 'cline', 'antigravity', 'gemini', 'copilot', 'kimi', 'cursor', 'muse']
 export const listsChildren = (agent) => CHILD_AGENTS.includes(agent)
 
 export function formatElapsed(ms) {
