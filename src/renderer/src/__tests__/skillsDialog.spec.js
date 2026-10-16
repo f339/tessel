@@ -1360,6 +1360,7 @@ describe('Skills dialog', () => {
     await row('weather').get('.skills-row').trigger('click')
     const details = row('weather').get('.skills-details')
     expect(details.text()).toContain('A forecast skill.')
+    expect(details.text()).toContain('Installed from a folder')
     expect(details.text()).toContain('Off: Muse Code panes do not load it.')
     await details.get('[data-test="muse-plugin-toggle"]').trigger('click')
     await flushPromises()

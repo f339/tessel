@@ -268,7 +268,10 @@
       "installPane": "Plugin Muse : {{name}}",
       "pickTitle": "Choisissez un dossier de plugin (avec son dossier .muse-plugin ou .claude-plugin)",
       "onHint": "Activé : les panneaux Muse Code le chargent à leur démarrage.",
-      "offHint": "Désactivé : les panneaux Muse Code ne le chargent pas."
+      "offHint": "Désactivé : les panneaux Muse Code ne le chargent pas.",
+      "fromFolder": "Installé depuis un dossier",
+      "fromImport": "Importé d'un plugin Claude Code ou Codex",
+      "fromMarketplace": "Depuis une boutique"
     },
     "kind": {
       "own": "À vous",

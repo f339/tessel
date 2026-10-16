@@ -1029,7 +1029,14 @@ function pluginPartList(p) {
   if (c.commands) parts.push(c.commands === 1 ? t('skills.plugins.commandOne', '1 command') : t('skills.plugins.commandMany', '{{count}} commands', { count: c.commands }))
   return parts
 }
-const pluginFrom = (p) => (p.source ? t('skills.plugins.from', 'From {{source}}', { source: p.source }) : '')
+// Where Muse says a plugin came from (its install record's provenance), in words.
+function museFrom(source) {
+  if (source === 'native-local') return t('skills.musePlugins.fromFolder', 'Installed from a folder')
+  if (source === 'foreign-import') return t('skills.musePlugins.fromImport', 'Imported from a Claude Code or Codex plugin')
+  if (source === 'marketplace-user-added') return t('skills.musePlugins.fromMarketplace', 'From a marketplace')
+  return source ? t('skills.plugins.from', 'From {{source}}', { source }) : ''
+}
+const pluginFrom = (p) => (musePlugins.value ? museFrom(p.source) : p.source ? t('skills.plugins.from', 'From {{source}}', { source: p.source }) : '')
 const pluginParts = (p) => pluginPartList(p).join(' · ') || pluginFrom(p) || t('skills.plugins.nothing', 'Nothing listed in it.')
 
 // One plugin open at a time, with the same keys as the skills list.
