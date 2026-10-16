@@ -9101,14 +9101,16 @@ function inputShownEmpty(id) {
 // relaunched in place reports nothing before its next turn): Tessel does not
 // type into it on its own, it asks you once (a toast with a button), unless
 // Settings > Orchestration says to wake agents even without confirmation.
-function offerWake(leaf, count) {
+function offerWake(leaf, _count) {
   if (!settings.teamWakeUps || leaf.kind !== 'agent' || !leaf.teamTools) return
   const w = (wakeState[leaf.id] = wakeState[leaf.id] || { since: Date.now(), woken: false, gen: leaf.gen || 0 })
   if (w.offered || Date.now() - w.since < WAKE_AFTER_MS) return
   w.offered = true
   const launchToken = leaf.agentLaunchToken
   const sessionId = leaf.sessionId
-  const reminder = `[Tessel] You have ${count} new team message${count > 1 ? 's' : ''}: read ${count > 1 ? 'them' : 'it'} with team_inbox.` // i18n-ignore
+  // Typed: no count, no digit (a menu open in the agent took a "1" as its
+  // answer). The same words as teamDelivery's pointer.
+  const reminder = '[Tessel] You have new team messages: read them with team_inbox.' // i18n-ignore
   showToast(
     t('app.team.wakeOffer', '{{name}} has team messages waiting, but Tessel cannot confirm it is idle (it was just restarted), so it did not type anything.', {
       name: paneLabel(leaf)
