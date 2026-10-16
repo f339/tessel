@@ -40,11 +40,14 @@ export function createRemoteModelReader({ readAgentFile, now = Date.now, minGapM
       return null
     }
     if (!r) return e.turn // unreachable now: what it showed
-    // Shrank, or grew past what is kept: its end again.
-    if (e.buf && (r.size < e.size || r.size - e.size > tailBytes)) {
+    // Shrank (rewritten): what it said is gone. Grew past what is kept: its
+    // end again, what it said stays until a newer model line shows.
+    const shrank = e.buf && r.size < e.size
+    if (e.buf && (shrank || r.size - e.size > tailBytes)) {
       r = await ask(hostId, agent, id, null)
       if (!r || r.missing) return r && r.missing ? (files.delete(key), null) : e.turn
       e.buf = null
+      if (shrank) e.turn = null
     }
     const same = e.buf && r.size === e.size && (r.mtimeMs == null || r.mtimeMs === e.mtimeMs)
     e.mtimeMs = r.mtimeMs ?? null
@@ -56,7 +59,9 @@ export function createRemoteModelReader({ readAgentFile, now = Date.now, minGapM
       e.buf = joined.length > tailBytes ? joined.subarray(joined.length - tailBytes) : joined
     }
     e.size = r.size
-    e.turn = parse(agent, e.buf)
+    // A long turn (web results, tool outputs) can push its model line out of
+    // the kept end: the model it named last still holds.
+    e.turn = parse(agent, e.buf) || e.turn
     return e.turn
   }
 

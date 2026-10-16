@@ -13,16 +13,23 @@
 //               "Modified locally" when an added copy was edited, "Update
 //               available" when GitHub has newer commits for it (checked
 //               about once a day, and by Refresh).
-//   Add       - from a GitHub repository or a folder. The SKILL.md and every
-//               file are shown first; then it is copied into the skill folder
-//               of each chosen agent. Nothing from a skill is ever run: a
-//               setup command it mentions is only offered, in a pane the
-//               user sees.
+//   Add       - from a GitHub repository or a folder, in three steps: the
+//               source; what was found (a card for each skill of a
+//               repository), its SKILL.md to read, formatted or as it is,
+//               and its files; then the agents (chips) and the scope. It is
+//               copied into the skill folder of each chosen agent, and the
+//               result says, folder by folder, installed, already there
+//               (Replace it) or failed and why. Nothing from a skill is ever
+//               run: a setup command it mentions is only offered, in a pane
+//               the user sees.
+//   Antigravity plugins - the Antigravity CLI's plugins, listed like the
+//               skills: one row each, its details on a click.
 // The work is done in the main process (src/main/skillsManager.js).
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount, inject } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 import { t, intlLocale } from '../i18n'
 import { isRemotePath } from '../../../shared/remotePath'
+import { splitFrontmatter, renderSkillMarkdown } from '../skillPreview'
 
 const props = defineProps({
   cwd: { type: String, default: null }, // current workspace's project folder
@@ -33,14 +40,15 @@ const props = defineProps({
 const emit = defineEmits(['close', 'run'])
 
 // The agents that read skills (same ids as Settings > Agents).
-const ALL_AGENTS = ['claude', 'codex', 'opencode', 'copilot', 'gemini', 'antigravity']
+const ALL_AGENTS = ['claude', 'codex', 'opencode', 'copilot', 'gemini', 'antigravity', 'muse']
 const AGENT_NAME = {
   claude: 'Claude Code', // i18n-ignore
   codex: 'Codex', // i18n-ignore
   opencode: 'OpenCode', // i18n-ignore
   copilot: 'Copilot CLI', // i18n-ignore
   gemini: 'Gemini CLI', // i18n-ignore
-  antigravity: 'Antigravity CLI' // i18n-ignore
+  antigravity: 'Antigravity CLI', // i18n-ignore
+  muse: 'Muse Code' // i18n-ignore
 }
 const installed = computed(() =>
   Object.fromEntries(ALL_AGENTS.map((id) => [id, !!props.agents.find((a) => a.id === id && a.available)]))
@@ -85,10 +93,11 @@ const skillsOfLabel = (shown, count) =>
   count === 1
     ? t('skills.installed.countOf', '{{shown}} of {{count}} skill', { shown, count })
     : t('skills.installed.countOf', '{{shown}} of {{count}} skills', { shown, count })
-const filesLabel = (pkg) =>
-  pkg.files.length === 1
-    ? t('skills.preview.files', '{{count}} file, {{size}}', { count: 1, size: size(pkg.totalBytes) })
-    : t('skills.preview.files', '{{count}} files, {{size}}', { count: pkg.files.length, size: size(pkg.totalBytes) })
+const filesSizeLabel = (count, bytes) =>
+  count === 1
+    ? t('skills.preview.files', '{{count}} file, {{size}}', { count: 1, size: size(bytes) })
+    : t('skills.preview.files', '{{count}} files, {{size}}', { count, size: size(bytes) })
+const filesLabel = (pkg) => filesSizeLabel(pkg.files.length, pkg.totalBytes)
 const scriptsLabel = (pkg) =>
   t('skills.preview.scripts', 'It includes scripts or programs ({{names}}). Tessel never runs them, but an agent using the skill may.', {
     names: pkg.scripts.slice(0, 5).join(', ') + (pkg.scripts.length > 5 ? '…' : '')
@@ -347,15 +356,25 @@ function focusRow(i) {
   const el = rowEls[Math.max(0, Math.min(n - 1, i))]
   if (el) el.focus()
 }
-function onRowKey(e, i, g) {
-  if (e.key === 'ArrowDown') focusRow(i + 1)
-  else if (e.key === 'ArrowUp') focusRow(i - 1)
-  else if (e.key === 'Home') focusRow(0)
-  else if (e.key === 'End') focusRow(shown.value.length - 1)
-  else if (e.key === 'ArrowRight' && openKey.value !== g.key) toggleGroup(g, true)
-  else if (e.key === 'ArrowLeft' && openKey.value === g.key) toggleGroup(g, false)
+// The keys of a list of rows (the skills, the skills found, the plugins):
+// arrows move between rows, Home and End to its ends; right opens a row,
+// left closes it.
+function rowKeys(e, els, count, i, open, toggle) {
+  const focus = (j) => {
+    const el = els[Math.max(0, Math.min(count - 1, j))]
+    if (el) el.focus()
+  }
+  if (e.key === 'ArrowDown') focus(i + 1)
+  else if (e.key === 'ArrowUp') focus(i - 1)
+  else if (e.key === 'Home') focus(0)
+  else if (e.key === 'End') focus(count - 1)
+  else if (e.key === 'ArrowRight' && !open) toggle(true)
+  else if (e.key === 'ArrowLeft' && open) toggle(false)
   else return
   e.preventDefault()
+}
+function onRowKey(e, i, g) {
+  rowKeys(e, rowEls, shown.value.length, i, openKey.value === g.key, (open) => toggleGroup(g, open))
 }
 // Escape inside an open skill closes it (and nothing else), back on its row.
 function onItemEscape(e, g, i) {
@@ -562,34 +581,89 @@ async function update(copy) {
   resetAdd()
   updating.value = copy
   tab.value = 'add'
+  const seq = ++lookSeq
   busy.value = 'look'
   try {
     const res = await window.shellApi.skillsForUpdate(copy.dir)
+    if (seq !== lookSeq) return
     if (res && res.ok === false) addError.value = res.error
     else preview.value = res
+  } catch (err) {
+    if (seq === lookSeq) addError.value = errorText(err)
   } finally {
-    busy.value = ''
+    if (seq === lookSeq) busy.value = ''
   }
 }
 
 // ---------------------------------------------------------------- Add
+// Three steps: where it comes from; what was found (one card per skill of a
+// repository), read before installing; the agents and the scope. Then the
+// result for each folder it went to.
 const from = ref('github') // 'github' | 'folder'
 const repoInput = ref('')
-const candidates = ref(null) // { repo, candidates: [...] }
+const repoEl = ref(null)
+const candidates = ref(null) // { repo, commit, candidates: [{ path, name, description, files, bytes }] }
+const pickedPath = ref(null) // the skill of `candidates` shown
 const preview = ref(null) // the package shown before installing
+const folderDir = ref('') // the folder chosen (From a folder)
 const addError = ref('')
 const results = ref(null)
+const resultName = ref('') // the skill those results are about
 const targets = reactive(Object.fromEntries(ALL_AGENTS.map((a) => [a, false])))
+const targetsTouched = ref(false) // chosen by the user: kept from one skill to the next
 const scope = ref('user')
+// The preview's parts shown: the instructions (formatted, or their source) and the files.
+const mdOpen = ref(false)
+const mdSource = ref(false)
+const filesOpen = ref(false)
+// One lookup at a time: the answer to an older one (another skill clicked
+// meanwhile, the source changed) is dropped.
+let lookSeq = 0
+const EXAMPLE_REPO = 'anthropics/skills' // i18n-ignore
+const SKILL_FILE = 'SKILL.md' // i18n-ignore
 
-function resetAdd() {
-  candidates.value = null
-  preview.value = null
-  addError.value = ''
-  results.value = null
-  updating.value = null
+// The agents found on this computer; Claude Code when none is (the window is never empty).
+function defaultTargets() {
   for (const a of ALL_AGENTS) targets[a] = installed.value[a] || (a === 'claude' && !ALL_AGENTS.some((x) => installed.value[x]))
 }
+// The agents can arrive after the window opens: the defaults follow them until the user chooses.
+watch(installed, () => {
+  if (!targetsTouched.value) defaultTargets()
+})
+
+function resetPreview() {
+  preview.value = null
+  mdOpen.value = false
+  mdSource.value = false
+  filesOpen.value = false
+}
+function resetAdd() {
+  lookSeq++
+  candidates.value = null
+  pickedPath.value = null
+  resetPreview()
+  addError.value = ''
+  results.value = null
+  resultName.value = ''
+  updating.value = null
+}
+// The Add tab. A finished update is left behind: Add starts afresh.
+function openAdd() {
+  if (updating.value && results.value && results.value.every((r) => r.ok)) resetAdd()
+  tab.value = 'add'
+}
+function setFrom(kind) {
+  if (from.value === kind) return
+  from.value = kind
+  folderDir.value = ''
+  resetAdd()
+}
+function useExample() {
+  repoInput.value = EXAMPLE_REPO
+  addError.value = ''
+  nextTick(() => repoEl.value && repoEl.value.focus())
+}
+const errorText = (err) => (err && err.message) || String(err)
 
 async function lookUp(pick = null) {
   const input = repoInput.value.trim()
@@ -598,16 +672,32 @@ async function lookUp(pick = null) {
   else {
     addError.value = ''
     results.value = null
+    resetPreview()
   }
-  busy.value = 'look'
+  pickedPath.value = pick
+  const seq = ++lookSeq
+  busy.value = pick == null ? 'look' : 'pick'
   try {
     const res = await window.shellApi.skillsFromGithub({ input, pick })
+    if (seq !== lookSeq) return
     if (res && res.ok === false) addError.value = res.error
     else if (res && res.candidates) candidates.value = res
     else preview.value = res
+  } catch (err) {
+    if (seq === lookSeq) addError.value = errorText(err)
   } finally {
-    busy.value = ''
+    if (seq === lookSeq) busy.value = ''
   }
+}
+
+// A skill of the repository: opened (its preview read) or closed again.
+function pickCandidate(c) {
+  if (pickedPath.value !== c.path) return lookUp(c.path)
+  lookSeq++
+  pickedPath.value = null
+  resetPreview()
+  results.value = null
+  if (busy.value === 'pick') busy.value = ''
 }
 
 async function chooseFolder() {
@@ -617,18 +707,114 @@ async function chooseFolder() {
   })
   if (!dir) return
   resetAdd()
+  folderDir.value = dir
+  const seq = ++lookSeq
   busy.value = 'look'
   try {
     const res = await window.shellApi.skillsFromFolder(dir)
+    if (seq !== lookSeq) return
     if (res && res.ok === false) addError.value = res.error
     else preview.value = res
+  } catch (err) {
+    if (seq === lookSeq) addError.value = errorText(err)
   } finally {
-    busy.value = ''
+    if (seq === lookSeq) busy.value = ''
   }
 }
 
-const chosenAgents = computed(() => AGENTS.value.filter((a) => targets[a]))
+// What step 2 lists: each skill of the repository, or the one found.
+const foundItems = computed(() => {
+  if (candidates.value) return candidates.value.candidates.map((c) => ({ ...c, key: c.path }))
+  if (!preview.value) return []
+  const p = preview.value
+  return [{ key: '', path: '', name: p.name, description: p.description, files: p.files.length, bytes: p.totalBytes }]
+})
+const foundOpen = (item) => (candidates.value ? pickedPath.value === item.path : true)
+const foundRowId = (item) => `${uid}-found-${item.key.replace(/[^A-Za-z0-9_-]/g, '_')}` // i18n-ignore
+const foundDetailsId = (item) => `${uid}-found-details-${item.key.replace(/[^A-Za-z0-9_-]/g, '_')}` // i18n-ignore
+const foundEls = []
+function onFoundKey(e, i, item) {
+  rowKeys(e, foundEls, foundItems.value.length, i, foundOpen(item), () => pickCandidate(item))
+}
+// Escape inside an open skill closes it, back on its row.
+function onFoundEscape(e, item, i) {
+  if (!candidates.value || !foundOpen(item)) return
+  e.preventDefault()
+  e.stopPropagation()
+  pickCandidate(item)
+  nextTick(() => foundEls[i] && foundEls[i].focus())
+}
+// "3 skills in owner/repo @ 1a2b3c4".
+const foundLabel = computed(() => {
+  if (!candidates.value) return ''
+  const count = candidates.value.candidates.length
+  const repo = candidates.value.repo + (candidates.value.commit ? ` @ ${candidates.value.commit.slice(0, 7)}` : '') // i18n-ignore commit
+  return count === 1
+    ? t('skills.add.found', '{{count}} skill in {{repo}}', { count, repo })
+    : t('skills.add.found', '{{count}} skills in {{repo}}', { count, repo })
+})
+const itemSize = (item) => (item.files == null ? item.path : filesSizeLabel(item.files, item.bytes || 0))
+// Where the preview comes from, short: owner/repo/path @ commit, or the folder.
+function sourceShort(source) {
+  if (!source) return ''
+  if (source.kind !== 'github') return shortPath(source.path)
+  return `${source.owner}/${source.repo}${source.path ? '/' + source.path : ''}${source.commit ? ' @ ' + source.commit.slice(0, 7) : ''}` // i18n-ignore path
+}
+const sourceTitle = (source) => (source ? sourceLabel(source) + (source.commit ? ` @ ${source.commit}` : '') : '') // i18n-ignore commit
 
+// The instructions: the front matter as key/value pairs, the rest formatted
+// (only while shown: a SKILL.md can be long), or the file as it is.
+const frontmatter = computed(() => (preview.value ? splitFrontmatter(preview.value.skillMd) : { meta: [], body: '' }))
+const mdHtml = computed(() => (preview.value && mdOpen.value && !mdSource.value ? renderSkillMarkdown(frontmatter.value.body) : ''))
+// A link in the instructions: a web page opens in the browser, never here.
+function onMdClick(e) {
+  const a = e.target && e.target.closest ? e.target.closest('a[href]') : null
+  if (!a) return
+  e.preventDefault()
+  const href = a.getAttribute('href') || ''
+  if (/^https?:\/\//i.test(href) && window.shellApi.openExternal) window.shellApi.openExternal(href)
+}
+
+// Step 3: the agents (chips) and the scope.
+const chosenAgents = computed(() => AGENTS.value.filter((a) => targets[a]))
+const allChosen = computed(() => AGENTS.value.every((a) => targets[a]))
+function toggleTarget(a) {
+  targets[a] = !targets[a]
+  targetsTouched.value = true
+}
+function chooseAll(on) {
+  for (const a of AGENTS.value) targets[a] = on
+  targetsTouched.value = true
+}
+const agentChipLabel = (a) => (installed.value[a] ? AGENT_NAME[a] : t('skills.add.agentMissing', '{{agent}} (not found on this computer)', { agent: AGENT_NAME[a] }))
+// The folders agents share, said only when it matters for the agents chosen.
+const sharedNote = computed(() => {
+  const chosen = chosenAgents.value
+  if (scope.value === 'project' && (chosen.includes('codex') || chosen.includes('antigravity')))
+    return t('skills.add.sharedProject', "Codex and Antigravity CLI get it in the project's shared .agents folder, which OpenCode, Copilot CLI and Gemini CLI read too.")
+  if (scope.value === 'user' && chosen.includes('codex')) return t('skills.add.codexNote', 'Codex gets it in the shared .agents folder, which OpenCode, Copilot CLI and Gemini CLI read too.')
+  return ''
+})
+const projectName = computed(() => (project.value ? String(project.value).replace(/[\\/]+$/, '').split(/[\\/]/).pop() : ''))
+watch(project, (p) => {
+  if (!p && scope.value === 'project') scope.value = 'user'
+})
+// "For Claude Code and Codex · All projects"; three agents or more by their number (the chips name them).
+const installSummary = computed(() => {
+  const n = chosenAgents.value.length
+  if (!n) return ''
+  const agents = n <= 2 ? agentNames(chosenAgents.value) : t('skills.add.agentCount', '{{count}} agents', { count: n })
+  return t('skills.add.summary', 'For {{agents}} · {{scope}}', { agents, scope: scopeLabel(scope.value) })
+})
+// Nothing left to do: every folder has it, for the agents and scope still
+// chosen (another choice brings the Install button back).
+const choiceKey = () => `${scope.value}:${chosenAgents.value.join(',')}` // i18n-ignore
+const doneKey = ref('')
+const allDone = computed(
+  () => !!results.value && results.value.length > 0 && results.value.every((r) => r.ok) && (!!updating.value || doneKey.value === choiceKey())
+)
+
+let listing = null // the list read again after an install
 async function install(replaceDir = null) {
   if (!preview.value) return
   addError.value = ''
@@ -648,7 +834,7 @@ async function install(replaceDir = null) {
     })
     if (sure !== true) return
   }
-  busy.value = 'install'
+  busy.value = replaceDir ? `replace:${replaceDir}` : 'install' // i18n-ignore
   try {
     const res = await window.shellApi.skillsInstall({
       id: preview.value.id,
@@ -661,7 +847,10 @@ async function install(replaceDir = null) {
       addError.value = res.error
       return
     }
-    results.value = res.results
+    // Replace it: that folder's line changes, the others stay as they were.
+    results.value = replaceDir && results.value ? results.value.map((r) => res.results.find((x) => x.dir === r.dir) || r) : res.results
+    resultName.value = res.name
+    if (!replaceDir) doneKey.value = choiceKey()
     const done = res.results.filter((r) => r.ok)
     if (done.length)
       say(
@@ -671,14 +860,64 @@ async function install(replaceDir = null) {
           ? t('skills.add.updated', 'Updated "{{name}}". Agents use it from their next session.', { name: res.name })
           : t('skills.add.installed', 'Installed "{{name}}" for {{agents}}. Agents use it from their next session.', {
               name: res.name,
-              agents: agentList([...new Set(done.flatMap((r) => r.seenBy))].filter((a) => AGENTS.value.includes(a)).map((a) => AGENT_NAME[a]))
+              agents: agentNames([...new Set(done.flatMap((r) => resultAgents(r)))])
             })
       )
-    if (res.ok && replace) updating.value = null
+  } catch (err) {
+    addError.value = errorText(err)
   } finally {
     busy.value = ''
   }
-  refresh()
+  listing = refresh()
+}
+
+// Each result: the agents it was for (one folder can be for two: Codex and
+// the Antigravity CLI share a project's .agents), and who else reads it.
+const resultAgents = (r) => (r.agents && r.agents.length ? r.agents.filter((a) => ALL_AGENTS.includes(a)) : (r.seenBy || []).filter((a) => AGENTS.value.includes(a)))
+const alsoSeen = (r) => (r.seenBy || []).filter((a) => AGENTS.value.includes(a) && !resultAgents(r).includes(a))
+function resultState(r) {
+  if (r.ok) return t('skills.add.done', 'Installed')
+  if (r.exists) return t('skills.add.exists', 'Already there')
+  return t('skills.add.failed', 'Failed')
+}
+const resultsHead = computed(() => {
+  const list = results.value || []
+  return t('skills.add.resultsDone', '{{done}} of {{total}} done', { done: list.filter((r) => r.ok).length, total: list.length })
+})
+const alsoSeenLabel = (r) => t('skills.add.alsoSeen', 'Also seen by {{agents}}', { agents: agentNames(alsoSeen(r)) })
+const updatingTitle = computed(() => (updating.value ? t('skills.add.updatingName', 'Update {{name}}', { name: updating.value.name }) : ''))
+const footSummary = computed(() =>
+  updating.value ? t('skills.add.updateSummary', 'Replaces the copy in {{path}}', { path: shortPath(updating.value.dir) }) : installSummary.value
+)
+
+// The skill just installed, opened in the Installed list.
+async function viewInstalled() {
+  const name = String(resultName.value || (preview.value && preview.value.name) || '').toLowerCase()
+  const kind = preview.value && preview.value.source && preview.value.source.kind === 'folder' ? 'folder' : 'github'
+  query.value = ''
+  originFilter.value = 'all'
+  tab.value = 'installed'
+  if (listing) await listing
+  const g = groups.value.find((x) => x.key === `${kind}:${name}`) || groups.value.find((x) => x.name.toLowerCase() === name)
+  if (!g) return
+  toggleGroup(g, true)
+  await nextTick()
+  const el = rowEls[shown.value.indexOf(g)]
+  if (!el) return
+  el.focus()
+  if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'nearest' })
+}
+function addAnother() {
+  resetAdd()
+  folderDir.value = ''
+  if (from.value === 'github') {
+    repoInput.value = ''
+    nextTick(() => repoEl.value && repoEl.value.focus())
+  }
+}
+function cancelUpdate() {
+  resetAdd()
+  tab.value = 'installed'
 }
 
 // A setup command the skill mentions: shown exactly, run only when asked, in
@@ -696,37 +935,90 @@ async function runSetup(command) {
 
 // ---------------------------------------------------------------- Plugins
 // The Antigravity CLI's plugins (bundles of skills, MCP servers, hooks and
-// rules): listed, turned on or off and uninstalled with agy's own commands
-// (src/main/agyPlugins.js). Installing one can ask questions (a plugin's
-// settings form): it runs in a pane the user sees.
-const showPlugins = computed(() => installed.value.antigravity && !!window.shellApi.agyPluginsList)
+// rules) and Muse Code's (skills, commands, hooks and MCP servers), listed
+// like the skills: one row each, its details on a click. Turned on or off and
+// uninstalled with each one's own commands (src/main/agyPlugins.js,
+// musePlugins.js). Installing one can ask questions (a plugin's settings
+// form, its hooks' approval): it runs in a pane the user sees. One tab per
+// agent installed here.
+const PLUGIN_API = {
+  antigravity: { list: 'agyPluginsList', set: 'agyPluginsSet', remove: 'agyPluginsRemove' },
+  muse: { list: 'musePluginsList', set: 'musePluginsSet', remove: 'musePluginsRemove' }
+}
+const pluginAgents = computed(() => Object.keys(PLUGIN_API).filter((id) => installed.value[id] && !!window.shellApi[PLUGIN_API[id].list]))
+const showPlugins = computed(() => pluginAgents.value.length > 0)
+const pluginAgent = ref('antigravity')
+const pluginApi = (op) => window.shellApi[PLUGIN_API[pluginAgent.value][op]]
+const musePlugins = computed(() => pluginAgent.value === 'muse')
+// Its own words: which agent, its marketplace, its panes.
+const pluginWords = {
+  intro: () =>
+    musePlugins.value
+      ? t('skills.musePlugins.intro', 'Muse Code plugins bundle skills, commands, hooks and MCP servers. Browse them with /plugins in a Muse Code pane, or install one here from a folder or by name (name@marketplace). Muse asks you to approve the hooks of a plugin before they run.')
+      : t('skills.plugins.intro', 'Antigravity CLI plugins bundle skills, MCP servers, subagents, hooks and rules. Browse its marketplace with /plugin in an Antigravity CLI pane, or install one here by name or from a folder.'),
+  placeholder: () => (musePlugins.value ? t('skills.musePlugins.placeholder', 'name@marketplace') : t('skills.plugins.placeholder', 'name@antigravity-plugins-official')),
+  empty: () => (musePlugins.value ? t('skills.musePlugins.empty', 'No Muse Code plugins installed.') : t('skills.plugins.empty', 'No Antigravity CLI plugins installed.')),
+  turnedOff: (name) =>
+    musePlugins.value
+      ? t('skills.musePlugins.turnedOff', 'Turned off "{{name}}". Muse Code panes use the change from their next start.', { name })
+      : t('skills.plugins.turnedOff', 'Turned off "{{name}}". Antigravity CLI panes use the change from their next start.', { name }),
+  turnedOn: (name) =>
+    musePlugins.value
+      ? t('skills.musePlugins.turnedOn', 'Turned on "{{name}}". Muse Code panes use the change from their next start.', { name })
+      : t('skills.plugins.turnedOn', 'Turned on "{{name}}". Antigravity CLI panes use the change from their next start.', { name }),
+  failed: () => (musePlugins.value ? t('skills.musePlugins.failed', 'Muse Code could not change it.') : t('skills.plugins.failed', 'The Antigravity CLI could not change it.')),
+  removeText: () =>
+    musePlugins.value
+      ? t('skills.musePlugins.removeText', 'Muse Code deletes its installed copy, with the skills, commands, hooks and MCP servers it brought.')
+      : t('skills.plugins.removeText', 'The Antigravity CLI deletes its folder, with the skills, MCP servers and hooks it brought.'),
+  installPane: (name) => (musePlugins.value ? t('skills.musePlugins.installPane', 'Muse plugin: {{name}}', { name }) : t('skills.plugins.installPane', 'Antigravity plugin: {{name}}', { name })),
+  pickTitle: () =>
+    musePlugins.value ? t('skills.musePlugins.pickTitle', 'Choose a plugin folder (with its .muse-plugin or .claude-plugin folder)') : t('skills.plugins.pickTitle', 'Choose a plugin folder (with a plugin.json)'),
+  onHint: () => (musePlugins.value ? t('skills.musePlugins.onHint', 'On: Muse Code panes load it when they start.') : t('skills.plugins.onHint', 'On: Antigravity CLI panes load it when they start.')),
+  offHint: () => (musePlugins.value ? t('skills.musePlugins.offHint', 'Off: Muse Code panes do not load it.') : t('skills.plugins.offHint', 'Off: Antigravity CLI panes do not load it.'))
+}
 const plugins = ref([])
 const pluginsLoading = ref(false)
+const pluginsLoaded = ref(false)
 const pluginsError = ref('')
 const pluginTarget = ref('')
 async function loadPlugins() {
-  if (!showPlugins.value) return
+  const list = showPlugins.value ? pluginApi('list') : null
+  if (!list) return
   pluginsLoading.value = true
   pluginsError.value = ''
   try {
-    const res = await window.shellApi.agyPluginsList()
+    const res = await list()
     if (res && res.ok === false) pluginsError.value = res.error
     else {
       plugins.value = (res && res.plugins) || []
       if (res && res.error) pluginsError.value = res.error
     }
   } catch (err) {
-    pluginsError.value = (err && err.message) || String(err)
+    pluginsError.value = errorText(err)
   } finally {
     pluginsLoading.value = false
+    pluginsLoaded.value = true
   }
 }
-function openPlugins() {
+function openPlugins(agent = 'antigravity') {
+  if (pluginAgent.value !== agent) {
+    pluginAgent.value = agent
+    plugins.value = []
+    pluginsError.value = ''
+    pluginsLoaded.value = false
+    pluginOpen.value = null
+  }
   tab.value = 'plugins'
   loadPlugins()
 }
-// "2 skills · 1 MCP server": what a plugin bundles.
-function pluginParts(p) {
+const pluginsCountLabel = computed(() =>
+  plugins.value.length === 1
+    ? t('skills.plugins.count', '{{count}} plugin', { count: 1 })
+    : t('skills.plugins.count', '{{count}} plugins', { count: plugins.value.length })
+)
+// What a plugin bundles: "2 skills", "1 MCP server"…
+function pluginPartList(p) {
   const c = p.counts || {}
   const parts = []
   if (c.skills) parts.push(c.skills === 1 ? t('skills.plugins.skillOne', '1 skill') : t('skills.plugins.skillMany', '{{count}} skills', { count: c.skills }))
@@ -735,15 +1027,46 @@ function pluginParts(p) {
   if (c.hooks) parts.push(t('skills.plugins.hooks', 'hooks'))
   if (c.rules) parts.push(t('skills.plugins.rules', 'rules'))
   if (c.commands) parts.push(c.commands === 1 ? t('skills.plugins.commandOne', '1 command') : t('skills.plugins.commandMany', '{{count}} commands', { count: c.commands }))
-  return parts.join(' · ') || (p.source ? t('skills.plugins.from', 'From {{source}}', { source: p.source }) : '')
+  return parts
 }
+// Where Muse says a plugin came from (its install record's provenance), in words.
+function museFrom(source) {
+  if (source === 'native-local') return t('skills.musePlugins.fromFolder', 'Installed from a folder')
+  if (source === 'foreign-import') return t('skills.musePlugins.fromImport', 'Imported from a Claude Code or Codex plugin')
+  if (source === 'marketplace-user-added') return t('skills.musePlugins.fromMarketplace', 'From a marketplace')
+  return source ? t('skills.plugins.from', 'From {{source}}', { source }) : ''
+}
+const pluginFrom = (p) => (musePlugins.value ? museFrom(p.source) : p.source ? t('skills.plugins.from', 'From {{source}}', { source: p.source }) : '')
+const pluginParts = (p) => pluginPartList(p).join(' · ') || pluginFrom(p) || t('skills.plugins.nothing', 'Nothing listed in it.')
+
+// One plugin open at a time, with the same keys as the skills list.
+const pluginOpen = ref(null)
+const pluginEls = []
+const pluginRowId = (p) => `${uid}-plugin-${p.name.replace(/[^A-Za-z0-9_-]/g, '_')}` // i18n-ignore
+const pluginDetailsId = (p) => `${uid}-plugin-details-${p.name.replace(/[^A-Za-z0-9_-]/g, '_')}` // i18n-ignore
+function togglePluginRow(p, open = pluginOpen.value !== p.name) {
+  pluginOpen.value = open ? p.name : null
+}
+function onPluginKey(e, i, p) {
+  rowKeys(e, pluginEls, plugins.value.length, i, pluginOpen.value === p.name, (open) => togglePluginRow(p, open))
+}
+function onPluginEscape(e, p, i) {
+  if (pluginOpen.value !== p.name) return
+  e.preventDefault()
+  e.stopPropagation()
+  togglePluginRow(p, false)
+  nextTick(() => pluginEls[i] && pluginEls[i].focus())
+}
+watch(plugins, (list) => {
+  if (pluginOpen.value && !list.some((p) => p.name === pluginOpen.value)) pluginOpen.value = null
+})
+
 async function togglePlugin(p) {
   busy.value = `plugin:${p.name}` // i18n-ignore
   try {
-    const res = await window.shellApi.agyPluginsSet({ name: p.name, enabled: !p.enabled })
-    if (res && res.ok)
-      say(p.enabled ? t('skills.plugins.turnedOff', 'Turned off "{{name}}". Antigravity CLI panes use the change from their next start.', { name: p.name }) : t('skills.plugins.turnedOn', 'Turned on "{{name}}". Antigravity CLI panes use the change from their next start.', { name: p.name }))
-    else say((res && res.error) || t('skills.plugins.failed', 'The Antigravity CLI could not change it.'), 'error')
+    const res = await pluginApi('set')({ name: p.name, enabled: !p.enabled })
+    if (res && res.ok) say(p.enabled ? pluginWords.turnedOff(p.name) : pluginWords.turnedOn(p.name))
+    else say((res && res.error) || pluginWords.failed(), 'error')
   } finally {
     busy.value = ''
   }
@@ -752,28 +1075,29 @@ async function togglePlugin(p) {
 async function removePlugin(p) {
   const ok = await askConfirm({
     title: t('skills.plugins.removeConfirm', 'Uninstall the plugin "{{name}}"?', { name: p.name }),
-    text: t('skills.plugins.removeText', 'The Antigravity CLI deletes its folder, with the skills, MCP servers and hooks it brought.'),
+    text: pluginWords.removeText(),
     confirmLabel: t('skills.plugins.uninstall', 'Uninstall'),
     danger: true
   })
   if (ok !== true) return
   busy.value = `plugin:${p.name}` // i18n-ignore
   try {
-    const res = await window.shellApi.agyPluginsRemove({ name: p.name })
+    const res = await pluginApi('remove')({ name: p.name })
     if (res && res.ok) say(t('skills.plugins.removed', 'Uninstalled "{{name}}".', { name: p.name }))
-    else say((res && res.error) || t('skills.plugins.failed', 'The Antigravity CLI could not change it.'), 'error')
+    else say((res && res.error) || pluginWords.failed(), 'error')
   } finally {
     busy.value = ''
   }
   loadPlugins()
 }
-// A marketplace name (name@antigravity-plugins-official) or a folder: the
-// install runs in a pane the user sees. Only a name or a plain path goes on
-// the command line (nothing a shell would read as more).
+// A marketplace name (name@antigravity-plugins-official, name@marketplace)
+// or a folder: the install runs in a pane the user sees. Only a name or a
+// plain path goes on the command line (nothing a shell would read as more).
 const PLUGIN_TARGET = /^[A-Za-z0-9][A-Za-z0-9._@/-]{0,150}$/
 const PLUGIN_FOLDER = /^[A-Za-z]:\\[^"'`$;&|<>%\r\n]{1,250}$/
 function runPluginInstall(target) {
-  emit('run', { label: t('skills.plugins.installPane', 'Antigravity plugin: {{name}}', { name: target }), command: `agy plugin install "${target}"` }) // i18n-ignore
+  const command = musePlugins.value ? `muse plugins install "${target}"` : `agy plugin install "${target}"` // i18n-ignore
+  emit('run', { label: pluginWords.installPane(target), command })
 }
 function installPlugin() {
   const target = pluginTarget.value.trim()
@@ -786,7 +1110,7 @@ function installPlugin() {
   say(t('skills.plugins.installing', 'Installing in a terminal. Refresh this list when it is done.'))
 }
 async function installPluginFolder() {
-  const dir = await window.shellApi.pickFolder({ title: t('skills.plugins.pickTitle', 'Choose a plugin folder (with a plugin.json)') })
+  const dir = await window.shellApi.pickFolder({ title: pluginWords.pickTitle() })
   if (!dir) return
   if (!PLUGIN_FOLDER.test(dir)) {
     pluginsError.value = t('skills.plugins.badFolder', 'This folder path has characters Tessel cannot pass on a command line.')
@@ -807,7 +1131,7 @@ function onEscape(e) {
 
 onMounted(async () => {
   if (cardEl.value && !props.embedded) cardEl.value.focus()
-  resetAdd()
+  defaultTargets()
   await refresh()
   checkUpdates(false)
 })
@@ -842,11 +1166,18 @@ onMounted(async () => {
           <button class="launch-seg-btn" :class="{ on: tab === 'installed' }" @click="tab = 'installed'">
             {{ t('skills.tab.installed', 'Installed') }}<span v-if="groups.length" class="mcp-count">{{ groups.length }}</span>
           </button>
-          <button class="launch-seg-btn" :class="{ on: tab === 'add' }" @click="tab = 'add'">
+          <button class="launch-seg-btn" :class="{ on: tab === 'add' }" data-test="skills-tab-add" @click="openAdd">
             {{ t('skills.tab.add', 'Add') }}
           </button>
-          <button v-if="showPlugins" class="launch-seg-btn" :class="{ on: tab === 'plugins' }" data-test="skills-tab-plugins" @click="openPlugins">
-            {{ t('skills.tab.plugins', 'Antigravity plugins') }}
+          <button
+            v-for="id in pluginAgents"
+            :key="id"
+            class="launch-seg-btn"
+            :class="{ on: tab === 'plugins' && pluginAgent === id }"
+            :data-test="id === 'muse' ? 'skills-tab-muse-plugins' : 'skills-tab-plugins'"
+            @click="openPlugins(id)"
+          >
+            {{ id === 'muse' ? t('skills.tab.musePlugins', 'Muse plugins') : t('skills.tab.plugins', 'Antigravity plugins') }}
           </button>
         </div>
       </div>
@@ -904,7 +1235,7 @@ onMounted(async () => {
 
         <div v-else-if="!groups.length" class="mcp-empty">
           {{ t('skills.installed.empty', 'No skills yet.') }}
-          <button type="button" class="exit-btn primary skills-btn" @click="tab = 'add'">{{ t('skills.installed.addOne', 'Add a skill') }}</button>
+          <button type="button" class="exit-btn primary skills-btn" @click="openAdd">{{ t('skills.installed.addOne', 'Add a skill') }}</button>
         </div>
 
         <div v-else-if="!shown.length" class="mcp-empty skills-nomatch">
@@ -1128,214 +1459,478 @@ onMounted(async () => {
         </ul>
       </template>
 
-      <!-- ================= Antigravity plugins ================= -->
+      <!-- ================= Antigravity / Muse plugins ================= -->
       <template v-else-if="tab === 'plugins'">
-        <p class="set-hint skills-plugins-intro">
-          {{
-            t('skills.plugins.intro', 'Antigravity CLI plugins bundle skills, MCP servers, subagents, hooks and rules. Browse its marketplace with /plugin in an Antigravity CLI pane, or install one here by name or from a folder.')
-          }}
-        </p>
-        <form class="mcp-toolbar" @submit.prevent="installPlugin">
-          <input
-            v-model="pluginTarget"
-            class="set-number skills-search"
-            :placeholder="t('skills.plugins.placeholder', 'name@antigravity-plugins-official')"
-            spellcheck="false"
-            data-test="agy-plugin-target"
-          />
-          <button class="exit-btn" type="submit" :disabled="!pluginTarget.trim()">{{ t('skills.plugins.install', 'Install') }}</button>
-          <button class="exit-btn" type="button" @click="installPluginFolder">{{ t('skills.plugins.fromFolder', 'From a folder…') }}</button>
-          <span class="set-hint">
-            <template v-if="pluginsLoading">{{ t('skills.loading', 'Loading…') }}</template>
-          </span>
-          <button class="exit-btn" type="button" :disabled="pluginsLoading" @click="loadPlugins">{{ t('skills.installed.refresh', 'Refresh') }}</button>
-        </form>
-        <p v-if="pluginsError" class="mcp-error">{{ pluginsError }}</p>
-        <div v-if="!pluginsLoading && !plugins.length && !pluginsError" class="mcp-empty">
-          {{ t('skills.plugins.empty', 'No Antigravity CLI plugins installed.') }}
-        </div>
-        <div v-for="p in plugins" :key="p.name" class="mcp-server" :data-test="'agy-plugin-' + p.name">
-          <div class="mcp-server-head">
-            <BrandIcon :kind="'plugin-' + p.name" accent="#8a93a6" :label="p.name" :size="22" />
-            <div class="mcp-row-main">
-              <span class="mcp-name">
-                {{ p.name }}
-                <span v-if="p.version" class="mcp-scope">{{ p.version }}</span>
-                <span v-if="!p.enabled" class="launch-tag muted">{{ t('skills.plugins.off', 'Turned off') }}</span>
-              </span>
-              <span class="set-hint skills-desc">{{ pluginParts(p) }}</span>
-            </div>
-            <span class="mcp-agent-actions">
-              <button class="exit-btn" :disabled="!!busy" @click="togglePlugin(p)">
-                {{ p.enabled ? t('skills.plugins.turnOff', 'Turn off') : t('skills.plugins.turnOn', 'Turn on') }}
-              </button>
-              <button class="ws-icon-btn small danger" :title="t('skills.plugins.uninstall', 'Uninstall')" :disabled="!!busy" @click="removePlugin(p)">
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-                </svg>
-              </button>
-            </span>
+        <p class="set-hint skills-plugins-intro">{{ pluginWords.intro() }}</p>
+        <form class="skills-plugin-form" @submit.prevent="installPlugin">
+          <div class="skills-field" :class="{ invalid: !!pluginsError }">
+            <svg class="skills-field-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 01-7 0zM8 11v3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <input
+              v-model="pluginTarget"
+              class="skills-field-input"
+              :placeholder="pluginWords.placeholder()"
+              :aria-label="t('skills.plugins.targetLabel', 'Plugin name or folder')"
+              :aria-invalid="pluginsError ? 'true' : undefined"
+              spellcheck="false"
+              autocomplete="off"
+              :data-test="musePlugins ? 'muse-plugin-target' : 'agy-plugin-target'"
+            />
+            <button class="exit-btn primary skills-btn skills-field-btn" type="submit" :disabled="!pluginTarget.trim()">{{ t('skills.plugins.install', 'Install') }}</button>
           </div>
+          <button class="exit-btn skills-btn skills-plugin-folder" type="button" @click="installPluginFolder">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
+            </svg>
+            {{ t('skills.plugins.fromFolder', 'From a folder…') }}
+          </button>
+        </form>
+        <p v-if="pluginsError" class="skills-add-error" role="alert">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 2.2l6.2 11H1.8zM8 6.5v3.2M8 11.6h.01" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>{{ pluginsError }}</span>
+        </p>
+
+        <div class="mcp-toolbar skills-toolbar">
+          <span class="set-hint skills-count" aria-live="polite">
+            <template v-if="pluginsLoading">{{ t('skills.loading', 'Loading…') }}</template>
+            <template v-else-if="pluginsLoaded">{{ pluginsCountLabel }}</template>
+          </span>
+          <button type="button" class="exit-btn skills-btn" :disabled="pluginsLoading" @click="loadPlugins">{{ t('skills.installed.refresh', 'Refresh') }}</button>
         </div>
+
+        <ul v-if="pluginsLoading && !plugins.length" class="skills-list" aria-busy="true" :aria-label="t('skills.loading', 'Loading…')">
+          <li v-for="n in 2" :key="n" class="skills-item skills-skeleton" aria-hidden="true">
+            <span class="skills-skel-icon" />
+            <span class="skills-skel-lines"><span /><span /></span>
+          </li>
+        </ul>
+        <div v-else-if="pluginsLoaded && !plugins.length && !pluginsError" class="mcp-empty">
+          {{ pluginWords.empty() }}
+        </div>
+        <ul v-else-if="plugins.length" class="skills-list" :aria-label="t('skills.plugins.listLabel', 'Installed plugins')">
+          <li
+            v-for="(p, i) in plugins"
+            :key="p.name"
+            class="skills-item"
+            :class="{ open: pluginOpen === p.name, off: !p.enabled }"
+            :data-test="(musePlugins ? 'muse-plugin-' : 'agy-plugin-') + p.name"
+            @keydown.escape="onPluginEscape($event, p, i)"
+          >
+            <button
+              :id="pluginRowId(p)"
+              :ref="(el) => (pluginEls[i] = el)"
+              type="button"
+              class="skills-row"
+              :aria-expanded="pluginOpen === p.name"
+              :aria-controls="pluginDetailsId(p)"
+              @click="togglePluginRow(p)"
+              @keydown="onPluginKey($event, i, p)"
+            >
+              <BrandIcon class="skills-row-icon" :kind="'plugin-' + p.name" accent="#8a93a6" :label="p.name" :size="20" />
+              <span class="skills-row-main">
+                <span class="skills-row-top">
+                  <span class="skills-row-name">{{ p.label || p.name }}</span>
+                  <span v-if="p.version" class="skills-tag skills-scope">{{ p.version }}</span>
+                  <span v-if="!p.enabled" class="skills-tag skills-off">{{ t('skills.plugins.off', 'Turned off') }}</span>
+                </span>
+                <span class="skills-row-desc">{{ pluginParts(p) }}</span>
+              </span>
+              <svg class="skills-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M6 3.5l4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+            <div v-if="pluginOpen === p.name" :id="pluginDetailsId(p)" class="skills-details" role="region" :aria-labelledby="pluginRowId(p)">
+              <p v-if="p.description" class="skills-details-desc">{{ p.description }}</p>
+              <p v-if="pluginFrom(p)" class="skills-details-desc">{{ pluginFrom(p) }}</p>
+              <div class="skills-section-head">
+                <span>{{ t('skills.plugins.bundles', 'What it brings') }}</span>
+              </div>
+              <div class="skills-plugin-parts">
+                <span v-for="part in pluginPartList(p)" :key="part" class="skills-tag">{{ part }}</span>
+                <span v-if="!pluginPartList(p).length" class="set-hint">{{ t('skills.plugins.nothing', 'Nothing listed in it.') }}</span>
+              </div>
+              <div class="skills-plugin-foot">
+                <span class="set-hint skills-plugin-state">
+                  {{ p.enabled ? pluginWords.onHint() : pluginWords.offHint() }}
+                </span>
+                <span class="skills-actions">
+                  <button type="button" class="exit-btn skills-btn" :disabled="!!busy" :data-test="musePlugins ? 'muse-plugin-toggle' : 'agy-plugin-toggle'" @click="togglePlugin(p)">
+                    {{ p.enabled ? t('skills.plugins.turnOff', 'Turn off') : t('skills.plugins.turnOn', 'Turn on') }}
+                  </button>
+                  <button type="button" class="exit-btn skills-btn skills-remove-all" :disabled="!!busy" :data-test="musePlugins ? 'muse-plugin-remove' : 'agy-plugin-remove'" @click="removePlugin(p)">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    {{ t('skills.plugins.uninstall', 'Uninstall') }}
+                  </button>
+                </span>
+              </div>
+            </div>
+          </li>
+        </ul>
       </template>
 
       <!-- ================= Add ================= -->
-      <template v-else>
-        <template v-if="!updating">
-          <div class="set-row">
-            <div class="set-label">{{ t('skills.add.from', 'From') }}</div>
-            <div class="launch-seg set-seg">
-              <button type="button" class="launch-seg-btn" :class="{ on: from === 'github' }" @click="(from = 'github'), resetAdd()">GitHub</button>
-              <button type="button" class="launch-seg-btn" :class="{ on: from === 'folder' }" @click="(from = 'folder'), resetAdd()">
-                {{ t('skills.add.folder', 'A folder') }}
-              </button>
-            </div>
+      <div v-else class="skills-add" :aria-busy="busy === 'install' ? 'true' : undefined">
+        <!-- An update: what is updated, instead of a source to choose. -->
+        <section v-if="updating" class="skills-step skills-updating" :aria-labelledby="uid + '-step-update'">
+          <div class="skills-step-head">
+            <h3 :id="uid + '-step-update'" class="skills-step-title">{{ updatingTitle }}</h3>
+            <button type="button" class="skills-link skills-step-aside" @click="cancelUpdate">{{ t('skills.add.cancelUpdate', 'Back to the list') }}</button>
           </div>
-          <form v-if="from === 'github'" class="set-row" @submit.prevent="lookUp()">
-            <div class="set-label">
-              {{ t('skills.add.repo', 'Repository') }}
-              <span class="set-hint">{{ t('skills.add.repoHint', 'owner/repo, owner/repo/path, or a github.com address') }}</span>
-            </div>
-            <div class="mcp-input-wrap">
-              <input v-model="repoInput" class="set-number mcp-input wide" :placeholder="'anthropics/skills'" spellcheck="false" />
-              <button class="exit-btn primary" type="submit" :disabled="!!busy || !repoInput.trim()">
-                {{ busy === 'look' ? t('skills.add.looking', 'Looking…') : t('skills.add.look', 'Look') }}
-              </button>
-            </div>
-          </form>
-          <div v-else class="set-row">
-            <div class="set-label">
-              {{ t('skills.add.folderLabel', 'Skill folder') }}
-              <span class="set-hint">{{ t('skills.add.folderHint', 'A folder with a SKILL.md at its top') }}</span>
-            </div>
-            <button class="exit-btn primary" :disabled="!!busy" @click="chooseFolder">
-              {{ busy === 'look' ? t('skills.add.looking', 'Looking…') : t('skills.add.choose', 'Choose a folder') }}
+          <span class="skills-path" :title="updating.dir">{{ shortPath(updating.dir) }}</span>
+          <p v-if="busy === 'look'" class="set-hint skills-looking">
+            <span class="skills-spinner" aria-hidden="true" />{{ t('skills.add.lookingUpdate', 'Getting the newest version from GitHub…') }}
+          </p>
+        </section>
+
+        <!-- Step 1: where it comes from. -->
+        <section v-else class="skills-step" :aria-labelledby="uid + '-step-source'">
+          <div class="skills-step-head">
+            <span class="skills-step-num" aria-hidden="true">1</span>
+            <h3 :id="uid + '-step-source'" class="skills-step-title">{{ t('skills.add.stepSource', 'Where it comes from') }}</h3>
+          </div>
+          <div class="skills-sources" role="group" :aria-label="t('skills.add.sourceLabel', 'Add a skill from')">
+            <button type="button" class="skills-source" :class="{ on: from === 'github' }" :aria-pressed="from === 'github'" data-source="github" @click="setFrom('github')">
+              <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
+                />
+              </svg>
+              GitHub
+            </button>
+            <button type="button" class="skills-source" :class="{ on: from === 'folder' }" :aria-pressed="from === 'folder'" data-source="folder" @click="setFrom('folder')">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
+              </svg>
+              {{ t('skills.add.folderTab', 'Folder') }}
             </button>
           </div>
-        </template>
-        <p v-else class="mcp-about">
-          <strong>{{ t('skills.add.updatingTitle', 'Update:') }}</strong>
-          {{ updating.dir }}
-        </p>
 
-        <p v-if="addError" class="mcp-error">{{ addError }}</p>
-        <p v-if="busy === 'look' && updating" class="set-hint">{{ t('skills.add.looking', 'Looking…') }}</p>
-
-        <!-- Several skills in the repository: pick one. -->
-        <div v-if="candidates && !preview" class="skills-candidates">
-          <p class="set-hint">{{ t('skills.add.several', 'This repository has several skills. Choose one:') }}</p>
-          <div v-for="c in candidates.candidates" :key="c.path" class="mcp-entry">
-            <div class="mcp-entry-head">
-              <div class="mcp-row-main">
-                <span class="mcp-name">{{ c.name }}</span>
-                <span class="set-hint skills-desc">{{ c.description || c.path }}</span>
-              </div>
-              <button class="exit-btn" :disabled="!!busy" @click="lookUp(c.path)">{{ t('skills.add.pick', 'Choose') }}</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- The preview: what will be installed, exactly. -->
-        <div v-if="preview" class="skills-preview">
-          <div class="mcp-entry-head">
-            <BrandIcon :kind="'skill-' + preview.name" accent="#8a93a6" :label="preview.name" :size="26" />
-            <div class="mcp-row-main">
-              <span class="mcp-name">{{ preview.name }}</span>
-              <span class="set-hint skills-desc">{{ preview.description || t('skills.installed.noDescription', 'No description.') }}</span>
-              <span class="mcp-target">{{ sourceLabel(preview.source) }}<template v-if="preview.source.commit"> @ {{ preview.source.commit.slice(0, 7) }}</template></span>
-            </div>
-          </div>
-          <p v-if="updating && updating.modified" class="mcp-about skills-warn">
-            {{ t('skills.update.modified', 'You changed this copy since it was installed. Updating replaces your changes; they stay in its history.') }}
-          </p>
-          <div v-if="updating && preview.changes" class="skills-changes">
-            <p class="mcp-about">
-              <strong>{{ changesTitle(preview.changes) }}</strong>
-            </p>
-            <ul v-if="preview.changes.commits.length" class="skills-commits">
-              <li v-for="c in preview.changes.commits" :key="c.sha">
-                <span class="skills-commit-msg">{{ c.message }}</span>
-                <span class="set-hint">{{ c.author }} · {{ dateTime(c.date) }}</span>
-              </li>
-            </ul>
-            <p v-if="preview.changes.more" class="set-hint">{{ t('skills.update.more', 'Older commits are not listed: only the 30 newest are shown.') }}</p>
-            <p v-if="!preview.changes.commits.length" class="set-hint">{{ t('skills.update.noCommits', 'No new commit touched this skill since your version.') }}</p>
-          </div>
-          <p class="mcp-about">
-            {{ t('skills.preview.review', 'Read it before installing: an agent follows these instructions.') }}
-          </p>
-          <pre class="skills-md">{{ preview.skillMd }}</pre>
-          <details class="skills-files">
-            <summary>{{ filesLabel(preview) }}</summary>
-            <div v-for="f in preview.files" :key="f.path" class="skills-file">
-              <span class="mcp-target">{{ f.path }}</span>
-              <span class="set-hint">{{ size(f.size) }}</span>
-            </div>
-          </details>
-          <p v-if="preview.scripts.length" class="mcp-about skills-warn">{{ scriptsLabel(preview) }}</p>
-
-          <div v-if="preview.setup.length" class="mcp-about">
-            <strong>{{ t('skills.setup.title', 'It comes with a setup command.') }}</strong>
-            {{ t('skills.setup.body', 'Tessel does not run it. If you need it, run it yourself in a terminal and answer its questions there.') }}
-            <div v-for="cmd in preview.setup" :key="cmd" class="mcp-input-wrap skills-setup">
-              <code class="mcp-preview">{{ cmd }}</code>
-              <button type="button" class="exit-btn" @click="runSetup(cmd)">{{ t('skills.setup.button', 'Run its setup in a terminal') }}</button>
-            </div>
-          </div>
-
-          <form class="mcp-entry-form" @submit.prevent="install()">
-            <template v-if="!updating">
-              <div class="set-row">
-                <div class="set-label">{{ t('skills.add.to', 'Add to') }}</div>
-                <div class="mcp-targets">
-                  <label v-for="a in AGENTS" :key="a" :class="{ disabled: !installed[a] && a !== 'claude' && a !== 'codex' }">
-                    <input v-model="targets[a]" type="checkbox" />
-                    <BrandIcon :kind="a" :size="13" />
-                    {{ AGENT_NAME[a] }}
-                  </label>
-                </div>
-              </div>
-              <div class="set-row">
-                <div class="set-label">
-                  {{ t('skills.add.scope', 'Use it in') }}
-                  <span class="set-hint">{{ project || t('skills.add.scopeHint', 'Open a project folder to add it to one project only') }}</span>
-                </div>
-                <div class="launch-seg set-seg">
-                  <button type="button" class="launch-seg-btn" :class="{ on: scope === 'user' }" @click="scope = 'user'">
-                    {{ t('skills.scope.user', 'All projects') }}
-                  </button>
-                  <button type="button" class="launch-seg-btn" :class="{ on: scope === 'project' }" :disabled="!project" @click="scope = 'project'">
-                    {{ t('skills.scope.project', 'This project') }}
-                  </button>
-                </div>
-              </div>
-            </template>
-            <div v-if="results" class="mcp-agents mcp-add-results">
-              <div v-for="r in results" :key="r.dir" class="mcp-agent">
-                <span class="mcp-status" :class="r.ok ? 'connected' : r.exists ? 'auth' : 'error'" :title="r.error || ''">
-                  {{ r.ok ? t('skills.add.done', 'Installed') : r.exists ? t('skills.add.exists', 'Already there') : t('skills.add.failed', 'Failed') }}
-                </span>
-                <span class="mcp-target" :title="r.dir">{{ r.dir }}</span>
-                <span class="mcp-agent-actions">
-                  <button v-if="r.exists" type="button" class="exit-btn" :disabled="!!busy" @click="install(r.dir)">
-                    {{ t('skills.add.replace', 'Replace it') }}
-                  </button>
-                </span>
-              </div>
-            </div>
-            <div class="set-foot">
-              <span class="set-hint">{{ t('skills.add.codexNote', 'Codex gets it in the shared .agents folder, which OpenCode, Copilot CLI and Gemini CLI read too.') }}</span>
-              <button class="exit-btn primary" type="submit" :disabled="!!busy">
-                {{ busy === 'install' ? t('skills.add.installing', 'Installing…') : installLabel(preview) /* i18n-ignore */ }}
+          <form v-if="from === 'github'" class="skills-source-form" @submit.prevent="lookUp()">
+            <div class="skills-field" :class="{ invalid: !!addError }">
+              <input
+                ref="repoEl"
+                v-model="repoInput"
+                class="skills-field-input"
+                :placeholder="t('skills.add.repoPlaceholder', 'owner/repo, owner/repo/path or a github.com address')"
+                :aria-label="t('skills.add.repo', 'Repository')"
+                :aria-invalid="addError ? 'true' : undefined"
+                :aria-describedby="addError ? uid + '-repo-hint ' + uid + '-add-error' : uid + '-repo-hint'"
+                spellcheck="false"
+                autocomplete="off"
+                data-test="skills-repo"
+              />
+              <button class="exit-btn primary skills-btn skills-field-btn" type="submit" :disabled="!!busy || !repoInput.trim()" data-test="skills-look">
+                <span v-if="busy === 'look'" class="skills-spinner" aria-hidden="true" />
+                {{ busy === 'look' ? t('skills.add.looking', 'Looking…') : t('skills.add.look', 'Look up') }}
               </button>
             </div>
+            <p :id="uid + '-repo-hint'" class="set-hint skills-field-hint">
+              {{ t('skills.add.exampleLabel', 'For example:') }}
+              <button type="button" class="skills-link skills-example" @click="useExample">{{ EXAMPLE_REPO }}</button>
+              <span class="skills-hint-more">{{ t('skills.add.exampleMore', 'Add a folder path to pick one skill, or paste a github.com address.') }}</span>
+            </p>
           </form>
-        </div>
-      </template>
+          <div v-else class="skills-source-form">
+            <div class="skills-folder-row">
+              <button type="button" class="exit-btn primary skills-btn" :disabled="!!busy" data-test="skills-choose-folder" @click="chooseFolder">
+                <span v-if="busy === 'look'" class="skills-spinner" aria-hidden="true" />
+                {{ busy === 'look' ? t('skills.add.looking', 'Looking…') : t('skills.add.chooseFolder', 'Choose a folder…') }}
+              </button>
+              <span v-if="folderDir" class="skills-path" :title="folderDir">{{ shortPath(folderDir) }}</span>
+            </div>
+            <p class="set-hint skills-field-hint">{{ t('skills.add.folderHint', 'A folder with a SKILL.md at its top') }}</p>
+          </div>
+        </section>
+
+        <p v-if="addError" :id="uid + '-add-error'" class="skills-add-error" role="alert">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 2.2l6.2 11H1.8zM8 6.5v3.2M8 11.6h.01" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <span>{{ addError }}</span>
+        </p>
+
+        <!-- Step 2: what was found, read before installing. -->
+        <section v-if="foundItems.length" class="skills-step" :aria-labelledby="uid + '-step-found'">
+          <div class="skills-step-head">
+            <span v-if="!updating" class="skills-step-num" aria-hidden="true">2</span>
+            <h3 :id="uid + '-step-found'" class="skills-step-title">
+              {{ updating ? t('skills.add.stepNew', 'The new version') : t('skills.add.stepFound', 'What it does') }}
+            </h3>
+            <span v-if="candidates" class="set-hint skills-step-aside" :title="foundLabel">{{ foundLabel }}</span>
+          </div>
+          <p v-if="candidates" class="set-hint skills-step-hint">{{ t('skills.add.severalHint', 'This repository has several skills. Open one to read it, then install it.') }}</p>
+          <ul class="skills-list skills-found" :aria-label="t('skills.add.foundLabel', 'Skills found')">
+            <li
+              v-for="(item, i) in foundItems"
+              :key="item.key"
+              class="skills-item"
+              :class="{ open: foundOpen(item), single: !candidates }"
+              :data-skill="item.name"
+              @keydown.escape="onFoundEscape($event, item, i)"
+            >
+              <button
+                v-if="candidates"
+                :id="foundRowId(item)"
+                :ref="(el) => (foundEls[i] = el)"
+                type="button"
+                class="skills-row"
+                :aria-expanded="foundOpen(item)"
+                :aria-controls="foundDetailsId(item)"
+                @click="pickCandidate(item)"
+                @keydown="onFoundKey($event, i, item)"
+              >
+                <BrandIcon class="skills-row-icon" :kind="'skill-' + item.name" accent="#8a93a6" :label="item.name" :size="20" />
+                <span class="skills-row-main">
+                  <span class="skills-row-top">
+                    <span class="skills-row-name">{{ item.name }}</span>
+                    <span class="skills-row-path" :title="item.path">{{ item.path }}</span>
+                  </span>
+                  <span class="skills-row-desc" :title="item.description || undefined">{{ item.description || t('skills.installed.noDescription', 'No description.') }}</span>
+                </span>
+                <span v-if="!foundOpen(item)" class="skills-row-meta">
+                  <span class="set-hint skills-row-size">{{ itemSize(item) }}</span>
+                </span>
+                <svg class="skills-chevron" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M6 3.5l4.5 4.5L6 12.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </button>
+              <div v-else :id="foundRowId(item)" class="skills-row skills-row-static">
+                <BrandIcon class="skills-row-icon" :kind="'skill-' + item.name" accent="#8a93a6" :label="item.name" :size="20" />
+                <span class="skills-row-main">
+                  <span class="skills-row-top">
+                    <span class="skills-row-name">{{ item.name }}</span>
+                  </span>
+                  <span class="skills-row-desc">{{ item.description || t('skills.installed.noDescription', 'No description.') }}</span>
+                </span>
+              </div>
+
+              <!-- The preview: what will be installed, exactly. -->
+              <div v-if="foundOpen(item)" :id="foundDetailsId(item)" class="skills-details skills-preview" role="region" :aria-labelledby="foundRowId(item)">
+                <p v-if="busy === 'pick' && !preview" class="set-hint skills-looking"><span class="skills-spinner" aria-hidden="true" />{{ t('skills.loading', 'Loading…') }}</p>
+                <template v-else-if="preview">
+                  <div class="skills-pv-meta">
+                    <span class="skills-tag skills-origin" :class="'origin-' + (preview.source.kind === 'github' ? 'github' : 'folder')">{{ kindLabel(preview.source.kind === 'github' ? 'github' : 'folder') }}</span>
+                    <span class="skills-pv-source" :title="sourceTitle(preview.source)">{{ sourceShort(preview.source) }}</span>
+                    <button
+                      type="button"
+                      class="skills-link skills-pv-files"
+                      :aria-expanded="filesOpen"
+                      :aria-controls="uid + '-files'"
+                      :title="t('skills.preview.filesHint', 'Show the files')"
+                      @click="filesOpen = !filesOpen"
+                    >
+                      {{ filesLabel(preview) }}
+                    </button>
+                  </div>
+                  <p v-if="candidates && preview.description" class="skills-details-desc">{{ preview.description }}</p>
+                  <table v-if="filesOpen" :id="uid + '-files'" class="skills-files">
+                    <tbody>
+                      <tr v-for="f in preview.files" :key="f.path">
+                        <td class="skills-file-path" :title="f.path">{{ f.path }}</td>
+                        <td class="skills-file-size">{{ size(f.size) }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  <p v-if="updating && updating.modified" class="skills-callout warn skills-warn">
+                    {{ t('skills.update.modified', 'You changed this copy since it was installed. Updating replaces your changes; they stay in its history.') }}
+                  </p>
+                  <div v-if="updating && preview.changes" class="skills-changes">
+                    <p class="mcp-about">
+                      <strong>{{ changesTitle(preview.changes) }}</strong>
+                    </p>
+                    <ul v-if="preview.changes.commits.length" class="skills-commits">
+                      <li v-for="c in preview.changes.commits" :key="c.sha">
+                        <span class="skills-commit-msg">{{ c.message }}</span>
+                        <span class="set-hint">{{ c.author }} · {{ dateTime(c.date) }}</span>
+                      </li>
+                    </ul>
+                    <p v-if="preview.changes.more" class="set-hint">{{ t('skills.update.more', 'Older commits are not listed: only the 30 newest are shown.') }}</p>
+                    <p v-if="!preview.changes.commits.length" class="set-hint">{{ t('skills.update.noCommits', 'No new commit touched this skill since your version.') }}</p>
+                  </div>
+
+                  <div class="skills-callout skills-safety">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M8 1.8l5 2v4.1c0 3.1-2.1 5.4-5 6.3-2.9-.9-5-3.2-5-6.3V3.8z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" />
+                      <path d="M8 5.2v3.3M8 10.6h.01" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+                    </svg>
+                    <span class="skills-callout-text">{{ t('skills.preview.review', 'Read it before installing: an agent follows these instructions.') }}</span>
+                    <button
+                      type="button"
+                      class="exit-btn skills-btn skills-read-btn"
+                      :aria-expanded="mdOpen"
+                      :aria-controls="uid + '-md'"
+                      data-test="skills-read"
+                      @click="mdOpen = !mdOpen"
+                    >
+                      {{ mdOpen ? t('skills.preview.hideInstructions', 'Hide the instructions') : t('skills.preview.readInstructions', 'Read the instructions') }}
+                    </button>
+                  </div>
+                  <div v-if="mdOpen" :id="uid + '-md'" class="skills-md-box">
+                    <div class="skills-md-bar">
+                      <span class="skills-md-file">{{ SKILL_FILE }}</span>
+                      <button type="button" class="skills-link" :aria-pressed="mdSource" data-test="skills-source-toggle" @click="mdSource = !mdSource">
+                        {{ mdSource ? t('skills.preview.viewFormatted', 'View formatted') : t('skills.preview.viewSource', 'View source') }}
+                      </button>
+                    </div>
+                    <pre v-if="mdSource" class="skills-md" tabindex="0" :aria-label="t('skills.preview.sourceLabel', 'SKILL.md source')">{{ preview.skillMd }}</pre>
+                    <template v-else>
+                      <dl v-if="frontmatter.meta.length" class="skills-fm">
+                        <template v-for="m in frontmatter.meta" :key="m.key">
+                          <dt>{{ m.key }}</dt>
+                          <dd>{{ m.value }}</dd>
+                        </template>
+                      </dl>
+                      <!-- eslint-disable-next-line vue/no-v-html (sanitized, no raw HTML: skillPreview.js) -->
+                      <article class="skills-md-view" tabindex="0" :aria-label="t('skills.preview.instructionsLabel', 'Instructions of the skill')" @click="onMdClick" v-html="mdHtml"></article>
+                    </template>
+                  </div>
+
+                  <p v-if="preview.scripts.length" class="skills-callout warn skills-warn">{{ scriptsLabel(preview) }}</p>
+                  <div v-if="preview.setup.length" class="skills-callout skills-setup-box">
+                    <div class="skills-callout-text">
+                      <strong>{{ t('skills.setup.title', 'It comes with a setup command.') }}</strong>
+                      {{ t('skills.setup.body', 'Tessel does not run it. If you need it, run it yourself in a terminal and answer its questions there.') }}
+                      <div v-for="cmd in preview.setup" :key="cmd" class="skills-setup">
+                        <code class="mcp-preview">{{ cmd }}</code>
+                        <button type="button" class="exit-btn skills-btn" @click="runSetup(cmd)">{{ t('skills.setup.button', 'Run its setup in a terminal') }}</button>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <!-- Step 3: the agents and the scope. -->
+        <section v-if="preview && !updating" class="skills-step" :aria-labelledby="uid + '-step-where'">
+          <div class="skills-step-head">
+            <span class="skills-step-num" aria-hidden="true">3</span>
+            <h3 :id="uid + '-step-where'" class="skills-step-title">{{ t('skills.add.stepWhere', 'Where to install it') }}</h3>
+          </div>
+          <div class="skills-field-head">
+            <span :id="uid + '-agents'" class="skills-field-label">{{ t('skills.add.agents', 'Agents') }}</span>
+            <span class="skills-field-tools">
+              <button type="button" class="skills-link" :disabled="allChosen" @click="chooseAll(true)">{{ t('skills.add.selectAll', 'Select all') }}</button>
+              <button type="button" class="skills-link" :disabled="!chosenAgents.length" @click="chooseAll(false)">{{ t('skills.add.selectNone', 'Select none') }}</button>
+            </span>
+          </div>
+          <div class="skills-agent-chips" role="group" :aria-labelledby="uid + '-agents'">
+            <button
+              v-for="a in AGENTS"
+              :key="a"
+              type="button"
+              class="skills-agent-chip"
+              :class="{ on: targets[a], missing: !installed[a] }"
+              :aria-pressed="targets[a]"
+              :aria-label="agentChipLabel(a)"
+              :title="installed[a] ? undefined : agentChipLabel(a)"
+              :data-agent="a"
+              @click="toggleTarget(a)"
+            >
+              <BrandIcon :kind="a" :size="14" />
+              <span class="skills-agent-name">{{ AGENT_NAME[a] }}</span>
+              <svg class="skills-agent-check" width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+          </div>
+          <p v-if="!chosenAgents.length" class="skills-info warn">{{ t('skills.add.chooseAgent', 'Choose at least one agent.') }}</p>
+          <p v-else-if="sharedNote" class="skills-info">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.2" />
+              <path d="M8 7.2v4M8 4.9h.01" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+            </svg>
+            <span>{{ sharedNote }}</span>
+          </p>
+
+          <div class="skills-field-head skills-scope-head">
+            <span :id="uid + '-scope'" class="skills-field-label">{{ t('skills.add.scope', 'Use it in') }}</span>
+          </div>
+          <div class="skills-scopes" role="group" :aria-labelledby="uid + '-scope'">
+            <button type="button" class="skills-scope-opt" :class="{ on: scope === 'user' }" :aria-pressed="scope === 'user'" data-scope="user" @click="scope = 'user'">
+              <span class="skills-scope-title">{{ t('skills.scope.user', 'All projects') }}</span>
+              <span class="skills-scope-sub">{{ t('skills.add.userHint', 'Every folder the agents open') }}</span>
+            </button>
+            <button
+              type="button"
+              class="skills-scope-opt"
+              :class="{ on: scope === 'project' }"
+              :aria-pressed="scope === 'project'"
+              :disabled="!project"
+              data-scope="project"
+              :title="project || undefined"
+              @click="scope = 'project'"
+            >
+              <span class="skills-scope-title">{{ t('skills.scope.project', 'This project') }}</span>
+              <span class="skills-scope-sub">{{ projectName || t('skills.add.noProject', 'No project open') }}</span>
+            </button>
+          </div>
+          <p v-if="!project" class="set-hint skills-field-hint">{{ t('skills.add.scopeHint', 'Open a project folder to add it to one project only') }}</p>
+        </section>
+
+        <!-- The result, for each folder it went to. -->
+        <section v-if="results" class="skills-results" :aria-label="t('skills.add.resultsLabel', 'Result')" aria-live="polite">
+          <p class="skills-results-head">
+            {{ resultsHead }}
+          </p>
+          <ul class="skills-result-list">
+            <li v-for="r in results" :key="r.dir" class="skills-result" :class="r.ok ? 'ok' : r.exists ? 'exists' : 'failed'" :data-dir="r.dir">
+              <svg v-if="r.ok" class="skills-result-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3" />
+                <path d="M5 8.3l2 2 4-4.3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <svg v-else-if="r.exists" class="skills-result-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3" />
+                <path d="M8 4.8v3.8M8 10.9h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+              </svg>
+              <svg v-else class="skills-result-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3" />
+                <path d="M5.8 5.8l4.4 4.4M10.2 5.8l-4.4 4.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+              </svg>
+              <span class="skills-result-main">
+                <span class="skills-result-top">
+                  <span class="skills-agents" aria-hidden="true"><BrandIcon v-for="a in resultAgents(r)" :key="a" :kind="a" :size="14" /></span>
+                  <span class="skills-result-agents">{{ agentNames(resultAgents(r)) }}</span>
+                  <span class="skills-result-state">{{ resultState(r) }}</span>
+                </span>
+                <span class="skills-path" :title="r.dir">{{ shortPath(r.dir) }}</span>
+                <span v-if="!r.ok && !r.exists && r.error" class="skills-result-error">{{ r.error }}</span>
+                <span v-if="r.exists" class="set-hint">{{ t('skills.add.existsHint', 'A skill with this name is already in this folder. Replace it, or keep it as it is.') }}</span>
+                <span v-if="alsoSeen(r).length" class="set-hint">{{ alsoSeenLabel(r) }}</span>
+              </span>
+              <button v-if="r.exists" type="button" class="exit-btn skills-btn" :disabled="!!busy" @click="install(r.dir)">
+                <span v-if="busy === 'replace:' + r.dir" class="skills-spinner" aria-hidden="true" />
+                {{ t('skills.add.replace', 'Replace it') }}
+              </button>
+            </li>
+          </ul>
+          <div class="skills-results-foot">
+            <button v-if="results.some((r) => r.ok || r.exists)" type="button" class="exit-btn skills-btn" data-test="skills-view-installed" @click="viewInstalled">
+              {{ t('skills.add.viewInstalled', 'View it in Installed') }}
+            </button>
+            <button v-if="!updating" type="button" class="skills-link" @click="addAnother">{{ t('skills.add.another', 'Add another skill') }}</button>
+          </div>
+        </section>
+
+        <form v-if="preview && !allDone" class="skills-add-foot" @submit.prevent="install()">
+          <span class="set-hint skills-foot-summary">{{ footSummary }}</span>
+          <button class="exit-btn primary skills-btn skills-install-btn" type="submit" :disabled="!!busy || (!updating && !chosenAgents.length)" data-test="skills-install">
+            <span v-if="busy === 'install'" class="skills-spinner" aria-hidden="true" />
+            {{ busy === 'install' ? t('skills.add.installing', 'Installing…') : installLabel(preview) /* i18n-ignore */ }}
+          </button>
+        </form>
+      </div>
     </div>
   </div>
 </template>
-
 <style scoped>
 .skills-plugins-intro {
   margin: 0 0 8px;
@@ -1343,12 +1938,6 @@ onMounted(async () => {
 .skills-search {
   flex: 1 1 auto;
   max-width: 260px;
-}
-.skills-desc {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
 }
 /* Buttons of the list never break their text over two lines nor shrink:
    when the width runs out, the group they are in moves to the next line. */
@@ -1742,19 +2331,447 @@ onMounted(async () => {
   }
 }
 
-/* The Add tab. */
-.skills-preview {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-strong);
+/* A message above the tab's content keeps its distance from it. */
+.mcp-notice,
+.mcp-error {
+  margin-bottom: 6px;
 }
+
+/* The Add tab: three numbered steps, one under the other. Labels sit above
+   their controls (never squeezed beside them), and the tab follows its own
+   width (a narrow page, or zoomed in). */
+.skills-add {
+  container-type: inline-size;
+}
+.skills-step {
+  padding: 12px 0 14px;
+  border-top: 1px solid var(--border);
+}
+.skills-step:first-child {
+  padding-top: 4px;
+  border-top: 0;
+}
+.skills-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 0 10px;
+}
+.skills-step-num {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text-strong);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.skills-step-title {
+  flex: 0 0 auto;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.skills-step-aside {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skills-step-hint {
+  margin: -4px 0 8px;
+}
+.skills-updating .skills-path {
+  display: block;
+}
+.skills-looking {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px 0 0;
+}
+
+/* Step 1: GitHub or a folder (compact tabs), then one wide box with its
+   button inside. */
+.skills-sources {
+  display: inline-flex;
+  gap: 2px;
+  max-width: 100%;
+  margin-bottom: 10px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--term);
+}
+.skills-source {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.skills-source:hover {
+  color: var(--text-strong);
+}
+.skills-source.on {
+  background: var(--surface-3);
+  color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.skills-source:focus-visible,
+.skills-agent-chip:focus-visible,
+.skills-scope-opt:focus-visible,
+.skills-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.skills-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 34px;
+  padding: 0 3px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--term);
+}
+.skills-field:focus-within {
+  border-color: var(--accent);
+}
+.skills-field.invalid {
+  border-color: color-mix(in srgb, #ff9b9e 70%, transparent);
+}
+.skills-field-icon {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+.skills-field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.skills-field-input::placeholder {
+  color: var(--text-dim);
+  opacity: 0.8;
+}
+.skills-field-btn {
+  height: 26px;
+  padding: 0 12px;
+}
+.skills-field-hint {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+.skills-example {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 11px;
+}
+.skills-hint-more {
+  margin-left: 6px;
+}
+.skills-folder-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  min-width: 0;
+}
+.skills-folder-row .skills-path {
+  flex: 1 1 160px;
+}
+.skills-add-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: #ffb4b6;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.skills-add-error svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+/* Step 2: the skills found, the same rows as the Installed list. */
+.skills-row-static {
+  cursor: default;
+}
+.skills-item.single > .skills-row-static,
+.skills-row-static:hover {
+  background: transparent;
+}
+/* The one skill found: its whole description, not cut to a line. */
+.skills-item.single .skills-row-static {
+  align-items: flex-start;
+}
+.skills-item.single .skills-row-icon {
+  margin-top: 2px;
+}
+.skills-item.single .skills-row-desc {
+  line-height: 1.45;
+  white-space: normal;
+}
+.skills-found .skills-item.open:not(.single) {
+  background: color-mix(in srgb, var(--surface-3) 35%, transparent);
+}
+.skills-row-path {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skills-row-size {
+  white-space: nowrap;
+}
+.skills-pv-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  margin-bottom: 6px;
+}
+.skills-pv-source {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+.skills-pv-files {
+  font-size: 11.5px;
+}
+.skills-files {
+  max-width: 100%;
+  margin: 2px 0 8px;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+.skills-files td {
+  padding: 2px 0;
+}
+.skills-file-path {
+  max-width: 360px;
+  padding-right: 18px !important;
+  overflow: hidden;
+  color: var(--text);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skills-file-size {
+  color: var(--text-dim);
+  text-align: right;
+  white-space: nowrap;
+}
+.skills-callout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 8px 0 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.skills-callout > svg {
+  flex: 0 0 auto;
+  color: var(--warn);
+}
+.skills-callout-text {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.skills-callout.warn {
+  border-color: transparent;
+  background: color-mix(in srgb, #d29922 14%, transparent);
+}
+.skills-warn {
+  color: #ffd98f;
+}
+.skills-read-btn {
+  margin-left: auto;
+}
+.skills-md-box {
+  margin-top: 6px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--term);
+}
+.skills-md-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.skills-md-file {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10.5px;
+}
+.skills-fm {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 12px;
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.skills-fm dt {
+  color: var(--text-dim);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+.skills-fm dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  user-select: text;
+}
+.skills-md-view,
 .skills-md {
-  max-height: 240px;
-  margin: 6px 0;
+  max-height: 360px;
+  overflow: auto;
+}
+.skills-md-view {
+  padding: 4px 14px 10px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.skills-md-view:focus-visible,
+.skills-md:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.skills-md-view :deep(h1),
+.skills-md-view :deep(h2),
+.skills-md-view :deep(h3),
+.skills-md-view :deep(h4) {
+  margin: 1em 0 0.4em;
+  color: var(--text-strong);
+  line-height: 1.3;
+}
+.skills-md-view :deep(h1) {
+  font-size: 16px;
+}
+.skills-md-view :deep(h2) {
+  font-size: 14px;
+}
+.skills-md-view :deep(h3),
+.skills-md-view :deep(h4) {
+  font-size: 12.5px;
+}
+.skills-md-view :deep(p),
+.skills-md-view :deep(ul),
+.skills-md-view :deep(ol),
+.skills-md-view :deep(blockquote),
+.skills-md-view :deep(table) {
+  margin: 0.5em 0;
+}
+.skills-md-view :deep(ul),
+.skills-md-view :deep(ol) {
+  padding-left: 20px;
+}
+.skills-md-view :deep(a) {
+  color: var(--accent);
+  cursor: pointer;
+}
+.skills-md-view :deep(code) {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.9em;
+}
+.skills-md-view :deep(pre) {
   padding: 8px 10px;
   overflow: auto;
   border-radius: 6px;
-  background: var(--term);
+  background: var(--surface-2);
+}
+.skills-md-view :deep(pre code) {
+  padding: 0;
+  background: none;
+}
+.skills-md-view :deep(blockquote) {
+  padding: 0 12px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-dim);
+}
+.skills-md-view :deep(table) {
+  border-collapse: collapse;
+}
+.skills-md-view :deep(th),
+.skills-md-view :deep(td) {
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+}
+.skills-md-view :deep(hr) {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+/* Images are never loaded (their text shows instead). */
+.skills-md-view :deep(img) {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.skills-md {
+  margin: 0;
+  padding: 10px 12px;
   color: var(--text);
   font-family: 'Cascadia Mono', Consolas, monospace;
   font-size: 11px;
@@ -1762,30 +2779,327 @@ onMounted(async () => {
   word-break: break-word;
   user-select: text;
 }
-.skills-files summary {
-  color: var(--text-dim);
-  font-size: 12px;
-  cursor: pointer;
-}
-.skills-files {
-  max-height: 180px;
-  overflow: auto;
-}
-.skills-file {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 1px 0 1px 14px;
-}
-.skills-warn {
-  color: #ffd98f;
-}
 .skills-setup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
   margin-top: 6px;
 }
 .skills-setup .mcp-preview {
-  flex: 1 1 auto;
+  flex: 1 1 200px;
+  min-width: 0;
   margin: 0;
+}
+
+/* Step 3: agent chips (the check and the colour say which are chosen) and
+   the scope, two options side by side. */
+.skills-field-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 0 0 6px;
+}
+.skills-scope-head {
+  margin-top: 14px;
+}
+.skills-field-label {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.skills-field-tools {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 12px;
+  margin-left: auto;
+  font-size: 11.5px;
+}
+.skills-link:disabled {
+  color: var(--text-dim);
+  text-decoration: none;
+  opacity: 0.6;
+  cursor: default;
+}
+.skills-agent-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.skills-agent-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.skills-agent-chip:hover {
+  color: var(--text-strong);
+  border-color: var(--text-dim);
+}
+.skills-agent-chip .brand-icon {
+  opacity: 0.5;
+  filter: grayscale(0.7);
+}
+.skills-agent-chip.on {
+  border-color: color-mix(in srgb, var(--accent) 75%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-strong);
+}
+.skills-agent-chip.on .brand-icon {
+  opacity: 1;
+  filter: none;
+}
+.skills-agent-check {
+  flex: 0 0 auto;
+  color: var(--accent);
+  visibility: hidden;
+}
+.skills-agent-chip.on .skills-agent-check {
+  visibility: visible;
+}
+.skills-agent-chip.missing .skills-agent-name {
+  font-style: italic;
+}
+.skills-info {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.skills-info svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.skills-info.warn {
+  color: #ffd98f;
+}
+.skills-scopes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  max-width: 520px;
+}
+.skills-scope-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.skills-scope-opt:hover:not(:disabled) {
+  border-color: var(--text-dim);
+}
+.skills-scope-opt.on {
+  border-color: color-mix(in srgb, var(--accent) 75%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.skills-scope-opt:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.skills-scope-title {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skills-scope-sub {
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The result, one line per folder, and the install button at the bottom right. */
+.skills-results {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.skills-results-head {
+  margin: 0 0 6px;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+.skills-result-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.skills-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.skills-result-icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.skills-result.ok .skills-result-icon,
+.skills-result.ok .skills-result-state {
+  color: #7ee2a8;
+}
+.skills-result.exists .skills-result-icon,
+.skills-result.exists .skills-result-state {
+  color: #ffd98f;
+}
+.skills-result.failed .skills-result-icon,
+.skills-result.failed .skills-result-state {
+  color: #ff9b9e;
+}
+.skills-result-main {
+  display: flex;
+  flex: 1 1 200px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.skills-result-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  font-size: 12px;
+}
+.skills-result-agents {
+  color: var(--text);
+  white-space: nowrap;
+}
+.skills-result-state {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.skills-result-error {
+  color: #ff9b9e;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.skills-results-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+.skills-add-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.skills-foot-summary {
+  flex: 1 1 180px;
+  min-width: 0;
+  line-height: 1.4;
+}
+.skills-install-btn {
+  height: 30px;
+  max-width: 100%;
+  padding: 0 14px;
+  overflow: hidden;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+}
+.skills-spinner {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: skills-spin 0.8s linear infinite;
+}
+@keyframes skills-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skills-spinner {
+    animation-duration: 2.4s;
+  }
+}
+@container (max-width: 420px) {
+  .skills-scopes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The Antigravity plugins tab: the same box as Add, then the same list as Installed. */
+.skills-plugin-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 0 0 4px;
+}
+.skills-plugin-form .skills-field {
+  flex: 1 1 260px;
+}
+.skills-plugin-folder {
+  height: 34px;
+}
+.skills-off {
+  background: color-mix(in srgb, var(--text-dim) 18%, transparent);
+}
+.skills-item.off .skills-row-name {
+  color: var(--text-dim);
+}
+.skills-plugin-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.skills-plugin-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.skills-plugin-state {
+  flex: 1 1 200px;
+  min-width: 0;
 }
 
 /* A copy's history. */

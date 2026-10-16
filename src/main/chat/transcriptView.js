@@ -22,7 +22,10 @@
 // <id>/subagents/, are never the pane's);
 // Antigravity (agy): ~/.gemini/antigravity-cli/brain/<id>/.system_generated/logs/
 // transcript_full.jsonl (else its shortened twin transcript.jsonl; the id is
-// the conversation id its hooks report).
+// the conversation id its hooks report);
+// Muse Code: <XDG_DATA_HOME or ~/.local/share>/muse/sessions/YYYY/MM/DD/<id>/
+// session.jsonl (museSessions.js; its sub-agents' logs, under subagent/, are
+// never the pane's).
 // Claude Code and Codex: the folder is the pane's account's, resolved in this
 // process from the account id (the window never names a folder). Newer Claude
 // Code names its file with a UUID other than the hook's session id: the path
@@ -45,6 +48,7 @@ import { basename, isAbsolute, join } from 'path'
 import { claudeTranscriptIn } from '../agentModel.js'
 import { realInside } from '../agentChildren.js'
 import { ompSessionsDir } from '../agentSessionSources.js'
+import { museConversation, museSessionLog, museSessionsDir } from '../museSessions.js'
 import { HISTORY_LIMITS, ATTACHMENT_LIMITS, resolveHistoryAttachments, claudeHistoryEvents, codexHistoryEvents, createBuilder, findTranscript } from './transcriptHistory.js'
 import { resolveHistoryAttachmentsCached } from './historyAttachments.js'
 import { createRemoteDrives } from './remoteDrives.js'
@@ -56,7 +60,7 @@ import { createRemoteTail, remoteWindowReader, validRemoteTranscript } from './r
 export const VIEW_LIMITS = { ...HISTORY_LIMITS, attachments: { ...ATTACHMENT_LIMITS, pageBytes: 6 * 1024 * 1024 } }
 import { claudeBackgroundFromLines, transcriptCwd } from './transcriptBackground.js'
 
-export const TRANSCRIPT_VIEW_AGENTS = ['grok', 'openclaude', 'omp', 'claude', 'codex', 'cursor', 'antigravity']
+export const TRANSCRIPT_VIEW_AGENTS = ['grok', 'openclaude', 'omp', 'claude', 'codex', 'cursor', 'antigravity', 'muse']
 // Their folder is the pane's account's (given by the caller as `home`).
 const ACCOUNT_AGENTS = ['claude', 'codex']
 const MAX_VIEWS = 8
@@ -69,7 +73,7 @@ const str = (v) => (typeof v === 'string' && v ? v : null)
 
 export function validViewId(agent, id) {
   if (typeof id !== 'string') return false
-  return agent === 'openclaude' || agent === 'cursor' || agent === 'antigravity' || ACCOUNT_AGENTS.includes(agent) ? UUID.test(id) : TOKEN_ID.test(id)
+  return agent === 'openclaude' || agent === 'cursor' || agent === 'antigravity' || agent === 'muse' || ACCOUNT_AGENTS.includes(agent) ? UUID.test(id) : TOKEN_ID.test(id)
 }
 
 function envDir(v) {
@@ -84,7 +88,8 @@ export function transcriptViewRoots(home = os.homedir(), env = process.env) {
     openclaude: join(home, '.openclaude'),
     omp: ompSessionsDir(home, env),
     cursor: join(home, '.cursor', 'projects'),
-    antigravity: join(home, '.gemini', 'antigravity-cli', 'brain')
+    antigravity: join(home, '.gemini', 'antigravity-cli', 'brain'),
+    muse: museSessionsDir(home, env)
   }
 }
 
@@ -131,6 +136,12 @@ export function findTranscriptViewFile(agent, id, roots = transcriptViewRoots(),
   }
   if (agent === 'cursor') return cursorTranscriptFile(roots.cursor, id, reported)
   if (agent === 'antigravity') return antigravityTranscriptFile(roots.antigravity, id)
+  // Muse: by its id's day (only a real file inside its sessions folder).
+  if (agent === 'muse') {
+    const file = typeof roots.muse === 'string' && isAbsolute(roots.muse) ? museSessionLog(id, roots.muse) : null
+    const base = file && realBase(roots.muse)
+    return base && realInside(base, file, false) ? file : null
+  }
   const root = roots[agent]
   if (typeof root !== 'string' || !isAbsolute(root)) return null
   const base = realBase(root)
@@ -521,6 +532,20 @@ export function antigravityViewEvents(lines, limits = HISTORY_LIMITS) {
   return b.finish()
 }
 
+// Muse Code: your prompts (each noted twice, taken in then its turn started:
+// shown once) and the answers it committed; its other records (model
+// requests, tools, its background observers' work) are not shown. A turn ends
+// at the next prompt.
+export function museViewEvents(lines, limits = HISTORY_LIMITS) {
+  const b = createBuilder(limits)
+  museConversation(lines.join('\n')).forEach((it, i) => {
+    const ts = it.at || undefined
+    if (it.role === 'user') b.user(`muse-u${i}`, it.text, ts) // i18n-ignore id
+    else b.message('assistant', `muse-a${i}`, it.text, ts, '\n\n') // i18n-ignore id
+  })
+  return b.finish()
+}
+
 /// ---- Reading -----------------------------------------------------------------
 
 // A session file's complete lines, the last `maxBytes` of them, kept between
@@ -733,6 +758,7 @@ export function viewEvents(agent, lines, sessionId, limits = HISTORY_LIMITS) {
   if (agent === 'codex') return codexHistoryEvents(lines, sessionId, limits)
   if (agent === 'cursor') return cursorViewEvents(lines, limits)
   if (agent === 'antigravity') return antigravityViewEvents(lines, limits)
+  if (agent === 'muse') return museViewEvents(lines, limits)
   return claudeHistoryEvents(lines, limits)
 }
 

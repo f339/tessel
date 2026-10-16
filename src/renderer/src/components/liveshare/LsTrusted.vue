@@ -82,7 +82,11 @@ async function untrust(p) {
 
 <template>
   <section ref="root" class="lsd-section" data-test="ls-trusted" :aria-label="t('liveShare.section.trusted', 'Trusted')">
-    <p class="lsd-intro">{{ t('liveShare.trusted.intro', 'Trusted people get in without asking, with the projects and rights kept here (they see the ones you share at the time). Trust someone from People or when you let them in.') }}</p>
+    <!-- In a head row like the other sections' (on its own in the column it
+         would take its flex basis as height). -->
+    <div class="lsd-section-head">
+      <p class="lsd-intro">{{ t('liveShare.trusted.intro', 'Trusted people get in without asking, with the projects and rights kept here (they see the ones you share at the time). Trust someone from People or when you let them in.') }}</p>
+    </div>
     <p v-if="!people.length" class="lsd-empty" data-test="ls-trusted-empty">{{ t('liveShare.trusted.empty', 'You trust no one yet.') }}</p>
     <ul v-else class="lsd-list">
       <li v-for="p in people" :key="p.id" class="lsd-item" :class="{ offline: !p.online }" :data-test="'ls-trusted-' + p.id">

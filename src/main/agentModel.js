@@ -1,9 +1,9 @@
 // Which model an agent pane uses, for the pane header.
 //
 // Best first:
-// 1. The running session (Claude Code, Codex, Copilot, Antigravity CLI: its
-//    conversation file; Cline: its sessions database), so a change with
-//    /model shows up.
+// 1. The running session (Claude Code, Codex, Copilot, Antigravity CLI, Muse
+//    Code: its conversation file; Cline: its sessions database), so a change
+//    with /model shows up.
 // 2. A --model / -m option in the agent's command.
 // 3. What the agent remembers or its settings file (OpenCode's last picked
 //    model, Cline's provider settings, the folder's settings, the user's).
@@ -16,6 +16,7 @@ import { isUuid } from './agentSessions'
 import { clineDataDir } from './jsonAgents'
 import { normDir, readHead, readRows, readTail as readTailBytes, readText } from './fileRead'
 import { antigravityLabelParts } from '../shared/antigravityModels'
+import { museConfigDir, museEffort, museModelFromText, museModelId, museSessionLog, museSessionsDir, museSettingsFile } from './museSessions'
 
 const TAIL = 256 * 1024
 const readTail = (file) => readTailBytes(file, TAIL)
@@ -148,6 +149,66 @@ export function codexModelFromText(text) {
     }
   }
   return null
+}
+
+// The model of a Codex rollout file: its latest model line, wherever it is.
+// A turn's web results and tool outputs can write megabytes after that line
+// (a fixed tail missed it, and the header fell back to config.toml), so the
+// file is read back in chunks until one shows. Remembered per file: a grown
+// file is read only from where the last read stopped (its last whole line),
+// and keeps what it said when the new part names no model.
+const CODEX_CHUNK = 512 * 1024
+const CODEX_MAX_SCAN = 64 * 1024 * 1024
+const CODEX_SEEN_MAX = 200
+const codexSeen = new Map() // file -> { size, lineEnd, found }
+export function codexModelFromFile(file) {
+  let fd
+  try {
+    fd = fs.openSync(file, 'r')
+    const size = fs.fstatSync(fd).size
+    const prev = codexSeen.get(file)
+    if (prev && prev.size === size) return prev.found
+    // Shrank (rewritten): read it all again.
+    const floor = prev && prev.size < size ? prev.lineEnd : 0
+    let found = null
+    let lineEnd = floor
+    let end = size
+    let carry = Buffer.alloc(0) // the cut first line of the chunk read before
+    while (end > floor && size - end < CODEX_MAX_SCAN) {
+      const start = Math.max(floor, end - CODEX_CHUNK)
+      const buf = Buffer.alloc(end - start)
+      const n = fs.readSync(fd, buf, 0, buf.length, start)
+      if (end === size) {
+        const nl = buf.subarray(0, n).lastIndexOf(10)
+        if (nl >= 0) lineEnd = start + nl + 1
+      }
+      const whole = Buffer.concat([buf.subarray(0, n), carry])
+      let from = 0
+      if (start > floor) {
+        // Its first line can be cut: kept for the next (earlier) chunk.
+        const nl = whole.indexOf(10)
+        if (nl === -1) {
+          carry = whole
+          end = start
+          continue
+        }
+        carry = whole.subarray(0, nl)
+        from = nl + 1
+      }
+      found = codexModelFromText(whole.subarray(from).toString('utf8'))
+      if (found) break
+      end = start
+    }
+    if (!found && prev && floor) found = prev.found
+    codexSeen.delete(file)
+    codexSeen.set(file, { size, lineEnd, found })
+    while (codexSeen.size > CODEX_SEEN_MAX) codexSeen.delete(codexSeen.keys().next().value)
+    return found
+  } catch {
+    return null
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
+  }
 }
 
 const fileCache = new Map() // folder + session id -> transcript path
@@ -358,6 +419,45 @@ function antigravitySettings(home) {
   const label = jsonModel(join(home, '.gemini', 'antigravity-cli', 'settings.json'), plainModel)
   const parts = label && antigravityLabelParts(label)
   return parts ? { model: label, name: parts.name, effort: parts.effort } : null
+}
+
+// Muse Code notes the model and effort in its session log (museSessions.js):
+// the model of each turn, each /models switch, each /effort. A long session's
+// latest change is in its tail; else its start says what it opened with.
+export function museSession(id, home = os.homedir()) {
+  const f = museSessionLog(id, museSessionsDir(home))
+  if (!f) return null
+  const tail = museModelFromText(readTail(f))
+  if (tail && tail.effort) return tail
+  const head = museModelFromText(readHead(f, TAIL))
+  if (!tail) return head
+  return head && head.effort ? { ...tail, effort: head.effort } : tail
+}
+
+// --reasoning-effort <level> (or its alias --effort) on Muse's command line:
+// its eight tiers.
+export function museEffortFromCommand(command) {
+  const m = /(?:^|\s)--(?:reasoning-)?effort(?:=|\s+)["']?([a-z]+)/i.exec(String(command || ''))
+  return (m && museEffort(m[1])) || null
+}
+
+// Muse's model defaults in its settings.json. Their keys are not documented:
+// only the names its own flags and session records use (model / model_id,
+// reasoning_effort), at the top or under "model", and only a plain model id
+// or one of its eight tiers.
+export function museSettingsModel(home = os.homedir()) {
+  let o
+  try {
+    o = JSON.parse(readText(museSettingsFile(home)))
+  } catch {
+    return null
+  }
+  if (!o || typeof o !== 'object') return null
+  const nested = o.model && typeof o.model === 'object' ? o.model : {}
+  const model = museModelId(o.model) || museModelId(o.model_id) || museModelId(o.default_model) || museModelId(nested.id) || museModelId(nested.model_id) || museModelId(nested.default)
+  if (!model) return null
+  const effort = museEffort(o.reasoning_effort) || museEffort(nested.reasoning_effort) || museEffort(nested.effort)
+  return { model, effort: effort || null }
 }
 
 // OpenCode remembers the models last picked in its model list (newest first).
@@ -644,6 +744,18 @@ function agentModelFound({ agentId, sessionId, command, cwd, launchedAt = 0, cod
     if (flagEffort && saved) return { model: saved.name, name: saved.name, effort: flagEffort, source: 'command' }
     return saved ? { ...saved, source: 'settings' } : null
   }
+  if (agentId === 'muse') {
+    // Its session log (a /models or /effort shows with its next record), its
+    // --model / --reasoning-effort, then its settings' defaults. The effort
+    // of a flag or the settings fills in a log that names none.
+    const flagEffort = museEffortFromCommand(command)
+    const saved = museSettingsModel(home)
+    const session = isUuid(sessionId) ? museSession(sessionId, home) : null
+    if (session) return { ...session, effort: session.effort || flagEffort || (saved && saved.model === session.model ? saved.effort : null), source: 'session' }
+    const flag = modelFromCommand(command)
+    if (flag) return { model: flag, effort: flagEffort || (saved && saved.model === flag ? saved.effort : null), source: 'command' }
+    return saved ? { model: saved.model, effort: flagEffort || saved.effort, source: 'settings' } : null
+  }
   if (isUuid(sessionId)) {
     if (agentId === 'claude') {
       const f = claudeTranscript(sessionId, home)
@@ -658,7 +770,7 @@ function agentModelFound({ agentId, sessionId, command, cwd, launchedAt = 0, cod
       }
     } else if (agentId === 'codex') {
       const f = codexDir ? codexRolloutIn(codexDir, sessionId) : codexRollout(sessionId, home)
-      const m = f && codexModelFromText(readTail(f))
+      const m = f && codexModelFromFile(f)
       if (m) return { ...m, source: 'session' }
     }
   }
@@ -701,7 +813,11 @@ export function watchModelFiles(onChange, home = os.homedir()) {
     { agent: 'cursor', dir: join(home, '.cursor'), match: /^cli-config\.json$/ },
     // The Antigravity CLI saves each /model and /effort there: its panes read
     // their footer again.
-    { agent: 'antigravity', dir: join(home, '.gemini', 'antigravity-cli'), match: /^settings\.json$/ }
+    { agent: 'antigravity', dir: join(home, '.gemini', 'antigravity-cli'), match: /^settings\.json$/ },
+    // Muse Code: its settings' defaults, and its session logs (each /models
+    // and /effort is a record there).
+    { agent: 'muse', dir: museConfigDir(home), match: /^settings\.json$/ },
+    { agent: 'muse', dir: museSessionsDir(home), match: /^session\.jsonl$/, recursive: true }
   ]
   const watchers = new Map() // target -> fs.FSWatcher
   const timers = new Map() // agent -> timeout

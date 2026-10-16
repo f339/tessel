@@ -20,8 +20,11 @@ export function formatMemory(bytes) {
   return t('statusBar.units.gb', '{{value}} GB', { value: fixed(bytes / (1024 * 1024 * 1024), 2) })
 }
 
+// A percent as the interface's language writes it (French: 41,7 %, with a
+// space that never breaks the line).
 export function formatCpu(percent) {
-  return Number.isFinite(percent) ? t('statusBar.units.percent', '{{value}}%', { value: fixed(percent, 1) }) : '—'
+  if (!Number.isFinite(percent)) return '—'
+  return new Intl.NumberFormat(intlLocale(), { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(percent / 100)
 }
 
 // Tessel's keepAwake ('on' | 'agents' | 'off') with Orca's words.
@@ -127,25 +130,41 @@ export function createResourceHistory({ capacity = HISTORY_CAPACITY, staleMs = H
 
 // Orca's Sparkline points: min-max scaled into width x height, a flat
 // midline until there are two samples.
-export function sparklinePoints(samples, width = 48, height = 14) {
-  const safe = Array.isArray(samples) ? samples : []
-  if (safe.length < 2) {
-    const midY = (height / 2).toFixed(1)
-    return `0,${midY} ${width},${midY}`
-  }
+// The samples a sparkline's width holds: a minute of the popover's 2 s readings.
+export const SPARK_SLOTS = 30
+export function sparklinePoints(samples, width = 48, height = 14, slots = SPARK_SLOTS) {
+  const safe = (Array.isArray(samples) ? samples : []).filter(Number.isFinite).slice(-slots)
+  const midY = (height / 2).toFixed(1)
+  // Nothing yet: a flat line in the middle.
+  if (!safe.length) return `0,${midY} ${width},${midY}`
+  // Like Task Manager's graphs: the latest sample at the right edge, history
+  // filling in to the left as it comes (one sample is a short stub, not a
+  // line across pretending to be two minutes of history). The height spans
+  // at least a tenth of the largest value, so a few kilobytes of change
+  // don't swing the line from top to bottom; the samples sit around the
+  // middle.
   let min = safe[0]
   let max = safe[0]
   for (const v of safe) {
     if (v < min) min = v
     if (v > max) max = v
   }
-  const range = max - min || 1
-  const stepX = width / (safe.length - 1)
-  const out = []
-  for (let i = 0; i < safe.length; i++) {
-    out.push(`${(i * stepX).toFixed(1)},${(height - ((safe[i] - min) / range) * height).toFixed(1)}`)
-  }
-  return out.join(' ')
+  const span = Math.max(max - min, Math.abs(max) * 0.1) || 1
+  const mid = (max + min) / 2
+  const stepX = width / Math.max(1, slots - 1)
+  const y = (v) => (height / 2 - ((v - mid) / span) * height).toFixed(1)
+  const x = (i) => (width - (safe.length - 1 - i) * stepX).toFixed(1)
+  if (safe.length === 1) return `${(width - stepX).toFixed(1)},${y(safe[0])} ${width.toFixed(1)},${y(safe[0])}`
+  return safe.map((v, i) => `${x(i)},${y(v)}`).join(' ')
+}
+
+// Left of the first sample, while the history fills in: a faint flat line at
+// its level, so a first open shows a baseline, not a lone dot ('' once the
+// samples span the width, or with none).
+export function sparklineLead(samples, width = 48, height = 14, slots = SPARK_SLOTS) {
+  if (!(Array.isArray(samples) ? samples : []).some(Number.isFinite)) return ''
+  const [x, y] = sparklinePoints(samples, width, height, slots).split(' ')[0].split(',')
+  return Number(x) > 0 ? `0.0,${y} ${x},${y}` : ''
 }
 
 // The Ports segment's numbers: workspace ports (shown), external ones.

@@ -96,9 +96,31 @@ describe('WorktreeCleanupDialog', () => {
     const det = w.findAll('[data-test="cleanup-row"]').find((r) => r.text().includes('det'))
     expect(det.find('[data-test="cleanup-check"]').element.disabled).toBe(true)
     // Show active lists the fresh one too.
-    await w.find('[data-test="cleanup-show-all"]').setValue(true)
+    await w.find('[data-test="cleanup-show-all"]').trigger('click')
     expect(names(w)).toContain('fresh')
     expect(w.text()).toContain('compared with main')
+  })
+
+  it('compact rows: each fact once, a shortened path (whole on hover), no green chip on a risky row', async () => {
+    const { w } = setup({ items: [ev('safe'), ev('dirty', { dirty: true, changes: 2, merged: false, ahead: 3 })] })
+    await flushPromises()
+    const rowOf = (name) => w.findAll('[data-test="cleanup-row"]').find((r) => r.text().includes(name))
+    const safe = rowOf('safe')
+    expect(safe.find('[data-test="cleanup-safe"]').text()).toBe('Safe to remove')
+    expect(safe.find('[data-test="cleanup-safe"]').attributes('title')).toContain('Merged into main')
+    const risky = rowOf('dirty')
+    expect(risky.find('[data-test="cleanup-safe"]').exists()).toBe(false)
+    expect(risky.findAll('.wcl-chip.ok')).toHaveLength(0)
+    expect(risky.findAll('[data-test="cleanup-risk"]').map((x) => x.text())).toEqual(['2 uncommitted changes', '3 commits not merged'])
+    // Said once: no "Dirty" / "Not merged" / "3 ahead" chips repeating it.
+    expect(risky.text()).not.toMatch(/Dirty|Not merged|ahead/)
+    const path = risky.find('.wcl-path')
+    expect(path.text()).toMatch(/^…[\\/][^\\/]+[\\/]dirty$/)
+    expect(path.attributes('title')).toMatch(/dirty$/)
+    expect(path.attributes('title').length).toBeGreaterThan(path.text().length)
+    // The other dialogs' header: title and close in one row.
+    expect(w.find('.help-head #wcl-title').text()).toBe('Clean up worktrees')
+    w.unmount()
   })
 
   it('a risky row is removed only once ticked, with force, after a confirm that names the risk', async () => {

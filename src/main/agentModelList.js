@@ -16,6 +16,7 @@ import { join } from 'path'
 import { spawn as nodeSpawn } from 'child_process'
 import { MODEL_PROBES, MODEL_PROBE_TIMEOUT_MS, MODEL_PROBE_MAX_OUTPUT, finalizeProbeOutput, validListedModels } from '../shared/agentModelProbe'
 import { writeFileAtomic } from './safeJson'
+import { findMuse, museServe } from './museServe'
 
 const FILE = 'agent-models.json'
 const COMMAND = /^[\w.\-\\/: ]{1,300}$/
@@ -48,7 +49,8 @@ function saveModelLists(dir, lists) {
 }
 
 // deps (tests): resolve(exe) -> { file, pre, path } | null; spawn like
-// child_process.spawn; now().
+// child_process.spawn; now(); findMsp(env) -> the program a protocol probe
+// runs (Muse: museServe.js findMuse).
 export function createModelLister(dir, deps = {}) {
   const resolve = deps.resolve
   const spawn = deps.spawn || nodeSpawn
@@ -71,8 +73,22 @@ export function createModelLister(dir, deps = {}) {
     return run
   }
 
+  // An agent asked over its own protocol (Muse Code: `muse serve`, its
+  // model/list query): its answer is parsed like a listing.
+  async function runProtocolProbe(agent, spec) {
+    const env = { ...(deps.env || process.env) }
+    const file = (deps.findMsp || ((e) => findMuse({ env: e })))(env)
+    if (!file) return { ok: false, reason: 'not-found', detail: spec.exe }
+    const res = await museServe(file, [{ method: spec.msp }], { spawn, env, cwd: os.homedir(), timeoutMs })
+    if (!res.ok) return { ok: false, reason: res.reason === 'timeout' ? 'timeout' : res.reason === 'missing' ? 'not-found' : 'failed', detail: '' }
+    const answer = res.results[spec.msp]
+    if (!answer || answer.error) return { ok: false, reason: 'failed', detail: answer && answer.error ? `${answer.error.code}: ${answer.error.message}`.slice(0, 300) : '' }
+    return finalizeProbeOutput(agent, JSON.stringify(answer.result), '', 0)
+  }
+
   async function runProbe(agent, command) {
     const spec = MODEL_PROBES[agent]
+    if (spec.msp) return keep(agent, await runProtocolProbe(agent, spec))
     // The agent's own command (Settings > Agents) when it is only a program.
     const exe = typeof command === 'string' && COMMAND.test(command.trim()) && !/\s/.test(command.trim()) ? command.trim() : spec.exe
     let prog = null
@@ -138,6 +154,11 @@ export function createModelLister(dir, deps = {}) {
         child.stdin.end(spec.stdin)
       }
     })
+    return keep(agent, result)
+  }
+
+  // A probe's success kept (on disk too); a failure changes nothing.
+  function keep(agent, result) {
     if (!result.ok) return result
     const models = validListedModels(result.models)
     if (!models.length) return { ok: false, reason: 'empty', detail: '' }

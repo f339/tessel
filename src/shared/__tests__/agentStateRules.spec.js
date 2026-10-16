@@ -70,8 +70,9 @@ describe('built-in rules reproduce the former hardcoded patterns', () => {
   it('the approval alternation, split one alternative per rule', () => {
     const approval = ofKind('common', 'approval')
     expect(approval.every((r) => r.ignoreCase)).toBe(true)
-    // Added since: the trust questions of today's Claude Code and Codex.
-    const added = ['approval-trust-safety-check', 'approval-trust-folder', 'approval-trust-option']
+    // Added since: the trust questions of today's Claude Code and Codex, and
+    // Muse Code's approval choices.
+    const added = ['approval-trust-safety-check', 'approval-trust-folder', 'approval-trust-option', 'approval-always-workspace']
     const former = approval.filter((r) => !added.includes(r.id))
     expect(approval.filter((r) => added.includes(r.id)).map((r) => r.id)).toEqual(added)
     expect(former.map((r) => asRegExp(r).source).join('|')).toBe(OLD.approval.source)

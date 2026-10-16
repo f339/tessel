@@ -16,7 +16,8 @@ import {
   Server,
   Activity,
   ChevronRight,
-  FolderOpen
+  FolderOpen,
+  RefreshCw
 } from 'lucide-vue-next'
 import OrcaMenu from './OrcaMenu.vue'
 import PortRow from './sidebar/PortRow.vue'
@@ -183,11 +184,14 @@ const metricLabel = computed(() => (snapshot.value && snapshot.value.processMemo
 const memBadge = computed(() => (snapshot.value ? formatMemory(snapshot.value.totalMemory) : '—'))
 const tree = computed(() => resourceTree(snapshot.value, props.terminals, sortBy.value))
 const terminalCount = computed(() => props.terminals.length)
+// The column and the totals say Memory and Private in words; which measure
+// (working set or RSS) is in their tooltips.
+const memoryWord = () => t('statusBar.resources.memory', 'Memory')
 const resourceTooltip = computed(() => {
   const mem = snapshot.value
-    ? `${memBadge.value} · Σ ${metricLabel.value}${
+    ? `${memBadge.value} ${memoryWord().toLocaleLowerCase()}${
         snapshot.value.totalPrivateMemory !== undefined
-          ? ` · ${formatMemory(snapshot.value.totalPrivateMemory)} Σ ${t('statusBar.resources.private', 'Private')}`
+          ? ` · ${formatMemory(snapshot.value.totalPrivateMemory)} ${t('statusBar.resources.privateLower', 'private')}`
           : ''
       }`
     : t('statusBar.resources.memoryUnavailable', 'memory unavailable')
@@ -242,6 +246,12 @@ const ports = computed(() => portsSummary(props.portGroups, props.externalPorts)
 const portsOpen = ref(false)
 const portsAnchor = ref(null)
 const externalExpanded = ref(false)
+const portCountsText = computed(() => {
+  const n = ports.value.workspaceCount
+  const ext = ports.value.externalCount
+  const inWs = n === 1 ? t('statusBar.ports.workspaceCount', '{{count}} workspace port', { count: n }) : t('statusBar.ports.workspaceCount', '{{count}} workspace ports', { count: n })
+  return `${inWs} · ${t('statusBar.ports.externalCount', '{{count}} external', { count: ext })}`
+})
 function togglePorts(e) {
   portsAnchor.value = e.currentTarget.getBoundingClientRect()
   resourcesOpen.value = false
@@ -265,7 +275,7 @@ function placePopover(anchor) {
     popPos.value = { left, top }
   })
 }
-watch([resourcesOpen, portsOpen, tree, () => ports.value.workspaceCount, externalExpanded], () => {
+watch([resourcesOpen, portsOpen, tree, appExpanded, () => ports.value.workspaceCount, externalExpanded], () => {
   if (resourcesOpen.value) placePopover(resourceAnchor.value)
   else if (portsOpen.value) placePopover(portsAnchor.value)
 })
@@ -465,18 +475,18 @@ defineExpose({ openResources, openPorts })
         <div v-if="snapshot" class="sb-res-summary">
           <span :title="t('statusBar.resources.cpuHint', 'Combined CPU load. Values above 100% mean more than one core is working at once.')">{{ formatCpu(snapshot.totalCpu) }}</span>
           <span class="sb-sep">·</span>
-          <span :title="metricDescription(metricLabel)">{{ formatMemory(snapshot.totalMemory) }} <span class="sb-muted-text">Σ {{ metricLabel }}</span></span>
+          <span :title="metricDescription(metricLabel)">{{ formatMemory(snapshot.totalMemory) }} <span class="sb-muted-text">{{ t('statusBar.resources.memoryLower', 'memory') }}</span></span>
           <template v-if="snapshot.totalPrivateMemory !== undefined">
             <span class="sb-sep">·</span>
-            <span :title="privateDescription()">{{ formatMemory(snapshot.totalPrivateMemory) }} <span class="sb-muted-text">Σ {{ t('statusBar.resources.private', 'Private') }}</span></span>
+            <span :title="privateDescription()">{{ formatMemory(snapshot.totalPrivateMemory) }} <span class="sb-muted-text">{{ t('statusBar.resources.privateLower', 'private') }}</span></span>
           </template>
         </div>
         <div class="sb-res-body">
           <div class="sb-res-sort">
             <button type="button" class="sb-res-col name" :class="{ on: sortBy === 'name' }" @click="sortBy = 'name'">{{ t('statusBar.resources.name', 'Name') }}</button>
             <button type="button" class="sb-res-col cpu" :class="{ on: sortBy === 'cpu' }" @click="sortBy = 'cpu'">CPU</button>
-            <button type="button" class="sb-res-col mem" :class="{ on: sortBy === 'memory' }" @click="sortBy = 'memory'">
-              {{ metricLabel }}
+            <button type="button" class="sb-res-col mem" :class="{ on: sortBy === 'memory' }" :title="metricDescription(metricLabel)" @click="sortBy = 'memory'">
+              {{ memoryWord() }}
             </button>
           </div>
           <div class="sb-res-scroll">
@@ -547,7 +557,18 @@ defineExpose({ openResources, openPorts })
       >
         <div class="sb-pop-head">
           <span class="sb-pop-title"><Plug :size="12" class="sb-muted" aria-hidden="true" /> {{ t('statusBar.ports.name', 'Ports') }}</span>
-          <span class="sb-pop-hint" v-text="t('statusBar.ports.counts', '{{workspace}} workspace · {{external}} external', { workspace: ports.workspaceCount, external: ports.externalCount })"></span>
+          <span class="sb-pop-hint" data-test="ports-counts">{{ portCountsText }}</span>
+          <button
+            type="button"
+            class="sb-pop-refresh"
+            :disabled="portsRefreshing"
+            :title="t('statusBar.ports.refresh', 'Scan again')"
+            :aria-label="t('statusBar.ports.refresh', 'Scan again')"
+            data-test="ports-refresh"
+            @click="emit('refresh-ports')"
+          >
+            <RefreshCw :size="12" :class="{ 'sb-spin': portsRefreshing }" aria-hidden="true" />
+          </button>
         </div>
         <div v-if="portsUnavailable" class="sb-notice" v-text="t('statusBar.ports.unavailable', 'Port scan unavailable on this computer: {{reason}}', { reason: portsUnavailable })"></div>
         <div class="sb-ports-list">
@@ -571,8 +592,12 @@ defineExpose({ openResources, openPorts })
               />
             </div>
           </section>
-          <div v-if="!ports.groups.length" class="sb-empty">
-            {{ portsRefreshing ? t('statusBar.ports.scanning', 'Scanning for workspace ports...') : t('statusBar.ports.none', 'No workspace ports detected') }}
+          <div v-if="!ports.groups.length" class="sb-empty sb-ports-empty" data-test="ports-empty">
+            <template v-if="portsRefreshing">{{ t('statusBar.ports.scanning', 'Scanning for workspace ports...') }}</template>
+            <template v-else>
+              <span class="sb-empty-title">{{ t('statusBar.ports.none', 'No workspace ports detected') }}</span>
+              <span class="sb-empty-hint">{{ t('statusBar.ports.noneHint', 'A program started in one of your terminals that listens on a port (a dev server, for example) shows up here.') }}</span>
+            </template>
           </div>
           <section class="sb-external">
             <button type="button" class="sb-external-toggle" :aria-expanded="externalExpanded" @click="externalExpanded = !externalExpanded">

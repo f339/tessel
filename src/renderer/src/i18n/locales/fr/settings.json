@@ -853,7 +853,9 @@
       "portsHint": "Les ports qu'écoutent les programmes de vos terminaux, par espace de travail : ouvrez-les, copiez-les ou arrêtez-les (barre d'état).",
       "explorer": "Explorateur de fichiers",
       "explorerHint": "Les fichiers du projet, avec leur état git (Ctrl+Shift+X).",
-      "resourcesHint": "Mémoire et processeur de Tessel et des terminaux de chaque espace de travail (barre d'état)."
+      "resourcesHint": "Mémoire et processeur de Tessel et des terminaux de chaque espace de travail (barre d'état).",
+      "copy": "Copier",
+      "diagnosticsHint": "Les versions et le journal récent, à coller dans un rapport de bogue."
     },
     "skills": {
       "installed": "Compétences installées",

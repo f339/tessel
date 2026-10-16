@@ -4,13 +4,14 @@
 // and profiles (the system default first, preselected), lets the user filter
 // by domain, warns plainly, and shows what was imported and what was skipped.
 // After Orca's cookie-import UI (MIT, Copyright (c) 2026 Lovecast Inc.).
-// No cookie value is ever shown here: only counts and domain names.
+// No cookie value is ever shown here: only counts and domain names. After an
+// import, Done is the main button (Import cookies again stays, secondary).
 import { ref, computed, onMounted } from 'vue'
-import { Cookie, Loader2, AlertTriangle, Globe } from 'lucide-vue-next'
+import { Cookie, Loader2, AlertTriangle, Globe, X } from 'lucide-vue-next'
 import { t } from '../i18n'
 import { settings } from '../settings'
 import { afterCookieImport } from '../browser/agentSession'
-import { lastImportText, headlineText, skippedText, skipBreakdown } from '../browser/cookieImportText'
+import { lastImportText, headlineText, skippedText, skipBreakdown, countText } from '../browser/cookieImportText'
 
 const emit = defineEmits(['close', 'imported'])
 
@@ -29,7 +30,7 @@ const current = computed(() => browsers.value.find((b) => b.id === (selected.val
 const currentProfile = computed(() => current.value && current.value.profiles.find((p) => p.dir === (selected.value && selected.value.profileDir)))
 const appBoundWarn = computed(() => (currentProfile.value && currentProfile.value.appBoundCount) || 0)
 const appBoundText = computed(() =>
-  t('browser.cookieImport.appBoundNote', "{{n}} of this profile's cookies use Chrome's app-bound encryption and cannot be read; export them to a file and use Import from file.", { n: appBoundWarn.value })
+  t('browser.cookieImport.appBoundNote', "{{n}} of this profile's cookies use Chrome's app-bound encryption and cannot be read; export them to a file and use Import from file.", { n: countText(appBoundWarn.value), count: appBoundWarn.value })
 )
 
 onMounted(async () => {
@@ -57,7 +58,9 @@ function pick(browserId, profileDir) {
 }
 
 function profileLabel(b, p) {
-  const count = p.cookieCount == null ? '' : t('browser.cookieImport.count', '{{n}} cookies', { n: p.cookieCount })
+  const n = p.cookieCount
+  const vars = { n: countText(n), count: n }
+  const count = n == null ? '' : n === 1 ? t('browser.cookieImport.count', '{{n}} cookie', vars) : t('browser.cookieImport.count', '{{n}} cookies', vars)
   const name = b.profiles.length > 1 || p.name !== b.name ? p.name : ''
   return [name, count].filter(Boolean).join(' · ')
 }
@@ -116,7 +119,7 @@ function codeMessage(code) {
 }
 
 // "Already imported on <date>. This time: X new, Y updated, Z unchanged."
-// then what was skipped; the reasons one by one under "Details".
+// then how many were skipped; the reasons one by one under "Details".
 const resultText = computed(() => {
   const s = result.value
   if (!s) return ''
@@ -130,7 +133,7 @@ const breakdown = computed(() => (result.value ? skipBreakdown(result.value) : [
     <div class="help-card cookie-card" role="dialog" aria-modal="true" aria-labelledby="cookie-title" @keydown.escape.prevent.stop="emit('close')">
       <div class="help-head">
         <span id="cookie-title"><Cookie :size="16" aria-hidden="true" /> {{ t('browser.cookieImport.title', 'Import cookies from another browser') }}</span>
-        <button class="tb-icon" :title="t('browser.cookieImport.close', 'Close (Esc)')" @click="emit('close')">✕</button>
+        <button class="tb-icon" :title="t('browser.cookieImport.close', 'Close (Esc)')" :aria-label="t('browser.cookieImport.close', 'Close (Esc)')" @click="emit('close')"><X :size="14" aria-hidden="true" /></button>
       </div>
 
       <p class="cookie-intro">{{ t('browser.cookieImport.intro', 'Copy your sign-ins from another browser so you stay logged in to your sites in Tessel\'s browser.') }}</p>
@@ -188,7 +191,7 @@ const breakdown = computed(() => (result.value ? skipBreakdown(result.value) : [
           <summary>{{ t('browser.cookieImport.details', 'Details') }}</summary>
           <ul>
             <li v-for="row in breakdown" :key="row.id" :data-reason="row.id">
-              <span>{{ row.label }}</span><span class="cookie-details-n">{{ row.n }}</span>
+              <span>{{ row.label }}</span><span class="cookie-details-n">{{ countText(row.n) }}</span>
             </li>
           </ul>
         </details>
@@ -199,14 +202,15 @@ const breakdown = computed(() => (result.value ? skipBreakdown(result.value) : [
       <div v-if="error" class="cookie-error" role="alert">{{ error }}</div>
 
       <div class="confirm-actions">
-        <button class="confirm-btn" @click="emit('close')">{{ result ? t('browser.cookieImport.done', 'Done') : t('app.confirm.cancel', 'Cancel') }}</button>
+        <button v-if="!result" class="confirm-btn" @click="emit('close')">{{ t('app.confirm.cancel', 'Cancel') }}</button>
         <button class="confirm-btn" :disabled="importing" data-test="cookie-import-file" @click="importFile">
           {{ t('browser.cookieImport.fromFile', 'Import from file…') }}
         </button>
-        <button class="confirm-btn primary" :disabled="importing || !selected" data-test="cookie-import" @click="doImport">
+        <button class="confirm-btn" :class="{ primary: !result }" :disabled="importing || !selected" data-test="cookie-import" @click="doImport">
           <Loader2 v-if="importing" :size="14" class="bp-spin" />
-          {{ t('browser.cookieImport.import', 'Import cookies') }}
+          {{ result ? t('browser.cookieImport.importAgain', 'Import again') : t('browser.cookieImport.import', 'Import cookies') }}
         </button>
+        <button v-if="result" class="confirm-btn primary" data-test="cookie-done" @click="emit('close')">{{ t('browser.cookieImport.done', 'Done') }}</button>
       </div>
     </div>
   </div>
@@ -255,12 +259,13 @@ const breakdown = computed(() => (result.value ? skipBreakdown(result.value) : [
   font-weight: 600;
 }
 .cookie-default {
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  padding: 0 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-3));
   color: var(--text-strong);
   font-size: 10.5px;
-  font-weight: 500;
+  font-weight: 400;
+  line-height: 16px;
 }
 .cookie-profile {
   display: flex;

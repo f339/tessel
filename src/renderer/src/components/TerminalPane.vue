@@ -57,6 +57,7 @@ import { effectiveAgent, launchSignature, launchSessionValues, inYoloFolder, YOL
 import { getAgentSessionOptionCatalog, modelOptions, resolveSessionOptionDefaults, composedModelId, listedModelValues, valuesOnListedRow } from '../../../shared/agentSessionOptions'
 import { cursorContextOnScreen, cursorModelOnScreen, cursorPickerFilter, cursorPickerShown } from '../../../shared/cursorModels'
 import { antigravityListed, antigravityModelOnScreen } from '../../../shared/antigravityModels'
+import { codexModelOnScreen } from '../../../shared/codexScreen'
 import { paneModels } from '../paneModels'
 import { modelsFor, refreshIfStale } from '../agentModels'
 import { CLAUDE_PRICING } from '../../../shared/claudePricing'
@@ -363,6 +364,17 @@ async function refreshModel() {
       if (seen) {
         delete n.modelChoice
         agentModel.value = { model: seen.model, name: seen.name, effort: seen.effort, source: 'screen' }
+        return
+      }
+    }
+    // Codex: the line under its input box names the model and effort it runs
+    // now ("GPT-6-Luna medium fast"), a /model or a "switch model?" answer
+    // included, before its rollout says so.
+    if (n.agentId === 'codex' && termNow()) {
+      const seen = codexModelOnScreen(screenText(12).split('\n'), modelsFor('codex'))
+      if (seen) {
+        delete n.modelChoice
+        agentModel.value = { model: seen.model, ...(seen.name ? { name: seen.name } : {}), effort: seen.effort, source: 'screen' }
         return
       }
     }

@@ -20,6 +20,7 @@ import { t } from './i18n'
 import { retryAfterMs } from './usagePoller'
 import { createAntigravityCliUsage } from './antigravityCliUsage'
 import { createAntigravityPlan } from './antigravityPlan'
+import { createMuseUsage } from './museUsage'
 
 // The console's server-function id for its workspaces list (stable, from Orca).
 const OPENCODE_WORKSPACES_ID = 'def39973159c7f0483d8793a822b8dbb10d067e12c65455fcb4608459ba0234f'
@@ -48,8 +49,9 @@ export const USAGE_URLS = Object.freeze({
 // Internal endpoints of a provider's read, never a provider of their own.
 const SUB_REQUESTS = ['geminiProject', 'cursorLegacy', 'grokMonthly', 'opencodeWorkspaces', 'opencodeConsole', 'minimaxCn', 'zcodeCn', 'zcodeDev']
 // Providers read from their own CLI instead of a web endpoint: Antigravity's
-// `agy /usage` (antigravityCliUsage.js).
-const CLI_PROVIDERS = ['antigravity']
+// `agy /usage` (antigravityCliUsage.js), Muse Code's `muse serve` usage/read
+// (museUsage.js).
+const CLI_PROVIDERS = ['antigravity', 'muse']
 // loadCodeAssist's answer for an account with no tier: one of its refused
 // tiers says the client itself is no longer supported (UNSUPPORTED_CLIENT).
 export function geminiUnsupported(answer) {
@@ -68,7 +70,8 @@ export function createExtraProviderUsage({
   cliEnv = null,
   antigravityCli = createAntigravityCliUsage(cliEnv ? { env: cliEnv } : {}),
   // Its plan, which agy's answer leaves out (antigravityPlan.js).
-  antigravityPlan = createAntigravityPlan()
+  antigravityPlan = createAntigravityPlan(),
+  museUsage = createMuseUsage(cliEnv ? { env: cliEnv } : {})
 } = {}) {
   const sequences = new Map()
   // The providers to read: installed ones, and the ones a key saved in
@@ -93,7 +96,7 @@ export function createExtraProviderUsage({
         ...p,
         quota:
           p.quota !== false &&
-          (p.report || (p.id === 'antigravity' ? antigravityCli.present() : await sources.present(p.id)))
+          (p.report || (p.id === 'antigravity' ? antigravityCli.present() : p.id === 'muse' ? museUsage.present() : await sources.present(p.id)))
       }))
     )
     return { ok: true, providers: providers.filter((p) => p.report || p.quota) }
@@ -242,11 +245,39 @@ export function createExtraProviderUsage({
           ...(typeof plan === 'string' ? { plan } : {})
         }
       }
+      // Muse Code: what `muse serve` last saw of your subscription (its
+      // 5-hour and weekly windows, and the plan it names).
+      const muse = async () => {
+        const res = await museUsage.read()
+        if (sequences.get(provider) !== sequence)
+          refuse('stale', t('main.usage.loginChanged', 'The provider login or usage request changed. Refresh usage.'))
+        if (!res?.ok) {
+          const reason = res?.reason
+          if (reason === 'timeout') refuse('timeout', t('main.usage.timedOut', 'The usage request timed out.'))
+          if (reason === 'missing') refuse('unavailable', t('main.usage.museNeedsCli', "Muse Code's usage needs the Muse Code CLI (muse) installed."))
+          if (reason === 'never-run') refuse('unavailable', t('main.usage.museNeverRun', 'Start Muse Code once (and sign in) so Tessel can read its usage.'))
+          if (reason === 'signed-out') refuse('unavailable', t('main.usage.museSignedOut', 'Muse Code is not signed in: run muse, then /login.'))
+          if (reason === 'api-key') refuse('unsupported', t('main.usage.museApiKey', 'Muse Code is signed in with an API key: it is billed per token, with no subscription quota to show.'))
+          if (reason === 'none') refuse('unavailable', t('main.usage.museNothingYet', 'Muse Code has not seen your subscription usage yet. Send it a prompt, then refresh.'))
+          if (reason === 'config') refuse('unavailable', t('main.usage.museConfig', 'Muse Code could not load its settings or its sign-in. Run muse to see why.'))
+          refuse('response', t('main.usage.unreadable', 'The usage response could not be read.'))
+        }
+        return {
+          ok: true,
+          provider,
+          accountId: null,
+          source: 'live',
+          observedAt: Number.isFinite(res.observedAt) ? res.observedAt : clock(),
+          windows: res.windows,
+          ...(typeof res.plan === 'string' && res.plan ? { plan: res.plan } : {})
+        }
+      }
       const work = async () => {
         const installed = await installedProviders()
         if (!installed.some((p) => p.id === provider))
           refuse('unavailable', t('main.usage.agentNotInstalled', 'The matching agent is not installed.'))
         if (provider === 'antigravity') return antigravity()
+        if (provider === 'muse') return muse()
         const login = await sources.auth(provider)
         for (const name of ['Authorization', 'Cookie']) {
           const value = login?.headers?.[name]
@@ -424,7 +455,7 @@ export function createExtraProviderUsage({
                 reject(new ProviderReadError('timeout', t('main.usage.timedOut', 'The usage request timed out.')))
               },
               // A CLI read: the time it gives its CLI, and a little more.
-              Math.max(1, Math.min(CLI_PROVIDERS.includes(provider) ? Math.max(timeoutMs, (antigravityCli.timeoutMs || 0) + 1000) : timeoutMs, 30000))
+              Math.max(1, Math.min(CLI_PROVIDERS.includes(provider) ? Math.max(timeoutMs, ((provider === 'muse' ? museUsage.timeoutMs : antigravityCli.timeoutMs) || 0) + 1000) : timeoutMs, 30000))
             )
           })
         ])
