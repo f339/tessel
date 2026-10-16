@@ -13,6 +13,7 @@ import { ref, computed, watch, nextTick, inject } from 'vue'
 import { ChevronRight, ShieldCheck } from 'lucide-vue-next'
 import RightsChecks from './RightsChecks.vue'
 import LsAvatars from './LsAvatars.vue'
+import ThemedSelect from '../ui/ThemedSelect.vue'
 import { accessPeople, invitesOf, projectAccess, inviteName, inviteExpiry, personName } from '../../liveShareAccess'
 import { shownRights, rightWords } from '../../liveShareRights'
 import { setRight as withRight } from '../../../../shared/liveShareRights'
@@ -103,10 +104,10 @@ function changeView(event) {
       <div class="lsd-section-head">
         <label class="lsx-pick">
           <span>{{ t('liveShare.access.show', 'Show') }}</span>
-          <select class="ls-input lsx-select" :value="view" data-test="ls-access-view" @change="changeView">
+          <ThemedSelect class="ls-input lsx-select" :value="view" data-test="ls-access-view" @change="changeView">
             <option value="all">{{ t('liveShare.access.all', 'All shared projects') }}</option>
             <option v-for="p in shared" :key="p.id" :value="p.id">{{ p.name }}</option>
-          </select>
+          </ThemedSelect>
         </label>
       </div>
 

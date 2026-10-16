@@ -1040,9 +1040,9 @@ describe('Live Share session: round 5', () => {
   }, 30000)
 
   it('a room full with its waiting line full too: still a full room, not counted against the code', async () => {
-    // Seven let in, then three left waiting for the host's answer.
+    // Eight let in, then two left waiting for the host's answer.
     let answered = 0
-    const t = fakeTessel({ approve: () => (++answered <= 7 ? true : new Promise(() => {})) })
+    const t = fakeTessel({ approve: () => (++answered <= 8 ? true : new Promise(() => {})) })
     let blocked = 0
     const secret = newSecret()
     const host = hostFor({ secret, hostName: 'Cedric', callbacks: { ...t.callbacks, onInviteBlocked: () => blocked++ } })
@@ -1053,8 +1053,8 @@ describe('Live Share session: round 5', () => {
       await until(() => r.states.includes('joined') || r.states.includes('waiting') || r.closed)
       return r
     }
-    for (let i = 0; i < 7; i++) expect((await join(`G${i}`)).states).toContain('joined')
-    for (let i = 0; i < 3; i++) expect((await join(`W${i}`)).states).toContain('waiting')
+    for (let i = 0; i < 8; i++) expect((await join(`G${i}`)).states).toContain('joined')
+    for (let i = 0; i < 2; i++) expect((await join(`W${i}`)).states).toContain('waiting')
     for (let i = 0; i < 9; i++) expect((await join(`X${i}`)).closed).toBe('busy')
     expect(blocked).toBe(0)
   }, 30000)
@@ -1071,7 +1071,7 @@ describe('Live Share session: round 5', () => {
       await until(() => r.states.includes('waiting') || r.closed)
       return r
     }
-    for (let i = 0; i < 3; i++) expect((await join(`W${i}`)).states).toContain('waiting')
+    for (let i = 0; i < 2; i++) expect((await join(`W${i}`)).states).toContain('waiting')
     for (let i = 0; i < 8; i++) expect((await join(`X${i}`)).closed).toBe('busy')
     // Eight counted: the code lets no new guest in.
     expect(blocked).toBe(1)
@@ -1091,19 +1091,26 @@ describe('Live Share session: round 5', () => {
     }
   }
 
-  it('a crowded share (7 in, 3 waiting) turns away 30 more in 10 minutes without blocking the code, and 30 more after that', async () => {
+  it('a crowded share (8 in, 2 waiting) turns away 30 more in 10 minutes without blocking the code, and 30 more after that', async () => {
     const clock = { now: 1000 }
     let answered = 0
-    const t = fakeTessel({ approve: () => (++answered <= 7 ? true : new Promise(() => {})) })
+    const t = fakeTessel({ approve: () => (++answered <= 8 ? true : new Promise(() => {})) })
     let blocked = 0
     const secret = newSecret()
     const host = hostFor({ secret, hostName: 'Cedric', callbacks: { ...t.callbacks, onInviteBlocked: () => blocked++ }, now: () => clock.now })
     const join = arrivals(await host.start(), secret, clock)
-    for (let i = 0; i < 7; i++) expect((await join(`G${i}`)).states).toContain('joined')
-    for (let i = 0; i < 3; i++) expect((await join(`W${i}`)).states).toContain('waiting')
+    for (let i = 0; i < 8; i++) expect((await join(`G${i}`)).states).toContain('joined')
+    const waiting = []
+    for (let i = 0; i < 2; i++) waiting.push(await join(`W${i}`))
+    expect(waiting.every((r) => r.states.includes('waiting'))).toBe(true)
     for (let i = 0; i < 30; i++) expect((await join(`X${i}`)).closed).toBe('busy')
     expect(blocked).toBe(0)
     clock.now += 10 * 60 * 1000
+    // Those two waited too long: turned away at the next arrival, and two
+    // more wait in their place.
+    for (let i = 2; i < 4; i++) expect((await join(`W${i}`)).states).toContain('waiting')
+    await until(() => waiting.every((r) => r.closed))
+    expect(waiting.map((r) => r.closed)).toEqual(['timeout', 'timeout'])
     for (let i = 0; i < 30; i++) expect((await join(`Z${i}`)).closed).toBe('busy')
     expect(blocked).toBe(0)
     expect(isBlocked(host)).toBe(false)

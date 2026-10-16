@@ -468,14 +468,26 @@ describe('Live Share in the window, as the host', () => {
     expect(t.api.approve).toHaveBeenLastCalledWith({ guestId: 'g2', yes: false, projects: [], rights: NO, trust: false })
   })
 
-  it('a full trusted list: the guest is let in, and the host is told it was not trusted', async () => {
+  it('a full trusted list: the guest is let in, and the host is told plainly it was not trusted', async () => {
     t.api.approve.mockResolvedValue({ ok: true, reason: 'trust-full', max: 50 })
     twoProjects()
     sharingNow(['ws-1'], { guests: [{ id: 'g1', name: 'Alex', state: 'waiting' }] })
     t.listeners.onAsk({ guestId: 'g1', name: 'Alex', code: '1', trustable: true })
     t.ls.answerAsk({ key: 'g1', yes: true, projects: ['ws-1'], trust: true })
     await flush()
-    expect(t.toasts.at(-1)).toBe('Trusted list is full (50): remove someone first. Alex was not trusted.')
+    expect(t.toasts.at(-1)).toBe('Trusted list full (50): Alex joined without being trusted. Remove someone from Trusted people to trust them.')
+  })
+
+  it('a guest whose Tessel can not be trusted: main says so, and the toast says it joined untrusted', async () => {
+    t.api.approve.mockResolvedValue({ ok: true, reason: 'not-trustable' })
+    twoProjects()
+    sharingNow(['ws-1'], { guests: [{ id: 'g1', name: 'Alex', state: 'waiting' }] })
+    t.listeners.onAsk({ guestId: 'g1', name: 'Alex', code: '1', trustable: false })
+    t.ls.answerAsk({ key: 'g1', yes: true, projects: ['ws-1'], trust: true })
+    // Main decides whether it can be trusted.
+    expect(t.api.approve).toHaveBeenLastCalledWith(expect.objectContaining({ guestId: 'g1', yes: true, trust: true }))
+    await flush()
+    expect(t.toasts.at(-1)).toBe('Alex joined without being trusted: their Tessel is too old to be trusted (it needs an update).')
   })
 
   it('says who joined which project, trusted people let in at once included', async () => {

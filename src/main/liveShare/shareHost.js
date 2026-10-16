@@ -35,11 +35,14 @@
 // few connections that got its keys and never got in, whatever their way out
 // (someone in the middle could be trying to make the verification codes
 // match), it is blocked until the host makes it a new code. After a no (or a
-// guest who left or was removed while waiting), that invitation's new guests
-// wait a while before they can ask again, and a few noes in a row pause
-// every invitation; each invitation has a waiting line of its own, and at
-// most MAX_WAITING_ALL guests wait for the host at once in all; handshakes
-// are limited to a few a minute.
+// guest who left or was removed while waiting), that invitation's new
+// guests wait a while before they can ask again; the host's own noes, a few
+// in a row across two invitations or more, pause every invitation. Each
+// invitation has a short waiting line of its own (MAX_WAITING), within a
+// longer one in all (MAX_WAITING_ALL), so one code can't fill the host's;
+// a guest waits WAITING_MS at most for the host's answer (then it counts
+// against its invitation's block, like any connection that never got in);
+// handshakes are limited to a few a minute.
 //
 // A guest let in made a reconnect key of its own (Ed25519) and gave its
 // public half when it joined. When its connection drops (its network, its
@@ -155,8 +158,11 @@ export { NO_RIGHTS, cleanRights, MAX_PROJECTS, isProjectId, cleanProjectIds, cle
 // its Tessel is out of date; an older host: the host's is).
 export const SHARE_PROTOCOL = 4
 const MAX_GUESTS = 10
-const MAX_WAITING = 3 // guests waiting for the host's answer at once, per invitation
-const MAX_WAITING_ALL = 3 // and in all
+const MAX_WAITING = 2 // guests waiting for the host's answer at once, per invitation
+const MAX_WAITING_ALL = 6 // and in all
+// How long a guest waits for the host's answer (then it is turned away,
+// counted against its invitation's block only).
+const WAITING_MS = 4 * 60 * 1000
 // Times a trusted identity joins in a minute (each join replaces the
 // connection it had).
 const TRUSTED_JOINS_PER_MINUTE = 3
@@ -448,6 +454,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     if (!guests.has(g.id)) return
     guests.delete(g.id)
     clearTimeout(g.flushTimer)
+    clearTimeout(g.waitTimer)
     // Nothing more of its conversations goes out.
     for (const id of [...g.chats.keys()]) unwatchChat(g, id)
     clearTimeout(g.chatHeldTimer)
@@ -469,8 +476,10 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     // its way out.
     if (g.keysSent && !g.everJoined && !g.byHost && !HOST_ENDS.has(reason)) stoppedEarly(g)
     // A guest who left or was removed while waiting: that invitation's new
-    // guests wait as after a no (asking again and again costs something).
-    // One removed after it was let in pauses no one else.
+    // guests wait as after a no (asking again and again costs something);
+    // other invitations do not. One that waited too long counts against its
+    // invitation's block (above), one removed after it was let in pauses no
+    // one.
     if (g.state === 'waiting' && (reason === 'left' || reason === 'closed' || reason === 'removed')) denied(g)
     // Left on purpose, or removed: it can't come back. Otherwise: seen now.
     if (g.person && (reason === 'left' || reason === 'removed')) access.removePerson(g.person.hash)
@@ -488,7 +497,13 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     callbacks.onInviteBlocked?.(g.guardId)
     dropNotJoined('expired')
   }
-  const denied = (g) => g.guardId && access.noteDenied(g.guardId)
+  // A no for its invitation (byHost: the host's own, which may pause every
+  // invitation, shareAccess.js noteDenied).
+  const denied = (g, byHost = false) => g.guardId && access.noteDenied(g.guardId, { byHost })
+  // Guests waiting longer than WAITING_MS: turned away.
+  function expireWaiting() {
+    for (const g of [...guests.values()]) if (g.state === 'waiting' && now() - g.waitingSince >= WAITING_MS) drop(g, 'timeout')
+  }
 
   // Output waiting for a guest; a pane whose screen is still being prepared
   // (held) keeps its output until that screen went out first.
@@ -1199,6 +1214,12 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     const signature = Buffer.from(String(back.sig || ''), 'base64')
     const person = key.length === KX_BYTES ? access.person(keyHash(key)) : null
     if (!person || !bindingSigned(key, g.binding, signature)) return drop(g, 'rejoin-refused')
+    // Linked to a trusted entry that is gone (trust taken back while this
+    // share was being taken back): no longer let in by itself.
+    if (person.trust && !(trust && trust.get(person.trust))) {
+      access.removePerson(person.hash)
+      return drop(g, 'rejoin-refused')
+    }
     // Back too often (each time, every pane it sees is taken again): turned
     // away until its minute is over, the connection it had kept. Counted for
     // its address like any connection, never against the code (it proved its
@@ -1260,6 +1281,8 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     if (identity === false) return drop(g, 'protocol')
     g.identity = identity
     const t = identity && trust ? trust.get(identityFingerprint(identity)) : null
+    // (Guests that waited too long first make room.)
+    expireWaiting()
     const inOrWaiting = [...guests.values()].filter((x) => x.state === 'joined' || x.state === 'waiting')
     // A trusted identity already in comes in its own place (its connection
     // is replaced).
@@ -1284,8 +1307,8 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     }
     // The invitation pausing after a no, or its waiting line full, with room
     // left: counted (anyone can cause those: leave while waiting, or wait
-    // three times, so they can't be a way around the count).
-    const waiting = inOrWaiting.filter((x) => x.state === 'waiting')
+    // as many times as its line holds: they can't be a way around the count).
+    const waiting = [...guests.values()].filter((x) => x.state === 'waiting')
     if (access.pausing(inv.id) || waiting.filter((x) => x.guardId === inv.id).length >= MAX_WAITING) return drop(g, 'busy')
     // Every invitation pausing (noes in a row), or the host's waiting line
     // full in all: like a full room (other invitations' guests may cause
@@ -1295,6 +1318,9 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       return drop(g, 'busy')
     }
     g.state = 'waiting'
+    g.waitingSince = now()
+    g.waitTimer = setTimeout(() => guests.has(g.id) && g.state === 'waiting' && drop(g, 'timeout'), WAITING_MS)
+    g.waitTimer.unref?.()
     notifyGuests()
     send(g, { t: 'waiting' })
     const shared = sharedIds()
@@ -1307,7 +1333,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     if (!guests.has(g.id)) return
     if (!(answer === true || (answer && typeof answer === 'object' && answer.yes === true))) {
       log(`guest ${g.name || '?'} denied`)
-      denied(g)
+      denied(g, true)
       drop(g, 'denied')
       return
     }
@@ -1557,6 +1583,8 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       chatBusySaid: new Map(), // pane id -> when it was last told "busy" (past its limit)
       chatHeldTimer: null,
       focus: null, // the pane it has on screen (presence)
+      waitingSince: 0, // when it started waiting for the host's answer
+      waitTimer: null,
       typed: new Map(), // pane id -> when it last typed there (presence)
       typedSaid: new Map(), // pane id -> when its typing there was last said
       subscribed: new Map(), // pane id -> { state: 'loading' | 'live', held, exit, project }
@@ -1657,6 +1685,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     pingTimer = setInterval(() => {
       access.prune()
       dropNotJoined('expired')
+      expireWaiting()
       access.forgetOld()
       for (const g of [...guests.values()]) {
         if (!guests.has(g.id)) continue

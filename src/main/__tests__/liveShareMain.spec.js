@@ -206,7 +206,7 @@ describe('guestPaneId', () => {
 
 // The window's side of registerLiveShare: its IPC handlers, what it sends to
 // the window, the terminal host client and the window's pty:data / pty:exit.
-function fakeMain({ snapshot = (id) => `screen of ${id}`, dataDir = newDataDir(), resume = false } = {}) {
+function fakeMain({ snapshot = (id) => `screen of ${id}`, dataDir = newDataDir(), resume = false, requestLimits } = {}) {
   const m = {
     handle: {},
     on: {},
@@ -244,7 +244,8 @@ function fakeMain({ snapshot = (id) => `screen of ${id}`, dataDir = newDataDir()
     log: { info: (_tag, line) => m.logs.push(line), warn: (_tag, line) => m.logs.push(line) },
     kill: vi.fn(),
     pidRunning: () => tunnel.alive,
-    resume
+    resume,
+    ...(requestLimits ? { requestLimits } : {})
   })
   m.dataDir = dataDir
   return m
@@ -1456,6 +1457,45 @@ describe('registerLiveShare: identity and trust files that can not be read are k
     expect(ask.trustable).toBe(false)
     expect(fs.readFileSync(join(guestDir, 'liveshare-identity.json'), 'utf8')).toBe('{ not json')
     expect(g.logs.join('\n')).toContain('identity file can not be read')
+    // Asked to trust it anyway: let in, not trusted, and said why.
+    expect(await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true, projects: ['ws-1'], trust: true })).toEqual({ ok: true, reason: 'not-trustable' })
+    await until(() => g.last('liveShare:guest')?.state === 'joined')
+    expect(host.last('liveShare:host').trusted).toEqual([])
+  })
+
+  it('requests to open kept too long, or past the most kept, are called off in the window', async () => {
+    const host = fakeMain({ requestLimits: { keepMs: 1500, max: 2 } })
+    mains.push(host)
+    const started = await host.handle['liveShare:start'](null, { name: 'Ada', projects: ['ws-1'] })
+    host.on['liveShare:layouts'](null, [{ id: 'ws-1', layout: { project: 'one', tree: leaf('pane-1-a'), activeId: 'pane-1-a' } }])
+    const g = fakeMain()
+    mains.push(g)
+    await g.handle['liveShare:join'](null, { invite: codeOf(started), name: 'Bob' })
+    const ask = await until(() => host.last('liveShare:ask'))
+    await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true, projects: ['ws-1'], rights: { open: true } })
+    await until(() => g.last('liveShare:guest')?.rights?.open)
+    for (let i = 0; i < 3; i++) await g.handle['liveShare:open'](null, { kind: 'terminal', project: 'ws-1' })
+    await until(() => host.events('liveShare:hostRequest').length === 4)
+    const [r1, r2, cancel1, r3] = host.events('liveShare:hostRequest')
+    expect([r1.action, r2.action, r3.action]).toEqual(['open', 'open', 'open'])
+    expect(cancel1).toEqual({ action: 'cancel', request: r1.request })
+    // A while later, the next request (another guest asking) calls off the
+    // ones kept too long (Bob still has his project and his right).
+    await new Promise((r) => setTimeout(r, 1600))
+    const c = fakeMain()
+    mains.push(c)
+    await c.handle['liveShare:join'](null, { invite: codeOf(started), name: 'Cid' })
+    const askC = await until(() => host.events('liveShare:ask').find((q) => q.name === 'Cid'))
+    await host.handle['liveShare:approve'](null, { guestId: askC.guestId, yes: true, projects: ['ws-1'] })
+    await until(() => c.last('liveShare:guest')?.state === 'joined' && c.last('liveShare:guest').agents)
+    expect(await c.handle['liveShare:open'](null, { kind: 'terminal', project: 'ws-1' })).toEqual({ ok: true, asked: true })
+    await until(() => host.events('liveShare:hostRequest').length === 7)
+    const after = host.events('liveShare:hostRequest').slice(4)
+    expect(after.slice(0, 2)).toEqual([
+      { action: 'cancel', request: r2.request },
+      { action: 'cancel', request: r3.request }
+    ])
+    expect(after[2]).toMatchObject({ action: 'ask-open', guest: expect.objectContaining({ name: 'Cid' }) })
   })
 
   it('a trusted people file that can not be read is never written over', async () => {

@@ -42,8 +42,10 @@
 // A project taken out of the share is taken out of every invitation's and
 // person's grant (shared again later, it is no one's until the host gives
 // it); a trusted person's projects stay (seen again whenever shared).
-// Besides each invitation's pause and waiting line, a few noes in a row pause
-// every invitation for a short while (pausingAll).
+// Besides each invitation's pause and waiting line, a few of the host's own
+// noes in a row, for guests of two invitations or more, pause every
+// invitation for a short while (pausingAll); a guest leaving or turned away
+// pauses its own invitation only, so no code can pause the others.
 // Nothing here touches the network: shareHost.js does.
 import crypto from 'crypto'
 import { cleanRights, isRightId, sameRights, setRight, RIGHT_IDS } from '../../shared/liveShareRights'
@@ -70,9 +72,11 @@ export const ROOM_FULL_FREE = 30
 const DENY_WAIT_MS = 15000
 const DENY_WAIT_MAX_MS = 5 * 60 * 1000
 const DENY_MEMORY_MS = 10 * 60 * 1000
-// Noes in 10 min, whatever the invitation, before every invitation pauses
-// (15 s, doubled by each more, up to 5 min).
+// The host's noes in 10 min, for guests of GLOBAL_INVITES invitations at
+// least, before every invitation pauses (15 s, doubled by each more, up to
+// 5 min).
 const GLOBAL_DENIALS = 3
+const GLOBAL_INVITES = 2
 
 export const secretId = (secret) => crypto.createHash('sha256').update('tessel-liveshare-secret').update(secret).digest('hex').slice(0, 16)
 export const keyHash = (key) => crypto.createHash('sha256').update(key).digest('hex')
@@ -128,7 +132,7 @@ export function createAccess({ now = Date.now, trust = null, isOnline = () => fa
   // A trusted identity's counters (fingerprint -> counters), whoever its
   // reconnect key is; kept with the share.
   const fpCounters = new Map()
-  let globalGuard = { denials: [], waitUntil: 0 }
+  let globalGuard = { denials: [], waitUntil: 0 } // denials: [time, invitation id]
   let shared = new Set(sharedIds())
 
   const changed = (kind) => {
@@ -139,6 +143,8 @@ export function createAccess({ now = Date.now, trust = null, isOnline = () => fa
     }
   }
   const freshGuard = () => ({ blocked: false, unfinished: [], roomFull: [], denials: [], waitUntil: 0 })
+  // The host's recent noes: [time, invitation id], the last 10 min.
+  const hostDenials = (list) => (Array.isArray(list) ? list.filter((d) => Array.isArray(d) && Number.isFinite(d[0]) && now() - d[0] < DENY_MEMORY_MS && isInviteId(d[1])).slice(-50) : [])
   const guardOf = (g) => ({
     blocked: !!(g && g.blocked),
     unfinished: times(g && g.unfinished, now(), UNFINISHED_MEMORY_MS),
@@ -246,7 +252,7 @@ export function createAccess({ now = Date.now, trust = null, isOnline = () => fa
     for (const c of Array.isArray(saved.counters) ? saved.counters : []) {
       if (c && typeof c.fp === 'string' && /^[0-9a-f]{32}$/.test(c.fp) && trust && trust.get(c.fp)) fpCounters.set(c.fp, counters(c))
     }
-    if (saved.guard && typeof saved.guard === 'object') globalGuard = { denials: times(saved.guard.denials, now(), DENY_MEMORY_MS), waitUntil: Number.isFinite(saved.guard.waitUntil) ? saved.guard.waitUntil : 0 }
+    if (saved.guard && typeof saved.guard === 'object') globalGuard = { denials: hostDenials(saved.guard.denials), waitUntil: Number.isFinite(saved.guard.waitUntil) ? saved.guard.waitUntil : 0 }
   } else if (legacy && Buffer.isBuffer(legacy.secret) && legacy.secret.length === 32) {
     // One code: a root invitation offering every shared project (as the
     // prompt did), and its earlier secrets for the guests who need them.
@@ -436,12 +442,17 @@ export function createAccess({ now = Date.now, trust = null, isOnline = () => fa
   }
   // A no (or a guest who left while waiting, or one removed): that
   // invitation's new guests wait a while.
-  function noteDenied(id) {
+  // byHost: the host's own no (it may pause every invitation); a guest that
+  // left, was removed or waited too long pauses its own invitation only.
+  function noteDenied(id, { byHost = false } = {}) {
     const t = now()
-    globalGuard.denials = [...times(globalGuard.denials, t, DENY_MEMORY_MS), t]
-    const n = globalGuard.denials.length
-    if (n >= GLOBAL_DENIALS) globalGuard.waitUntil = t + Math.min(DENY_WAIT_MAX_MS, DENY_WAIT_MS * 2 ** (n - GLOBAL_DENIALS))
     const inv = invites.get(id)
+    if (byHost && inv) {
+      globalGuard.denials = [...hostDenials(globalGuard.denials), [t, id]]
+      const n = globalGuard.denials.length
+      const spread = new Set(globalGuard.denials.map((d) => d[1])).size
+      if (n >= GLOBAL_DENIALS && spread >= GLOBAL_INVITES) globalGuard.waitUntil = t + Math.min(DENY_WAIT_MAX_MS, DENY_WAIT_MS * 2 ** (n - GLOBAL_DENIALS))
+    }
     if (!inv) return
     inv.guard.denials = [...times(inv.guard.denials, t, DENY_MEMORY_MS), t]
     inv.guard.waitUntil = t + Math.min(DENY_WAIT_MAX_MS, DENY_WAIT_MS * 2 ** (inv.guard.denials.length - 1))
@@ -534,7 +545,9 @@ export function createAccess({ now = Date.now, trust = null, isOnline = () => fa
   function forgetOld() {
     let gone = false
     for (const [hash, p] of [...people]) {
-      if (isOnline(hash) || now() - p.lastSeen <= OFFLINE_KEEP_MS) continue
+      // Linked to a trusted entry that is gone: not let in by itself any more.
+      const staleTrust = !!p.trust && !(trust && trust.get(p.trust)) && !isOnline(hash)
+      if (!staleTrust && (isOnline(hash) || now() - p.lastSeen <= OFFLINE_KEEP_MS)) continue
       people.delete(hash)
       gone = true
     }
@@ -688,9 +701,9 @@ export function createAccess({ now = Date.now, trust = null, isOnline = () => fa
         via: p.via,
         viaLabel: p.viaLabel,
         identity: p.identity ? p.identity.toString('base64') : null,
-        // What it gets now (a trusted person: its trusted grant, what it
-        // keeps if it is no longer trusted when the share is taken back).
-        grant: copyGrant(grantOf(p)),
+        // Its own grant (a trusted person has none: what it gets is its
+        // trusted entry's, and nothing is left to it once that is gone).
+        grant: p.trust ? { projects: [], rights: cleanRights(null) } : copyGrant(p.grant),
         trust: p.trust,
         opened: p.opened,
         lastSeen: isOnline(p.hash) ? now() : p.lastSeen,
@@ -698,7 +711,7 @@ export function createAccess({ now = Date.now, trust = null, isOnline = () => fa
         closes: [...p.closes]
       })),
       counters: [...fpCounters].filter(([fp]) => trust && trust.get(fp)).map(([fp, c]) => ({ fp, opened: c.opened, opens: [...c.opens], closes: [...c.closes], joins: [...c.joins], invites: [...c.invites] })),
-      guard: { denials: times(globalGuard.denials, now(), DENY_MEMORY_MS), waitUntil: globalGuard.waitUntil },
+      guard: { denials: hostDenials(globalGuard.denials), waitUntil: globalGuard.waitUntil },
       knownAt: now()
     }
   }

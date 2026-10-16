@@ -168,7 +168,8 @@
       "noProject": "{{host}} ne partage plus ce projet avec vous.",
       "openFailed": "La demande n'a pas pu être envoyée à {{host}} : la connexion est peut-être coupée.",
       "noAgent": "{{host}} n'a pas cet agent.",
-      "trustFull": "La liste des personnes de confiance est pleine ({{max}}) : retirez quelqu'un d'abord. {{name}} n'est pas devenue une personne de confiance."
+      "trustFullJoined": "Liste des personnes de confiance pleine ({{max}}) : {{name}} est entré·e sans être une personne de confiance. Retirez quelqu'un des personnes de confiance pour lui faire confiance.",
+      "notTrustable": "{{name}} est entré·e sans être une personne de confiance : son Tessel est trop ancien pour ça (il doit être mis à jour)."
     },
     "toolbar": {
       "label": "Live Share",
@@ -210,6 +211,8 @@
       "title": "Arrêter Live Share ?",
       "text_one": "{{count}} personne est déconnectée, et chaque code d'invitation cesse de fonctionner. Les personnes de confiance le restent.",
       "text_other": "{{count}} personnes sont déconnectées, et chaque code d'invitation cesse de fonctionner. Les personnes de confiance le restent.",
+      "textWaiting_one": "{{count}} personne en attente de votre réponse sera refusée, et chaque code d'invitation cesse de fonctionner. Les personnes de confiance le restent.",
+      "textWaiting_other": "{{count}} personnes en attente de votre réponse seront refusées, et chaque code d'invitation cesse de fonctionner. Les personnes de confiance le restent.",
       "confirm": "Arrêter le partage"
     },
     "leave": {

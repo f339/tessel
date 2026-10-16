@@ -380,7 +380,8 @@ export function createLiveShareWindow(deps) {
     if (i < 0) return
     const a = dropAsk(i)
     if (a.kind === 'join') {
-      const trustIt = !!(yes && trust && a.trustable)
+      // Main decides whether it can be trusted (and says why not).
+      const trustIt = !!(yes && trust)
       Promise.resolve(
         api()?.approve({
           guestId: a.guestId,
@@ -391,9 +392,13 @@ export function createLiveShareWindow(deps) {
         })
       )
         .then((r) => {
-          // Let in, but not trusted: the trusted list is full.
-          if (trustIt && r && r.reason === 'trust-full')
-            deps.showToast(t('liveShare.toast.trustFull', 'Trusted list is full ({{max}}): remove someone first. {{name}} was not trusted.', { max: r.max || 50, name: personName(a) }), { kind: 'error', timeout: 9000 })
+          // Let in, but NOT trusted: the trusted list is full, or its Tessel
+          // can't be trusted (too old: no identity key).
+          if (!trustIt || !r) return
+          if (r.reason === 'trust-full')
+            deps.showToast(t('liveShare.toast.trustFullJoined', 'Trusted list full ({{max}}): {{name}} joined without being trusted. Remove someone from Trusted people to trust them.', { max: r.max || 50, name: personName(a) }), { kind: 'error', timeout: 9000 })
+          else if (r.reason === 'not-trustable')
+            deps.showToast(t('liveShare.toast.notTrustable', '{{name}} joined without being trusted: their Tessel is too old to be trusted (it needs an update).', { name: personName(a) }), { kind: 'error', timeout: 9000 })
         })
         .catch(() => {})
     } else if (a.kind === 'close' && yes && closeStands(a)) closeForGuest(a.paneId, a.name)
