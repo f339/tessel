@@ -25,7 +25,8 @@
     "tab": {
       "installed": "Installées",
       "add": "Ajouter",
-      "plugins": "Plugins Antigravity"
+      "plugins": "Plugins Antigravity",
+      "musePlugins": "Plugins Muse"
     },
     "installed": {
       "seenBy": "Vue par {{agents}}",
@@ -255,6 +256,22 @@
       "bundles": "Ce qu'il apporte",
       "onHint": "Activé : les panneaux Antigravity CLI le chargent à leur démarrage.",
       "offHint": "Désactivé : les panneaux Antigravity CLI ne le chargent pas."
+    },
+    "musePlugins": {
+      "intro": "Les plugins de Muse Code regroupent des skills, des commandes, des hooks et des serveurs MCP. Parcourez-les avec /plugins dans un panneau Muse Code, ou installez-en un ici depuis un dossier ou par son nom (nom@boutique). Muse vous demande d'approuver les hooks d'un plugin avant qu'ils s'exécutent.",
+      "placeholder": "nom@boutique",
+      "empty": "Aucun plugin de Muse Code installé.",
+      "turnedOff": "« {{name}} » désactivé. Les panneaux Muse Code appliquent le changement à leur prochain démarrage.",
+      "turnedOn": "« {{name}} » activé. Les panneaux Muse Code appliquent le changement à leur prochain démarrage.",
+      "failed": "Muse Code n'a pas pu le modifier.",
+      "removeText": "Muse Code supprime sa copie installée, avec les skills, commandes, hooks et serveurs MCP qu'il apportait.",
+      "installPane": "Plugin Muse : {{name}}",
+      "pickTitle": "Choisissez un dossier de plugin (avec son dossier .muse-plugin ou .claude-plugin)",
+      "onHint": "Activé : les panneaux Muse Code le chargent à leur démarrage.",
+      "offHint": "Désactivé : les panneaux Muse Code ne le chargent pas.",
+      "fromFolder": "Installé depuis un dossier",
+      "fromImport": "Importé d'un plugin Claude Code ou Codex",
+      "fromMarketplace": "Depuis une boutique"
     },
     "kind": {
       "own": "À vous",

@@ -20,6 +20,9 @@
 //               (agentSessionSources.js), resumed with zcode --resume <id>
 //   Qoder CLI, DeepSeek Harness: their id only comes from their status
 //               hooks (reported sessions): qodercli / dsh-tui --resume <id>
+//   Muse Code   picks its own id (reported by its status hooks too): found in
+//               its sessions folder (agentSessionSources.js), resumed with
+//               muse resume <id>
 // Each "find" takes the session started in the pane's folder at or after the
 // pane started, not already used by another pane (like findCodexSession).
 import fs from 'fs'
@@ -30,6 +33,7 @@ import { clineDataDir } from './jsonAgents'
 import { normDir, readFirstLine, readRows, readHead } from './fileRead'
 import { geminiFiles, parseGeminiHead, qwenProjectsRoot } from './agentHistory'
 import { agentSessionList, kimiHistorySessions, ompResumeFile, piResumeFile } from './agentSessionSources'
+import { museSessionLog, museSessionsDir } from './museSessions'
 
 const SLACK = 5000
 
@@ -168,7 +172,7 @@ export function findAgentSession(q = {}, home = os.homedir(), roots = {}) {
   if (agent === 'cline') return pickSession(clineSessions(home), q)
   if (agent === 'copilot') return pickSession(copilotSessions(home, q.since), q)
   if (agent === 'kimi') return pickSession(kimiSessions(home, q.since), q)
-  // Droid, Grok, Pi, OMP, Antigravity, Devin, Cursor, ZCode (agentSessionSources.js).
+  // Droid, Grok, Pi, OMP, Antigravity, Devin, Cursor, ZCode, Muse (agentSessionSources.js).
   const list = agentSessionList(agent, home, { since: q.since })
   return list ? pickSession(list.map((r) => ({ id: r.id, cwd: r.cwd, time: r.started, updated: r.updated })), q) : null
 }
@@ -195,6 +199,8 @@ export function resumeTarget({ agent, sessionId } = {}, home = os.homedir()) {
     const transcriptPath = agent === 'pi' ? piResumeFile(sessionId, home) : ompResumeFile(sessionId, home)
     return transcriptPath ? { transcriptPath } : null
   }
+  // Muse: its log, found by its id's day (however old: its list is capped).
+  if (agent === 'muse') return museSessionLog(sessionId, museSessionsDir(home)) ? {} : null
   const list = agentSessionList(agent, home)
   return list && list.some((r) => r.id === sessionId) ? {} : null
 }

@@ -164,6 +164,16 @@ __ta_others() {
   [ -f "$__f" ] && __ta_head kimi default - "$__f" "${KIMI_CODE_HOME:-$HOME/.kimi-code}" && __ta_v cred file
   __f="$HOME/.qwen/oauth_creds.json"
   [ -f "$__f" ] && __ta_head qwen default - "$__f" "$HOME/.qwen" && { [ "$(__ta_flat "$__f" | __ta_set refresh_token)" = 1 ] && __ta_v cred file; }
+  # Muse Code: its sign-in in auth.json (MUSE_AUTH_PATH, else its config
+  # folder), as its launcher reads it; it names no account, so only whether
+  # a browser sign-in or a key is there.
+  __f="${MUSE_AUTH_PATH:-${XDG_CONFIG_HOME:-$HOME/.config}/muse/auth.json}"
+  if [ -f "$__f" ]; then
+    __ta_head muse default - "$__f" "${__f%/*}" && {
+      { [ "$(__ta_flat "$__f" | __ta_set access_token)" = 1 ] || [ "$(__ta_flat "$__f" | __ta_set refresh_token)" = 1 ]; } && __ta_v cred file
+      [ "$(__ta_flat "$__f" | __ta_set api_key)" = 1 ] && __ta_v method apikey
+    }
+  fi
   __f="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json"
   if [ -f "$__f" ]; then
     __ta_head opencode default - "$__f" "${__f%/*}" && __ta_flat "$__f" | grep -o '"[A-Za-z0-9_.-]*"[[:space:]]*:[[:space:]]*{[[:space:]]*"type"[[:space:]]*:[[:space:]]*"[a-z]*"' 2>/dev/null | head -n 20 | sed 's/^"\([^"]*\)".*"\([a-z]*\)"$/v provider \1 \2/'

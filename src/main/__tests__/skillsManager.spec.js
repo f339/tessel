@@ -18,7 +18,8 @@ import {
   findSetupCommands,
   safeRelPath,
   isSafeSkillName,
-  SKILL_CAPS
+  SKILL_CAPS,
+  SKILL_AGENTS
 } from '../skillsManager'
 import { readTar } from '../skillsTar'
 import { setLanguage } from '../i18n'
@@ -110,10 +111,11 @@ describe('skill folders per agent and scope', () => {
     const at = (p) => roots.find((r) => r.path === path.resolve(p))
     expect(at(path.join(home, '.claude', 'skills'))).toMatchObject({ scope: 'user', installFor: ['claude'] })
     expect(at(path.join(home, '.claude', 'skills')).seenBy).toContain('claude')
-    expect(at(path.join(tmp, 'codexhome', 'skills'))).toMatchObject({ scope: 'user', seenBy: ['codex'] })
+    // Muse Code reads Codex's folders too (its skills guide).
+    expect(at(path.join(tmp, 'codexhome', 'skills'))).toMatchObject({ scope: 'user', seenBy: ['codex', 'muse'] })
     expect(at(path.join(home, '.agents', 'skills')).seenBy).toContain('codex')
     expect(at(path.join(cwd, '.agents', 'skills'))).toMatchObject({ scope: 'project' })
-    expect(at(path.join(cwd, '.codex', 'skills'))).toMatchObject({ scope: 'project', seenBy: ['codex'] })
+    expect(at(path.join(cwd, '.codex', 'skills'))).toMatchObject({ scope: 'project', seenBy: ['codex', 'muse'] })
     expect(at(path.join(cwd, '.github', 'skills')).seenBy).toEqual(['copilot'])
   })
 
@@ -146,6 +148,17 @@ describe('skill folders per agent and scope', () => {
     expect(targetRoots(['antigravity'], 'user', { home, env, cwd }).map((r) => r.path)).toEqual([path.join(home, '.gemini', 'config', 'skills')])
     expect(targetRoots(['codex', 'antigravity'], 'project', { home, env, cwd }).map((r) => r.path)).toEqual([path.join(cwd, '.agents', 'skills')])
   })
+
+  it("Muse Code: its own ~/.config/muse/skills and the project .agents/skills, and the Claude Code, Codex and .agents ones it also reads", () => {
+    const roots = skillRoots({ home, env, cwd })
+    const at = (p) => roots.find((r) => r.path === path.resolve(p))
+    expect(at(path.join(home, '.config', 'muse', 'skills'))).toMatchObject({ scope: 'user', seenBy: ['muse'], installFor: ['muse'] })
+    for (const p of [path.join(home, '.claude', 'skills'), path.join(home, '.agents', 'skills'), path.join(home, '.codex', 'skills'), path.join(cwd, '.agents', 'skills'), path.join(cwd, '.claude', 'skills'), path.join(cwd, '.codex', 'skills')])
+      expect(at(p).seenBy).toContain('muse')
+    expect(targetRoots(['muse'], 'user', { home, env, cwd }).map((r) => r.path)).toEqual([path.join(home, '.config', 'muse', 'skills')])
+    expect(targetRoots(['muse'], 'project', { home, env, cwd }).map((r) => r.path)).toEqual([path.join(cwd, '.agents', 'skills')])
+    expect(SKILL_AGENTS).toContain('muse')
+  })
 })
 
 describe('listing', () => {
@@ -167,7 +180,8 @@ describe('listing', () => {
     expect(by('folded-skill')).toMatchObject({ description: 'Long text on two lines.', folder: 'folded' })
     expect(by('plain')).toMatchObject({ description: null })
     expect(by('docx')).toMatchObject({ managed: 'synced', removable: false })
-    expect(by('imagegen')).toMatchObject({ managed: 'system', removable: false, seenBy: ['codex'] })
+    // In $CODEX_HOME/skills, which Muse Code reads too.
+    expect(by('imagegen')).toMatchObject({ managed: 'system', removable: false, seenBy: ['codex', 'muse'] })
     expect(by('review')).toMatchObject({ scope: 'project', removable: true })
     expect(by('review').seenBy).toContain('codex')
     expect(roots.find((r) => r.path === path.join(home, '.claude', 'skills')).exists).toBe(true)
@@ -325,7 +339,7 @@ describe('install from GitHub', () => {
     const res = await installSkill({ id: pkg.id, agents: ['codex'], scope: 'user', home, env, sources })
     expect(res.ok).toBe(true)
     // Each result says which chosen agent it is for, and who else reads that folder.
-    expect(res.results[0]).toMatchObject({ agents: ['codex'], seenBy: ['codex', 'opencode', 'copilot', 'gemini'] })
+    expect(res.results[0]).toMatchObject({ agents: ['codex'], seenBy: ['codex', 'opencode', 'copilot', 'gemini', 'muse'] })
     const dest = path.join(home, '.agents', 'skills', 'pdf')
     expect(fs.readFileSync(path.join(dest, 'forms', 'fill.py'), 'utf8')).toBe('print(2)')
     expect(sources.get(dest)).toMatchObject({ kind: 'github', repo: 'r', path: 'skills/pdf' })

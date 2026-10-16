@@ -25,6 +25,8 @@ import { writeFileAtomic } from './safeJson'
 import { t } from './i18n'
 import { hookNode, hookCommand, goCmdHookCommand, pluginNodeSource, findNode, unsafePathError } from './nodePath'
 import { dshHome, dshPatchStatus, installDshPatch, removeDshPatchFile } from './dshHooks'
+import { installMuseManaged, museManagedCheck, museManagedStatus, removeMuseManaged } from './museHooks'
+import { museConfigDir, museSettingsFile } from './museSessions'
 
 const OURS = 'tessel-team-mcp.cjs'
 const record = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -39,6 +41,8 @@ export function statusCommand(scriptPath, agent, event, node, platform = process
   const args = `--hook --agent=${agent}${event ? ` --event=${event}` : ''}`
   const spec = STATUS_HOOKS[agent]
   if (spec && spec.goCmd && platform === 'win32') return goCmdHookCommand(node, scriptPath, args)
+  // cmd /C: the form any quoting of it runs, else (a path with a space) the usual one.
+  if (spec && spec.cmd && platform === 'win32') return goCmdHookCommand(node, scriptPath, args) || hookCommand(node, scriptPath, args)
   return hookCommand(node, scriptPath, args)
 }
 const isOurs = (command) => typeof command === 'string' && command.includes(OURS) && command.includes('--agent=')
@@ -112,6 +116,22 @@ export const STATUS_HOOKS = {
     patch: true,
     file: (home, env) => join(dshHome(home, env), 'tessel-status-hooks.json'),
     events: ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']
+  },
+  // Muse Code: Claude Code's events, but its hooks run with a cleared
+  // environment, so Tessel's are its managed hooks file (Tessel's own, next
+  // to its settings), the only one that also gets the pane's variables: its
+  // settings.json names that file and those variables (museHooks.js). Not
+  // PermissionRequest: Muse's approval judge may decide alone; its
+  // Notification says when you have been asked. On Windows it runs a hook
+  // through cmd /C.
+  muse: {
+    shape: 'claude',
+    own: true,
+    managed: true,
+    file: (home, env) => join(museConfigDir(home, env), 'tessel-status-hooks.json'),
+    settings: (home, env) => museSettingsFile(home, env),
+    events: ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'Stop', 'StopFailure', 'Interrupt', 'SessionEnd', 'SubagentStart', 'SubagentStop'],
+    cmd: true
   },
   amp: {
     shape: 'plugin',
@@ -361,11 +381,17 @@ function eventTable(spec, settings, create) {
 export function installStatusHooks(agent, scriptPath, { home = os.homedir(), env = process.env, node } = {}) {
   const spec = STATUS_HOOKS[agent]
   if (!spec) return { error: `${agent}: no status hooks` } // i18n-ignore internal: programming error
+  // Muse: nothing is written when its settings name someone else's managed file.
+  if (spec.managed) {
+    const check = museManagedCheck(spec.file(home, env), { home, env })
+    if (check) return check
+  }
   const result = installEntries(agent, spec, scriptPath, { home, env, node })
-  if (result.error || !spec.patch) return result
-  // dsh: its patch row points at the hooks file, written first.
-  const patched = installDshPatch(spec.file(home, env), { home, env })
-  return patched.error ? patched : { changed: !!(result.changed || patched.changed) }
+  if (result.error || !(spec.patch || spec.managed)) return result
+  // dsh: its patch row points at the hooks file, written first; Muse: its
+  // settings name it as their managed file.
+  const pointed = spec.managed ? installMuseManaged(spec.file(home, env), { home, env }) : installDshPatch(spec.file(home, env), { home, env })
+  return pointed.error ? pointed : { changed: !!(result.changed || pointed.changed) }
 }
 
 function installEntries(agent, spec, scriptPath, { home, env, node }) {
@@ -461,11 +487,17 @@ export function removeStatusHooks(agent, { home = os.homedir(), env = process.en
   const spec = STATUS_HOOKS[agent]
   if (!spec) return { changed: false }
   const file = spec.file(home, env)
-  // dsh: its patch row goes first (never pointing at a missing file).
+  // dsh: its patch row goes first (never pointing at a missing file); Muse:
+  // its settings' pointer to Tessel's file.
   let unpatched = { changed: false }
   if (spec.patch) {
     unpatched = removeDshPatchFile({ home, env })
     if (unpatched.error) return unpatched
+  }
+  if (spec.managed) {
+    unpatched = removeMuseManaged(file, { home, env })
+    if (unpatched.error) return unpatched
+    dropBackup(spec.settings(home, env))
   }
   const result = removeEntries(spec, file)
   // Tessel's copy of the user's file goes with its hooks (only once they are
@@ -564,9 +596,10 @@ export function statusHooksInstallation(agent, scriptPath, { home = os.homedir()
   row.events = status.events
   const on = Object.values(status.events).filter(Boolean).length
   row.hooks = status.every ? 'installed' : on ? 'partial' : 'missing'
-  // dsh reads the file only through its patch row.
-  if (spec.patch && on) {
-    const patch = dshPatchStatus(file, { home, env })
+  // dsh reads the file only through its patch row, Muse only as the managed
+  // file its settings name (with the pane's variables).
+  if ((spec.patch || spec.managed) && on) {
+    const patch = spec.managed ? museManagedStatus(file, { home, env }) : dshPatchStatus(file, { home, env })
     if (patch.error) {
       row.hooks = 'error'
       row.error = patch.error

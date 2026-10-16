@@ -40,6 +40,7 @@ import {
 } from './transcriptView.js'
 import { remoteWindowReader, validRemoteTranscript } from './remoteTranscripts.js'
 import { isTesselDelivery } from '../../shared/tesselDelivery.js'
+import { museModelTimeline } from '../museSessions.js'
 
 // Cursor is left out: its file keeps no times (a line could not be placed).
 export const TERMINAL_CONVERSATION_AGENTS = [
@@ -48,7 +49,8 @@ export const TERMINAL_CONVERSATION_AGENTS = [
   'openclaude',
   'antigravity',
   'grok',
-  'omp'
+  'omp',
+  'muse'
 ]
 // Their folder is the pane's account's (homes()).
 const ACCOUNT_AGENTS = ['claude', 'codex']
@@ -221,8 +223,10 @@ function codexAnswer(line) {
 // The models a file names, in its order: [{ t, model, effort }]. Claude Code:
 // each answer's model and the effort it ran with (perTurnEffort, else
 // effort); Codex: each turn_context (and thread settings applied), its effort
-// on the turn or in its collaboration mode. As agentModel.js reads them.
+// on the turn or in its collaboration mode; Muse Code: each turn's model, each
+// /models and /effort (museSessions.js). As agentModel.js reads them.
 export function modelTimeline(agent, lines) {
+  if (agent === 'muse') return museModelTimeline(lines.join('\n'))
   const out = []
   const claude = agent === 'claude' || agent === 'openclaude'
   if (!claude && agent !== 'codex') return out

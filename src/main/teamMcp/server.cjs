@@ -39,7 +39,7 @@ const path = require('path')
 const crypto = require('crypto')
 const { randomUUID } = crypto
 
-const VERSION = '1.11.6'
+const VERSION = '1.11.7'
 const MAX_TEXT = 6000
 
 // --- An agent on an SSH host --------------------------------------------------
@@ -1602,7 +1602,7 @@ const STATUS_EVENTS = {
 // 2026 Lovecast Inc.
 // Agents whose hooks (agentStatusHooks.js) only report their status: the hook
 // answers nothing, or the neutral answer their CLI waits for.
-const STATUS_AGENTS = ['cursor', 'droid', 'grok', 'antigravity', 'openclaude', 'commandcode', 'amp', 'pi', 'qoder', 'dsh']
+const STATUS_AGENTS = ['cursor', 'droid', 'grok', 'antigravity', 'openclaude', 'commandcode', 'amp', 'pi', 'qoder', 'dsh', 'muse']
 // Cursor's prompt hook answers {"continue":true} (it takes the AND of every
 // hook's answer: never a refusal of Tessel's). Antigravity's PreInvocation can
 // only add context (its result has no decision): an explicit empty result, as
@@ -1811,7 +1811,65 @@ const NORMALIZE = {
     // No Notification or PermissionRequest: its question tool is the wait.
     if (name === 'PreToolUse') return askOr('PreToolUse', data)
     return ['SessionStart', 'UserPromptSubmit', 'PostToolUse', 'Stop'].includes(name) ? { event: name } : null
+  },
+  muse(name, data) {
+    // A sub-agent it starts or ends, by its own session's id (the one its
+    // events carry, see museChildId).
+    if (name === 'SubagentStart' || name === 'SubagentStop') {
+      const agentId = firstStr(data, ['child_session_id', 'subagent_id'])
+      return agentId ? { event: name, agentId } : null
+    }
+    // A compaction restarts the session mid-turn: not a new one.
+    if (name === 'SessionStart') return str(data.source) === 'compact' ? null : { event: name }
+    if (name === 'PreToolUse') return askOr('PreToolUse', data)
+    // Only once you are asked (its approval judge may decide alone first).
+    if (name === 'Notification') return str(data.notification_type) === 'permission_prompt' ? permission() : null
+    if (name === 'Stop') return { event: data.is_interrupt === true ? 'Interrupt' : 'Stop' }
+    return ['UserPromptSubmit', 'PostToolUse', 'PostToolUseFailure', 'StopFailure', 'Interrupt', 'SessionEnd'].includes(name) ? { event: name } : null
   }
+}
+// Muse Code: each sub-agent its hooks announce (SubagentStart, SubagentStop:
+// its own session's id) noted per top-level session, one small file each
+// (two starting at once never write the same file):
+// <sessions>/muse-children/<session>/<child session>.json { startedAt,
+// stoppedAt?, name? }. Tessel lists those from their own logs
+// (agentChildren.js), never the logs Muse's background observers write beside
+// them. Ids, a name and times only.
+const MUSE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function reportMuseChild(data) {
+  const event = data.hook_event_name
+  if (event !== 'SubagentStart' && event !== 'SubagentStop') return
+  // Only a Muse that Tessel started in a pane (its hooks also run outside Tessel).
+  if (!process.env.TESSEL_PANE_ID || process.env.TESSEL_AGENT_PROVIDER !== 'muse') return
+  const top = (str(process.env.MUSE_SESSION_ID) || str(data.session_id)).toLowerCase()
+  const child = str(data.child_session_id).toLowerCase()
+  if (!MUSE_ID.test(top) || !MUSE_ID.test(child) || child === top) return
+  const dir = path.join(process.env.TESSEL_SESSIONS_DIR || path.join(__dirname, 'sessions'), 'muse-children', top)
+  const file = path.join(dir, `${child}.json`)
+  try {
+    const old = readJson(file) || {}
+    const entry = { startedAt: Number.isFinite(old.startedAt) ? old.startedAt : Date.now() }
+    const name = str(data.subagent_id) || str(old.name)
+    if (/^[A-Za-z0-9_.:-]{1,80}$/.test(name)) entry.name = name
+    if (event === 'SubagentStop') entry.stoppedAt = Date.now()
+    fs.mkdirSync(dir, { recursive: true })
+    const tmp = `${file}.${process.pid}.tmp`
+    fs.writeFileSync(tmp, JSON.stringify(entry))
+    fs.renameSync(tmp, file)
+  } catch {
+    // not noted this time
+  }
+}
+
+// A Muse Code hook that fires in one of its sub-agents' sessions: that
+// session's id ('' for the top-level chat's). Muse names the top-level chat
+// in MUSE_SESSION_ID (1.4.4 and later); Muse 1.3 gives a sub-agent's turns
+// its own session's id.
+function museChildId(data) {
+  const id = str(data.session_id)
+  const top = str(process.env.MUSE_SESSION_ID)
+  if (top) return id && id !== top ? id : ''
+  return id && str(data.turn_id) === id ? id : ''
 }
 // -> the status event this hook stands for ({ event, ...fields }), or null.
 function statusEvent(provider, data) {
@@ -1959,7 +2017,9 @@ function sessionFilePath(value, agent) {
     codex: path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'sessions'),
     // Cursor: projects/<folder>/agent-transcripts/<id>/<id>.jsonl (never a
     // sub-agent's file: reportSession skips those events).
-    cursor: path.join(home, '.cursor', 'projects')
+    cursor: path.join(home, '.cursor', 'projects'),
+    // Muse Code: sessions/YYYY/MM/DD/<id>/session.jsonl.
+    muse: path.join(process.env.XDG_DATA_HOME || path.join(home, '.local', 'share'), 'muse', 'sessions')
   }
   const root = roots[agent]
   if (!root || !path.isAbsolute(root)) return ''
@@ -2101,6 +2161,12 @@ function hookMain() {
         hook_event_name: statusAgent ? (named ? named.slice(8) : data.hook_event_name || data.hookEventName || '') : data.hook_event_name || (named ? named.slice(8) : '')
       }
     }
+    // Muse Code: an event of one of its sub-agents is that sub-agent's (its
+    // session is not the pane's).
+    if (statusAgent === 'muse' && !data.agent_id) {
+      const child = museChildId(data)
+      if (child) data = { ...data, agent_id: child }
+    }
     // Which conversation the agent is in: recorded first, team or not.
     const codex = process.argv.includes('--codex')
     const gemini = process.argv.includes('--gemini')
@@ -2112,6 +2178,8 @@ function hookMain() {
     const statusOnly = !!statusAgent || process.argv.includes('--status')
     let continuing = false
     try {
+    // Muse Code's sub-agents, for the pane's sub-agent list.
+    if (provider === 'muse') reportMuseChild(data)
     // Children may report their own state, but never change the root session
     // or consume its messages (the finally below is observation-only).
     if (data.agent_id) return

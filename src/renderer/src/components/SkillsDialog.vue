@@ -40,14 +40,15 @@ const props = defineProps({
 const emit = defineEmits(['close', 'run'])
 
 // The agents that read skills (same ids as Settings > Agents).
-const ALL_AGENTS = ['claude', 'codex', 'opencode', 'copilot', 'gemini', 'antigravity']
+const ALL_AGENTS = ['claude', 'codex', 'opencode', 'copilot', 'gemini', 'antigravity', 'muse']
 const AGENT_NAME = {
   claude: 'Claude Code', // i18n-ignore
   codex: 'Codex', // i18n-ignore
   opencode: 'OpenCode', // i18n-ignore
   copilot: 'Copilot CLI', // i18n-ignore
   gemini: 'Gemini CLI', // i18n-ignore
-  antigravity: 'Antigravity CLI' // i18n-ignore
+  antigravity: 'Antigravity CLI', // i18n-ignore
+  muse: 'Muse Code' // i18n-ignore
 }
 const installed = computed(() =>
   Object.fromEntries(ALL_AGENTS.map((id) => [id, !!props.agents.find((a) => a.id === id && a.available)]))
@@ -934,22 +935,60 @@ async function runSetup(command) {
 
 // ---------------------------------------------------------------- Plugins
 // The Antigravity CLI's plugins (bundles of skills, MCP servers, hooks and
-// rules), listed like the skills: one row each, its details on a click.
-// Turned on or off and uninstalled with agy's own commands
-// (src/main/agyPlugins.js). Installing one can ask questions (a plugin's
-// settings form): it runs in a pane the user sees.
-const showPlugins = computed(() => installed.value.antigravity && !!window.shellApi.agyPluginsList)
+// rules) and Muse Code's (skills, commands, hooks and MCP servers), listed
+// like the skills: one row each, its details on a click. Turned on or off and
+// uninstalled with each one's own commands (src/main/agyPlugins.js,
+// musePlugins.js). Installing one can ask questions (a plugin's settings
+// form, its hooks' approval): it runs in a pane the user sees. One tab per
+// agent installed here.
+const PLUGIN_API = {
+  antigravity: { list: 'agyPluginsList', set: 'agyPluginsSet', remove: 'agyPluginsRemove' },
+  muse: { list: 'musePluginsList', set: 'musePluginsSet', remove: 'musePluginsRemove' }
+}
+const pluginAgents = computed(() => Object.keys(PLUGIN_API).filter((id) => installed.value[id] && !!window.shellApi[PLUGIN_API[id].list]))
+const showPlugins = computed(() => pluginAgents.value.length > 0)
+const pluginAgent = ref('antigravity')
+const pluginApi = (op) => window.shellApi[PLUGIN_API[pluginAgent.value][op]]
+const musePlugins = computed(() => pluginAgent.value === 'muse')
+// Its own words: which agent, its marketplace, its panes.
+const pluginWords = {
+  intro: () =>
+    musePlugins.value
+      ? t('skills.musePlugins.intro', 'Muse Code plugins bundle skills, commands, hooks and MCP servers. Browse them with /plugins in a Muse Code pane, or install one here from a folder or by name (name@marketplace). Muse asks you to approve the hooks of a plugin before they run.')
+      : t('skills.plugins.intro', 'Antigravity CLI plugins bundle skills, MCP servers, subagents, hooks and rules. Browse its marketplace with /plugin in an Antigravity CLI pane, or install one here by name or from a folder.'),
+  placeholder: () => (musePlugins.value ? t('skills.musePlugins.placeholder', 'name@marketplace') : t('skills.plugins.placeholder', 'name@antigravity-plugins-official')),
+  empty: () => (musePlugins.value ? t('skills.musePlugins.empty', 'No Muse Code plugins installed.') : t('skills.plugins.empty', 'No Antigravity CLI plugins installed.')),
+  turnedOff: (name) =>
+    musePlugins.value
+      ? t('skills.musePlugins.turnedOff', 'Turned off "{{name}}". Muse Code panes use the change from their next start.', { name })
+      : t('skills.plugins.turnedOff', 'Turned off "{{name}}". Antigravity CLI panes use the change from their next start.', { name }),
+  turnedOn: (name) =>
+    musePlugins.value
+      ? t('skills.musePlugins.turnedOn', 'Turned on "{{name}}". Muse Code panes use the change from their next start.', { name })
+      : t('skills.plugins.turnedOn', 'Turned on "{{name}}". Antigravity CLI panes use the change from their next start.', { name }),
+  failed: () => (musePlugins.value ? t('skills.musePlugins.failed', 'Muse Code could not change it.') : t('skills.plugins.failed', 'The Antigravity CLI could not change it.')),
+  removeText: () =>
+    musePlugins.value
+      ? t('skills.musePlugins.removeText', 'Muse Code deletes its installed copy, with the skills, commands, hooks and MCP servers it brought.')
+      : t('skills.plugins.removeText', 'The Antigravity CLI deletes its folder, with the skills, MCP servers and hooks it brought.'),
+  installPane: (name) => (musePlugins.value ? t('skills.musePlugins.installPane', 'Muse plugin: {{name}}', { name }) : t('skills.plugins.installPane', 'Antigravity plugin: {{name}}', { name })),
+  pickTitle: () =>
+    musePlugins.value ? t('skills.musePlugins.pickTitle', 'Choose a plugin folder (with its .muse-plugin or .claude-plugin folder)') : t('skills.plugins.pickTitle', 'Choose a plugin folder (with a plugin.json)'),
+  onHint: () => (musePlugins.value ? t('skills.musePlugins.onHint', 'On: Muse Code panes load it when they start.') : t('skills.plugins.onHint', 'On: Antigravity CLI panes load it when they start.')),
+  offHint: () => (musePlugins.value ? t('skills.musePlugins.offHint', 'Off: Muse Code panes do not load it.') : t('skills.plugins.offHint', 'Off: Antigravity CLI panes do not load it.'))
+}
 const plugins = ref([])
 const pluginsLoading = ref(false)
 const pluginsLoaded = ref(false)
 const pluginsError = ref('')
 const pluginTarget = ref('')
 async function loadPlugins() {
-  if (!showPlugins.value) return
+  const list = showPlugins.value ? pluginApi('list') : null
+  if (!list) return
   pluginsLoading.value = true
   pluginsError.value = ''
   try {
-    const res = await window.shellApi.agyPluginsList()
+    const res = await list()
     if (res && res.ok === false) pluginsError.value = res.error
     else {
       plugins.value = (res && res.plugins) || []
@@ -962,7 +1001,14 @@ async function loadPlugins() {
     pluginsLoaded.value = true
   }
 }
-function openPlugins() {
+function openPlugins(agent = 'antigravity') {
+  if (pluginAgent.value !== agent) {
+    pluginAgent.value = agent
+    plugins.value = []
+    pluginsError.value = ''
+    pluginsLoaded.value = false
+    pluginOpen.value = null
+  }
   tab.value = 'plugins'
   loadPlugins()
 }
@@ -983,7 +1029,14 @@ function pluginPartList(p) {
   if (c.commands) parts.push(c.commands === 1 ? t('skills.plugins.commandOne', '1 command') : t('skills.plugins.commandMany', '{{count}} commands', { count: c.commands }))
   return parts
 }
-const pluginFrom = (p) => (p.source ? t('skills.plugins.from', 'From {{source}}', { source: p.source }) : '')
+// Where Muse says a plugin came from (its install record's provenance), in words.
+function museFrom(source) {
+  if (source === 'native-local') return t('skills.musePlugins.fromFolder', 'Installed from a folder')
+  if (source === 'foreign-import') return t('skills.musePlugins.fromImport', 'Imported from a Claude Code or Codex plugin')
+  if (source === 'marketplace-user-added') return t('skills.musePlugins.fromMarketplace', 'From a marketplace')
+  return source ? t('skills.plugins.from', 'From {{source}}', { source }) : ''
+}
+const pluginFrom = (p) => (musePlugins.value ? museFrom(p.source) : p.source ? t('skills.plugins.from', 'From {{source}}', { source: p.source }) : '')
 const pluginParts = (p) => pluginPartList(p).join(' · ') || pluginFrom(p) || t('skills.plugins.nothing', 'Nothing listed in it.')
 
 // One plugin open at a time, with the same keys as the skills list.
@@ -1011,10 +1064,9 @@ watch(plugins, (list) => {
 async function togglePlugin(p) {
   busy.value = `plugin:${p.name}` // i18n-ignore
   try {
-    const res = await window.shellApi.agyPluginsSet({ name: p.name, enabled: !p.enabled })
-    if (res && res.ok)
-      say(p.enabled ? t('skills.plugins.turnedOff', 'Turned off "{{name}}". Antigravity CLI panes use the change from their next start.', { name: p.name }) : t('skills.plugins.turnedOn', 'Turned on "{{name}}". Antigravity CLI panes use the change from their next start.', { name: p.name }))
-    else say((res && res.error) || t('skills.plugins.failed', 'The Antigravity CLI could not change it.'), 'error')
+    const res = await pluginApi('set')({ name: p.name, enabled: !p.enabled })
+    if (res && res.ok) say(p.enabled ? pluginWords.turnedOff(p.name) : pluginWords.turnedOn(p.name))
+    else say((res && res.error) || pluginWords.failed(), 'error')
   } finally {
     busy.value = ''
   }
@@ -1023,28 +1075,29 @@ async function togglePlugin(p) {
 async function removePlugin(p) {
   const ok = await askConfirm({
     title: t('skills.plugins.removeConfirm', 'Uninstall the plugin "{{name}}"?', { name: p.name }),
-    text: t('skills.plugins.removeText', 'The Antigravity CLI deletes its folder, with the skills, MCP servers and hooks it brought.'),
+    text: pluginWords.removeText(),
     confirmLabel: t('skills.plugins.uninstall', 'Uninstall'),
     danger: true
   })
   if (ok !== true) return
   busy.value = `plugin:${p.name}` // i18n-ignore
   try {
-    const res = await window.shellApi.agyPluginsRemove({ name: p.name })
+    const res = await pluginApi('remove')({ name: p.name })
     if (res && res.ok) say(t('skills.plugins.removed', 'Uninstalled "{{name}}".', { name: p.name }))
-    else say((res && res.error) || t('skills.plugins.failed', 'The Antigravity CLI could not change it.'), 'error')
+    else say((res && res.error) || pluginWords.failed(), 'error')
   } finally {
     busy.value = ''
   }
   loadPlugins()
 }
-// A marketplace name (name@antigravity-plugins-official) or a folder: the
-// install runs in a pane the user sees. Only a name or a plain path goes on
-// the command line (nothing a shell would read as more).
+// A marketplace name (name@antigravity-plugins-official, name@marketplace)
+// or a folder: the install runs in a pane the user sees. Only a name or a
+// plain path goes on the command line (nothing a shell would read as more).
 const PLUGIN_TARGET = /^[A-Za-z0-9][A-Za-z0-9._@/-]{0,150}$/
 const PLUGIN_FOLDER = /^[A-Za-z]:\\[^"'`$;&|<>%\r\n]{1,250}$/
 function runPluginInstall(target) {
-  emit('run', { label: t('skills.plugins.installPane', 'Antigravity plugin: {{name}}', { name: target }), command: `agy plugin install "${target}"` }) // i18n-ignore
+  const command = musePlugins.value ? `muse plugins install "${target}"` : `agy plugin install "${target}"` // i18n-ignore
+  emit('run', { label: pluginWords.installPane(target), command })
 }
 function installPlugin() {
   const target = pluginTarget.value.trim()
@@ -1057,7 +1110,7 @@ function installPlugin() {
   say(t('skills.plugins.installing', 'Installing in a terminal. Refresh this list when it is done.'))
 }
 async function installPluginFolder() {
-  const dir = await window.shellApi.pickFolder({ title: t('skills.plugins.pickTitle', 'Choose a plugin folder (with a plugin.json)') })
+  const dir = await window.shellApi.pickFolder({ title: pluginWords.pickTitle() })
   if (!dir) return
   if (!PLUGIN_FOLDER.test(dir)) {
     pluginsError.value = t('skills.plugins.badFolder', 'This folder path has characters Tessel cannot pass on a command line.')
@@ -1116,8 +1169,15 @@ onMounted(async () => {
           <button class="launch-seg-btn" :class="{ on: tab === 'add' }" data-test="skills-tab-add" @click="openAdd">
             {{ t('skills.tab.add', 'Add') }}
           </button>
-          <button v-if="showPlugins" class="launch-seg-btn" :class="{ on: tab === 'plugins' }" data-test="skills-tab-plugins" @click="openPlugins">
-            {{ t('skills.tab.plugins', 'Antigravity plugins') }}
+          <button
+            v-for="id in pluginAgents"
+            :key="id"
+            class="launch-seg-btn"
+            :class="{ on: tab === 'plugins' && pluginAgent === id }"
+            :data-test="id === 'muse' ? 'skills-tab-muse-plugins' : 'skills-tab-plugins'"
+            @click="openPlugins(id)"
+          >
+            {{ id === 'muse' ? t('skills.tab.musePlugins', 'Muse plugins') : t('skills.tab.plugins', 'Antigravity plugins') }}
           </button>
         </div>
       </div>
@@ -1399,13 +1459,9 @@ onMounted(async () => {
         </ul>
       </template>
 
-      <!-- ================= Antigravity plugins ================= -->
+      <!-- ================= Antigravity / Muse plugins ================= -->
       <template v-else-if="tab === 'plugins'">
-        <p class="set-hint skills-plugins-intro">
-          {{
-            t('skills.plugins.intro', 'Antigravity CLI plugins bundle skills, MCP servers, subagents, hooks and rules. Browse its marketplace with /plugin in an Antigravity CLI pane, or install one here by name or from a folder.')
-          }}
-        </p>
+        <p class="set-hint skills-plugins-intro">{{ pluginWords.intro() }}</p>
         <form class="skills-plugin-form" @submit.prevent="installPlugin">
           <div class="skills-field" :class="{ invalid: !!pluginsError }">
             <svg class="skills-field-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -1414,12 +1470,12 @@ onMounted(async () => {
             <input
               v-model="pluginTarget"
               class="skills-field-input"
-              :placeholder="t('skills.plugins.placeholder', 'name@antigravity-plugins-official')"
+              :placeholder="pluginWords.placeholder()"
               :aria-label="t('skills.plugins.targetLabel', 'Plugin name or folder')"
               :aria-invalid="pluginsError ? 'true' : undefined"
               spellcheck="false"
               autocomplete="off"
-              data-test="agy-plugin-target"
+              :data-test="musePlugins ? 'muse-plugin-target' : 'agy-plugin-target'"
             />
             <button class="exit-btn primary skills-btn skills-field-btn" type="submit" :disabled="!pluginTarget.trim()">{{ t('skills.plugins.install', 'Install') }}</button>
           </div>
@@ -1452,7 +1508,7 @@ onMounted(async () => {
           </li>
         </ul>
         <div v-else-if="pluginsLoaded && !plugins.length && !pluginsError" class="mcp-empty">
-          {{ t('skills.plugins.empty', 'No Antigravity CLI plugins installed.') }}
+          {{ pluginWords.empty() }}
         </div>
         <ul v-else-if="plugins.length" class="skills-list" :aria-label="t('skills.plugins.listLabel', 'Installed plugins')">
           <li
@@ -1460,7 +1516,7 @@ onMounted(async () => {
             :key="p.name"
             class="skills-item"
             :class="{ open: pluginOpen === p.name, off: !p.enabled }"
-            :data-test="'agy-plugin-' + p.name"
+            :data-test="(musePlugins ? 'muse-plugin-' : 'agy-plugin-') + p.name"
             @keydown.escape="onPluginEscape($event, p, i)"
           >
             <button
@@ -1476,7 +1532,7 @@ onMounted(async () => {
               <BrandIcon class="skills-row-icon" :kind="'plugin-' + p.name" accent="#8a93a6" :label="p.name" :size="20" />
               <span class="skills-row-main">
                 <span class="skills-row-top">
-                  <span class="skills-row-name">{{ p.name }}</span>
+                  <span class="skills-row-name">{{ p.label || p.name }}</span>
                   <span v-if="p.version" class="skills-tag skills-scope">{{ p.version }}</span>
                   <span v-if="!p.enabled" class="skills-tag skills-off">{{ t('skills.plugins.off', 'Turned off') }}</span>
                 </span>
@@ -1487,6 +1543,7 @@ onMounted(async () => {
               </svg>
             </button>
             <div v-if="pluginOpen === p.name" :id="pluginDetailsId(p)" class="skills-details" role="region" :aria-labelledby="pluginRowId(p)">
+              <p v-if="p.description" class="skills-details-desc">{{ p.description }}</p>
               <p v-if="pluginFrom(p)" class="skills-details-desc">{{ pluginFrom(p) }}</p>
               <div class="skills-section-head">
                 <span>{{ t('skills.plugins.bundles', 'What it brings') }}</span>
@@ -1497,13 +1554,13 @@ onMounted(async () => {
               </div>
               <div class="skills-plugin-foot">
                 <span class="set-hint skills-plugin-state">
-                  {{ p.enabled ? t('skills.plugins.onHint', 'On: Antigravity CLI panes load it when they start.') : t('skills.plugins.offHint', 'Off: Antigravity CLI panes do not load it.') }}
+                  {{ p.enabled ? pluginWords.onHint() : pluginWords.offHint() }}
                 </span>
                 <span class="skills-actions">
-                  <button type="button" class="exit-btn skills-btn" :disabled="!!busy" data-test="agy-plugin-toggle" @click="togglePlugin(p)">
+                  <button type="button" class="exit-btn skills-btn" :disabled="!!busy" :data-test="musePlugins ? 'muse-plugin-toggle' : 'agy-plugin-toggle'" @click="togglePlugin(p)">
                     {{ p.enabled ? t('skills.plugins.turnOff', 'Turn off') : t('skills.plugins.turnOn', 'Turn on') }}
                   </button>
-                  <button type="button" class="exit-btn skills-btn skills-remove-all" :disabled="!!busy" data-test="agy-plugin-remove" @click="removePlugin(p)">
+                  <button type="button" class="exit-btn skills-btn skills-remove-all" :disabled="!!busy" :data-test="musePlugins ? 'muse-plugin-remove' : 'agy-plugin-remove'" @click="removePlugin(p)">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                       <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
                     </svg>

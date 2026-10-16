@@ -16,6 +16,12 @@ Checked on 2026-09-29. No prompts or paid turns were sent.
   (`antigravityModels.js`); `--model <base> --effort <level>` picks the
   variant, while a variant id with another `--effort`, or an effort the model
   lacks, is refused at launch. A model listed once has no effort option.
+- Muse Code: `muse serve` answers `model/list` (its session protocol, a query:
+  no session, no turn) with each model id, its label, its ordered efforts
+  (`variants`) and its default effort; launched as `--model <id>
+  --reasoning-effort <level>`, switched in a session with `/model <id>` and
+  `/effort <level>`. From its protocol reference and SDK types (1.4.9); Muse
+  was not installed here, so the probe is covered by a fake `muse serve`.
 - Amp: reference fixed modes smart/rush/large/deep, `--mode`; `--effort` only on
   large/deep. Availability and these flags could not be checked locally.
 - Kimi: installed `kimi --help` confirms `-m`/`--model`, but does not advertise

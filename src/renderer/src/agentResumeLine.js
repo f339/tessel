@@ -9,11 +9,24 @@ import { getAgentResumeArgv } from './chat/orca/shared/agent-session-resume.js'
 
 // Resumable agents that choose their own id, found after they start
 // (watchFoundSession) or reported by their hooks (Qoder CLI, DeepSeek Harness).
-export const OWN_ID_AGENTS = ['opencode', 'cline', 'copilot', 'kimi', 'droid', 'grok', 'pi', 'omp', 'antigravity', 'devin', 'cursor', 'zcode', 'qoder', 'dsh']
+export const OWN_ID_AGENTS = ['opencode', 'cline', 'copilot', 'kimi', 'droid', 'grok', 'pi', 'omp', 'antigravity', 'devin', 'cursor', 'zcode', 'qoder', 'dsh', 'muse']
 // Of those, the ones whose session is found in their files.
-export const FOUND_IN_FILES = ['opencode', 'cline', 'copilot', 'kimi', 'droid', 'grok', 'pi', 'omp', 'antigravity', 'devin', 'cursor', 'zcode']
+export const FOUND_IN_FILES = ['opencode', 'cline', 'copilot', 'kimi', 'droid', 'grok', 'pi', 'omp', 'antigravity', 'devin', 'cursor', 'zcode', 'muse']
 
 export const safeSessionId = (id) => typeof id === 'string' && /^[A-Za-z0-9_][A-Za-z0-9_-]{5,79}$/.test(id)
+
+// The command line that resumes: the agent's command, then the resume
+// arguments. Muse Code resumes with a subcommand (muse resume <id>) that takes
+// its options after it, never before: there the resume words go right after
+// the program, ahead of the options its command has (--trust-workspace).
+const SUBCOMMAND_RESUME = ['muse']
+export function resumeLine(kind, command, args) {
+  const line = [command, ...args].join(' ')
+  if (!SUBCOMMAND_RESUME.includes(kind)) return line
+  // The program: a word, or a quoted path (after PowerShell's call operator).
+  const m = /^\s*((?:&\s+)?(?:"[^"]+"|'[^']+'|\S+))(.*)$/.exec(String(command || ''))
+  return m ? [m[1], ...args].join(' ') + m[2] : line
+}
 const safeArg = (a) => typeof a === 'string' && /^[A-Za-z0-9_.:=\/-]+$/.test(a)
 
 // Agents the vendored table has no entry for.

@@ -1313,4 +1313,90 @@ describe('Skills dialog', () => {
     expect(wrapper.get('.skills-plugin-state').text()).toBe('Désactivé : les panneaux Antigravity CLI ne le chargent pas.')
     wrapper.unmount()
   })
+
+  it("Muse plugins: a tab of their own beside Antigravity's; listed, turned on, uninstalled, installed in a pane with muse's own command", async () => {
+    const calls = api()
+    calls.set = []
+    calls.rm = []
+    let list = [
+      { name: 'weather', label: 'Weather', enabled: false, version: '0.1.0', source: 'native-local', counts: { skills: 1, commands: 1, hooks: 1 } },
+      { name: 'docs-kit', label: '', enabled: true, version: '2.0.0', source: 'marketplace-user-added', counts: { mcpServers: 2 } }
+    ]
+    Object.assign(window.shellApi, {
+      agyPluginsList: async () => ({ plugins: [] }),
+      agyPluginsSet: async () => ({ ok: true }),
+      agyPluginsRemove: async () => ({ ok: true }),
+      musePluginsList: async () => ({ plugins: list }),
+      musePluginsSet: async (q) => {
+        calls.set.push(q)
+        list = list.map((p) => (p.name === q.name ? { ...p, enabled: q.enabled } : p))
+        return { ok: true }
+      },
+      musePluginsRemove: async (q) => {
+        calls.rm.push(q)
+        list = list.filter((p) => p.name !== q.name)
+        return { ok: true }
+      }
+    })
+    list[0].description = 'A forecast skill.'
+    const agents = [{ id: 'antigravity', available: true }, { id: 'muse', available: true }]
+    const wrapper = mount(SkillsDialog, { props: { agents }, attachTo: document.body, global: { provide: { askConfirm: () => Promise.resolve(true) } } })
+    await flushPromises()
+    expect(wrapper.get('[data-test="skills-tab-plugins"]').text()).toBe('Antigravity plugins')
+    expect(wrapper.get('[data-test="skills-tab-muse-plugins"]').text()).toBe('Muse plugins')
+    await wrapper.get('[data-test="skills-tab-muse-plugins"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="skills-tab-muse-plugins"]').classes()).toContain('on')
+    expect(wrapper.get('[data-test="skills-tab-plugins"]').classes()).not.toContain('on')
+    expect(wrapper.text()).toContain('Muse Code plugins bundle skills, commands, hooks and MCP servers.')
+    // The same list as Antigravity's: a row each, a count above it.
+    expect(wrapper.get('.skills-count').text()).toBe('2 plugins')
+    const row = (name) => wrapper.get(`[data-test="muse-plugin-${name}"]`)
+    expect(row('weather').get('.skills-row-name').text()).toBe('Weather')
+    expect(row('weather').get('.skills-row-desc').text()).toBe('1 skill · hooks · 1 command')
+    expect(row('weather').get('.skills-off').text()).toBe('Turned off')
+    expect(row('docs-kit').get('.skills-row-name').text()).toBe('docs-kit')
+    // Its details: its description, its words, turn on, uninstall.
+    await row('weather').get('.skills-row').trigger('click')
+    const details = row('weather').get('.skills-details')
+    expect(details.text()).toContain('A forecast skill.')
+    expect(details.text()).toContain('Installed from a folder')
+    expect(details.text()).toContain('Off: Muse Code panes do not load it.')
+    await details.get('[data-test="muse-plugin-toggle"]').trigger('click')
+    await flushPromises()
+    expect(calls.set).toEqual([{ name: 'weather', enabled: true }])
+    expect(wrapper.text()).toContain('Turned on "weather". Muse Code panes use the change from their next start.')
+    await row('docs-kit').get('.skills-row').trigger('click')
+    await row('docs-kit').get('[data-test="muse-plugin-remove"]').trigger('click')
+    await flushPromises()
+    expect(calls.rm).toEqual([{ name: 'docs-kit' }])
+    expect(wrapper.find('[data-test="muse-plugin-docs-kit"]').exists()).toBe(false)
+    // Installing: muse's own command, in a pane the user sees.
+    await wrapper.get('[data-test="muse-plugin-target"]').setValue('weather@local')
+    await wrapper.get('form.skills-plugin-form').trigger('submit')
+    expect(wrapper.emitted('run').at(-1)[0]).toEqual({ label: 'Muse plugin: weather@local', command: 'muse plugins install "weather@local"' })
+    // Back to Antigravity's tab: its own list again.
+    await wrapper.get('[data-test="skills-tab-plugins"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="muse-plugin-weather"]').exists()).toBe(false)
+    expect(wrapper.get('.mcp-empty').text()).toBe('No Antigravity CLI plugins installed.')
+    wrapper.unmount()
+  })
+
+  it('Muse plugins: French', async () => {
+    api({ musePluginsList: async () => ({ plugins: [{ name: 'weather', enabled: false, version: '0.1.0', source: 'x', counts: { skills: 1 } }] }), musePluginsSet: async () => ({ ok: true }), musePluginsRemove: async () => ({ ok: true }) })
+    setMessages('fr', fr)
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'muse', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    expect(wrapper.find('[data-test="skills-tab-plugins"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="skills-tab-muse-plugins"]').text()).toBe('Plugins Muse')
+    await wrapper.get('[data-test="skills-tab-muse-plugins"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-test="muse-plugin-weather"]').text()).toContain('Désactivé')
+    expect(wrapper.text()).toContain('Les plugins de Muse Code')
+    await wrapper.get('[data-test="muse-plugin-weather"] .skills-row').trigger('click')
+    expect(wrapper.get('[data-test="muse-plugin-toggle"]').text()).toBe('Activer')
+    expect(wrapper.get('.skills-plugin-state').text()).toBe('Désactivé : les panneaux Muse Code ne le chargent pas.')
+    wrapper.unmount()
+  })
 })
