@@ -1266,7 +1266,7 @@ export function createChatSessions(deps) {
 
   // from: internal, the asleep session this open wakes (see below).
   async function open(opts = {}, from = null) {
-    const { paneId, cwd, projectDir, resumeId, model, effort, accountEnv, askTrust, envOpts, hostAccount } = opts
+    const { paneId, cwd, projectDir, resumeId, model, effort, accountEnv, askTrust, envOpts, hostAccount, hostAccountSignedIn } = opts
     let { permissions = 'manual', permissionMode } = opts
     const agent = opts.agent ?? 'claude'
     const idleMinutes = opts.idleMinutes ?? 30
@@ -1451,12 +1451,14 @@ export function createChatSessions(deps) {
         // account's local folders.
         childEnv = remoteAgentEnv({ paneId, agent, extraEnv: envOpts?.extraEnv })
         // On an account folder of the host (its terminal ran there): that
-        // folder, checked there (remoteAccounts.js). It can't be used: the
-        // chat does not start on another account.
+        // folder, checked there (remoteAccounts.js); the host's default
+        // account (hostAccountSignedIn) only when signed in there. It can't
+        // be used: the chat does not start on another account (the window
+        // starts a default's chat again on the host's own sign-in, said).
         if (hostAccount) {
           let folder = null
           try {
-            folder = remote.accountFolder ? await remote.accountFolder({ hostId: onHost.hostId, agent, id: hostAccount }) : null
+            folder = remote.accountFolder ? await remote.accountFolder({ hostId: onHost.hostId, agent, id: hostAccount, signedIn: hostAccountSignedIn === true }) : null
           } catch {
             folder = null
           }
@@ -2164,8 +2166,9 @@ export function createChatSessions(deps) {
         askTrust: o.askTrust === true,
         agentFolderTrust: o.agentFolderTrust === true,
         envOpts: { extraEnv: o.extraEnv, accountEnv: o.accountEnv, unsetEnv: Array.isArray(o.unsetEnv) ? o.unsetEnv.filter((n) => typeof n === 'string').slice(0, 50) : [] },
-        // A chat on an SSH host's account folder (its id; the folder is checked in main).
-        ...(typeof o.hostAccount === 'string' ? { hostAccount: o.hostAccount } : {})
+        // A chat on an SSH host's account folder (its id; the folder is checked in main),
+        // the host's default one only when signed in there.
+        ...(typeof o.hostAccount === 'string' ? { hostAccount: o.hostAccount, hostAccountSignedIn: o.hostAccountSignedIn === true } : {})
       })
     })
     ipcMain.handle('chat:send', (_e, q) => {

@@ -6,7 +6,7 @@ import fs from 'fs'
 import vm from 'vm'
 import { join } from 'path'
 import { reactive } from 'vue'
-import { HOST_ACCOUNT_AGENTS, validHostAccount } from '../hostAccounts'
+import { HOST_ACCOUNT_AGENTS, validHostAccount, hostAccountChoice, defaultHostAccount } from '../hostAccounts'
 
 const source = fs.readFileSync(join(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
 function slice(from, to) {
@@ -40,6 +40,8 @@ function load({ shared = false, tree = null } = {}) {
   const ctx = {
     HOST_ACCOUNT_AGENTS,
     validHostAccount,
+    hostAccountChoice,
+    defaultHostAccount,
     refreshHostAccounts: () => {},
     t: (k, en, vars) => en.replace(/\{\{(\w+)\}\}/g, (_, n) => (vars && vars[n] != null ? vars[n] : '')),
     reactive,

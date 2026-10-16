@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import fs from 'fs'
 import vm from 'vm'
 import { join } from 'path'
-import { HOST_ACCOUNT_AGENTS, validHostAccount } from '../hostAccounts'
+import { HOST_ACCOUNT_AGENTS, validHostAccount, hostAccountChoice, defaultHostAccount } from '../hostAccounts'
 
 const source = fs.readFileSync(join(process.cwd(), 'src/renderer/src/App.vue'), 'utf8').replace(/\r\n/g, '\n')
 function slice(from, to) {
@@ -17,10 +17,19 @@ function slice(from, to) {
 }
 const code = slice('// Pane menu > Restart on <account>', '// Pane menu > Restart in Yolo / Restart asking first')
 
-function load({ leaves = {}, accounts = {}, remoteAccounts = null, restart = async () => true, splitLeaf = async () => ({ id: 'n1' }) } = {}) {
+function load({ leaves = {}, accounts = {}, remoteAccounts = null, paneFolder = async () => null, restart = async () => true, splitLeaf = async () => ({ id: 'n1' }), clipboard = [] } = {}) {
   const ctx = {
+    hostPaneFolder: vi.fn(paneFolder),
+    checkHostAccountsNow: vi.fn(async () => null),
+    setDefaultHostAccount: vi.fn(),
+    hostEntry: () => null,
+    hostAccountsOf: () => ({ at: Date.UTC(2026, 9, 16, 12) }),
+    remoteHostLabel: () => '192.99.0.20',
+    scheduleSave: vi.fn(),
     HOST_ACCOUNT_AGENTS,
     validHostAccount,
+    hostAccountChoice,
+    defaultHostAccount,
     refreshHostAccounts: vi.fn(),
     splitLeaf: vi.fn(splitLeaf),
     agentById: (id) => ({ id, name: id === 'claude' ? 'Claude Code' : 'Codex' }),
@@ -32,13 +41,116 @@ function load({ leaves = {}, accounts = {}, remoteAccounts = null, restart = asy
     refreshAccountChoices: vi.fn(),
     onMounted: () => {},
     onBeforeUnmount: () => {},
-    window: { shellApi: { accounts, ...(remoteAccounts ? { remoteAccounts } : {}) }, addEventListener: () => {}, removeEventListener: () => {} },
+    window: { shellApi: { accounts, ...(remoteAccounts ? { remoteAccounts } : {}), writeClipboard: async (text) => clipboard.push(text), log: vi.fn() }, addEventListener: () => {}, removeEventListener: () => {} },
+    Date,
+    Object,
     Promise
   }
-  vm.runInNewContext(`${code}\nthis.api = { restartOnAccount, signInOnHost, finishClaudeSwitch, checkClaudeSwitch }`, ctx)
+  vm.runInNewContext(`${code}\nthis.api = { restartOnAccount, signInOnHost, verifyHostAccount, resolveHostAccountMismatch, checkHostAccount, setHostAccountDefault, copyAccountDetails, finishClaudeSwitch, checkClaudeSwitch }`, ctx)
   return ctx
 }
 const claude = (extra = {}) => ({ id: 'p1', kind: 'agent', agentId: 'claude', agentCommand: 'claude', title: 'Claude Code', ...extra })
+
+describe('the account a pane on a host really runs on', () => {
+  const pane = (extra = {}) => claude({ id: 'pane-a', remoteHostId: 'ssh-1', hostAccount: 'bd93c7f5566d', ...extra })
+
+  it('its agent runs without the folder, and that folder is not signed in there: its account follows what runs', async () => {
+    const leaf = pane()
+    const env = load({ leaves: { 'pane-a': leaf }, paneFolder: async () => ({ ok: true, found: 'yes', dir: null, folderId: null, own: true }) })
+    await env.api.verifyHostAccount('pane-a')
+    expect(env.hostPaneFolder).toHaveBeenCalledWith('ssh-1', 'claude', 'pane-a')
+    expect(leaf.hostAccount).toBeNull()
+    expect(leaf.hostAccountMismatch).toBeUndefined()
+    expect(env.scheduleSave).toHaveBeenCalled()
+  })
+
+  it('on another folder of Tessel’s (its own not signed in): that one; then no answer, no process, mixed or unknown evidence, a folder Tessel does not know: nothing changes', async () => {
+    const leaf = pane()
+    const answers = [
+      { ok: true, found: 'yes', dir: '/home/u/.tessel-server/accounts/claude/abc123', folderId: 'abc123', own: false },
+      { ok: true, found: 'yes', dir: '/home/u/.tessel-server/accounts/claude/abc123', folderId: 'abc123', own: false },
+      { ok: true, found: 'none', dir: null, folderId: null, own: false },
+      { ok: true, found: 'unknown', dir: null, folderId: null, own: false },
+      { ok: true, found: 'mixed', dir: null, folderId: null, own: false },
+      { ok: true, found: 'yes', dir: '/opt/elsewhere', folderId: null, own: false },
+      { ok: false, notConnected: true }
+    ]
+    const env = load({ leaves: { 'pane-a': leaf }, paneFolder: async () => answers.shift() })
+    await env.api.verifyHostAccount('pane-a')
+    expect(leaf.hostAccount).toBe('abc123')
+    env.scheduleSave.mockClear()
+    for (let i = 0; i < 6; i++) await env.api.verifyHostAccount('pane-a')
+    expect(leaf.hostAccount).toBe('abc123')
+    expect(leaf.hostAccountMismatch).toBeUndefined()
+    expect(env.scheduleSave).not.toHaveBeenCalled()
+  })
+
+  it('its saved folder signed in there, or the host’s accounts not known yet: never changed behind your back; the pane asks (Update / Keep)', async () => {
+    const leaf = pane()
+    const env = load({ leaves: { 'pane-a': leaf }, paneFolder: async () => ({ ok: true, found: 'yes', dir: '/home/u/.tessel-server/accounts/claude/abc123', folderId: 'abc123', own: false }) })
+    env.hostEntry = (hostId, agent, id) => (id === 'bd93c7f5566d' ? { scope: 'tessel', id, state: 'signed-in' } : null)
+    await env.api.verifyHostAccount('pane-a')
+    expect(leaf.hostAccount).toBe('bd93c7f5566d')
+    expect(leaf.hostAccountMismatch).toEqual({ runs: 'abc123' })
+    expect(env.scheduleSave).not.toHaveBeenCalled()
+    // Keep: the saved one stays, not asked again for that folder...
+    env.api.resolveHostAccountMismatch('pane-a', false)
+    expect(leaf.hostAccountMismatch).toBeUndefined()
+    await env.api.verifyHostAccount('pane-a')
+    expect(leaf.hostAccountMismatch).toBeUndefined()
+    // ...until you ask (Check again).
+    await env.api.checkHostAccount('pane-a')
+    expect(leaf.hostAccountMismatch).toEqual({ runs: 'abc123' })
+    // Update: the pane's account becomes the one its agent runs on, saved.
+    env.api.resolveHostAccountMismatch('pane-a', true)
+    expect(leaf.hostAccount).toBe('abc123')
+    expect(leaf.hostAccountMismatch).toBeUndefined()
+    expect(env.scheduleSave).toHaveBeenCalledTimes(1)
+    // Back on its saved account: the notice goes.
+    leaf.hostAccountMismatch = { runs: 'zzz' }
+    await env.api.verifyHostAccount('pane-a')
+    expect(leaf.hostAccountMismatch).toBeUndefined()
+    // The host's accounts not read yet: asked, never changed.
+    const other = pane({ id: 'pane-b' })
+    const env2 = load({ leaves: { 'pane-b': other }, paneFolder: async () => ({ ok: true, found: 'yes', dir: null, folderId: null, own: true }) })
+    env2.hostAccountsOf = () => null
+    await env2.api.verifyHostAccount('pane-b')
+    expect(other.hostAccount).toBe('bd93c7f5566d')
+    expect(other.hostAccountMismatch).toEqual({ runs: null })
+  })
+
+  it('Check again: the host asked now and the running folder checked', async () => {
+    const env = load({ leaves: { 'pane-a': pane() }, paneFolder: async () => ({ ok: true, found: 'yes', dir: '/x/.tessel-server/accounts/claude/bd93c7f5566d', folderId: 'bd93c7f5566d', own: false }) })
+    await env.api.checkHostAccount('pane-a')
+    expect(env.checkHostAccountsNow).toHaveBeenCalledWith('ssh-1')
+    expect(env.hostPaneFolder).toHaveBeenCalled()
+  })
+
+  it('Make this the default on <host>: this pane’s account (a folder, or the host’s own) for new panes of that agent there', () => {
+    const env = load({ leaves: { 'pane-a': pane(), 'pane-b': pane({ id: 'pane-b', hostAccount: null }) } })
+    env.api.setHostAccountDefault('pane-a')
+    expect(env.setDefaultHostAccount).toHaveBeenLastCalledWith('ssh-1', 'claude', 'bd93c7f5566d')
+    env.api.setHostAccountDefault('pane-b')
+    expect(env.setDefaultHostAccount).toHaveBeenLastCalledWith('ssh-1', 'claude', null)
+    expect(env.showToast.mock.calls.at(-1)[0]).toContain('192.99.0.20')
+  })
+
+  it('Copy account details: presence flags and the folder id only, never an email or a token', async () => {
+    const clipboard = []
+    const remoteAccounts = { diagnose: vi.fn(async () => ({ ok: true, flags: { 'folder.credentials': 'yes', 'folder.email': 'no', 'process.configDirSet': 'no' } })) }
+    const env = load({ leaves: { 'pane-a': pane() }, remoteAccounts, clipboard })
+    env.hostEntry = () => ({ scope: 'tessel', state: 'signed-in', email: 'coreine13@gmail.com', plan: 'max' })
+    await env.api.copyAccountDetails('pane-a')
+    expect(remoteAccounts.diagnose).toHaveBeenCalledWith('ssh-1', 'claude', 'bd93c7f5566d', 'pane-a')
+    const text = clipboard[0]
+    expect(text).toContain('pane account: folder bd93c7f5566d')
+    expect(text).toContain('folder.email: no')
+    expect(text).toContain('process.configDirSet: no')
+    expect(text).toContain('email known')
+    expect(text).toContain('last check: 2026-10-16T12:00:00.000Z')
+    expect(text).not.toContain('coreine13')
+  })
+})
 
 describe('pane menu > Restart on <account>', () => {
   it('restarts a Claude Code pane on the account chosen, its conversation resumed', async () => {
@@ -63,7 +175,7 @@ describe('pane menu > Restart on <account>', () => {
     await env.api.restartOnAccount('s', 'abc123')
     expect(env.restartInPlace).toHaveBeenLastCalledWith('s', { resume: true, hostAccount: 'abc123' })
     await env.api.restartOnAccount('s', null)
-    expect(env.restartInPlace).toHaveBeenLastCalledWith('s', { resume: true, hostAccount: undefined })
+    expect(env.restartInPlace).toHaveBeenLastCalledWith('s', { resume: true, hostAccount: null })
     await env.api.restartOnAccount('x', 'def456')
     expect(env.restartInPlace).toHaveBeenLastCalledWith('x', { resume: false, hostAccount: 'def456' })
     expect(env.refreshHostAccounts).toHaveBeenCalledWith('ssh-1', { fresh: true })

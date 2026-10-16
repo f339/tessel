@@ -8,7 +8,8 @@
 // its own conversation file by the main process
 // (src/main/chat/terminalConversations.js), merged in time into your thread
 // with it, a small terminal mark on each. One thread per team and one per
-// agent you talked with, latest first; a thread's lines are chat rows (who,
+// agent you talked with, latest first; a thread's lines read like a chat
+// (oldest at the top, the latest at the bottom), as chat rows (who,
 // to whom, when, the text, its delivery status, the model it was said with
 // at its bottom right). A scope switch (this workspace / all), a period, an
 // agent filter, a search box, and a switch to show Tessel's own notices. A
@@ -262,14 +263,12 @@ const countText = computed(
 // --- Threads open or folded, lines shown ----------------------------------------------------
 const folded = reactive({}) // thread key -> true when folded
 const toggleThread = (key) => (folded[key] = !folded[key])
-// A thread's lines newest first (the latest message at the top); a long
-// thread shows its latest ones, Show earlier (at the bottom) the rest.
+// A thread's lines in the order they were said, like a chat (the latest at
+// the bottom); a long thread shows its latest ones, Show earlier (at the
+// top) the rest.
 const TAIL = 30
 const whole = reactive({}) // thread key -> true: every line shown
-const visibleLines = (thread) => {
-  const newest = [...thread.lines].reverse()
-  return whole[thread.key] || newest.length <= TAIL ? newest : newest.slice(0, TAIL)
-}
+const visibleLines = (thread) => (whole[thread.key] || thread.lines.length <= TAIL ? thread.lines : thread.lines.slice(-TAIL))
 const hiddenCount = (thread) => (whole[thread.key] ? 0 : Math.max(0, thread.lines.length - TAIL))
 // A long text is clamped; a click on it shows it whole.
 const LONG = 280
@@ -300,14 +299,19 @@ const programOf = (who) => (agentKind(who) ? agentLabel(agentKind(who)) : '')
 // minutes) make a group whose joined corners are nearly square; the name
 // goes above the group's first bubble, the avatar beside its last one.
 const sameSpeaker = (a, b) => !!a && !!b && a.kind !== 'notice' && b.kind !== 'notice' && a.from.kind === b.from.kind && a.from.label === b.from.label && Math.abs(b.t - a.t) < 10 * 60000
+// In a team thread the group head names the recipients too: a message to
+// someone else starts a new group, so every bubble's recipients show.
+const toKey = (line) => recipients(line).map((to) => to.label).join(', ')
+const sameGroup = (team, a, b) => sameSpeaker(a, b) && (!team || toKey(a) === toKey(b))
 // A time stamp sits between messages an hour or more apart (and above the
-// newest one), like Messenger's.
+// first one shown), like Messenger's.
 const STAMP_GAP = 60 * 60000
 function rows(thread) {
   const lines = visibleLines(thread)
+  const team = thread.kind === 'team'
   return lines.map((line, i) => {
-    const prev = sameSpeaker(lines[i - 1], line)
-    const next = sameSpeaker(line, lines[i + 1])
+    const prev = sameGroup(team, lines[i - 1], line)
+    const next = sameGroup(team, line, lines[i + 1])
     const stamp = !lines[i - 1] || Math.abs(lines[i - 1].t - line.t) >= STAMP_GAP
     return { line, shape: prev && next ? 'mid' : prev ? 'last' : next ? 'first' : 'single', head: !prev, tail: !next, stamp }
   })
@@ -401,10 +405,18 @@ const terminalHint = (line) => (line.from.kind === 'you' ? t('conversations.term
         <option value="">{{ t('conversations.participant.all', 'All agents') }}</option>
         <option v-for="p in participants" :key="p" :value="p">{{ p }}</option>
       </ThemedSelect>
-      <label class="cv-check" :title="t('conversations.noticesHint', 'Also show what Tessel told the agents (team, cards, deliveries)')">
-        <input v-model="notices" type="checkbox" data-test="cv-notices" />
-        <span>{{ t('conversations.notices', 'Tessel notices') }}</span>
-      </label>
+      <button
+        type="button"
+        class="cv-chip"
+        :class="{ on: notices }"
+        :aria-pressed="notices ? 'true' : 'false'"
+        :title="t('conversations.noticesHint', 'Also show what Tessel told the agents (team, cards, deliveries)')"
+        data-test="cv-notices"
+        @click="notices = !notices"
+      >
+        <Check v-if="notices" :size="11" aria-hidden="true" />
+        {{ t('conversations.notices', 'Tessel notices') }}
+      </button>
       <label class="sh-search cv-search">
         <Search :size="12" class="sh-search-icon" aria-hidden="true" />
         <input
@@ -436,14 +448,7 @@ const terminalHint = (line) => (line.from.kind === 'you' ? t('conversations.term
     <div class="sh-list cv-list" role="list" data-test="cv-list">
       <div v-if="!threads.length" class="sh-empty" data-test="cv-empty">
         <MessagesSquare :size="28" class="sh-empty-icon" aria-hidden="true" />
-        <p>
-          {{
-            t(
-              'conversations.empty',
-              'Nothing said yet. Messages between the agents of a team, those you exchange with an agent through Tessel (its chat, the notes, decisions on a card), and what you and an agent say in its terminal (your prompts, its answers) show up here.'
-            )
-          }}
-        </p>
+        <p>{{ t('conversations.empty2', 'Nothing said yet. Team messages and your chats with agents show up here.') }}</p>
       </div>
       <div v-else-if="!shown.length" class="sh-empty" data-test="cv-none">
         <p>{{ t('conversations.noMatch', 'No message matches.') }}</p>
@@ -473,6 +478,9 @@ const terminalHint = (line) => (line.from.kind === 'you' ? t('conversations.term
           </button>
         </div>
         <div v-if="!folded[thread.key]" class="cv-lines">
+          <button v-if="hiddenCount(thread)" type="button" class="cv-earlier" :data-test="'cv-earlier-' + thread.key" @click="whole[thread.key] = true">
+            {{ earlierLabel(thread) }}
+          </button>
           <template v-for="row in rows(thread)" :key="row.line.key">
           <div v-if="row.stamp" class="cv-stamp" data-test="cv-stamp">{{ when(row.line.t) }}</div>
           <article
@@ -555,9 +563,6 @@ const terminalHint = (line) => (line.from.kind === 'you' ? t('conversations.term
             </template>
           </article>
           </template>
-          <button v-if="hiddenCount(thread)" type="button" class="cv-earlier" :data-test="'cv-earlier-' + thread.key" @click="whole[thread.key] = true">
-            {{ earlierLabel(thread) }}
-          </button>
         </div>
       </section>
     </div>
@@ -589,18 +594,35 @@ const terminalHint = (line) => (line.from.kind === 'you' ? t('conversations.term
   flex: 1 1 90px;
   min-width: 0;
 }
-.cv-check {
+/* A filter that is on or off: a chip (the Settings' filter chips' look). */
+.cv-chip {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: transparent;
   color: var(--text-dim);
+  font: inherit;
   font-size: 11px;
+  white-space: nowrap;
   cursor: pointer;
-  user-select: none;
 }
-.cv-check input {
-  margin: 0;
+.cv-chip:hover {
+  color: var(--text-strong);
+}
+.cv-chip.on {
+  border-color: transparent;
+  background: var(--surface-3);
+  color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.cv-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .cv-search {
   flex: 1 1 100%;
@@ -659,8 +681,6 @@ const terminalHint = (line) => (line.from.kind === 'you' ? t('conversations.term
   color: var(--text-dim);
   font-size: 10.5px;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
 }
 .cv-earlier {
   align-self: center;

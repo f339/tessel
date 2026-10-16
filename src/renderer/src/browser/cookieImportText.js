@@ -1,8 +1,20 @@
 // The words of a cookie import's result (CookieImportDialog.vue and its
 // toast in App.vue): new / updated / unchanged, when the profile was imported
 // before, and why cookies were skipped. Counts and dates only: a summary
-// never carries a cookie's value.
+// never carries a cookie's value. Counts are written as the interface's
+// language writes them ({{n}}: 2,184; French: 2 184), and pick its singular
+// or plural (count).
 import { t, intlLocale } from '../i18n'
+
+export function countText(n) {
+  const value = Number(n) || 0
+  try {
+    return new Intl.NumberFormat(intlLocale()).format(value)
+  } catch {
+    return String(value)
+  }
+}
+const counted = (n, vars = {}) => ({ ...vars, n: countText(n), count: Number(n) || 0 })
 
 export function importDate(ms) {
   if (!Number.isFinite(ms)) return ''
@@ -17,7 +29,8 @@ export function importDate(ms) {
 export function lastImportText(last) {
   if (!last || !Number.isFinite(last.at)) return ''
   const count = Number(last.imported) || 0
-  return t('browser.cookieImport.lastImport', 'Imported on {{date}} · {{count}} cookies', { date: importDate(last.at), count })
+  const vars = counted(count, { date: importDate(last.at) })
+  return count === 1 ? t('browser.cookieImport.lastImport', 'Imported on {{date}} · {{n}} cookie', vars) : t('browser.cookieImport.lastImport', 'Imported on {{date}} · {{n}} cookies', vars)
 }
 
 // "12 new, 3 updated, 2165 unchanged", or '' when the session could not be
@@ -25,9 +38,9 @@ export function lastImportText(last) {
 export function changesText(s) {
   if (!s || s.added == null) return ''
   return [
-    t('browser.cookieImport.new', '{{count}} new', { count: s.added || 0 }),
-    t('browser.cookieImport.updated', '{{count}} updated', { count: s.updated || 0 }),
-    t('browser.cookieImport.unchanged', '{{count}} unchanged', { count: s.unchanged || 0 })
+    t('browser.cookieImport.new', '{{n}} new', counted(s.added)),
+    t('browser.cookieImport.updated', '{{n}} updated', counted(s.updated)),
+    t('browser.cookieImport.unchanged', '{{n}} unchanged', counted(s.unchanged))
   ].join(', ')
 }
 
@@ -36,27 +49,20 @@ export function headlineText(s) {
   const changes = changesText(s)
   if (changes && Number.isFinite(s.previousAt))
     return t('browser.cookieImport.again', 'Already imported on {{date}}. This time: {{changes}}.', { date: importDate(s.previousAt), changes })
-  if (changes) return t('browser.cookieImport.importedChanges', 'Imported {{n}} cookies: {{changes}}.', { n: s.imported, changes })
-  return t('browser.cookieImport.imported', 'Imported {{n}} cookies', { n: s.imported }) + '.'
+  const one = s.imported === 1
+  if (changes) {
+    const vars = counted(s.imported, { changes })
+    return one ? t('browser.cookieImport.importedChanges', 'Imported {{n}} cookie: {{changes}}.', vars) : t('browser.cookieImport.importedChanges', 'Imported {{n}} cookies: {{changes}}.', vars)
+  }
+  return (one ? t('browser.cookieImport.imported', 'Imported {{n}} cookie', counted(1)) : t('browser.cookieImport.imported', 'Imported {{n}} cookies', counted(s.imported))) + '.'
 }
 
-// Skipped cookies not told apart in the sentence ("N others").
-export function otherSkipped(s) {
-  const r = (s && s.reasons) || {}
-  return Math.max(0, (s.skipped || 0) - (r.google || 0) - (r.appBound || 0) - (r.filtered || 0))
-}
-
-// The second sentence: what was skipped ('' when nothing).
+// The second sentence: how many were skipped ('' when none); why, one
+// reason a line, is in the Details under it (said once).
 export function skippedText(s) {
-  const r = (s && s.reasons) || {}
-  const parts = []
-  if (r.appBound) parts.push(t('browser.cookieImport.skippedAppBound', "skipped {{n}} encrypted by Chrome's app-bound protection", { n: r.appBound }))
-  if (r.google) parts.push(t('browser.cookieImport.skippedGoogle', "skipped {{n}} Google cookies (sign in to Google in Tessel's browser instead)", { n: r.google }))
-  const other = otherSkipped(s)
-  if (other) parts.push(t('browser.cookieImport.skippedOther', 'skipped {{n}} others', { n: other }))
-  if (!parts.length) return ''
-  const text = parts.join(', ') + '.'
-  return text.charAt(0).toUpperCase() + text.slice(1)
+  const n = (s && s.skipped) || 0
+  if (!n) return ''
+  return t('browser.cookieImport.skippedCount', '{{n}} skipped.', counted(n))
 }
 
 // Why each skipped cookie was skipped, for the "Details" list: [{ id, label, n }].
@@ -90,5 +96,6 @@ export function skipBreakdown(s) {
 export function toastText(s) {
   const changes = changesText(s)
   if (changes) return t('browser.cookieImport.toastChanges', "Cookies imported into Tessel's browser: {{changes}}.", { changes })
-  return t('browser.cookieImport.toast', "Imported {{n}} cookies into Tessel's browser.", { n: (s && s.imported) || 0 })
+  const n = (s && s.imported) || 0
+  return n === 1 ? t('browser.cookieImport.toast', "Imported {{n}} cookie into Tessel's browser.", counted(1)) : t('browser.cookieImport.toast', "Imported {{n}} cookies into Tessel's browser.", counted(n))
 }

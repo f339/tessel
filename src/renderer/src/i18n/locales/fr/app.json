@@ -78,12 +78,22 @@
       "thisHelp": "Cette aide",
       "title": "Raccourcis clavier",
       "close": "Fermer (Échap)",
-      "logsHint": "Un problème ? Les journaux aident à en trouver la cause.",
-      "openLogs": "Ouvrir le dossier des journaux",
-      "copyDiagnostics": "Copier les diagnostics",
       "foot": "Déposez des fichiers sur un panneau pour coller leurs chemins. Sélectionnez du texte pour le copier, clic droit pour coller. Maj+clic droit sur un panneau pour plus d’options.",
       "chatApproval": "Dans un panneau de chat : aller à la demande qui attend votre réponse",
-      "floatingTerminal": "Afficher ou masquer le terminal flottant (la touche à gauche de 1)"
+      "floatingTerminal": "Afficher ou masquer le terminal flottant (la touche à gauche de 1)",
+      "search": "Chercher un raccourci",
+      "noMatch": "Aucun raccourci ne correspond.",
+      "or": "ou",
+      "key": {
+        "ctrl": "Ctrl",
+        "shift": "Maj",
+        "alt": "Alt",
+        "esc": "Échap",
+        "space": "Espace",
+        "pageUp": "Pg préc",
+        "pageDown": "Pg suiv",
+        "arrows": "Flèches"
+      }
     },
     "toolbar": {
       "updateVersion": "Mettre à jour {{version}}",
@@ -199,7 +209,9 @@
       "warning": "Les programmes qui tournent dans les terminaux sont arrêtés. Laissez d'abord un agent terminer ce qu'il fait. Windows peut demander l'autorisation d'installer.",
       "later": "Plus tard",
       "restarting": "Redémarrage…",
-      "restart": "Redémarrer et mettre à jour"
+      "restart": "Redémarrer et mettre à jour",
+      "close": "Fermer (Échap)",
+      "releaseNotes": "Notes de version"
     },
     "toast": {
       "copied": "{{what}} copié.",
@@ -300,7 +312,8 @@
       "floatingHint": "Un terminal par-dessus l'espace de travail, dans le dossier du projet ; il continue de tourner une fois masqué",
       "skills": "Skills (compétences des agents)",
       "skillsHint": "Voir, ajouter et retirer les compétences des agents",
-      "newOnAccount": "Nouveau {{name}} avec le compte {{account}}"
+      "newOnAccount": "Nouveau {{name}} avec le compte {{account}}",
+      "copyDiagnostics": "Copier les diagnostics"
     },
     "worktree": {
       "createFailed": "Impossible de créer une copie séparée.",
@@ -895,7 +908,14 @@
     "hostAccount": {
       "refused": "{{agent}} n’a pas été démarré sur son compte sur cet hôte : {{error}} Menu du panneau > Redémarrer sur… le démarre sur un autre.",
       "createFailed": "Impossible de préparer un nouveau compte sur cet hôte : {{error}}",
-      "signInHint": "Connectez-vous à l’autre compte dans le nouveau panneau. Ensuite, Redémarrer sur… dans le menu d’un panneau le passe à ce compte."
+      "signInHint": "Connectez-vous à l’autre compte dans le nouveau panneau. Ensuite, Redémarrer sur… dans le menu d’un panneau le passe à ce compte.",
+      "defaultFallback": "Le compte par défaut de {{agent}} sur {{host}} ne peut pas être utilisé ({{error}}) : il a démarré sur la connexion propre de l’hôte.",
+      "thisAccount": "ce compte",
+      "ownSignIn": "la connexion propre de l’hôte",
+      "defaultSet": "Les nouveaux panneaux {{agent}} sur {{host}} démarrent maintenant sur {{account}}.",
+      "detailsCopied": "Détails du compte copiés (oui / non seulement : aucun jeton, aucun courriel).",
+      "detailsNotCopied": "Les détails du compte n’ont pas pu être copiés.",
+      "signedOutThere": "déconnecté là-bas"
     }
   }
 }

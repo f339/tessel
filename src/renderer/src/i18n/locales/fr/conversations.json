@@ -37,7 +37,6 @@
     "count_other": "{{count}} messages",
     "threads_one": "{{count}} conversation",
     "threads_other": "{{count}} conversations",
-    "empty": "Rien n'a encore été dit. Les messages entre les agents d'une équipe, ceux que vous échangez avec un agent par Tessel (chat natif, notes, décisions sur une carte), et ce que vous et un agent vous dites dans son terminal (vos demandes, ses réponses) apparaissent ici.",
     "noMatch": "Aucun message ne correspond.",
     "team": "Équipe",
     "teamThread": "Équipe « {{name}} »",
@@ -71,6 +70,7 @@
       "answered": "Répondu dans son terminal",
       "note": "dans son terminal"
     },
-    "last": "Dernier message {{when}}"
+    "last": "Dernier message {{when}}",
+    "empty2": "Rien n'a encore été dit. Les messages d'équipe et vos échanges avec les agents s'affichent ici."
   }
 }

@@ -151,6 +151,66 @@ export function codexModelFromText(text) {
   return null
 }
 
+// The model of a Codex rollout file: its latest model line, wherever it is.
+// A turn's web results and tool outputs can write megabytes after that line
+// (a fixed tail missed it, and the header fell back to config.toml), so the
+// file is read back in chunks until one shows. Remembered per file: a grown
+// file is read only from where the last read stopped (its last whole line),
+// and keeps what it said when the new part names no model.
+const CODEX_CHUNK = 512 * 1024
+const CODEX_MAX_SCAN = 64 * 1024 * 1024
+const CODEX_SEEN_MAX = 200
+const codexSeen = new Map() // file -> { size, lineEnd, found }
+export function codexModelFromFile(file) {
+  let fd
+  try {
+    fd = fs.openSync(file, 'r')
+    const size = fs.fstatSync(fd).size
+    const prev = codexSeen.get(file)
+    if (prev && prev.size === size) return prev.found
+    // Shrank (rewritten): read it all again.
+    const floor = prev && prev.size < size ? prev.lineEnd : 0
+    let found = null
+    let lineEnd = floor
+    let end = size
+    let carry = Buffer.alloc(0) // the cut first line of the chunk read before
+    while (end > floor && size - end < CODEX_MAX_SCAN) {
+      const start = Math.max(floor, end - CODEX_CHUNK)
+      const buf = Buffer.alloc(end - start)
+      const n = fs.readSync(fd, buf, 0, buf.length, start)
+      if (end === size) {
+        const nl = buf.subarray(0, n).lastIndexOf(10)
+        if (nl >= 0) lineEnd = start + nl + 1
+      }
+      const whole = Buffer.concat([buf.subarray(0, n), carry])
+      let from = 0
+      if (start > floor) {
+        // Its first line can be cut: kept for the next (earlier) chunk.
+        const nl = whole.indexOf(10)
+        if (nl === -1) {
+          carry = whole
+          end = start
+          continue
+        }
+        carry = whole.subarray(0, nl)
+        from = nl + 1
+      }
+      found = codexModelFromText(whole.subarray(from).toString('utf8'))
+      if (found) break
+      end = start
+    }
+    if (!found && prev && floor) found = prev.found
+    codexSeen.delete(file)
+    codexSeen.set(file, { size, lineEnd, found })
+    while (codexSeen.size > CODEX_SEEN_MAX) codexSeen.delete(codexSeen.keys().next().value)
+    return found
+  } catch {
+    return null
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd)
+  }
+}
+
 const fileCache = new Map() // folder + session id -> transcript path
 
 // The Claude transcript of a session in a Claude folder (~/.claude or a
@@ -710,7 +770,7 @@ function agentModelFound({ agentId, sessionId, command, cwd, launchedAt = 0, cod
       }
     } else if (agentId === 'codex') {
       const f = codexDir ? codexRolloutIn(codexDir, sessionId) : codexRollout(sessionId, home)
-      const m = f && codexModelFromText(readTail(f))
+      const m = f && codexModelFromFile(f)
       if (m) return { ...m, source: 'session' }
     }
   }

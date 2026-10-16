@@ -853,7 +853,9 @@
       "portsHint": "Les ports qu'écoutent les programmes de vos terminaux, par espace de travail : ouvrez-les, copiez-les ou arrêtez-les (barre d'état).",
       "explorer": "Explorateur de fichiers",
       "explorerHint": "Les fichiers du projet, avec leur état git (Ctrl+Shift+X).",
-      "resourcesHint": "Mémoire et processeur de Tessel et des terminaux de chaque espace de travail (barre d'état)."
+      "resourcesHint": "Mémoire et processeur de Tessel et des terminaux de chaque espace de travail (barre d'état).",
+      "copy": "Copier",
+      "diagnosticsHint": "Les versions et le journal récent, à coller dans un rapport de bogue."
     },
     "skills": {
       "installed": "Compétences installées",
@@ -897,10 +899,8 @@
       "unknown": "non vérifié"
     },
     "lastSeen": "dernier changement {{when}}",
-    "unnamed": "Connecté (sans nom de compte)",
     "checking": "vérification…",
     "notConnectedStale": "non connecté (affiché tel que vérifié la dernière fois)",
-    "notConnected": "non connecté : ouvrez un terminal ou son projet là-bas pour le vérifier",
     "stopped": "pas démarrée",
     "error": "n’a pas pu être vérifié",
     "notChecked": "pas encore vérifié",
@@ -912,15 +912,55 @@
     "removed": "Retiré de {{host}}.",
     "signedOut": "Déconnecté sur {{host}}.",
     "actionFailed": "Cela n’a pas pu être fait.",
-    "switchHint": "Redémarrer {{pane}} sur ce compte (même panneau)",
-    "switch": "Basculer {{pane}}",
-    "remove": "Retirer de cet hôte",
     "signOut": "Se déconnecter sur l’hôte…",
-    "places": "Endroits vérifiés",
     "startHint": "Démarre cette distribution pour voir ses connexions",
     "check": "Vérifier",
     "recheck": "Vérifier de nouveau",
     "override": "utilise {{what}} à la place",
-    "signedOutKeychain": "Déconnecté du fichier de connexion sur {{host}} ; la connexion du trousseau macOS reste (déconnectez-vous dans Claude Code là-bas pour la retirer)."
+    "signedOutKeychain": "Déconnecté du fichier de connexion sur {{host}} ; la connexion du trousseau macOS reste (déconnectez-vous dans Claude Code là-bas pour la retirer).",
+    "isDefault": "par défaut pour les nouveaux panneaux",
+    "makeDefaultHint": "Les nouveaux panneaux de cet agent sur {{host}} démarrent sur ce compte",
+    "scopeShort": {
+      "added": "ajouté dans Tessel",
+      "own": "propre connexion",
+      "folder": "dossier",
+      "orphan": "reste d’un dossier retiré",
+      "env": "dossier du shell de connexion"
+    },
+    "menu": {
+      "isDefault": "Par défaut pour les nouveaux panneaux ici",
+      "makeDefault": "Utiliser par défaut ici",
+      "remove": "Retirer de cet hôte…"
+    },
+    "scopeNoteShort": "Seules les machines connues de Tessel : ce PC, WSL et vos hôtes SSH.",
+    "notConnectedShort": "non connecté",
+    "unknownAccount": "Compte inconnu",
+    "unnamedShort": "Compte",
+    "unknownHint": "connecté ; son compte n’est pas encore connu",
+    "usedByOne": "Utilisé par 1 panneau",
+    "usedBy_one": "Utilisé par {{count}} panneau",
+    "usedBy_other": "Utilisé par {{count}} panneaux",
+    "defaultSet": "Les nouveaux panneaux {{agent}} sur {{host}} démarrent maintenant sur ce compte.",
+    "openToCheck": "Ouvrez un terminal là-bas pour le vérifier",
+    "switchedMany_one": "{{count}} panneau redémarre sur {{account}}.",
+    "switchedMany_other": "{{count}} panneaux redémarrent sur {{account}}.",
+    "notCheckedMore_one": "Pas encore vérifiés : {{names}} et {{count}} autre. Ouvrez un terminal là-bas pour les vérifier.",
+    "notCheckedMore_other": "Pas encore vérifiés : {{names}} et {{count}} autres. Ouvrez un terminal là-bas pour les vérifier.",
+    "notCheckedList": "Pas encore vérifié : {{names}}. Ouvrez un terminal là-bas pour le vérifier.",
+    "checkingList": "Vérification de {{names}}…",
+    "placesOf": "Où {{account}} est connecté",
+    "defaultShort": "par défaut",
+    "switchPanes": "Basculer des panneaux…",
+    "switchIntro": "Redémarrer ces panneaux sur {{account}} (même panneau, sa conversation reprise quand c’est possible) :",
+    "restartOnAccount": "Redémarrer sur ce compte",
+    "cancel": "Annuler",
+    "wslStopped": "{{name}} pas démarrée",
+    "hidePlaces": "Masquer les endroits",
+    "showPlaces": "Tous les endroits ({{count}})",
+    "unknownSignedOut": "déconnecté ; son compte n’est pas connu",
+    "stateShort": {
+      "unknown": "non vérifié",
+      "out": "déconnecté"
+    }
   }
 }

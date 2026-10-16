@@ -50,14 +50,6 @@
     "selectNone": "Tout désélectionner",
     "selectRow": "Sélectionner {{name}}",
     "missing": "Dossier disparu",
-    "clean": "Propre",
-    "dirtyChip": "Modifié",
-    "merged": "Fusionné",
-    "notMerged": "Non fusionné",
-    "ahead": "{{count}} en avance",
-    "behind": "{{count}} en retard",
-    "agentsChip": "{{count}} agents ouverts",
-    "panesChip": "{{count}} panneaux ouverts",
     "lastCommit": "Dernier commit {{time}} : {{subject}}",
     "lastActivity": "Dernière activité {{time}}",
     "ago": "il y a {{time}}",
@@ -65,7 +57,9 @@
     "failed": "Non supprimé : {{error}}",
     "empty": "Rien à nettoyer",
     "emptyHidden": "{{count}} worktrees actifs sont masqués : « Afficher aussi les worktrees actifs » les liste.",
-    "emptyNone": "Ce projet n'a pas d'autres worktrees."
+    "emptyNone": "Ce projet n'a pas d'autres worktrees.",
+    "safe": "Sans risque",
+    "safeTitle": "Fusionné dans {{branch}}, rien de non commité : le retirer ne fait perdre aucun travail."
   },
   "sidebar": {
     "project": {
