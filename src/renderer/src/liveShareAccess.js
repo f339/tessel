@@ -10,8 +10,8 @@
 // let in who is offline now, t-… a trusted person, iv-… an invitation. A
 // trusted person who was let in during this share and is offline shows up
 // twice in the status (offline, as k-…, and in trusted, as t-…, both with
-// the same grant): the views that list everyone at once keep the trusted
-// entry only.
+// the same grant; trustId links them): the views that list everyone at once
+// keep the trusted entry only.
 import { t } from './i18n'
 import { formatDuration, formatWhen } from './timeFormat'
 
@@ -43,9 +43,21 @@ export function viaName(via) {
   return via.label || t('liveShare.invite.untitled', 'Invitation')
 }
 
-export const joinedGuests = (host) => list(host && host.guests).filter((g) => g && g.state === 'joined')
+// The guests in now. A trusted identity has one connection at a time (a new
+// id on each join): should two show for a moment, the newest stands.
+export function joinedGuests(host) {
+  const joined = list(host && host.guests).filter((g) => g && g.state === 'joined')
+  const newest = new Map()
+  for (const g of joined) if (g.trustId && (!newest.has(g.trustId) || (g.since || 0) >= (newest.get(g.trustId).since || 0))) newest.set(g.trustId, g)
+  return joined.filter((g) => !g.trustId || newest.get(g.trustId) === g)
+}
 export const waitingGuests = (host) => list(host && host.guests).filter((g) => g && g.state === 'waiting')
-export const offlinePeople = (host) => list(host && host.offline)
+// The people let in who are offline now (not one of a trusted person who is
+// connected through another connection).
+export function offlinePeople(host) {
+  const online = new Set(joinedGuests(host).map((g) => g.trustId).filter(Boolean))
+  return list(host && host.offline).filter((p) => !(p && p.trustId && online.has(p.trustId)))
+}
 export const trustedPeople = (host) => list(host && host.trusted)
 export const invitesOf = (host) => list(host && host.invites)
 
@@ -63,14 +75,16 @@ export function accessPeople(host) {
     trustable: !!g.trustable,
     projects: list(g.projects),
     rights: g.rights || {},
-    via: g.invite || null
+    via: g.invite || null,
+    trustId: g.trustId || null
   }))
   for (const p of offlinePeople(host)) {
-    if (p.trusted) continue
+    if (p.trusted || p.trustId) continue
     rows.push({ id: p.id, kind: 'offline', name: personName(p), online: false, trusted: false, trustable: !!p.trustable, projects: list(p.projects), rights: p.rights || {}, via: p.invite || null })
   }
+  const inNow = new Set(rows.map((r) => r.trustId).filter(Boolean))
   for (const e of trustedPeople(host)) {
-    if (e.online) continue
+    if (e.online || inNow.has(e.id)) continue
     rows.push({ id: e.id, kind: 'trusted', name: personName(e), online: false, trusted: true, trustable: true, projects: list(e.projects), rights: e.rights || {}, via: null, lastSeen: e.lastSeen || null })
   }
   return rows

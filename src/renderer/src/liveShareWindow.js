@@ -12,7 +12,8 @@
 // (liveShareAccess.js derives the views; the Live Share dialog edits it).
 // What guests do in your panes (open a terminal or an agent) is done here,
 // with a notice: at once for a guest with the right to open, after your yes
-// for one without it (an 'ask-open' request waits in `asks`); a guest asking
+// for one without it (an 'ask-open' request waits in `asks`; main may call
+// it off, and is told when the window is done with each request); a guest asking
 // to close an agent, or a terminal where a program runs, waits in `asks` for
 // your yes too. A request is checked again when it is done: the same
 // sharing, the guest still in with that right, the pane (or the project it
@@ -51,10 +52,11 @@ import { t } from './i18n'
 import { buildGuestTree, hostLayoutFromWorkspace, hostChatsFromWorkspace, GUEST_CHAT_AGENTS } from './liveShareLayout'
 import { cleanRights } from '../../shared/liveShareRights'
 import { shownRights } from './liveShareRights'
-import { initials, inviteName, personName } from './liveShareAccess'
+import { initials, inviteName, personName, joinedGuests } from './liveShareAccess'
 
-// Typing shown on a pane is main's (typed in the last 3 s, said again when
-// it ends); one main never said the end of (a lost push) goes after this.
+// Typing shown on a pane is main's (typed in the last 3 s, said again every
+// 4 s while it goes on and when it ends); one main never said the end of (a
+// lost push) goes after this.
 export const TYPING_STALE_MS = 12000
 
 const REASONS = {
@@ -64,7 +66,7 @@ const REASONS = {
   closed: () => t('liveShare.reason.closed', 'The connection closed.'),
   refused: () => t('liveShare.reason.refused', 'The invite code is not valid any more.'),
   expired: () => t('liveShare.reason.expired', 'This invite code expired. Ask the host for a new one.'),
-  busy: () => t('liveShare.reason.busy', 'The host is not taking new guests right now. Try again in a few minutes.'),
+  busy: () => t('liveShare.reason.busy2', 'The host is not taking new guests right now (too many people are waiting for an answer, or several were just turned away). Try again in a few minutes.'),
   timeout: () => t('liveShare.reason.timeout', 'The host did not answer in time.'),
   unreachable: () => t('liveShare.reason.unreachable', 'The host could not be reached.'),
   'not-tessel': () => t('liveShare.reason.notTessel', 'This address is not a Tessel Live Share.'),
@@ -242,13 +244,18 @@ export function createLiveShareWindow(deps) {
       seen.clear()
       if (lastShared.length) state.pickedIds = [...lastShared]
     }
-    // Joined and left, trusted people let in at once included.
+    // Joined and left, trusted people let in at once included. A trusted
+    // person's new connection replacing its old one (one connection per
+    // trusted identity, a new id each time) is neither.
+    const wasIn = new Set([...before.values()].filter((g) => g.state === 'joined' && g.trustId).map((g) => g.trustId))
+    const nowIn = new Set((s.guests || []).filter((g) => g.state === 'joined' && g.trustId).map((g) => g.trustId))
     for (const g of s.guests || []) {
       const was = before.get(g.id)
-      if (g.state === 'joined' && (!was || was.state !== 'joined')) deps.showToast(joinedText(g), { timeout: 5000 })
+      if (g.state === 'joined' && (!was || was.state !== 'joined') && !(g.trustId && wasIn.has(g.trustId))) deps.showToast(joinedText(g), { timeout: 5000 })
       before.delete(g.id)
     }
-    for (const g of before.values()) if (g.state === 'joined') deps.showToast(t('liveShare.toast.left', '{{name}} left your Live Share.', { name: personName(g) }), { timeout: 5000 })
+    for (const g of before.values())
+      if (g.state === 'joined' && !(g.trustId && nowIn.has(g.trustId))) deps.showToast(t('liveShare.toast.left', '{{name}} left your Live Share.', { name: personName(g) }), { timeout: 5000 })
     // A guest who is no longer waiting (gone, or answered elsewhere), and the
     // requests that no longer stand (the guest left, lost the right or the
     // project, sharing stopped).
@@ -256,8 +263,19 @@ export function createLiveShareWindow(deps) {
     for (let i = state.asks.length - 1; i >= 0; i--) {
       const a = state.asks[i]
       const stands = a.kind === 'join' ? waiting.has(a.guestId) : a.kind === 'open' ? openStands(a) : closeStands(a)
-      if (!stands) state.asks.splice(i, 1)
+      if (!stands) dropAsk(i)
     }
+  }
+
+  // An ask taken away (answered, no longer standing, called off): a request
+  // to open is done with, for main.
+  function dropAsk(i) {
+    const [a] = state.asks.splice(i, 1)
+    if (a && a.kind === 'open') requestDone(a.request)
+    return a
+  }
+  const requestDone = (request) => {
+    if (typeof request === 'string' && request) api()?.requestDone?.(request)
   }
 
   // An invitation got blocked (connections used its code without joining).
@@ -301,8 +319,10 @@ export function createLiveShareWindow(deps) {
     if (!entry || !Array.isArray(entry.guests)) return []
     const now = Date.now()
     const out = []
+    // The guests in now (a trusted person's replaced connection is not).
+    const inNow = joinedGuests(state.host)
     for (const g of entry.guests) {
-      const guest = g && (state.host.guests || []).find((x) => x.id === g.id && x.state === 'joined')
+      const guest = g && inNow.find((x) => x.id === g.id)
       if (!guest) continue
       const seenAt = typingSeen.get(`${paneId}\n${g.id}`) // i18n-ignore
       const typing = !!g.typing && seenAt !== undefined && now - seenAt < TYPING_STALE_MS
@@ -347,7 +367,7 @@ export function createLiveShareWindow(deps) {
   function answerAsk({ key, yes, projects, rights, trust } = {}) {
     const i = state.asks.findIndex((a) => a.key === key)
     if (i < 0) return
-    const [a] = state.asks.splice(i, 1)
+    const a = dropAsk(i)
     if (a.kind === 'join') {
       const trustIt = !!(yes && trust && a.trustable)
       Promise.resolve(
@@ -426,21 +446,30 @@ export function createLiveShareWindow(deps) {
 
   let openSeq = 0
   function onHostRequest(req) {
-    if (!req || !hostSharing()) return
+    if (!req) return
+    // Main called a request off (the guest left, lost that project, or the
+    // right to open): its prompt goes; nothing opens.
+    if (req.action === 'cancel') {
+      const i = state.asks.findIndex((a) => a.kind === 'open' && a.request === req.request)
+      if (i >= 0) dropAsk(i)
+      return
+    }
+    const request = typeof req.request === 'string' ? req.request : null
+    if (!hostSharing()) return requestDone(request)
     const who = (req.guest && req.guest.name) || t('liveShare.guest', 'A guest')
     const guestId = (req.guest && req.guest.id) || null
     if (req.action === 'open' || req.action === 'ask-open') {
       const s = req.spec || {}
       const spec = { kind: s.kind === 'agent' ? 'agent' : 'terminal', agent: s.kind === 'agent' && typeof s.agent === 'string' ? s.agent : null, project: typeof s.project === 'string' ? s.project : null, guestId }
       if (req.action === 'open') {
-        // Main checked the right; it is checked here again.
+        // Main checked the right; it is checked here again. Done with it
+        // either way.
         if (guestMay(guestId, 'open')) openForGuest(spec, who)
-        return
+        return requestDone(request)
       }
       // Without the right: you are asked (a few at a time per guest).
-      const ask = { kind: 'open', key: `open-${guestId}-${++openSeq}`, guestId, name: who, spec, projectName: sharedName(spec.project), agentName: spec.agent ? agentLabel(spec.agent) : null, generation } // i18n-ignore
-      if (!openTarget(spec, guestId) || !openStands(ask)) return
-      if (state.asks.filter((a) => a.kind === 'open' && a.guestId === guestId).length >= 3) return
+      const ask = { kind: 'open', key: `open-${guestId}-${++openSeq}`, request, guestId, name: who, spec, projectName: sharedName(spec.project), agentName: spec.agent ? agentLabel(spec.agent) : null, generation } // i18n-ignore
+      if (!openTarget(spec, guestId) || !openStands(ask) || state.asks.filter((a) => a.kind === 'open' && a.guestId === guestId).length >= 3) return requestDone(request)
       state.asks.push(ask)
     } else if (req.action === 'close') {
       askClose(req, who)

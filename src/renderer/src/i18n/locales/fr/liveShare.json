@@ -114,7 +114,6 @@
       "closed": "La connexion s'est fermée.",
       "refused": "Le code d'invitation n'est plus valide.",
       "expired": "Ce code d'invitation a expiré. Demandez-en un nouveau à l'hôte.",
-      "busy": "L'hôte n'accepte pas de nouveaux invités pour le moment. Réessayez dans quelques minutes.",
       "timeout": "L'hôte n'a pas répondu à temps.",
       "unreachable": "Impossible de joindre l'hôte.",
       "notTessel": "Cette adresse n'est pas un Live Share Tessel.",
@@ -129,7 +128,8 @@
       "outdatedHost": "Le Tessel de l'hôte est trop ancien pour ce Live Share : l'hôte doit mettre Tessel à jour.",
       "protocol": "Les deux Tessel ne parlent pas le même Live Share : mettez-les à jour tous les deux et rejoignez de nouveau.",
       "hostUnverified": "L'hôte n'a pas pu prouver qu'il s'agit du même Tessel qu'avant : rejoignez de nouveau avec un code d'invitation et vérifiez le code avec l'hôte.",
-      "ended": "La session est terminée."
+      "ended": "La session est terminée.",
+      "busy2": "L'hôte n'accepte pas de nouveaux invités pour l'instant (trop de personnes attendent une réponse, ou plusieurs viennent d'être refusées). Réessayez dans quelques minutes."
     },
     "toast": {
       "joined": "{{name}} a rejoint votre Live Share.",
@@ -340,7 +340,8 @@
       "trustTitle": "La prochaine fois, cette personne entre sans demander, avec ces projets et ces droits",
       "trust": "Faire confiance",
       "trustFailed": "{{name}} n'a pas pu devenir une personne de confiance (elle est peut-être partie, ou son Tessel est trop ancien).",
-      "untrustToo2": "Ne plus lui faire confiance non plus (sinon elle peut revenir sans demander, avec n'importe quel nouveau code)"
+      "untrustToo2": "Ne plus lui faire confiance non plus (sinon elle peut revenir sans demander, avec n'importe quel nouveau code)",
+      "keepTrust": "Elle reste de confiance : elle peut revenir sans demander."
     },
     "section": {
       "access": "Accès",

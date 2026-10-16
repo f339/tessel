@@ -234,6 +234,9 @@ describe('LiveShareDialog: Join', () => {
     const wrapper = await open({ initialTab: 'join' })
     await guestSays({ state: 'ended', host: 'Ada', reason: 'denied' })
     expect(wrapper.find('[data-test="ls-ended"]').text()).toBe('The host said no.')
+    // Too many waiting, or a pause after several noes: said plainly.
+    await guestSays({ state: 'ended', host: 'Ada', reason: 'busy' })
+    expect(wrapper.find('[data-test="ls-ended"]').text()).toContain('The host is not taking new guests right now')
     for (const reason of ['__proto__', 'constructor', 'made-up']) {
       await guestSays({ state: 'ended', host: 'Ada', reason })
       expect(wrapper.find('[data-test="ls-ended"]').text()).toBe('The session ended.')

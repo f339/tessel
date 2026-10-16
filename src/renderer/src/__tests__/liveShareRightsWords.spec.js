@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { RIGHT_IDS } from '../../../shared/liveShareRights'
 import { hasRightWords, rightWords, shownRights, rightsShort } from '../liveShareRights'
-import { initials, inviteName, inviteUses, inviteExpiry, grantDiff, accessPeople, accessError } from '../liveShareAccess'
+import { initials, inviteName, inviteUses, inviteExpiry, grantDiff, accessPeople, accessError, joinedGuests, offlinePeople } from '../liveShareAccess'
 import RightsChecks from '../components/liveshare/RightsChecks.vue'
 
 describe('rights: words for the catalog', () => {
@@ -86,6 +86,20 @@ describe('access views: helpers', () => {
       ['k-1', 'offline'],
       ['t-1', 'trusted']
     ])
+  })
+
+  it('a trusted person’s replaced connection shows once (the newest), and not as offline too', () => {
+    const host = {
+      guests: [
+        { id: 'g1', name: 'Tess', state: 'joined', trustId: 't-1', since: 1, projects: [] },
+        { id: 'g2', name: 'Tess', state: 'joined', trustId: 't-1', since: 2, projects: [] }
+      ],
+      offline: [{ id: 'k-1', name: 'Tess', trustId: 't-1', trusted: true, projects: [] }, { id: 'k-2', name: 'Al', trustId: null, projects: [] }],
+      trusted: [{ id: 't-1', name: 'Tess', projects: [], online: true }]
+    }
+    expect(joinedGuests(host).map((g) => g.id)).toEqual(['g2'])
+    expect(offlinePeople(host).map((p) => p.id)).toEqual(['k-2'])
+    expect(accessPeople(host).map((r) => r.id)).toEqual(['g2', 'k-2'])
   })
 
   it('refusals in words', () => {

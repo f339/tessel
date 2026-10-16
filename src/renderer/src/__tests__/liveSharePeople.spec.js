@@ -91,6 +91,14 @@ describe('Live Share: People', () => {
     w.unmount()
   })
 
+  it('a trusted person shows once: its newest connection, not its old one, not as offline', async () => {
+    const tess = (id, since) => guest({ id, name: 'Tess', trusted: true, trustId: 't-1', since })
+    const w = await openAt('people', sharing({ guests: [tess('g1', 1), tess('g2', 2)], offline: [{ id: 'k-old', name: 'Tess', rights: {}, projects: [], invite: null, trusted: true, trustId: 't-1', trustable: true }] }))
+    expect(w.findAll('[data-test^="ls-guest-"]').map((x) => x.attributes('data-test'))).toEqual(['ls-guest-g2'])
+    expect(w.find('[data-test="ls-offline-k-old"]').exists()).toBe(false)
+    w.unmount()
+  })
+
   it('Trust makes a guest trusted', async () => {
     const w = await openAt('people', sharing({ guests: [guest()] }))
     await w.find('[data-test="ls-person-trust-g1"]').trigger('click')
@@ -127,9 +135,11 @@ describe('Live Share: People', () => {
     await w.find('[data-test="ls-person-remove-yes-g2"]').trigger('click')
     await flushPromises()
     expect(api.removeGuest).toHaveBeenLastCalledWith({ guestId: 'g2', untrust: true })
-    // Unticked: removed, still trusted.
+    // Unticked: removed, still trusted (and it says so).
     await w.find('[data-test="ls-person-remove-g2"]').trigger('click')
+    expect(w.find('[data-test="ls-person-keep-trust-g2"]').exists()).toBe(false)
     await w.find('[data-test="ls-person-untrust-g2"] input').setValue(false)
+    expect(w.find('[data-test="ls-person-keep-trust-g2"]').text()).toBe('They stay trusted: they can come back without asking.')
     await w.find('[data-test="ls-person-remove-yes-g2"]').trigger('click')
     await flushPromises()
     expect(api.removeGuest).toHaveBeenLastCalledWith({ guestId: 'g2', untrust: false })

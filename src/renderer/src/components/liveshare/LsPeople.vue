@@ -128,6 +128,7 @@ const waitingText = (g) => (g.code ? t('liveShare.share.guestWaitingCode', 'Wait
             <input v-model="untrustToo" type="checkbox" />
             <span>{{ t('liveShare.people.untrustToo2', 'Also stop trusting them (otherwise they can come back without asking, with any new code)') }}</span>
           </label>
+          <p v-if="p.trusted && !untrustToo" class="lsd-hint" :data-test="'ls-person-keep-trust-' + p.id">{{ t('liveShare.people.keepTrust', 'They stay trusted: they can come back without asking.') }}</p>
           <div class="lsd-actions">
             <button type="button" class="confirm-btn ls-small" :data-test="'ls-person-remove-cancel-' + p.id" @click="cancelRemove(p)">{{ t('liveShare.cancel', 'Cancel') }}</button>
             <button type="button" class="confirm-btn ls-small primary danger" :disabled="ctx.busy(p.id + ':remove')" :data-test="'ls-person-remove-yes-' + p.id" @click="remove(p)">{{ t('liveShare.share.remove', 'Remove') }}</button>

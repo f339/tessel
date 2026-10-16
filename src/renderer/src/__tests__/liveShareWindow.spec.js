@@ -38,7 +38,8 @@ function setup() {
     open: vi.fn(async () => ({ ok: true, asked: false })),
     leave: vi.fn(),
     setAgents: vi.fn(),
-    focus: vi.fn()
+    focus: vi.fn(),
+    requestDone: vi.fn()
   }
   for (const name of ['onHost', 'onGuest', 'onAsk', 'onHostRequest', 'onNotice', 'onPresence', 'onInviteBlocked']) {
     api[name] = (cb) => {
@@ -490,18 +491,23 @@ describe('Live Share in the window, as the host', () => {
     twoProjects()
     const alexIn = (projects = ['ws-1']) => sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g1', name: 'Alex', state: 'joined', rights: { open: false }, projects }] })
     alexIn()
-    const ask = (spec) => t.listeners.onHostRequest({ action: 'ask-open', spec, guest: { id: 'g1', name: 'Alex' } })
+    let n = 0
+    const ask = (spec) => t.listeners.onHostRequest({ action: 'ask-open', request: `r${++n}`, spec, guest: { id: 'g1', name: 'Alex' } })
     ask({ kind: 'agent', agent: 'claude', project: 'ws-1' })
     ask({ kind: 'terminal', project: 'ws-2' }) // a project Alex does not see
     ask({ kind: 'agent', agent: 'nope', project: 'ws-1' }) // an agent this host does not have
     expect(t.deps.launch).not.toHaveBeenCalled()
-    expect(t.ls.state.asks.map((a) => [a.kind, a.agentName, a.projectName])).toEqual([['open', 'Claude Code', 'tessel']])
-    // An 'open' without the right is not done either.
-    t.listeners.onHostRequest({ action: 'open', spec: { kind: 'terminal', project: 'ws-1' }, guest: { id: 'g1', name: 'Alex' } })
+    expect(t.ls.state.asks.map((a) => [a.kind, a.request, a.agentName, a.projectName])).toEqual([['open', 'r1', 'Claude Code', 'tessel']])
+    // The two dropped at once are done with.
+    expect(t.api.requestDone.mock.calls).toEqual([['r2'], ['r3']])
+    // An 'open' without the right is not done either (and done with).
+    t.listeners.onHostRequest({ action: 'open', request: 'r9', spec: { kind: 'terminal', project: 'ws-1' }, guest: { id: 'g1', name: 'Alex' } })
     expect(t.deps.launch).not.toHaveBeenCalled()
+    expect(t.api.requestDone).toHaveBeenLastCalledWith('r9')
     t.ls.answerAsk({ key: t.ls.state.asks[0].key, yes: true })
     expect(t.deps.launch).toHaveBeenCalledWith({ kind: 'agent', id: 'claude' }, 'pane-1', 'right')
     expect(t.toasts.at(-1)).toBe('Alex opened Claude Code in your Tessel.')
+    expect(t.api.requestDone).toHaveBeenLastCalledWith('r1')
     // Asked, then the project taken from Alex: the ask goes, nothing opens.
     ask({ kind: 'terminal', project: 'ws-1' })
     expect(t.ls.state.asks).toHaveLength(1)
@@ -513,6 +519,37 @@ describe('Live Share in the window, as the host', () => {
     expect(t.ls.state.asks).toHaveLength(3)
     t.ls.answerAsk({ key: t.ls.state.asks[0].key, yes: false })
     expect(t.deps.launch).toHaveBeenCalledTimes(1)
+  })
+
+  it('main calls a request off: its prompt goes and nothing opens; one opened with the right is done with', async () => {
+    twoProjects()
+    sharingNow(['ws-1'], { guests: [{ id: 'g1', name: 'Alex', state: 'joined', rights: { open: false }, projects: ['ws-1'] }] })
+    t.listeners.onHostRequest({ action: 'ask-open', request: 'r1', spec: { kind: 'terminal', project: 'ws-1' }, guest: { id: 'g1', name: 'Alex' } })
+    t.listeners.onHostRequest({ action: 'ask-open', request: 'r2', spec: { kind: 'terminal', project: 'ws-1' }, guest: { id: 'g1', name: 'Alex' } })
+    expect(t.ls.state.asks.map((a) => a.request)).toEqual(['r1', 'r2'])
+    t.listeners.onHostRequest({ action: 'cancel', request: 'r1' })
+    t.listeners.onHostRequest({ action: 'cancel', request: 'r-unknown' })
+    expect(t.ls.state.asks.map((a) => a.request)).toEqual(['r2'])
+    t.ls.answerAsk({ key: t.ls.state.asks[0].key, yes: false })
+    expect(t.deps.launch).not.toHaveBeenCalled()
+    expect(t.api.requestDone).toHaveBeenLastCalledWith('r2')
+    sharingNow(['ws-1'], { guests: [{ id: 'g1', name: 'Alex', state: 'joined', rights: { open: true }, projects: ['ws-1'] }] })
+    t.listeners.onHostRequest({ action: 'open', request: 'r3', spec: { kind: 'terminal', project: 'ws-1' }, guest: { id: 'g1', name: 'Alex' } })
+    expect(t.deps.launch).toHaveBeenCalledTimes(1)
+    expect(t.api.requestDone).toHaveBeenLastCalledWith('r3')
+  })
+
+  it('a trusted person’s new connection replacing the old one is neither a join nor a leave', async () => {
+    twoProjects()
+    const tess = (id, since) => ({ id, name: 'Tess', state: 'joined', trusted: true, trustId: 't-1', since, projects: ['ws-1'] })
+    sharingNow(['ws-1'], { guests: [tess('g1', 1)] })
+    expect(t.toasts.at(-1)).toBe('Tess joined tessel.')
+    const said = t.toasts.length
+    sharingNow(['ws-1'], { guests: [tess('g2', 2)] })
+    expect(t.toasts.length).toBe(said)
+    // Both for a moment: presence shows the newest only.
+    sharingNow(['ws-1'], { guests: [tess('g2', 2), tess('g3', 3)], presence: [{ id: 'pane-1', guests: [{ id: 'g2', watching: true }, { id: 'g3', watching: true }] }] })
+    expect(t.ls.presenceOf('pane-1').map((p) => p.id)).toEqual(['g3'])
   })
 
   it('tells main the agents guests may ask for, at once and when they change', async () => {
