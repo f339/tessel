@@ -890,7 +890,7 @@ describe('Live Share: a trusted identity keeps its caps and its one place', () =
     await until(() => r.projects || r.closed)
     expect(r.closed).toBe(null)
     // What is saved for it: no grant of its own (its trusted entry's).
-    expect(s.host.accessState().people[0].grant).toEqual({ projects: [], rights: { type: false, open: false, close: false } })
+    expect(s.host.accessState().people[0].grant).toEqual({ projects: [], rights: { ...NO_RIGHTS, type: false, open: false, close: false } })
     r.client.disconnect()
     await until(() => s.host.offlineGuests().length === 1)
     // The trusted entry goes by itself (not through the share).
