@@ -19,7 +19,7 @@ import { join } from 'path'
 import { execFileSync } from 'child_process'
 import { createShareRequests, SHARE_OPS, noEmails } from '../liveShare/shareRequests'
 import { createShareScope, isSecretName, hiddenByName } from '../liveShare/shareScope'
-import { createGitTrust, setGitTrust, runAsGuest, localGitArgs, inGuestGit } from '../gitSafety'
+import { createGitTrust, setGitTrust, runAsGuest, localGitArgs, inGuestGit, mergeDriverArgs } from '../gitSafety'
 import * as sourceControl from '../sourceControl'
 import { publishTeamTasks } from '../teamTasks'
 
@@ -159,6 +159,17 @@ describe('H2: a guest’s git runs nothing of the repository’s', () => {
     expect(fs.readdirSync(text.match(/core\.hooksPath=(\S+)/)[1])).toEqual([])
   })
 
+  it('turns off the credential helpers and every merge driver for a guest', async () => {
+    g(root, 'config', 'merge.ours.driver', `sh -c 'echo merge >> "${marker}"'`)
+    g(root, 'config', 'merge.union2.driver', 'true')
+    g(root, 'config', 'credential.helper', 'store')
+    const guest = await runAsGuest(() => localGitArgs(root))
+    const pairs = []
+    for (let i = 0; i < guest.length; i += 2) if (guest[i] === '-c') pairs.push(guest[i + 1])
+    expect(pairs).toEqual(expect.arrayContaining(['credential.helper=', 'merge.ours.driver=', 'merge.union2.driver=']))
+    expect(mergeDriverArgs('merge.x.driver\ncmd\0merge.y=z.driver\ncmd\0filter.a.clean\nc\0')).toEqual(['-c', 'merge.x.driver='])
+  })
+
   it('protects the hook managers’ configs and the hooks folder', async () => {
     for (const p of ['.githooks/commit-msg', '.pre-commit-config.yaml', 'lefthook.yml', '.lintstagedrc.json', 'commitlint.config.js']) {
       put(root, p, 'x')
@@ -291,6 +302,42 @@ describe('L2: a project below its repository’s top', () => {
     expect(await ask('scm.commit', { message: 'guest' }, GIT)).toEqual({ ok: false, code: 'staged-outside' })
     g(repo, 'reset', '-q', '--', 'other/c.js')
     expect((await ask('scm.commit', { message: 'guest' }, GIT)).ok).toBe(true)
+  })
+
+  it('refuses a commit while the host has staged a file hidden or ignored for guests', async () => {
+    put(root, '.gitignore', 'local.yml\n')
+    g(repo, 'add', 'proj/.gitignore')
+    g(repo, 'commit', '-qm', 'ignore')
+    put(root, 'a.js', 'a3')
+    expect((await ask('scm.stage', { paths: ['a.js'] }, GIT)).ok).toBe(true)
+    // A secret by name, staged by the host: refused, nothing committed.
+    put(root, '.env', 'KEY=1')
+    g(repo, 'add', 'proj/.env')
+    const head = g(repo, 'rev-parse', 'HEAD').trim()
+    expect(await ask('scm.commit', { message: 'guest' }, GIT)).toEqual({ ok: false, code: 'staged-hidden' })
+    g(repo, 'reset', '-q', '--', 'proj/.env')
+    // An ignored file the host force-added (the guest never saw it): the
+    // same; and with the setting off (guests see ignored files) it goes.
+    put(root, 'local.yml', 'password: x')
+    g(repo, 'add', '-f', 'proj/local.yml')
+    const spent = []
+    expect(await ask('scm.commit', { message: 'guest' }, GIT, { spend: (k) => (spent.push(k), true) })).toEqual({ ok: false, code: 'staged-hidden' })
+    expect(spent).toContain('git')
+    expect(g(repo, 'rev-parse', 'HEAD').trim()).toBe(head)
+    // Over the budget: refused as busy, nothing committed.
+    expect(await ask('scm.commit', { message: 'guest' }, GIT, { spend: () => false })).toEqual({ ok: false, code: 'busy' })
+    expect(g(repo, 'rev-parse', 'HEAD').trim()).toBe(head)
+    g(repo, 'reset', '-q', '--', 'proj/local.yml')
+    expect((await ask('scm.commit', { message: 'guest' }, GIT)).ok).toBe(true)
+  })
+
+  it('refuses a guest commit when git cannot say whether a staged file is ignored', async () => {
+    requests = createShareRequests({ ignoreCheck: async () => null })
+    put(root, 'a.js', 'a4')
+    expect((await ask('scm.stage', { paths: ['a.js'] }, GIT)).ok).toBe(true)
+    expect(await ask('scm.commit', { message: 'guest' }, GIT)).toEqual({ ok: false, code: 'staged-hidden' })
+    const allowed = createShareRequests({ ignoreCheck: async () => null })
+    expect((await allowed.handle({ op: 'scm.commit', project: 'p1', args: { message: 'guest' } }, { roots: { p1: root }, rights: GIT, settings: { hideIgnored: false }, recheck: () => true })).ok).toBe(true)
   })
 })
 

@@ -161,6 +161,7 @@ export const LSHARE_CODES = Object.freeze([
   'not-repo',
   'nothing-staged',
   'staged-outside',
+  'staged-hidden',
   'no-message',
   'no-identity',
   'bad-commit',
