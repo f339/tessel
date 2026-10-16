@@ -2,7 +2,7 @@
 // The right side panel (after Orca's): one panel, a tab bar at its top —
 // Dashboard (every agent of every project), Files (the explorer), Changes
 // (source control), Tasks (the task board), Task history (finished tasks,
-// their time and cost), Agents (the agent session history), Conversations
+// their time and cost), Past conversations (the agents'), Conversations
 // (what the agents of a team said to each other and to you), then the web
 // pages opened with + (SideBrowser.vue, one tab each,
 // x or a middle-click closes one). At the right end of the bar: + (a new web
@@ -111,7 +111,7 @@ const TABS = [
   { id: 'changes', key: 'explorer.side.changes', label: 'Changes', shortcut: 'Ctrl+Shift+G', icon: GitBranch },
   { id: 'tasks', key: 'explorer.side.tasks', label: 'Tasks', shortcut: 'Ctrl+Shift+K', icon: ListChecks },
   { id: 'taskHistory', key: 'taskHistory.tab', label: 'Task history — time and cost', shortcut: '', icon: ReceiptText }, // i18n-ignore
-  { id: 'history', key: 'explorer.side.history', label: 'Agent Session History', shortcut: '', icon: AgentSessionHistoryIcon }, // i18n-ignore
+  { id: 'history', key: 'explorer.side.history', label: 'Past conversations', shortcut: '', icon: AgentSessionHistoryIcon }, // i18n-ignore
   { id: 'conversations', key: 'conversations.tab', label: 'Conversations', shortcut: '', icon: MessagesSquare }
 ]
 const tabLabel = (tab) => t(tab.key, tab.label)
