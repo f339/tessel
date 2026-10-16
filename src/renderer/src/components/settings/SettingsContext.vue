@@ -17,7 +17,7 @@ import { settings } from '../../settings'
 import { TOKENIZERS } from '../../../../shared/tokenCounters'
 import { PAGES } from './settingsPages'
 import { useSettingsShell } from './settingsShell'
-import { AGENT_LABELS, agentLabel, tokensText, compactTokens, sourceTitle, signIns, reasonText, retryable, counterText } from '../../contextCost'
+import { AGENT_LABELS, agentLabel, tokensText, compactTokens, fullTokens, sourceTitle, signIns, reasonText, retryable, counterText } from '../../contextCost'
 
 const props = defineProps({
   // The current workspace's project folder (its project files and servers).
@@ -173,10 +173,18 @@ const groupsLine = (a) =>
     .map((g) => `${groupShort(g)} ${compactTokens(a.summary.groups[g])}`)
     .join(' · ')
 const barParts = (a) => (a.summary.total ? GROUPS.filter((g) => a.summary.groups[g]).map((g) => ({ g, pct: (a.summary.groups[g] / a.summary.total) * 100 })) : [])
+// The lines that stand for several items, never struck through.
+const isTally = (item) => item.type === 'more' || item.type === 'hidden'
+// A group shows ITEM_LIMIT lines at most, then one "N more not shown" line
+// (the main process already folds a flood of imports into its own line,
+// kept last).
+const ITEM_LIMIT = 300
 const itemsOf = (a, g) => {
-  const list = a.items.filter((i) => i.group === g)
-  if (g === 'rules') return list
-  return [...list].sort((x, y) => (y.result ? y.result.tokens : -1) - (x.result ? x.result.tokens : -1))
+  const all = (a.items || []).filter((i) => i.group === g && !isTally(i))
+  const list = g === 'rules' ? all : [...all].sort((x, y) => (y.result ? y.result.tokens : -1) - (x.result ? x.result.tokens : -1))
+  const tallies = (a.items || []).filter((i) => i.group === g && isTally(i))
+  if (list.length <= ITEM_LIMIT) return tallies.length ? [...list, ...tallies] : list
+  return [...list.slice(0, ITEM_LIMIT), { key: 'hidden:' + g, group: g, type: 'hidden', label: '', count: list.length - ITEM_LIMIT, loaded: true }, ...tallies]
 }
 const groupTokens = (a, g) => a.summary.groups[g] || 0
 const scopeText = (s) => (s === 'project' || s === 'local' ? t('context.scope.project', 'This project') : t('context.scope.user', 'All projects'))
@@ -184,6 +192,11 @@ const itemLabel = (item) => {
   if (item.type === 'boardRule') return t('context.item.boardRule', 'Task board rule in {{file}}', { file: item.label })
   if (item.type === 'teamInstructions') return t('context.item.teamInstructions', 'Team tools: instructions')
   if (item.type === 'teamTools') return t('context.item.teamTools', 'Team tools: {{count}} definitions', { count: item.toolCount })
+  if (item.type === 'more')
+    return item.count === 1
+      ? t('context.item.more', '{{n}} more import not followed', { count: 1, n: fullTokens(1) })
+      : t('context.item.more', '{{n}} more imports not followed', { count: item.count, n: fullTokens(item.count) })
+  if (item.type === 'hidden') return t('context.item.hidden', '{{n}} more not shown', { count: item.count, n: fullTokens(item.count) })
   return item.label
 }
 const noteText = (note) =>
@@ -205,10 +218,10 @@ const canOpen = (item) => item.type === 'file' && !!item.path && !['outside', 's
 const missingTokenizer = (a) => (a.counter && a.counter.kind === 'local' && TOKENIZERS[a.counter.tokenizer] && !TOKENIZERS[a.counter.tokenizer].shipped && !(tokenizers.value[a.counter.tokenizer] || {}).ready ? a.counter.tokenizer : null)
 // The estimates a Retry may turn exact, and why.
 const retryReason = (a) => {
-  const r = a.items.map((i) => i.result).find((res) => retryable(res) && res.reason !== 'notCounted')
+  const r = (a.items || []).map((i) => i.result).find((res) => retryable(res) && res.reason !== 'notCounted')
   return r ? reasonText(r) : ''
 }
-const needsSignIn = (a) => a.counter && a.counter.api === 'anthropic' && a.items.some((i) => i.result && i.result.reason === 'noKey')
+const needsSignIn = (a) => a.counter && a.counter.api === 'anthropic' && (a.items || []).some((i) => i.result && i.result.reason === 'noKey')
 // Text with {{placeholders}} is built here: in the template, "}}" would end
 // the interpolation.
 const needTokenizerText = (a) => {
@@ -225,7 +238,7 @@ const agentCounterText = (a) => {
   if (a.summary.exact === 'all' || a.summary.exact === 'some') return counterText(a.counter)
   const id = missingTokenizer(a)
   if (id) return t('context.counter.waitTokenizer', 'estimated until the {{tokenizer}} tokenizer is downloaded', { tokenizer: TOKENIZERS[id].name })
-  const why = reasonText(a.items.map((i) => i.result).find((r) => r && !r.exact && r.reason))
+  const why = reasonText((a.items || []).map((i) => i.result).find((r) => r && !r.exact && r.reason))
   return why ? t('context.counter.estimatedWhy', 'estimated: {{why}}', { why }) : t('context.counter.estimate', 'estimated')
 }
 const tokenizerRows = computed(() => Object.entries(tokenizers.value).map(([id, row]) => ({ id, ...row })))
@@ -317,7 +330,7 @@ const shortPath = (p) => {
                     <button v-if="groupLink(g)" type="button" class="ctx-link" @click="go(groupLink(g).page)">{{ groupLink(g).label }}</button>
                   </div>
                   <ul class="ctx-lines">
-                    <li v-for="item in itemsOf(a, g)" :key="item.key" class="ctx-line" :class="{ off: !item.loaded }">
+                    <li v-for="item in itemsOf(a, g)" :key="item.key" class="ctx-line" :class="{ off: !item.loaded && !isTally(item), tally: isTally(item) }">
                       <span class="ctx-line-main">
                         <span class="ctx-line-top">
                           <span class="ctx-line-name" :title="item.path || undefined">{{ itemLabel(item) }}</span>
@@ -606,6 +619,9 @@ const shortPath = (p) => {
 .ctx-line.off .ctx-line-name {
   color: var(--text-dim);
   text-decoration: line-through;
+}
+.ctx-line.tally .ctx-line-name {
+  color: var(--text-dim);
 }
 /* Name, scope and path on one line (the path gives way first), a note under. */
 .ctx-line-main {

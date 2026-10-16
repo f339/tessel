@@ -4,9 +4,9 @@
 // enabledMcpjsonServers, or enableAllProjectMcpServers is on, and it is not
 // in disabledMcpjsonServers, as the user's own settings say:
 //   ~/.claude.json, the project's entry (where Claude Code's dialog saves it);
-//   Claude's user settings (<config>/settings.json, ~/.claude/settings.json);
-//   the project's .claude/settings.local.json (the user's, not shared).
-// Never the project's shared .claude/settings.json: the repository would
+//   Claude's user settings (<config>/settings.json, ~/.claude/settings.json).
+// Never a file in the project folder, .claude/settings.json nor
+// .claude/settings.local.json: a repository can ship either, and would
 // approve its own servers. An unapproved server is listed, not counted, and
 // Measure asks first, showing its command.
 import path from 'node:path'
@@ -36,7 +36,6 @@ export function approvalSources({ cwd, home = os.homedir(), claudeDir = null, re
     for (const [p, entry] of Object.entries(config.projects)) if (normDir(p) === want) sources.push(entry)
   }
   for (const dir of [...new Set([claudeDir, path.join(home, '.claude')].filter(Boolean))]) sources.push(read(path.join(dir, 'settings.json')))
-  if (cwd) sources.push(read(path.join(cwd, '.claude', 'settings.local.json')))
   return sources
 }
 

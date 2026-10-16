@@ -142,8 +142,7 @@ import { createHfTokenizers } from './contextCost/hfTokenizers'
 import { createAnthropicCounter } from './contextCost/anthropic'
 import { createGeminiCounter } from './contextCost/gemini'
 import { createXaiCounter, createResponsesCounter, OPENAI_INPUT_TOKENS_URL } from './contextCost/apis'
-import { createCountAuths, createSignIns } from './contextCost/auth'
-import { readJson } from './fileRead'
+import { createCountAuths, createSignIns, claudeSettingsEnvs } from './contextCost/auth'
 import { createOllamaCounter } from './contextCost/ollama'
 import { createContextCounter, createCountCache } from './contextCost/counts'
 import { createContextCost } from './contextCost'
@@ -2846,15 +2845,15 @@ async function claudeConfigDir() {
   const res = await accounts.sessionEnv('claude')
   return (res && res.ok && res.env && res.env.CLAUDE_CONFIG_DIR) || null
 }
-let claudeSettingsDir = null // the selected account's config folder, as last read
 const countAuths = createCountAuths({
   env: () => freshEnv(),
-  // The "env" of Claude's settings (a gateway's ANTHROPIC_BASE_URL there too).
-  claudeSettingsEnv: () =>
-    [...new Set([claudeSettingsDir, join(os.homedir(), '.claude')].filter(Boolean))]
-      .map((dir) => readJson(join(dir, 'settings.json')))
-      .map((cfg) => (cfg && cfg.env && typeof cfg.env === 'object' ? cfg.env : null))
-      .filter(Boolean),
+  // The "env" of Claude's settings (a gateway's ANTHROPIC_BASE_URL there too):
+  // the selected account's config folder, read again for each call, so that
+  // no count (the Skills page's first one too) runs before it is known.
+  claudeSettingsEnv: async (opts) => {
+    const dir = await claudeConfigDir()
+    return claudeSettingsEnvs({ configDirs: [...new Set([dir, join(os.homedir(), '.claude')].filter(Boolean))], cwd: (opts && opts.cwd) || null })
+  },
   claudeLogin: () => claudeCountLogin.apiAuth('claude'),
   geminiLogin: () => geminiCountSources.auth('gemini')
 })
@@ -2886,7 +2885,7 @@ const contextCost = createContextCost({
   listMcp: (cwd) => listMcp(skillCwd(cwd) || undefined),
   testMcp: (ref, opts) => testMcp(ref, freshEnv(), undefined, opts),
   agentModel: (q) => agentModel(q),
-  claudeDir: async () => (claudeSettingsDir = await claudeConfigDir()),
+  claudeDir: () => claudeConfigDir(),
   getPackage: (id) => getPackage(id),
   env: () => freshEnv(),
   log
@@ -2894,11 +2893,13 @@ const contextCost = createContextCost({
 // Every request says which sign-ins may count (turning one off stops the
 // counts still running with it), whether to count over the network now
 // (remote: the page was opened, or a click), and whether it comes from a
-// pane card's hover (kept: no process started).
+// pane card's hover (kept: no process started). The sign-ins go with the
+// project folder, whose Claude settings may name a gateway (auth.js).
 const contextQuery = (q) => {
   const o = q && typeof q === 'object' ? q : {}
   const agents = Array.isArray(o.agents) ? o.agents.slice(0, 40) : undefined
-  return { ...o, agents, cwd: skillCwd(o.cwd), remote: o.remote === true, kept: o.kept === true, confirmed: o.confirmed === true, auth: contextSignIns.take(o) }
+  const cwd = skillCwd(o.cwd)
+  return { ...o, agents, cwd, remote: o.remote === true, kept: o.kept === true, confirmed: o.confirmed === true, auth: { ...contextSignIns.take(o), cwd } }
 }
 ipcMain.handle(
   'context:summary',

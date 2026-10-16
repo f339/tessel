@@ -168,15 +168,23 @@ describe('project MCP servers: started only once approved, or after a confirmati
     expect(testMcp).toHaveBeenCalledTimes(1)
   })
 
-  it('follows the user’s own approvals, never the repository’s shared settings', async () => {
+  it('follows the user’s own approvals, never a settings file the repository can ship', async () => {
     fs.mkdirSync(join(project, '.claude'), { recursive: true })
     fs.writeFileSync(join(project, '.claude', 'settings.json'), JSON.stringify({ enableAllProjectMcpServers: true }))
     let svc = withProject().svc
     expect((await svc.summary({ cwd: project, agents: [{ id: 'claude' }] })).agents[0].items.find((i) => i.label === 'evil').note).toBe('notApproved')
+    // settings.local.json is usually the user's, but a repository can commit one.
+    for (const shipped of [{ enableAllProjectMcpServers: true }, { enabledMcpjsonServers: ['evil'] }]) {
+      fs.writeFileSync(join(project, '.claude', 'settings.local.json'), JSON.stringify(shipped))
+      const local = withProject()
+      expect((await local.svc.summary({ cwd: project, agents: [{ id: 'claude' }] })).agents[0].items.find((i) => i.label === 'evil').note).toBe('notApproved')
+      expect(await local.svc.measureMcp({ agent: 'claude', name: 'evil', scope: 'project', cwd: project })).toEqual({ ok: false, code: 'needsConfirm', target: 'npx evil-mcp' })
+      expect(local.testMcp).not.toHaveBeenCalled()
+    }
     fs.writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [project]: { enabledMcpjsonServers: ['evil'] } } }))
     svc = withProject().svc
     expect((await svc.summary({ cwd: project, agents: [{ id: 'claude' }] })).agents[0].items.find((i) => i.label === 'evil')).toMatchObject({ loaded: true, note: 'notMeasured' })
-    fs.writeFileSync(join(project, '.claude', 'settings.local.json'), JSON.stringify({ disabledMcpjsonServers: ['evil'] }))
+    fs.writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [project]: { enabledMcpjsonServers: ['evil'], disabledMcpjsonServers: ['evil'] } } }))
     const off = withProject()
     expect((await off.svc.summary({ cwd: project, agents: [{ id: 'claude' }] })).agents[0].items.find((i) => i.label === 'evil').note).toBe('off')
     expect(await off.svc.measureMcp({ agent: 'claude', name: 'evil', scope: 'project', cwd: project, confirmed: true })).toEqual({ ok: false, code: 'disabled' })
@@ -194,8 +202,25 @@ describe('a pane card’s hover: kept results only', () => {
     const calls = anthropic.count.mock.calls.length
     const kept = await svc.summary({ cwd: project, agents: [{ id: 'claude' }], kept: true, remote: true })
     expect(kept.agents[0].summary.total).toBeGreaterThan(0)
+    // Totals only: no list of items (a flood of imports never rides along).
+    expect(kept.agents[0].items).toBeUndefined()
     expect(listMcp).toHaveBeenCalledTimes(1)
     expect(anthropic.count.mock.calls.length).toBe(calls) // no count API from a hover
+  })
+})
+
+describe('a flood of imports', () => {
+  it('reaches the page as IMPORT_LIMIT lines at most, then one line with the number of the others', async () => {
+    fs.writeFileSync(join(project, 'CLAUDE.md'), Array.from({ length: 500 }, (_, i) => `@../../far${i}.md`).join('\n'))
+    const { svc } = service()
+    const res = await svc.summary({ cwd: project, agents: [{ id: 'claude' }] })
+    const items = res.agents[0].items
+    const more = items.filter((i) => i.type === 'more')
+    expect(more).toHaveLength(1)
+    expect(more[0]).toMatchObject({ group: 'rules', loaded: false, note: 'more' })
+    const refused = items.filter((i) => ['outside', 'skipped', 'limit'].includes(i.note))
+    expect(refused.length).toBeLessThanOrEqual(200)
+    expect(refused.length + more[0].count).toBeGreaterThanOrEqual(500)
   })
 })
 

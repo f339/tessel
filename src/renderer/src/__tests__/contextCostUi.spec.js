@@ -308,4 +308,34 @@ describe('Settings > Context', () => {
     settings.contextGeminiSignIn = false
     w.unmount()
   })
+
+  it('shows a flood of imports as one line, and caps every list', async () => {
+    const refused = Array.from({ length: 350 }, (_, i) => ({ key: `o${i}`, group: 'rules', type: 'file', label: `far${i}.md`, path: `C:\\far${i}.md`, loaded: false, note: 'outside' }))
+    const row = agentRow({
+      items: [...refused, { key: 'claude:more', group: 'rules', type: 'more', label: '', count: 121970, loaded: false, note: 'more' }],
+      summary: { total: 0, groups: { rules: 0, skills: 0, mcp: 0, tessel: 0 }, optional: 0, pending: 0, exact: 'none' }
+    })
+    window.shellApi = { openFile: vi.fn(), context: { summary: async () => ({ agents: [row] }), tokenizers: async () => ({}) } }
+    const w = mountPage({ agents: [{ id: 'claude', available: true }] })
+    await flushPromises()
+    const lines = w.findAll('[data-group="rules"] .ctx-line')
+    expect(lines).toHaveLength(302) // 300, "N more not shown", then the imports not looked at
+    expect(lines[300].text()).toBe('50 more not shown')
+    expect(lines[301].text()).toBe('121,970 more imports not followed')
+    expect(lines[301].classes()).toContain('tally')
+    expect(lines[301].classes()).not.toContain('off')
+    w.unmount()
+    const few = agentRow({ items: [{ key: 'claude:more', group: 'rules', type: 'more', label: '', count: 1, loaded: false, note: 'more' }] })
+    window.shellApi = { openFile: vi.fn(), context: { summary: async () => ({ agents: [few] }), tokenizers: async () => ({}) } }
+    const v = mountPage({ agents: [{ id: 'claude', available: true }] })
+    await flushPromises()
+    expect(v.find('[data-group="rules"] .ctx-line').text()).toBe('1 more import not followed')
+    v.unmount()
+    const many = agentRow({ items: [{ key: 'claude:more', group: 'rules', type: 'more', label: '', count: 121970, loaded: false, note: 'more' }] })
+    window.shellApi = { openFile: vi.fn(), context: { summary: async () => ({ agents: [many] }), tokenizers: async () => ({}) } }
+    const m = mountPage({ agents: [{ id: 'claude', available: true }] })
+    await flushPromises()
+    expect(m.find('[data-group="rules"] .ctx-line').text()).toBe('121,970 more imports not followed')
+    m.unmount()
+  })
 })

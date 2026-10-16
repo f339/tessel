@@ -209,6 +209,11 @@ export function createContextCost({
     const dir = agent === 'claude' ? await claudeDir().catch(() => null) : null
     const rules = await readRules(agent, { cwd, home, env: env(), claudeDir: dir, gitRoot: cwd ? await findGitRoot(cwd) : null, budget }, reader)
     for (const r of rules) {
+      // The imports past the summary's limit: one line, with their number.
+      if (r.note === 'more') {
+        items.push({ key: r.id, group: 'rules', type: 'more', label: '', count: r.count, note: 'more', loaded: false, optional: true })
+        continue
+      }
       const notRead = ['outside', 'skipped', 'limit'].includes(r.note)
       if (!notRead && (!r.text || !r.text.trim())) continue
       items.push({
@@ -269,7 +274,8 @@ export function createContextCost({
     // agents: [{ id, model? }]. -> { agents: [{ id, model, counter, items, summary }] }
     // remote: the page is looked at (count APIs asked, lists read again);
     // kept: a pane card's hover (no process started, no count API asked;
-    // nothing when the servers were never listed).
+    // nothing when the servers were never listed), which shows the totals
+    // only: its reply carries no items.
     async summary({ cwd = null, agents = [], remote = false, kept = false, auth = null } = {}) {
       const wanted = agents.filter((a) => a && CONTEXT_AGENTS.includes(a.id))
       const mode = kept ? 'kept' : remote ? 'fresh' : 'cached'
@@ -282,7 +288,7 @@ export function createContextCost({
         const model = modelOf(a.id, cwd, a.model)
         const counterInfo = await resolveCounter(a.id, model, { kept })
         const items = await countItems(await itemsFor(a.id, { cwd, skills: skillList, mcp, budget }), counterInfo, remote && !kept, auth)
-        out.push({ id: a.id, model: counterInfo.model, defaulted: counterInfo.defaulted, counter: counterInfo, items: items.map(publicItem), summary: summarize(items) })
+        out.push({ id: a.id, model: counterInfo.model, defaulted: counterInfo.defaulted, counter: counterInfo, ...(kept ? {} : { items: items.map(publicItem) }), summary: summarize(items) })
       }
       return { agents: out }
     },

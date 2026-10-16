@@ -3,8 +3,24 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import fsp from 'fs/promises'
 import os from 'os'
-import { join, sep } from 'path'
-import { rulesCandidates, readRules, createFileReader, claudeImports, splitTesselBlock, claudeProjectSlug, foldersUp, importProblem, isSensitivePath, readBudget } from '../contextCost/rulesFiles'
+import { join, sep, resolve, parse, dirname } from 'path'
+import {
+  rulesCandidates,
+  readRules,
+  createFileReader,
+  claudeImports,
+  splitTesselBlock,
+  claudeProjectSlug,
+  foldersUp,
+  importProblem,
+  isSensitivePath,
+  readBudget,
+  importRoot,
+  walkLinks,
+  findGitRoot,
+  isInside,
+  IMPORT_LIMIT
+} from '../contextCost/rulesFiles'
 import { RULE_START, RULE_END } from '../agentMemory'
 
 let root, home, project
@@ -181,5 +197,243 @@ describe('the file reader: read again only when size or date changed', () => {
     reader.clear()
     expect(reader.memoSize()).toEqual({ files: 0, bytes: 0 })
     expect(await reader.read('\\\\host\\share\\x.md')).toBe(null)
+  })
+})
+
+// Only the temp folder of the test: the folders above it (and a CLAUDE.md
+// there, the real user's) are missing to this reader.
+const confined = (reader) => {
+  const mine = (p) => isInside(root, p)
+  return {
+    ...reader,
+    real: (p, c) => (mine(p) ? reader.real(p, c) : Promise.resolve(null)),
+    read: (p, c) => (mine(p) ? reader.read(p, c) : Promise.resolve(null)),
+    list: (p, x, c) => (mine(p) ? reader.list(p, x, c) : Promise.resolve([])),
+    isDir: (p, c) => (mine(p) ? reader.isDir(p, c) : Promise.resolve(false)),
+    linkProblem: (p, c) => (mine(p) ? reader.linkProblem(p, c) : Promise.resolve('missing'))
+  }
+}
+
+describe('a flood of imports: one summary looks at IMPORT_LIMIT of them', () => {
+  it('lists IMPORT_LIMIT at most, then one line with the number of the others, never resolved', async () => {
+    const lines = []
+    for (let i = 0; i < 300; i++) lines.push(`@../../out${i}.md`) // outside
+    for (let i = 0; i < 300; i++) lines.push(`@docs/missing${i}.md`) // missing
+    write(join(project, 'CLAUDE.md'), lines.join('\n'))
+    const reader = confined(createFileReader({ fsApi: fsp }))
+    const real = vi.spyOn(reader, 'real')
+    const links = vi.spyOn(reader, 'linkProblem')
+    const rules = await readRules('claude', { home, cwd: project, env: {}, claudeDir: join(home, '.claude') }, reader)
+    const listed = rules.filter((r) => ['outside', 'skipped', 'limit'].includes(r.note))
+    expect(listed).toHaveLength(IMPORT_LIMIT)
+    expect(rules.filter((r) => r.note === 'more')).toEqual([{ id: 'claude:more', path: '', scope: null, text: '', loaded: false, note: 'more', count: 600 - IMPORT_LIMIT }])
+    // The missing ones past the limit were never looked up.
+    expect([...real.mock.calls, ...links.mock.calls].filter(([p]) => /missing\d+\.md$/.test(p))).toHaveLength(0)
+  })
+
+  it('looks a missing import up once, and counts it against the read budget', async () => {
+    write(join(project, 'CLAUDE.md'), ['@docs/a.md', '@docs/a.md', '@./docs/a.md', '@docs/b.md', '@docs/c.md', '@docs/ok.md'].join('\n'))
+    write(join(project, 'docs', 'ok.md'), 'Fine.')
+    const reader = confined(createFileReader({ fsApi: fsp }))
+    const links = vi.spyOn(reader, 'linkProblem')
+    const budget = { ...readBudget(), files: 4 }
+    const rules = await readRules('claude', { home, cwd: project, env: {}, budget }, reader)
+    expect(links.mock.calls.filter(([p]) => p.endsWith('a.md'))).toHaveLength(1)
+    // CLAUDE.md, then a, b and c (missing): the budget is spent before ok.md.
+    expect(rules.find((r) => r.path.endsWith('ok.md'))).toMatchObject({ note: 'limit', loaded: false, text: '' })
+    expect(budget.files).toBe(0)
+  })
+})
+
+// A fake disk: this PC refuses to create file symlinks (EPERM), so links are
+// answered by lstat and readlink here. stat, realpath, open and readdir
+// record each path they are asked, which the system would follow.
+function fakeDisk({ files = {}, links = {}, dirs = [] }) {
+  const norm = (p) => resolve(p).toLowerCase()
+  const F = new Map(Object.entries(files).map(([p, t]) => [norm(p), t]))
+  const L = new Map(Object.entries(links).map(([p, t]) => [norm(p), t]))
+  const D = new Set(dirs.map(norm))
+  const followed = []
+  const isDir = (p) => {
+    const n = norm(p)
+    if (D.has(n) || n === norm(parse(n).root)) return true
+    return [...F.keys(), ...L.keys(), ...D].some((k) => k.startsWith(n.endsWith(sep) ? n : n + sep))
+  }
+  const enoent = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+  const kind = (link, file, dir) => ({ isSymbolicLink: () => link, isFile: () => file, isDirectory: () => dir })
+  // Where the system would land: the local links followed.
+  const land = (p) => {
+    const full = resolve(p)
+    let cur = parse(full).root
+    for (const part of full.slice(cur.length).split(/[\\/]/).filter(Boolean)) {
+      const next = join(cur, part)
+      const t = L.get(norm(next))
+      cur = t === undefined ? next : resolve(dirname(next), t)
+    }
+    return cur
+  }
+  return {
+    followed,
+    async lstat(p) {
+      const n = norm(p)
+      if (L.has(n)) return kind(true, false, false)
+      if (F.has(n)) return { ...kind(false, true, false), size: F.get(n).length, mtimeMs: 1 }
+      if (isDir(p)) return kind(false, false, true)
+      throw enoent()
+    },
+    async readlink(p) {
+      if (!L.has(norm(p))) throw Object.assign(new Error('EINVAL'), { code: 'EINVAL' })
+      return L.get(norm(p))
+    },
+    async stat(p) {
+      followed.push(p)
+      const n = norm(land(p))
+      if (F.has(n)) return { ...kind(false, true, false), size: F.get(n).length, mtimeMs: 1 }
+      if (isDir(land(p))) return kind(false, false, true)
+      throw enoent()
+    },
+    async realpath(p) {
+      followed.push(p)
+      const to = land(p)
+      if (!F.has(norm(to)) && !isDir(to)) throw enoent()
+      return to
+    },
+    async open(p) {
+      followed.push(p)
+      const text = F.get(norm(land(p)))
+      if (text === undefined) throw enoent()
+      return {
+        async read(buffer, offset, length) {
+          const b = Buffer.from(text)
+          b.copy(buffer, offset, 0, length)
+          return { bytesRead: Math.min(length, b.length) }
+        },
+        async close() {}
+      }
+    },
+    async readdir(p) {
+      followed.push(p)
+      return []
+    }
+  }
+}
+
+describe('links to the network or a device are never followed', () => {
+  const base = join(os.tmpdir(), 'tessel-fake-disk') // never created: fakeDisk only
+  const proj = join(base, 'proj')
+  const fakeHome = join(base, 'home')
+  const bad = [join(proj, 'share'), join(proj, 'pipe.md'), join(proj, 'chain'), join(base, 'hop'), join(proj, 'dev.md'), join(proj, '.git'), join(proj, 'rules')]
+  const disk = () =>
+    fakeDisk({
+      dirs: [proj, fakeHome],
+      files: {
+        [join(proj, 'CLAUDE.md')]: ['@./share/rules.md', '@./pipe.md', '@./chain/rules.md', '@./dev.md', '@./ok.md', '@./notes.md', '@./cfg.md'].join('\n'),
+        [join(proj, 'ok.md')]: 'Fine.',
+        [join(proj, 'tool.exe')]: 'MZ',
+        [join(base, 'other', '.git', 'config')]: '[core]'
+      },
+      links: {
+        [join(proj, 'share')]: '\\\\evil.example.com\\share',
+        [join(proj, 'pipe.md')]: '\\\\.\\pipe\\probe',
+        [join(proj, 'chain')]: join(base, 'hop'), // local, but leads on to a share
+        [join(base, 'hop')]: '//evil.example.com/share',
+        [join(proj, 'dev.md')]: join(base, 'NUL'),
+        [join(proj, '.git')]: '\\\\evil.example.com\\repo',
+        [join(proj, 'rules')]: '\\\\evil.example.com\\rules',
+        // Links with a text name, to a program and into .git.
+        [join(proj, 'notes.md')]: join(proj, 'tool.exe'),
+        [join(proj, 'cfg.md')]: join(base, 'other', '.git', 'config')
+      }
+    })
+  const throughBad = (followed) => followed.filter((p) => bad.some((link) => isInside(link, p)))
+
+  it('lists an import through such a link as not followed, and never stats, opens or resolves it', async () => {
+    const fsApi = disk()
+    const rules = await readRules('claude', { home: fakeHome, cwd: proj, env: {}, claudeDir: join(fakeHome, '.claude'), gitRoot: proj }, createFileReader({ fsApi }))
+    const notes = Object.fromEntries(rules.map((r) => [r.path.slice(proj.length + 1), r.note]))
+    expect(notes[join('share', 'rules.md')]).toBe('outside')
+    expect(notes['pipe.md']).toBe('outside')
+    expect(notes[join('chain', 'rules.md')]).toBe('outside')
+    expect(notes['dev.md']).toBe('outside')
+    expect(notes['ok.md']).toBe('import')
+    expect(throughBad(fsApi.followed)).toEqual([])
+    expect(rules.find((r) => r.path.endsWith('ok.md')).text).toBe('Fine.')
+  })
+
+  it('checks the real path of a link with a text name: a program or a .git file is not read', async () => {
+    const fsApi = disk()
+    const rules = await readRules('claude', { home: fakeHome, cwd: proj, env: {}, gitRoot: proj }, createFileReader({ fsApi }))
+    expect(rules.find((r) => r.path === join(proj, 'notes.md'))).toMatchObject({ note: 'skipped', loaded: false, text: '' })
+    expect(rules.find((r) => r.path === join(proj, 'cfg.md'))).toMatchObject({ note: 'skipped', loaded: false, text: '' })
+    expect(fsApi.followed.some((p) => /tool\.exe$|config$/.test(p))).toBe(false)
+  })
+
+  it('refuses them in every reader call and in findGitRoot', async () => {
+    const fsApi = disk()
+    const reader = createFileReader({ fsApi })
+    expect(await reader.read(join(proj, 'share', 'x.md'))).toBe(null)
+    expect(await reader.real(join(proj, 'pipe.md'))).toBe(null)
+    expect(await reader.list(join(proj, 'rules'), ['.md'])).toEqual([])
+    expect(await reader.isDir(join(proj, 'chain'))).toBe(false)
+    expect(await reader.linkProblem(join(proj, 'chain', 'x.md'))).toBe('network')
+    expect(await reader.linkProblem(join(proj, 'nothing.md'))).toBe('missing')
+    expect((await walkLinks(join(proj, 'notes.md'), { fsApi })).path).toBe(join(proj, 'tool.exe'))
+    expect(await findGitRoot(join(proj, 'src'), fsApi)).toBe(proj) // a .git link, seen by lstat, not followed
+    expect(throughBad(fsApi.followed)).toEqual([])
+  })
+
+  it('ends a loop of links', async () => {
+    const fsApi = fakeDisk({ dirs: [proj], links: { [join(proj, 'a')]: join(proj, 'b'), [join(proj, 'b')]: join(proj, 'a') } })
+    const readlink = vi.spyOn(fsApi, 'readlink')
+    expect((await walkLinks(join(proj, 'a', 'x.md'), { fsApi })).problem).toBe('skipped')
+    expect(readlink.mock.calls.length).toBeLessThan(20)
+  })
+})
+
+describe('where imports may lead', () => {
+  it('the project folder, or its git root when close above it and holding neither home nor a drive', () => {
+    const repo = join(root, 'repo')
+    expect(importRoot(join(repo, 'a', 'b'), repo, home)).toBe(repo)
+    expect(importRoot(join(repo, 'a', 'b', 'c', 'd'), repo, home)).toBe(join(repo, 'a', 'b', 'c', 'd')) // too far down
+    expect(importRoot(join(home, 'Downloads', 'x'), home, home)).toBe(join(home, 'Downloads', 'x')) // a dotfiles repo
+    expect(importRoot(join(home, 'x'), dirname(home), home)).toBe(join(home, 'x')) // above home
+    const drive = parse(root).root
+    expect(importRoot(join(drive, 'work'), drive, home)).toBe(join(drive, 'work'))
+    expect(importRoot(project, null, home)).toBe(project)
+    expect(importRoot(null, repo, home)).toBe(null)
+  })
+
+  it('never into a dotfiles repository’s whole home folder', async () => {
+    fs.mkdirSync(join(home, '.git'), { recursive: true })
+    const proj = join(home, 'Downloads', 'unzipped')
+    write(join(home, 'Documents', 'notes.txt'), 'PRIVATE NOTES')
+    write(join(proj, 'CLAUDE.md'), 'See @../../Documents/notes.txt')
+    const gitRoot = await findGitRoot(proj)
+    expect(gitRoot).toBe(home)
+    const rules = await readRules('claude', { home, cwd: proj, env: {}, claudeDir: join(home, '.claude'), gitRoot }, confined(createFileReader({ fsApi: fsp })))
+    expect(rules.find((r) => r.path.endsWith('notes.txt'))).toMatchObject({ note: 'outside', text: '' })
+    expect(JSON.stringify(rules)).not.toContain('PRIVATE NOTES')
+  })
+
+  it('never anything in .git, even a file with no extension', () => {
+    expect(importProblem('./.git/config', join(project, '.git', 'config'), [project])).toBe('skipped')
+    expect(importProblem('./.GIT/hooks/pre-commit', join(project, '.GIT', 'hooks', 'pre-commit'), [project])).toBe('skipped')
+    expect(importProblem('./docs/README', join(project, 'docs', 'README'), [project])).toBe(null)
+  })
+
+  it('follows the imports of a project opened through a junction, and of a ~/.claude behind one', async () => {
+    const real = join(root, 'real-project')
+    write(join(real, 'docs', 'style.md'), 'Project style.')
+    write(join(real, 'CLAUDE.md'), 'See @./docs/style.md')
+    fs.mkdirSync(join(real, '.git'))
+    const linked = join(root, 'linked-project')
+    fs.symlinkSync(real, linked, 'junction')
+    const claudeReal = join(root, 'dotfiles', 'claude')
+    write(join(claudeReal, 'CLAUDE.md'), 'See @./team.md')
+    write(join(claudeReal, 'team.md'), 'Team rules.')
+    fs.symlinkSync(claudeReal, join(home, '.claude'), 'junction')
+    const rules = await readRules('claude', { home, cwd: linked, env: {}, gitRoot: linked }, confined(createFileReader({ fsApi: fsp })))
+    expect(rules.find((r) => r.path.endsWith('style.md'))).toMatchObject({ note: 'import', text: 'Project style.' })
+    expect(rules.find((r) => r.path.endsWith('team.md'))).toMatchObject({ note: 'import', text: 'Team rules.' })
   })
 })

@@ -95,7 +95,11 @@
     "item": {
       "boardRule": "Règle du tableau des tâches dans {{file}}",
       "teamInstructions": "Outils d’équipe : instructions",
-      "teamTools": "Outils d’équipe : {{count}} définitions"
+      "teamTools": "Outils d’équipe : {{count}} définitions",
+      "more_one": "{{n}} autre import non suivi",
+      "more_other": "{{n}} autres imports non suivis",
+      "hidden_one": "{{n}} autre élément non affiché",
+      "hidden_other": "{{n}} autres éléments non affichés"
     },
     "note": {
       "memory": "200 premières lignes",
