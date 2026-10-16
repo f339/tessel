@@ -72,14 +72,18 @@ export function createPageFeed({ guestById, lease = leaseDebugger, holders = deb
   // webContents id -> { busy (clicks or keys being dispatched), end (when
   // the last one was), used (when any input was), stream } of a guest's input.
   const lastInput = new Map()
+  // The latest used last (a page in use is never the one let go), and never
+  // one whose input is being dispatched.
   function inputOf(webContentsId, stream) {
     let r = lastInput.get(webContentsId)
-    if (!r) {
-      r = { busy: 0, end: -Infinity, used: -Infinity, stream }
-      lastInput.set(webContentsId, r)
-      if (lastInput.size > 64) lastInput.delete(lastInput.keys().next().value)
-    }
+    if (r) lastInput.delete(webContentsId)
+    else r = { busy: 0, end: -Infinity, used: -Infinity, stream }
+    lastInput.set(webContentsId, r)
     r.stream = stream
+    for (const [id, x] of lastInput) {
+      if (lastInput.size <= PAGE_FEED.listed) break
+      if (x.busy <= 0 && x !== r) lastInput.delete(id)
+    }
     return r
   }
 

@@ -61,6 +61,11 @@ describe('Live Share: hidden files out of the guests\u2019 texts', () => {
     expect(off[2]).toContain('deploy/prod.pem')
   })
 
+  it('reads names in any script', async () => {
+    const out = await hideHiddenNames(['Read caf\u00e9/.env and donn\u00e9es/app.js, then na\u00efve/.git/config'], { settings: ON })
+    expect(out).toEqual(['Read \u2026 and donn\u00e9es/app.js, then \u2026'])
+  })
+
   it('over the guest\u2019s git budget: busy; without a project folder: by name only', async () => {
     await expect(hideHiddenNames(['see dist/out.js'], { scope: fakeScope({ refuse: true }), info: { real: 'C:\\site' }, settings: ON, charge: () => false })).rejects.toMatchObject({ code: 'busy' })
     expect(await hideHiddenNames(['see .env and dist/out.js'], { settings: ON })).toEqual(['see … and dist/out.js'])

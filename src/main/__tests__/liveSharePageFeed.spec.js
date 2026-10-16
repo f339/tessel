@@ -256,6 +256,48 @@ describe('Live Share page feed: a guest using a page', () => {
     expect(await feed.input(s, 'ws-1', 'pane-a', events, () => true)).toMatchObject({ ok: false, code: 'forbidden', done: 0 })
   })
 
+  it('keeps what it knows of the pages guests used lately: the latest used last, never one mid-dispatch', async () => {
+    const guests = Array.from({ length: 70 }, (_, i) => fakeGuest(100 + i))
+    const ids = guests.map((_, i) => `pane-${i}`)
+    const { feed } = setup(guests, { layout: { 'ws-1': ids } })
+    const allowed = () => true
+    const click = [{ type: 'mouse', action: 'down', x: 0.5, y: 0.5, button: 'left' }]
+    const use = async (from, to) => {
+      feed.setPages(guests.slice(from, to).map((g, i) => ({ project: 'ws-1', paneId: ids[from + i], webContentsId: g.id })), allowed)
+      for (let i = from; i < to; i++) {
+        const s = stream(`g${i}`)
+        feed.watchGuest(s, 'ws-1', ids[i], true)
+        await feed.input(s, 'ws-1', ids[i], click, () => true)
+      }
+    }
+    // A click on page 0 that hangs in its dispatch (the page opens a window
+    // meanwhile, later).
+    let release
+    const real = guests[0].debugger.sendCommand.getMockImplementation()
+    guests[0].debugger.sendCommand.mockImplementation((method, params) => (method === 'Input.dispatchMouseEvent' ? new Promise((r) => (release = r)) : real(method, params)))
+    feed.setPages([{ project: 'ws-1', paneId: ids[0], webContentsId: 100 }], allowed)
+    const s0 = stream('g0')
+    feed.watchGuest(s0, 'ws-1', ids[0], true)
+    const pending = feed.input(s0, 'ws-1', ids[0], click, () => true)
+    await tick(1)
+    // 63 other pages used since (64 known in all), page 1 first, then page 1
+    // again (the latest), then 3 more: 3 have to go.
+    await use(1, 64)
+    feed.setPages([{ project: 'ws-1', paneId: ids[1], webContentsId: 101 }], allowed)
+    const s1 = stream('g1b')
+    feed.watchGuest(s1, 'ws-1', ids[1], true)
+    await feed.input(s1, 'ws-1', ids[1], click, () => true)
+    await use(64, 67)
+    // Page 0, mid-dispatch, is still known (its window is the guest's), and
+    // page 1, used again, too; page 2, the oldest done, was let go.
+    expect(feed.popupFrom(100)).toEqual({ allowed: true })
+    expect(feed.guestActive(101)).toBe(true)
+    expect(feed.guestActive(102)).toBe(false)
+    expect(feed.guestActive(166)).toBe(true)
+    release({})
+    await pending
+  })
+
   it('takes a guest’s messages in order, one at a time; past a few waiting, a limit', async () => {
     const { feed, allowed, guests } = setup()
     const [g] = guests

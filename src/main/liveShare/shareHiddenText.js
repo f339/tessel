@@ -22,8 +22,9 @@ import { hiddenByName } from './shareScope.js'
 const HIDDEN = '…'
 // The words of a text that may be paths, at most, per answer.
 const MAX_WORDS = 1000
-// A path-like word: names and separators, not inside a longer word.
-const WORD = /(?<![\w.@+~/\\-])[\w.@+~-]+(?:[\\/]+[\w.@+~-]+)*[\\/]?/g
+// A path-like word: names (letters and digits of any script, café/.env
+// too) and separators, not inside a longer word.
+const WORD = /(?<![\p{L}\p{M}\p{N}_.@+~/\\-])[\p{L}\p{M}\p{N}_.@+~-]+(?:[\\/]+[\p{L}\p{M}\p{N}_.@+~-]+)*[\\/]?/gu
 
 // A word -> { rel, tail } (rel: the path it names from the project's folder,
 // or null; tail: what follows it, kept: a sentence's dot, a separator).
