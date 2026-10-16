@@ -1267,7 +1267,7 @@ function previewSound() {
     </nav>
 
     <main ref="mainEl" class="set-main">
-      <div class="set-content">
+      <div class="set-content" :class="{ 'set-content-wide': page === 'skills' && !searching }">
         <p
           v-if="searching && !matched.length"
           class="set-empty"

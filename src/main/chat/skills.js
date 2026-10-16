@@ -69,6 +69,8 @@ export function skillFrontmatter(text, fallback) {
         else if (comment >= 0) value = value.slice(0, comment).trimEnd()
       }
       values[key] = clean(value)
+      // A description cut at the cap ends with an ellipsis, not mid-word.
+      if (key === 'description' && values[key] && value.trim().length > 512) values[key] = values[key].slice(0, 511) + '…'
     }
   }
   const name = commandName(values.name || fallback)

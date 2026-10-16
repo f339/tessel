@@ -3137,6 +3137,11 @@ kbd {
   padding: 34px 40px 60px;
 }
 
+/* Skills: room for a repository's skills beside the one opened (Add). */
+.set-content.set-content-wide {
+  max-width: 1180px;
+}
+
 .set-page-head h2 {
   margin: 0;
   color: var(--text-strong);

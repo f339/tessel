@@ -2754,7 +2754,13 @@ ipcMain.handle(
 )
 ipcMain.handle(
   'skills:fromGithub',
-  safe((q) => packageFromGithub((q && q.input) || '', { pick: q && typeof q.pick === 'string' ? q.pick : null }))
+  safe((q) =>
+    packageFromGithub((q && q.input) || '', {
+      pick: q && typeof q.pick === 'string' ? q.pick : null,
+      // The commit the list of skills was read at (one picked from it).
+      commit: q && typeof q.commit === 'string' ? q.commit : null
+    })
+  )
 )
 ipcMain.handle(
   'skills:forUpdate',
