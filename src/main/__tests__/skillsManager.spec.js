@@ -7,6 +7,7 @@ import {
   skillRoots,
   targetRoots,
   listSkills,
+  isListedFolder,
   packageFromFolder,
   packageFromGithub,
   packageForUpdate,
@@ -171,6 +172,51 @@ describe('listing', () => {
     expect(by('review').seenBy).toContain('codex')
     expect(roots.find((r) => r.path === path.join(home, '.claude', 'skills')).exists).toBe(true)
     expect(roots.find((r) => r.path === path.join(home, '.gemini', 'skills')).exists).toBe(false)
+  })
+
+  it("never lists a hidden folder (an agent's trash, a copy being installed or set aside, a cache), nor a tool's folder; Codex's .system holds its built-in skills", async () => {
+    const claude = path.join(home, '.claude', 'skills')
+    const codex = path.join(tmp, 'ch', 'skills')
+    write(path.join(claude, 'pdf', 'SKILL.md'), skillMd('pdf', 'Fill PDF forms.'))
+    // Claude Code moves a deleted skill to .trash/<id>/<name>.
+    write(path.join(claude, '.trash', '1792021773694-48400-kTaBox', 'built-in-browser', 'SKILL.md'), skillMd('built-in-browser', 'Deleted.'))
+    write(path.join(claude, '.trash', 'loose', 'SKILL.md'), skillMd('loose', 'Deleted.'))
+    write(path.join(claude, '.pdf.tessel-0a1b2c3d', 'SKILL.md'), skillMd('pdf', 'Being installed.'))
+    write(path.join(claude, '.pdf.tessel-old-0a1b2c3d', 'pdf', 'SKILL.md'), skillMd('pdf', 'Set aside.'))
+    write(path.join(claude, '.hidden', 'SKILL.md'), skillMd('hidden', 'Hidden.'))
+    write(path.join(claude, 'synced', 'acct', 'docx', 'SKILL.md'), skillMd('docx', 'Word.'))
+    write(path.join(claude, 'synced', 'acct', '.trash', 'x', 'xlsx', 'SKILL.md'), skillMd('xlsx', 'Deleted.'))
+    write(path.join(claude, 'synced', '.staging', 'pptx', 'SKILL.md'), skillMd('pptx', 'Half synced.'))
+    write(path.join(claude, 'kit', 'node_modules', 'dep', 'SKILL.md'), skillMd('dep', 'A package.'))
+    write(path.join(claude, 'kit', 'tools', 'SKILL.md'), skillMd('tools', 'In a plugin store.'))
+    write(path.join(codex, '.system', 'imagegen', 'SKILL.md'), skillMd('imagegen', 'Images.'))
+    write(path.join(codex, 'store', '.system', 'deep', 'SKILL.md'), skillMd('deep', 'Not at the top.'))
+    const { skills, home: listedHome } = await listSkills({ home, env: { CODEX_HOME: path.join(tmp, 'ch') } })
+    const rel = (s) => path.relative(tmp, s.dir).split(path.sep).join('/')
+    expect(skills.map(rel).sort()).toEqual([
+      'ch/skills/.system/imagegen',
+      'home/.claude/skills/kit/tools',
+      'home/.claude/skills/pdf',
+      'home/.claude/skills/synced/acct/docx'
+    ])
+    expect(skills.find((s) => s.name === 'imagegen')).toMatchObject({ managed: 'system', removable: false })
+    expect(listedHome).toBe(path.resolve(home))
+    expect(isListedFolder('.trash', 0)).toBe(false)
+    expect(isListedFolder('.trash', 2)).toBe(false)
+    expect(isListedFolder('.system', 0)).toBe(true)
+    expect(isListedFolder('.system', 1)).toBe(false)
+    expect(isListedFolder('pdf', 0)).toBe(true)
+  })
+
+  it("gives each copy its SKILL.md's hash: the same for the same file, another for an edited one", async () => {
+    write(path.join(home, '.claude', 'skills', 'pdf', 'SKILL.md'), skillMd('pdf', 'Fill PDF forms.'))
+    write(path.join(home, '.agents', 'skills', 'pdf', 'SKILL.md'), skillMd('pdf', 'Fill PDF forms.'))
+    write(path.join(home, '.copilot', 'skills', 'pdf', 'SKILL.md'), skillMd('pdf', 'Fill PDF forms, edited.'))
+    const { skills } = await listSkills({ home, env })
+    const hash = (root) => skills.find((s) => s.dir === path.join(home, root, 'skills', 'pdf')).mdHash
+    expect(hash('.claude')).toMatch(/^[0-9a-f]{64}$/)
+    expect(hash('.agents')).toBe(hash('.claude'))
+    expect(hash('.copilot')).not.toBe(hash('.claude'))
   })
 
   it('shows where a skill was added from', async () => {

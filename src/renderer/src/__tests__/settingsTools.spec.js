@@ -274,6 +274,15 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     expect(page.text()).toContain('Fill PDF forms.')
     expect(page.findAll('.launch-seg-btn').map((b) => b.text())).toContain('Add')
 
+    // A skill's copies are in its details, opened from its row; Escape in
+    // there closes the details, not Settings.
+    await page.get('.skills-row').trigger('click')
+    await flushPromises()
+    await page.get('.skills-details .skills-btn').trigger('keydown', { key: 'Escape' })
+    expect(page.find('.skills-details').exists()).toBe(false)
+    expect(wrapper.emitted('close')).toBeUndefined()
+    await page.get('.skills-row').trigger('click')
+    await flushPromises()
     await page.findAll('.skills-copy .exit-btn').find((b) => b.text() === 'Update').trigger('click')
     await flushPromises()
     await page.get('.skills-setup .exit-btn').trigger('click')
