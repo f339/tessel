@@ -1381,8 +1381,6 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   })
   // A project added to the share or taken out: { id, shared }.
   ipcMain.handle('liveShare:share', (_evt, { id, shared } = {}) => setShared(id, !!shared))
-  // What a guest may do, and the shared projects it sees: guestId is a
-  // guest in, or one let in by its k- id (offline: it comes back with them).
   // Access, one change at a time, against what the subject has now (two
   // clicks in a row never undo each other): one project or one right of a
   // guest in, a person let in (offline: it comes back with it), a trusted
@@ -1446,9 +1444,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       const id = subjectId(guestId)
       const person = server.personOf(id)
       if (untrust && person && person.trust) server.untrust(trustId(person.trust))
-      if (id.startsWith('k-')) return { ok: !!server.removeKnown(id) }
-      server.removeGuest(id)
-      return { ok: true }
+      return { ok: id.startsWith('k-') ? !!server.removeKnown(id) : !!server.removeGuest(id) }
     })
   )
   // The agents the window lists for guests (the ones it can start).
@@ -1461,8 +1457,6 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     leaveSession('left')
     return { ok: true }
   })
-  // A terminal or an agent opened on the host, in one of its projects this
-  // guest sees.
   // Guest: a host's agent pane's conversation watched by this window (on) or
   // no longer: read only, nothing reaches the host's pane. -> { ok, last }
   // (the latest that came, or null) | { ok: false, code } ('outdated-host':

@@ -226,8 +226,10 @@ export function createAccess({ now = Date.now, trust = null, isOnline = () => fa
     for (const s of Array.isArray(legacy.secrets) ? legacy.secrets : []) if (Buffer.isBuffer(s) && s.length === 32 && !codes.has(secretId(s))) addCode(s, '', null, '')
     restorePeople(legacy.known, legacy.knownAt, (k) => ({ ...k, grant: { projects: k.projects, rights: k.rights }, via: k.sid === root.sid ? root.id : null }))
   }
-  // A share taken back: a project no longer shared is no invitation's or
-  // person's any more (shared again later, no one gets it back by itself).
+  // A share taken back: someone no longer trusted keeps what it had, as its
+  // own; a project no longer shared is no invitation's or person's any more
+  // (shared again later, no one gets it back by itself).
+  for (const p of people.values()) if (p.trust && !(trust && trust.get(p.trust))) p.trust = null
   for (const inv of invites.values()) inv.grant.projects = inv.grant.projects.filter((x) => shared.has(x))
   for (const p of people.values()) if (!p.trust) p.grant.projects = p.grant.projects.filter((x) => shared.has(x))
   pruneCodes()
@@ -608,7 +610,9 @@ export function createAccess({ now = Date.now, trust = null, isOnline = () => fa
         via: p.via,
         viaLabel: p.viaLabel,
         identity: p.identity ? p.identity.toString('base64') : null,
-        grant: copyGrant(p.grant),
+        // What it gets now (a trusted person: its trusted grant, what it
+        // keeps if it is no longer trusted when the share is taken back).
+        grant: copyGrant(grantOf(p)),
         trust: p.trust,
         opened: p.opened,
         lastSeen: isOnline(p.hash) ? now() : p.lastSeen,

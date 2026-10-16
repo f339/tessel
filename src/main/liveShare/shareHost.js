@@ -1480,7 +1480,9 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
 
     removeGuest(guestId) {
       const g = guests.get(guestId)
-      if (g) drop(g, 'removed')
+      if (!g) return false
+      drop(g, 'removed')
+      return true
     },
     // Guests let in who are not connected now (their connection dropped, or
     // they are coming back after a restart): { id: 'k-<key hash>', name,
