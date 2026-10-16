@@ -5,7 +5,7 @@
 // share back. The wire is liveShareInvites.spec.js's.
 import { describe, it, expect } from 'vitest'
 import crypto from 'crypto'
-import { createAccess, pathOfUrl, cleanInviteSpec, secretId, keyHash, personId, LIFETIMES, MAX_INVITES, UNFINISHED_MAX, ROOM_FULL_FREE, OFFLINE_KEEP_MS } from '../liveShare/shareAccess'
+import { createAccess, pathOfUrl, cleanInviteSpec, secretId, keyHash, personId, LIFETIMES, MAX_INVITES, MAX_PEOPLE, UNFINISHED_MAX, ROOM_FULL_FREE, OFFLINE_KEEP_MS } from '../liveShare/shareAccess'
 import { createTrustStore, MAX_TRUSTED, trustId, isTrustId } from '../liveShare/shareTrust'
 import { SHARE_RIGHTS, RIGHT_IDS, cleanRights, defaultRights, NO_RIGHTS, isRightId, sameRights } from '../../shared/liveShareRights'
 import { newSigningKey, identityFingerprint } from '../liveShare/shareCrypto'
@@ -67,10 +67,11 @@ describe('invitations', () => {
     expect(access.codesAt(pathOfUrl(`/i/${cb.path}/`))).toEqual([cb])
     expect(access.liveInvite(ca)).toBe(a)
     expect(access.codesAt(pathOfUrl('/'))).toEqual([]) // no root code in a new share
-    for (const url of ['/x', '/i/short', `/i/${ca.path}/more`, `/I/${ca.path}`, '//evil/', null]) expect(access.codesAt(pathOfUrl(url))).toEqual([])
+    for (const url of ['/x', '/i/short', `/i/${ca.path}/more`, `/I/${ca.path}`, '//evil/', `//evil/i/${ca.path}`, '', `http://evil/i/${ca.path}`]) expect(pathOfUrl(url)).toBe(null)
     // A query is not part of the address.
     expect(pathOfUrl(`/i/${ca.path}?x=1`)).toBe(ca.path)
     expect(pathOfUrl('/')).toBe('')
+    expect(pathOfUrl('/?x')).toBe('')
   })
 
   it('has a label, a lifetime (an hour by default, a day, a week or none), optional uses, and what it offers (shared projects only)', () => {
@@ -321,6 +322,16 @@ describe('people and trust', () => {
     expect(access.people().map((p) => p.name)).toEqual(['B'])
     expect(access.personById(personId(b.hash))).toBe(b)
     expect(access.personById(personId(a.hash))).toBe(null)
+    // Full: the one offline the longest makes room (the ones online stay).
+    for (let i = 0; i < MAX_PEOPLE - 1; i++) {
+      clock.now += 1
+      access.addPerson({ key: key(), name: `p${i}`, sid, grant: {} })
+    }
+    expect(access.people()).toHaveLength(MAX_PEOPLE)
+    access.addPerson({ key: key(), name: 'late', sid, grant: {} })
+    expect(access.people()).toHaveLength(MAX_PEOPLE)
+    expect(access.people().map((p) => p.name)).toEqual(expect.arrayContaining(['B', 'late']))
+    expect(access.people().some((p) => p.name === 'p0')).toBe(false)
   })
 })
 

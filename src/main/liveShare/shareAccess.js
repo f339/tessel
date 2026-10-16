@@ -74,16 +74,12 @@ const newSecret = () => crypto.randomBytes(32)
 const times = (list, now, keepMs) => (Array.isArray(list) ? list.filter((x) => Number.isFinite(x) && now - x < keepMs) : [])
 const recent = (list, now) => times(list, now, 60000).slice(-20)
 
-// Where an invitation is reached: '/' (a root one) or '/i/<path>'; null for
-// anything else.
+// Where a connection asks to go (its request's target, a query aside): ''
+// for the address itself (root invitations), the path of '/i/<path>', null
+// for anything else.
 export function pathOfUrl(url) {
-  let pathname
-  try {
-    pathname = new URL(String(url || '/'), 'http://share').pathname
-  } catch {
-    return null
-  }
-  if (pathname === '/' || pathname === '') return ''
+  const pathname = String(url === undefined || url === null ? '/' : url).split(/[?#]/)[0]
+  if (pathname === '/') return ''
   const m = /^\/i\/([A-Za-z0-9_-]{16})\/?$/.exec(pathname)
   return m ? m[1] : null
 }

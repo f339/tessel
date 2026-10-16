@@ -1204,6 +1204,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     })
     g.client = client
     client.connect()
+    // The pane on screen goes again with each connection (said once in).
+    if (g.focusRemote) client.focus(g.focusRemote)
   }
 
   function joinSession({ invite, name, signingKey = null, hostKey = null } = {}) {
@@ -1224,6 +1226,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       // watches, and those this connection asked the host for.
       features: new Set(),
       agents: [],
+      focusRemote: null, // the host pane on screen here (presence)
       chats: new Map(),
       chatByLocal: new Map(),
       chatWanted: new Set(),
@@ -1505,7 +1508,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     const g = joined
     if (!g || g.state !== 'joined') return
     const pane = typeof id === 'string' ? g.byLocal.get(id) || g.chatByLocal.get(id) : null
-    g.client.focus(pane ? pane.remoteId : null)
+    g.focusRemote = pane ? pane.remoteId : null
+    g.client.focus(g.focusRemote)
   })
 
   // A share or a session the last Tessel left (a restart, an update, a

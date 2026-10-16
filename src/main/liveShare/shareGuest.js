@@ -109,6 +109,22 @@ export function createShareGuest({ url, secret, name, signingKey, identityKey = 
     socket.send(channel.seal(message))
   }
 
+  // The pane on screen, to a host that listens (once welcomed): at most every
+  // FOCUS_MS, the latest.
+  function sayFocus() {
+    if (!welcomed || !hostSpeaks.has('presence') || focusTimer || closed) return
+    const go = () => {
+      focusTimer = null
+      if (closed || focusWanted === focusSent) return
+      focusSent = focusWanted
+      focusAt = Date.now()
+      send({ t: 'focus', id: focusSent })
+    }
+    const later = focusAt + FOCUS_MS - Date.now()
+    if (later > 0) focusTimer = setTimeout(go, later)
+    else go()
+  }
+
   // Rights as this Tessel knows them (an id it does not know is never kept).
   const rightsOf = (r) => (r && typeof r === 'object' ? cleanRights(r) : null)
 
@@ -139,6 +155,8 @@ export function createShareGuest({ url, secret, name, signingKey, identityKey = 
         if (hostSpeaks.has('agents') && Array.isArray(msg.agents)) callbacks.onAgents?.(msg.agents)
         callbacks.onState?.('joined', { host: String(msg.host || '') })
         callbacks.onProjects?.(Array.isArray(msg.projects) ? msg.projects : [])
+        // A pane on screen before the welcome (or before a reconnect).
+        if (focusWanted !== null) sayFocus()
         return
       }
       case 'projects':
@@ -262,17 +280,7 @@ export function createShareGuest({ url, secret, name, signingKey, identityKey = 
     // said to a host that listens, at most every FOCUS_MS, the latest.
     focus(id) {
       focusWanted = typeof id === 'string' ? id : null
-      if (!welcomed || !hostSpeaks.has('presence') || focusTimer) return
-      const later = focusAt + FOCUS_MS - Date.now()
-      const go = () => {
-        focusTimer = null
-        if (closed || focusWanted === focusSent) return
-        focusSent = focusWanted
-        focusAt = Date.now()
-        send({ t: 'focus', id: focusSent })
-      }
-      if (later > 0) focusTimer = setTimeout(go, later)
-      else go()
+      sayFocus()
     },
     // An agent pane's conversation watched (on) or no longer: read only.
     chat(id, on) {
