@@ -196,6 +196,18 @@ export function bindingSigned(publicRaw, binding, signature) {
   }
 }
 
+// A guest's identity key (Ed25519, made once on its computer and kept in its
+// data folder, shareIdentity.js): what a host trusts across sessions. The
+// guest proves it holds it by signing this connection's binding under a label
+// of its own, so a reconnect signature can never pass for an identity proof
+// (or the other way round), and a proof made for one connection fits no
+// other (someone in the middle has a different binding with each side).
+const IDENTITY_LABEL = Buffer.from('tessel-liveshare-identity-v1\0')
+export const signIdentity = (key, binding) => signBinding(key, Buffer.concat([IDENTITY_LABEL, binding]))
+export const identitySigned = (publicRaw, binding, signature) => Buffer.isBuffer(binding) && bindingSigned(publicRaw, Buffer.concat([IDENTITY_LABEL, binding]), signature)
+// What a host keeps of a guest's identity key: its fingerprint (hex).
+export const identityFingerprint = (publicRaw) => crypto.createHash('sha256').update('tessel-liveshare-identity-fp').update(publicRaw).digest('hex').slice(0, 32)
+
 // Seals and opens the messages of one connection, in order.
 export function createChannel({ send, recv }) {
   let sent = 0

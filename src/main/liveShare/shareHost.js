@@ -4,58 +4,81 @@
 // what reaches it from outside), and refuses browsers (any Origin header). A
 // connection first runs the handshake of shareCrypto.js in clear (the
 // guest's commitment, the host's nonce and X25519 key, the guest's), then
-// everything is sealed with keys derived from them and the invite's secret:
-// a guest without the invite code is dropped at its first message. A guest
-// with it still waits until the host says yes (askApproval) to that guest
-// (its id, and the verification code both sides show), and the host can
-// remove any guest at any time. After a no (or a guest who left while
-// waiting, or one removed), new guests wait a while before they can ask
-// again. An invite code works for an hour; rotate() makes a new one, and
-// guests not in yet under the old one are turned away. Every connection that
-// got the host's keys and never got in is counted, whatever its way out:
-// past a few, the code lets no new guest in (onInviteBlocked), since someone
-// in the middle could be trying to make the verification codes match; and
-// handshakes are limited to a few a minute.
+// everything is sealed with keys derived from them and an invitation's
+// secret: a guest without an invite code is dropped at its first message.
+//
+// Who may get in, and what each one gets, is the access model's
+// (shareAccess.js): invitations, people, trusted people (shareTrust.js). Each
+// invitation is reached at an address of its own on the share (/i/<path>,
+// part of its invite code: older guests connect to it as they always did),
+// so a connection says which invitation it uses before the host's keys, and
+// only that invitation's secret is tried. A connection to an address no
+// invitation has gets the hello (the address answers as a Tessel Live Share)
+// and is closed as expired. A code made before invitations is reached at the
+// address itself (a root invitation; every earlier root secret a person
+// still needs is tried there).
+//
+// A new guest with a code still waits until the host says yes (askApproval)
+// to that guest (its id, its invitation, and the verification code both
+// sides show), which comes with the projects and rights the host gives it
+// (the invitation's, ticked in the prompt); the host can remove any guest at
+// any time. Only a trusted person gets in without the question: its Tessel
+// proves its identity key on the join (shareCrypto.js signIdentity, bound to
+// this connection), and the host trusts that key (shareTrust.js), something
+// it can only do for a guest it let in itself. An older guest has no identity
+// key: it joins as before and can't be trusted. Each invitation lets no new
+// guest in once it is revoked, expired, used up (its uses) or blocked: past a
+// few connections that got its keys and never got in, whatever their way out
+// (someone in the middle could be trying to make the verification codes
+// match), it is blocked until the host makes it a new code. After a no (or a
+// guest who left while waiting, or one removed), that invitation's new guests
+// wait a while before they can ask again; each invitation has a waiting line
+// of its own; handshakes are limited to a few a minute.
 //
 // A guest let in made a reconnect key of its own (Ed25519) and gave its
 // public half when it joined. When its connection drops (its network, its
 // Tessel or this one restarting), it comes back by signing the new
 // connection's binding with that key, and is in again at once, with its
-// rights (and its open / close counts): no new question. Someone in the
+// grant (and its open / close counts): no new question. Someone in the
 // middle can't do that for it: the key never travels, and a signature only
 // fits the connection it was made for. A new guest proves it holds its key
 // (it signs its first connection too), and a key already known, or a weak
 // one, is refused. The host signs every welcome with a key of its own (the
 // share's, given to the guest in its first welcome, checked by the code both
-// sides compared): a returning guest checks it is the same host. Guests let
-// in survive a restart of this Tessel (knownGuests, given back to
-// createShareHost), with their open / close counts, and so do the share's
-// earlier invite secrets (a guest let in before a new code comes back with
-// the one it had: a secret is kept as long as a guest let in needs it) and
-// its block (guard). A guest who leaves or is removed can't come back; the
-// host can also remove one that is offline (removeKnown), and one offline
-// for more than 15 minutes is forgotten.
+// sides compared): a returning guest checks it is the same host. People let
+// in survive a restart of this Tessel (accessState(), given back to
+// createShareHost), with their counts, and so do the codes they need and each
+// invitation's block. A guest who leaves or is removed can't come back with
+// its reconnect key; one offline for more than 15 minutes is forgotten.
 //
 // The host shares one project or several (projects), and can add or take one
-// out at any time. Each guest sees its own of them: the ones the host ticked
-// when it let it in, changed later with setProjects or changeProject (a guest
-// offline too: it comes back with them); a project shared later is no
-// guest's until the host gives it, and one taken out of the share is no one's
-// any more. Once in, a guest sees each of its projects as the host's screen
-// shows it: its layout (splits, sizes, the active and fullscreen pane), and
-// each of its terminals and agents live: the screen as it is (no
-// scrollback), then its output as it comes. Nothing of the other projects
-// reaches it, and every request it makes is checked against its projects at
-// the moment it comes. A guest starts view only: the host gives each one the
-// right to type in those panes, to open terminals and agents (a few a
-// minute), and to ask to close panes (setRights, changeRight). A pane's
-// screen costs the host's terminal host some work: one is taken at a time per
-// pane, shared by every guest that needs it then, and a guest comes back (a
-// new connection with its key) and asks for screens again only a few times a
-// minute. What a guest's terminal answers by itself to a program's
+// out at any time. Each guest sees its own of them (its grant): changed at any
+// time (change, setGrant: a guest offline too, it comes back with them); a
+// project shared later is no one's until the host gives it (an invitation
+// that takes projects shared later offers it to new guests), and one taken out
+// of the share is no one's any more (a trusted person's stays, seen again
+// when shared again). Once in, a guest sees each of its projects as the
+// host's screen shows it: its layout (splits, sizes, the active and
+// fullscreen pane), and each of its terminals and agents live: the screen as
+// it is (no scrollback), then its output as it comes. Nothing of the other
+// projects reaches it, and every request it makes is checked against its
+// projects at the moment it comes. A guest starts view only: rights
+// (src/shared/liveShareRights.js) let it type in those panes, open terminals
+// and agents (a few a minute, a dozen in all), and ask to close panes. A
+// pane's screen costs the host's terminal host some work: one is taken at a
+// time per pane, shared by every guest that needs it then, and a guest comes
+// back (a new connection with its key) and asks for screens again only a few
+// times a minute. What a guest's terminal answers by itself to a program's
 // questions (cursor position, colours...) is never typed in the host's: the
 // host's own terminal answers.
 //
+// Opening: a guest asks for a terminal, or for one of the agents the host
+// lists (callbacks.agents: ids only; the host's Tessel picks the shell and
+// the command, as when the host opens one), in one of its projects; nothing
+// else it sends is kept (no command line, path, argument or variable). With
+// the right, it opens (openPane); without it, a guest whose Tessel says so
+// (the 'agents' feature) asks the host (askOpen), a couple of times a minute.
+// An agent the host does not list is refused.
 //
 // A guest whose Tessel says so (the 'chat' feature, shareChat.js) can also
 // look at an agent pane of its projects as a chat, read only: it asks for
@@ -70,27 +93,40 @@
 // does not watch is ignored. Nothing about it reaches the pane: no typing, no
 // mode, no restart. A guest whose Tessel does not say so gets none of it.
 //
+// Presence, for the host's eyes only (presence(), onPresence): which of the
+// host's panes each guest has on screen (the 'presence' feature: 'focus',
+// checked against its projects, a couple of times a second at most, and it
+// gives nothing), which it typed in during the last few seconds (its typing
+// as the host takes it), and which conversations it reads.
+//
 // Tessel itself is reached only through the callbacks below, so this file
 // runs (and is tested) without Electron.
 import crypto from 'crypto'
 import { WebSocketServer } from 'ws'
-import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitmentMatches, bindingSigned, signBinding, newSigningKey, NONCE_BYTES, COMMIT_BYTES, KX_BYTES } from './shareCrypto.js'
+import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitmentMatches, bindingSigned, signBinding, newSigningKey, identitySigned, identityFingerprint, NONCE_BYTES, COMMIT_BYTES, KX_BYTES } from './shareCrypto.js'
 import { SHARE_FEATURES, cleanFeatures, CHAT_LIMITS, CHAT_CODES } from './shareChat.js'
+import { NO_RIGHTS, cleanRights, sameRights } from '../../shared/liveShareRights'
+import { MAX_PROJECTS, isProjectId, cleanProjectIds, cleanName, cleanGrant } from './shareGrant.js'
+import { createAccess, pathOfUrl, keyHash, personId, isInviteId, INVITE_TTL_MS } from './shareAccess.js'
+import { isTrustId } from './shareTrust.js'
+
+export { NO_RIGHTS, cleanRights, MAX_PROJECTS, isProjectId, cleanProjectIds, cleanName, INVITE_TTL_MS }
 
 // 4: several projects shared, each guest its own (the welcome and the
 // updates list projects, not panes). What came after 4 is said as features
 // in the sealed join and welcome (shareChat.js SHARE_FEATURES), not as a new
 // version: the hello's version must be the same on both sides, and an older
-// Tessel ignores features it does not know. 3: the guest commits first
-// (shareCrypto.js), proves its reconnect key and the host signs its welcome.
-// A Tessel with protocol 1 (no commitment) is told it is out of date; one
-// with protocol 2 or 3 reads the hello's version (an older guest: its Tessel
-// is out of date; an older host: the host's is).
+// Tessel ignores features it does not know. Fields added since, each ignored
+// by an older Tessel: the join's identity ({ key, sig }: the guest's identity
+// key and its proof), the welcome's agents and the 'agents' message (with the
+// 'agents' feature), the guest's 'focus' (with 'presence'). 3: the guest
+// commits first (shareCrypto.js), proves its reconnect key and the host signs
+// its welcome. A Tessel with protocol 1 (no commitment) is told it is out of
+// date; one with protocol 2 or 3 reads the hello's version (an older guest:
+// its Tessel is out of date; an older host: the host's is).
 export const SHARE_PROTOCOL = 4
-// Projects shared at once (and so a guest's at most).
-export const MAX_PROJECTS = 16
 const MAX_GUESTS = 10
-const MAX_WAITING = 3 // guests waiting for the host's answer at once
+const MAX_WAITING = 3 // guests waiting for the host's answer at once, per invitation
 const MAX_FRAME = 1024 * 1024 // a guest's message (typing, a paste)
 const MAX_WRITE = 256 * 1024
 const MAX_BUFFERED = 16 * 1024 * 1024 // a guest this far behind is dropped
@@ -102,19 +138,18 @@ const HANDSHAKES_PER_ADDRESS = 3
 const HANDSHAKES_AT_ONCE = 30
 const PING_MS = 25000 // Cloudflare closes a WebSocket idle for 100 s
 const FLUSH_MS = 8
-const MAX_SECRETS = 8 // earlier invite secrets kept even when no guest needs them
-const OFFLINE_KEEP_MS = 15 * 60 * 1000 // a guest offline this long is forgotten
-export const INVITE_TTL_MS = 60 * 60 * 1000
-// After a no: new guests wait 15 s, doubled by each no of the last 10 min,
-// up to 5 min.
-const DENY_WAIT_MS = 15000
-const DENY_WAIT_MAX_MS = 5 * 60 * 1000
-const DENY_MEMORY_MS = 10 * 60 * 1000
 // What one guest may ask in a minute, and in all.
 const OPENS_PER_MINUTE = 3
 const OPENS_IN_ALL = 12
+const OPEN_ASKS_PER_MINUTE = 2 // asking the host to open (without the right)
 const CLOSES_PER_MINUTE = 6
 const RESYNCS_PER_MINUTE = 30 // pane screens asked again (a window reloaded)
+// The agents the host lists for guests, at most.
+const MAX_AGENTS = 32
+// Presence: typing in a pane counts for this long; a guest says what it has
+// on screen this often at most.
+const TYPING_MS = 3000
+const FOCUS_PER_MINUTE = 120
 // Conversations (the 'chat' feature): watched by one guest at once, started
 // in a minute, and how often one pane's goes out (the latest when its time
 // comes); one bigger than this is not sent.
@@ -132,16 +167,8 @@ const CHAT_BUFFERED = 1024 * 1024
 // is taken again); past that it is turned away as busy (its Tessel tries
 // again a moment later).
 const REJOINS_PER_MINUTE = 3
-// Connections that got the host's keys and never got in, in 10 min, before
-// the invite code is blocked; handshakes a minute.
-const UNFINISHED_MAX = 8
-const UNFINISHED_MEMORY_MS = 10 * 60 * 1000
-// Guests turned away by a full room in that time and not counted (a crowd);
-// past that, counted like the others (someone keeping the room full can't try
-// codes past the count).
-const ROOM_FULL_FREE = 30
 // Connections a minute, from one address and in all (a guest let in comes
-// back past the per-code block, not past these). Addresses: Cloudflare's
+// back past an invitation's block, not past these). Addresses: Cloudflare's
 // word for the client (IPv6 by its /64); a program on this PC can claim any
 // (a known limit: it could connect anyway).
 const EXCHANGES_PER_ADDRESS = 20
@@ -164,20 +191,26 @@ export const CLOSE_EXPIRED = 4001
 export const CLOSE_BUSY = 4002
 export const CLOSE_OUTDATED = 4003
 
-export const NO_RIGHTS = Object.freeze({ type: false, open: false, close: false })
-export const cleanRights = (r) => ({ type: !!(r && r.type), open: !!(r && r.open), close: !!(r && r.close) })
-
-// Project ids (the host window's): valid ids, each once, at most MAX_PROJECTS.
-export const isProjectId = (id) => typeof id === 'string' && /^[\w-]{1,80}$/.test(id)
-export const cleanProjectIds = (list) => [...new Set((Array.isArray(list) ? list : []).filter(isProjectId))].slice(0, MAX_PROJECTS)
-
-// A guest's name as given ('' when none: the window says "A guest").
-export const cleanName = (name) =>
-  String(name || '')
-    // eslint-disable-next-line no-control-regex -- control characters are what it removes
-    .replace(/[\u0000-\u001f\u007f]/g, '')
-    .trim()
-    .slice(0, 40)
+// An agent id the host lists (its Tessel's ids: claude, codex, opencode...).
+export const isAgentId = (id) => typeof id === 'string' && /^[A-Za-z0-9][\w.-]{0,39}$/.test(id)
+// The agents the host lists for guests: [{ id, name }], each once, bounded.
+export function cleanAgents(list) {
+  const out = []
+  for (const a of Array.isArray(list) ? list : []) {
+    if (out.length >= MAX_AGENTS) break
+    if (!a || !isAgentId(a.id) || out.some((x) => x.id === a.id)) continue
+    out.push({ id: a.id, name: cleanName(a.name) || a.id })
+  }
+  return out
+}
+// What a guest asks to open: a terminal, or an agent by its id, in a
+// project. Nothing else it sends is kept.
+export function openSpec(spec) {
+  if (!spec || typeof spec !== 'object' || !isProjectId(spec.project)) return null
+  if (spec.kind === 'terminal') return { kind: 'terminal', project: spec.project }
+  if (spec.kind === 'agent' && isAgentId(spec.agent)) return { kind: 'agent', agent: spec.agent, project: spec.project }
+  return null
+}
 
 // What a terminal sends by itself when a program asks (xterm's reports), not
 // what someone types: the cursor position, the terminal's identity and
@@ -202,10 +235,6 @@ export function stripTerminalReplies(data) {
   return out
 }
 
-// A guest's reconnect key, and an invite secret, as the host knows them.
-const keyHash = (key) => crypto.createHash('sha256').update(key).digest('hex')
-const secretId = (secret) => crypto.createHash('sha256').update('tessel-liveshare-secret').update(secret).digest('hex').slice(0, 16)
-
 // callbacks:
 //   projects()             -> the projects shared now, in order: [{ id,
 //                             layout (what the host's window shows of it,
@@ -222,19 +251,29 @@ const secretId = (secret) => crypto.createHash('sha256').update('tessel-liveshar
 //                             output comes through sendData (see subscribe);
 //                             data may be a Promise of the text
 //   write(id, data)
-//   openPane(spec, guest)  -> spec: { kind: 'terminal' | 'agent', agent?,
-//                             project } (one of the guest's projects)
+//   openPane(spec, guest)  -> spec: { kind: 'terminal' } | { kind: 'agent',
+//                             agent } and project (one of the guest's)
+//   askOpen(spec, guest)   -> optional: a guest without the right asks the
+//                             host to open that (the host's answer is the
+//                             window's)
+//   agents()               -> optional: the agents guests may ask for, [{ id,
+//                             name }]; without it, no agent is opened
 //   closePane(id, guest)
-//   askApproval(guest)     -> Promise<boolean | { yes, projects }>; guest:
-//                             { id, name, code }; projects: the shared
-//                             projects that guest gets (none when not said;
-//                             a plain true gives all of them)
+//   askApproval(guest)     -> Promise<boolean | { yes, projects, rights,
+//                             trust }>; guest: publicGuest's, with offer
+//                             (the invitation's { projects, rights }, the
+//                             shared ones); projects: the shared projects
+//                             that guest gets (none when not said; a plain
+//                             true gives all of them); trust: trust its
+//                             identity key from now on
 //   onGuests(list)         -> the guests connected changed (offlineGuests()
 //                             gives the others let in)
-//   onInviteBlocked()      -> too many connections stopped after the
-//                             handshake: the code lets no new guest in until
-//                             rotate()
-//   onKnownChanged()       -> the guests let in changed (knownGuests())
+//   onInviteBlocked(id)    -> too many connections stopped after the
+//                             handshake: that invitation lets no new guest in
+//                             until it gets a new code
+//   onKnownChanged()       -> the access model changed (accessState(): to
+//                             save, and the host's window)
+//   onPresence()           -> optional: presence() changed
 //   chatProject(id)        -> the shared project an agent pane a guest can
 //                             look at as a chat is in, or null (optional:
 //                             projects()' chats otherwise); checked like
@@ -248,92 +287,73 @@ const secretId = (secret) => crypto.createHash('sha256').update('tessel-liveshar
 // projects()' items may have chats: [{ id, title, agentId, accent,
 // terminal }] (shareChat.js cleanChatPanes), sent only to guests with the
 // 'chat' feature.
-// A share taken back after a restart: known (knownGuests()), secrets (its
-// earlier invite secrets), inviteExpires (its code's end), guard (its block,
-// guardState()), hostKey (its signing key, shareCrypto.js newSigningKey).
-export function createShareHost({ secret, hostName, callbacks, log = () => {}, now = Date.now, known = [], knownAt = null, secrets: earlier = [], inviteExpires: expiresAt = null, guard = null, hostKey = newSigningKey() }) {
-  const guests = new Map() // id -> guest
+// secret: a root invitation's (a share of one code, at the address itself);
+// with it, a share taken back from before invitations: known (its guests let
+// in), knownAt, secrets (its earlier secrets), inviteExpires, guard (its
+// block). access: a share taken back (accessState()). trust: the trusted
+// people (shareTrust.js; none without it). hostKey: the share's signing key
+// (shareCrypto.js newSigningKey).
+export function createShareHost({ secret = null, hostName, callbacks, log = () => {}, now = Date.now, known = [], knownAt = null, secrets = [], inviteExpires = null, guard = null, access: saved = null, trust = null, hostKey = newSigningKey() }) {
+  const guests = new Map() // id -> guest (a connection)
   let wss = null
   let pingTimer = null
   let nextGuest = 1
   let stopped = false
-  // The invite secrets of this share, the current one first: a new guest
-  // needs the current one, a guest let in comes back with the one it had.
-  let secrets = [secret, ...(Array.isArray(earlier) ? earlier : []).filter((s) => Buffer.isBuffer(s) && s.length === 32 && !s.equals(secret))]
-  let inviteExpires = Number.isFinite(expiresAt) ? expiresAt : now() + INVITE_TTL_MS
-  // Guests let in: sha256 of their reconnect public key -> { key, name,
-  // rights, projects (the shared projects it sees), sid (the secret it came
-  // in with), opened, lastSeen, opens, closes, rejoins, resyncs } (the
-  // counters stay with the guest across its reconnects; opened, opens and
-  // closes across a restart of this Tessel too).
-  const keys = new Map()
-  const times = (list) => (Array.isArray(list) ? list.filter((x) => Number.isFinite(x) && now() - x < 60000).slice(-20) : [])
-  const entry = (key, name, rights, sid, opened = 0, lastSeen = now(), opens = [], closes = [], projects = []) => ({
-    key,
-    name: cleanName(name),
-    rights: cleanRights(rights),
-    projects: cleanProjectIds(projects),
-    sid,
-    opened: Math.max(0, opened | 0),
-    lastSeen,
-    opens: times(opens),
-    closes: times(closes),
-    rejoins: [],
-    resyncs: []
-  })
-  const sids = new Set(secrets.map(secretId))
-  // Guests of a share taken back, with their counts. The time this Tessel was
-  // away (since the list was saved, knownAt) does not count as theirs offline:
-  // one online then gets its full time to come back, one already offline only
-  // what it had left.
-  const away = Number.isFinite(knownAt) ? Math.max(0, now() - knownAt) : 0
-  for (const k of Array.isArray(known) ? known : []) {
-    const key = k && typeof k.key === 'string' ? Buffer.from(k.key, 'base64') : null
-    const seen = Number.isFinite(k && k.lastSeen) ? Math.min(now(), k.lastSeen + away) : now()
-    if (key && key.length === KX_BYTES && sids.has(k.sid)) keys.set(keyHash(key), entry(key, k.name, k.rights, k.sid, k.opened, seen, k.opens, k.closes, k.projects))
-  }
-  // Earlier secrets kept: the recent ones, and any a guest let in needs.
-  const pruneSecrets = () => {
-    const needed = new Set([...keys.values()].map((k) => k.sid))
-    secrets = secrets.filter((x, i) => i <= MAX_SECRETS || needed.has(secretId(x)))
-  }
-  pruneSecrets()
-  const keysChanged = () => callbacks.onKnownChanged?.()
-  let denials = [] // times of the host's no
-  let waitUntil = 0
-  // The block, kept across a restart (guardState).
-  let unfinished = Array.isArray(guard && guard.unfinished) ? guard.unfinished.filter((x) => Number.isFinite(x)) : [] // times of connections that stopped after the handshake
-  let roomFull = Array.isArray(guard && guard.roomFull) ? guard.roomFull.filter((x) => Number.isFinite(x)) : [] // times of guests turned away by a full room
-  let blocked = !!(guard && guard.blocked)
   let exchanges = [] // times of handshakes: [time, address]
+  // A guest let in and connected now (its person's key hash).
+  const online = () => new Set([...guests.values()].filter((g) => g.state === 'joined' && g.person).map((g) => g.person.hash))
+  // Changes of the access model: guests see what they now get; the host's
+  // Tessel saves it and shows it. Grant changes made inside panesChanged wait
+  // for it (it sends every guest its projects anyway).
+  let holding = 0
+  let heldGrants = false
+  const access = createAccess({
+    now,
+    trust,
+    log,
+    isOnline: (hash) => online().has(hash),
+    sharedIds: () => sharedIds(),
+    saved,
+    legacy: saved ? null : secret ? { secret, expiresAt: Number.isFinite(inviteExpires) ? inviteExpires : undefined, secrets, known, knownAt, guard } : null,
+    onChange: (kind) => {
+      if (kind === 'grants') {
+        if (holding) heldGrants = true
+        else refreshGuests()
+      }
+      knownChanged()
+    }
+  })
+  const knownChanged = () => callbacks.onKnownChanged?.()
   // What this host speaks beyond the protocol version.
-  const hostFeatures = typeof callbacks.chatWatch === 'function' ? [...SHARE_FEATURES] : []
+  const FEATURE_NEEDS = { chat: callbacks.chatWatch, agents: callbacks.agents, presence: callbacks.onPresence }
+  const hostFeatures = SHARE_FEATURES.filter((f) => typeof FEATURE_NEEDS[f] === 'function')
   // Conversations watched: pane id -> Set of guest ids; the last one read
   // (sent at once to a guest that starts watching), and when one last went out.
   const chatWatchers = new Map()
   const chatLast = new Map()
   const chatTimes = new Map() // pane id -> { at, timer }
-
-  // A guest offline for more than OFFLINE_KEEP_MS: forgotten.
-  function forgetOld() {
-    const online = new Set([...guests.values()].filter((g) => g.state === 'joined').map((g) => g.keyHash))
-    let changed = false
-    for (const [hash, k] of [...keys]) {
-      if (!online.has(hash) && now() - k.lastSeen > OFFLINE_KEEP_MS) {
-        keys.delete(hash)
-        changed = true
-      }
-    }
-    if (changed) {
-      pruneSecrets()
-      keysChanged()
-    }
-  }
+  let typingTimer = null
 
   const inHandshake = (g) => g.state === 'handshake' || g.state === 'committed' || g.state === 'secured'
-  const publicGuest = (g) => ({ id: g.id, name: g.name, state: g.state, since: g.since, code: g.code, rights: { ...g.rights }, projects: [...g.projects] })
+  const trustedOf = (g) => (g.person ? access.trustedOf(g.person) : null)
+  const inviteOfGuest = (g) => {
+    if (g.person) return access.viaOf(g.person)
+    const inv = g.entry ? access.liveInvite(g.entry) : null
+    return inv ? { id: inv.id, label: inv.label } : null
+  }
+  const publicGuest = (g) => ({
+    id: g.id,
+    name: g.name,
+    state: g.state,
+    since: g.since,
+    code: g.code,
+    rights: { ...g.rights },
+    projects: [...g.projects],
+    invite: inviteOfGuest(g),
+    trusted: !!trustedOf(g),
+    trustable: !!g.identity
+  })
   const notifyGuests = () => callbacks.onGuests?.([...guests.values()].filter((g) => !inHandshake(g)).map(publicGuest))
-  const isCurrent = (g) => g.secret === secrets[0]
 
   function send(g, message) {
     if (g.socket.readyState !== 1) return
@@ -363,33 +383,29 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     }
     g.resolveApproval?.(false)
     // Past the host's keys, never in, and not turned away by the host's own
-    // doing: counted (see onInviteBlocked), whatever its way out.
-    if (g.keysSent && !g.everJoined && !g.byHost && !HOST_ENDS.has(reason)) stoppedEarly()
-    // A guest who left while waiting, or one removed: new guests wait as
-    // after a no (asking again and again costs something).
-    if ((g.state === 'waiting' && (reason === 'left' || reason === 'closed')) || reason === 'removed') denied()
+    // doing: counted against its invitation (see onInviteBlocked), whatever
+    // its way out.
+    if (g.keysSent && !g.everJoined && !g.byHost && !HOST_ENDS.has(reason)) stoppedEarly(g)
+    // A guest who left while waiting, or one removed: that invitation's new
+    // guests wait as after a no (asking again and again costs something).
+    if ((g.state === 'waiting' && (reason === 'left' || reason === 'closed')) || reason === 'removed') denied(g)
     // Left on purpose, or removed: it can't come back. Otherwise: seen now.
-    if (g.keyHash && (reason === 'left' || reason === 'removed')) {
-      if (keys.delete(g.keyHash)) {
-        pruneSecrets()
-        keysChanged()
-      }
-    } else if (g.keyHash && g.everJoined && keys.has(g.keyHash)) {
-      keys.get(g.keyHash).lastSeen = now()
-      keysChanged()
+    if (g.person && (reason === 'left' || reason === 'removed')) access.removePerson(g.person.hash)
+    else if (g.person && g.everJoined && access.person(g.person.hash)) {
+      g.person.lastSeen = now()
+      knownChanged()
     }
+    if (g.focus || g.typed.size) presenceChanged()
     if (!inHandshake(g)) log(`guest ${g.name || '?'} left (${reason})`)
     notifyGuests()
   }
 
-  function stoppedEarly() {
-    const t = now()
-    unfinished = [...unfinished.filter((x) => t - x < UNFINISHED_MEMORY_MS), t]
-    if (unfinished.length < UNFINISHED_MAX || blocked) return
-    blocked = true
-    log('invite code blocked: connections stopped after the handshake')
-    callbacks.onInviteBlocked?.()
+  function stoppedEarly(g) {
+    if (!g.guardId || !access.noteUnfinished(g.guardId)) return
+    callbacks.onInviteBlocked?.(g.guardId)
+    dropNotJoined('expired')
   }
+  const denied = (g) => g.guardId && access.noteDenied(g.guardId)
 
   // Output waiting for a guest; a pane whose screen is still being prepared
   // (held) keeps its output until that screen went out first.
@@ -407,7 +423,9 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   }
 
   // The projects shared now (their ids), and the one a pane is in.
-  const sharedIds = () => new Set(callbacks.projects().map((p) => p.id))
+  function sharedIds() {
+    return new Set(callbacks.projects().map((p) => p.id))
+  }
   function paneProject(id) {
     if (callbacks.paneProject) return callbacks.paneProject(id) || null
     const p = callbacks.projects().find((x) => x.panes.some((pane) => pane.id === id))
@@ -442,6 +460,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     return p ? p.id : null
   }
   const speaksChat = (g) => g.features.has('chat')
+  const speaksAgents = (g) => g.features.has('agents')
   // Still good: the pane in the project it was asked in, that project still
   // shared and the guest's.
   const chatLive = (g, id) => {
@@ -463,6 +482,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     if (!watchers) chatWatchers.set(id, (watchers = new Set()))
     watchers.add(g.id)
     watchedChanged()
+    presenceChanged()
     if (first) {
       try {
         callbacks.chatWatch(id, true)
@@ -481,6 +501,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     const watchers = chatWatchers.get(id)
     // Only a guest that watched it changes anything.
     if (!watchers || !watchers.delete(g.id)) return
+    presenceChanged()
     if (watchers.size) return watchedChanged()
     chatWatchers.delete(id)
     chatLast.delete(id)
@@ -572,6 +593,45 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       const g = guests.get(gid)
       if (g && g.state === 'joined' && chatLive(g, id)) sendChatTo(g, id, message)
     }
+  }
+
+  // --- Presence (for the host's eyes only) ------------------------------------
+  function presenceChanged() {
+    try {
+      callbacks.onPresence?.()
+    } catch {
+      /* only a display */
+    }
+  }
+  // Each pane a guest has on screen, typed in lately, or reads as a chat,
+  // checked against its projects now: [{ id (pane), guests: [{ id, watching,
+  // typing, reading }] }].
+  function presence() {
+    const t = now()
+    const panes = new Map()
+    const at = (id, gid) => {
+      if (!panes.has(id)) panes.set(id, new Map())
+      const m = panes.get(id)
+      if (!m.has(gid)) m.set(gid, { id: gid, watching: false, typing: false, reading: false })
+      return m.get(gid)
+    }
+    for (const g of guests.values()) {
+      if (g.state !== 'joined') continue
+      if (g.focus && canSee(g, g.focus)) at(g.focus, g.id).watching = true
+      for (const [id, when] of g.typed) if (t - when < TYPING_MS && canSee(g, id)) at(id, g.id).typing = true
+      for (const id of g.chats.keys()) if (chatLive(g, id)) at(id, g.id).reading = true
+    }
+    return [...panes].map(([id, m]) => ({ id, guests: [...m.values()] }))
+  }
+  // Typing seen: said now, and once more when it is over.
+  function typed(g, id) {
+    const was = g.typed.get(id)
+    g.typed.set(id, now())
+    if (g.typed.size > 64) g.typed.delete(g.typed.keys().next().value)
+    if (!was || now() - was >= TYPING_MS) presenceChanged()
+    clearTimeout(typingTimer)
+    typingTimer = setTimeout(presenceChanged, TYPING_MS + 50)
+    typingTimer.unref?.()
   }
 
   // A pane's screen, then its output from there on. Output that came before
@@ -687,91 +747,69 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     for (const id of where.keys()) subscribe(g, id)
   }
 
-  // A project no longer shared is no guest's any more, connected or not
-  // (shared again later, no one gets it back by itself).
-  function pruneProjects(projects) {
-    const ids = new Set(projects.map((p) => p.id))
-    let guestsChanged = false
+  // What a connected guest gets now, from the access model (its grant, the
+  // projects shared now): kept on the connection for the hot paths. true
+  // when it changed.
+  function syncGrant(g) {
+    const e = access.effective(g.person)
+    const projectsChanged = e.projects.size !== g.projects.size || [...e.projects].some((id) => !g.projects.has(id))
+    const rightsChanged = !sameRights(e.rights, g.rights)
+    g.projects = e.projects
+    g.rights = e.rights
+    return { projectsChanged, rightsChanged }
+  }
+  // Every guest in gets what it now gets: its projects at once (and loses
+  // the others: their panes and conversations stop), its rights.
+  function refreshGuests(projects = callbacks.projects()) {
+    let any = false
     for (const g of guests.values()) {
-      for (const id of [...g.projects]) {
-        if (ids.has(id)) continue
-        g.projects.delete(id)
-        guestsChanged = true
-      }
+      if (g.state !== 'joined' || !g.person) continue
+      const { projectsChanged, rightsChanged } = syncGrant(g)
+      if (projectsChanged) sendProjects(g, projects)
+      if (rightsChanged) send(g, { t: 'rights', rights: { ...g.rights } })
+      if (projectsChanged || rightsChanged) any = true
     }
-    let changed = false
-    for (const k of keys.values()) {
-      const kept = k.projects.filter((id) => ids.has(id))
-      if (kept.length === k.projects.length) continue
-      k.projects = kept
-      changed = true
-    }
-    if (changed) keysChanged()
-    if (guestsChanged) notifyGuests()
-  }
-
-  // A guest let in, as the host's window names it: by its connection's id
-  // while it is in, or by its entry's (k-..., offlineGuests), in or not.
-  // { g: its connection while in (or null), known: its entry }, or null.
-  const knownId = (hash) => `k-${hash.slice(0, 24)}`
-  const hashOf = (id) => [...keys.keys()].find((h) => knownId(h) === id) || null
-  function guestById(guestId) {
-    const id = String(guestId || '')
-    const g = guests.get(id)
-    if (g) return g.state === 'joined' && keys.has(g.keyHash) ? { g, known: keys.get(g.keyHash) } : null
-    const hash = id.startsWith('k-') ? hashOf(id) : null
-    if (!hash) return null
-    return { g: [...guests.values()].find((x) => x.state === 'joined' && x.keyHash === hash) || null, known: keys.get(hash) }
-  }
-
-  // Which shared projects a guest sees: one in gets them at once (and loses
-  // the others), one offline comes back with them.
-  function giveProjects(who, list, projects = callbacks.projects()) {
-    const shared = new Set(projects.map((p) => p.id))
-    const ids = cleanProjectIds(list).filter((id) => shared.has(id))
-    if (who.g) who.g.projects = new Set(ids)
-    who.known.projects = [...ids]
-    keysChanged()
-    if (who.g) {
-      sendProjects(who.g, projects)
+    if (any) {
       notifyGuests()
+      presenceChanged()
     }
-    log(`guest ${who.known.name || '?'} sees ${ids.length} project(s)`)
   }
 
-  // What a guest may do: one in is told at once, one offline comes back
-  // with it.
-  function giveRights(who, rights) {
-    const r = cleanRights(rights)
-    if (who.g) who.g.rights = { ...r }
-    who.known.rights = { ...r }
-    keysChanged()
-    if (who.g) {
-      send(who.g, { t: 'rights', rights: { ...r } })
-      notifyGuests()
+  // A subject of the host's window: a guest in (its connection's id), a
+  // person let in (k-...), a trusted person (t-...) or an invitation
+  // (iv-...). null when it is none (any more).
+  function subjectOf(id) {
+    const text = String(id || '')
+    if (isInviteId(text)) return access.invite(text) ? { invite: text } : null
+    if (isTrustId(text)) return trust && trust.byId(text) ? { trust: text.slice(2) } : null
+    if (text.startsWith('k-')) {
+      const p = access.personById(text)
+      return p ? { person: p.hash } : null
     }
-    log(`guest ${who.known.name || '?'} may ${Object.keys(r).filter((k) => r[k]).join(', ') || 'only watch'}`)
+    const g = guests.get(text)
+    return g && g.state === 'joined' && g.person && access.person(g.person.hash) ? { person: g.person.hash } : null
   }
+  const connectionOf = (hash) => [...guests.values()].find((x) => x.state === 'joined' && x.person && x.person.hash === hash) || null
 
-  // In: the guest's entry (its reconnect key, name, rights, projects and
-  // counters).
+  // In: the guest's person (its reconnect key, name, grant and counters).
   function welcome(g, back = false) {
     g.state = 'joined'
     g.everJoined = true
     g.since = now()
-    const known = keys.get(g.keyHash)
-    known.name = g.name
-    known.rights = { ...g.rights }
-    known.projects = [...g.projects]
-    known.lastSeen = now()
-    keysChanged()
-    log(`guest ${g.name || '?'} ${back ? 'came back' : 'joined'}`)
+    g.person.name = g.name
+    g.person.lastSeen = now()
+    syncGrant(g)
+    const t = trustedOf(g)
+    if (t) trust.seen(t.fp)
+    knownChanged()
+    log(`guest ${g.name || '?'} ${back ? 'came back' : 'joined'}${t ? ' (trusted)' : ''}`)
     notifyGuests()
     const { mine, where } = projectsOf(g)
     // This host's key, and its signature of this connection (a returning
     // guest checks it with the key it got the first time).
     const proof = { hostKey: hostKey.publicRaw.toString('base64'), hostSig: signBinding(hostKey, g.binding).toString('base64') }
-    send(g, { t: 'welcome', host: hostName, protocol: SHARE_PROTOCOL, features: [...hostFeatures], projects: mine, rights: { ...g.rights }, ...proof })
+    const agents = speaksAgents(g) && callbacks.agents ? { agents: cleanAgents(callbacks.agents()) } : {}
+    send(g, { t: 'welcome', host: hostName, protocol: SHARE_PROTOCOL, features: [...hostFeatures], projects: mine, rights: { ...g.rights }, ...agents, ...proof })
     for (const id of where.keys()) subscribe(g, id)
   }
 
@@ -781,31 +819,27 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   function rejoin(g, back) {
     const key = Buffer.from(String(back.key || ''), 'base64')
     const signature = Buffer.from(String(back.sig || ''), 'base64')
-    const hash = key.length === KX_BYTES ? keyHash(key) : ''
-    const known = hash && keys.get(hash)
-    if (!known || !bindingSigned(key, g.binding, signature)) return drop(g, 'rejoin-refused')
+    const person = key.length === KX_BYTES ? access.person(keyHash(key)) : null
+    if (!person || !bindingSigned(key, g.binding, signature)) return drop(g, 'rejoin-refused')
     // Back too often (each time, every pane it sees is taken again): turned
     // away until its minute is over, the connection it had kept. Counted for
     // its address like any connection, never against the code (it proved its
     // key); only the times it got in count, so its Tessel trying again every
     // few seconds gets in once the minute is over.
-    if (!within(known, 'rejoins', REJOINS_PER_MINUTE)) {
+    if (!within(person, 'rejoins', REJOINS_PER_MINUTE)) {
       g.byHost = true
       return drop(g, 'busy')
     }
-    for (const other of [...guests.values()]) if (other !== g && other.keyHash === hash) drop(other, 'replaced')
+    for (const other of [...guests.values()]) if (other !== g && other.person && other.person.hash === person.hash) drop(other, 'replaced')
     // At most a few more than the guests' room (it was one of them). The
     // host's doing: never counted against the code (it proved its key).
     if ([...guests.values()].filter((x) => x.state === 'joined').length >= MAX_GUESTS + 2) {
       g.byHost = true
       return drop(g, 'busy')
     }
-    g.keyHash = hash
-    g.name = known.name || cleanName(g.name)
-    g.rights = { ...known.rights }
-    // Its projects, those still shared.
-    const shared = sharedIds()
-    g.projects = new Set(known.projects.filter((id) => shared.has(id)))
+    g.person = person
+    g.name = person.name || cleanName(g.name)
+    g.identity = person.identity
     welcome(g, true)
   }
 
@@ -816,10 +850,14 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     subscribe(g, id)
   }
 
-  function denied() {
-    const t = now()
-    denials = [...denials.filter((d) => t - d < DENY_MEMORY_MS), t]
-    waitUntil = t + Math.min(DENY_WAIT_MAX_MS, DENY_WAIT_MS * 2 ** (denials.length - 1))
+  // Its identity key, proved for this connection (null: none given, as an
+  // older Tessel; false: one given that does not hold).
+  function identityOf(g, id) {
+    if (id === undefined || id === null) return null
+    if (typeof id !== 'object') return false
+    const key = Buffer.from(String(id.key || ''), 'base64')
+    const sig = Buffer.from(String(id.sig || ''), 'base64')
+    return key.length === KX_BYTES && identitySigned(key, g.binding, sig) ? key : false
   }
 
   async function onJoin(g, msg) {
@@ -827,77 +865,103 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     // What its Tessel speaks too (an older one says nothing: none).
     g.features = new Set(cleanFeatures(msg.features).filter((f) => hostFeatures.includes(f)))
     if (msg.rejoin && typeof msg.rejoin === 'object') return rejoin(g, msg.rejoin)
-    // A new guest: the current code, not blocked or expired, the host not
-    // pausing after a no, and its reconnect key.
-    if (blocked || !isCurrent(g) || now() > inviteExpires) return drop(g, 'expired')
+    // A new guest: an invitation's current code, one that lets new guests in.
+    const inv = access.liveInvite(g.entry)
+    const why = inv ? access.usable(inv) : 'expired'
+    if (why) {
+      log(`a new guest turned away: invitation ${why === 'revoked' && !inv ? 'replaced or gone' : why}`)
+      return drop(g, 'expired')
+    }
     const inOrWaiting = [...guests.values()].filter((x) => x.state === 'joined' || x.state === 'waiting')
     // The room full (guests the host let in, and at most a few waiting): the
-    // host's doing, not counted against the code, up to ROOM_FULL_FREE in
-    // UNFINISHED_MEMORY_MS. Checked first: a room full with its waiting line
-    // full too is still a full room.
+    // host's doing, not counted against the invitation, up to ROOM_FULL_FREE
+    // in 10 min. Checked first: a room full with its waiting line full too is
+    // still a full room.
     if (inOrWaiting.length >= MAX_GUESTS) {
-      const t = now()
-      roomFull = [...roomFull.filter((x) => t - x < UNFINISHED_MEMORY_MS), t]
-      if (roomFull.length <= ROOM_FULL_FREE) g.byHost = true
+      if (access.noteRoomFull(inv.id)) g.byHost = true
       return drop(g, 'busy')
     }
-    // The host pausing after a no, or the waiting line full, with room left:
-    // counted (anyone can cause those: leave while waiting, or wait three
-    // times, so they can't be a way around the count).
-    if (now() < waitUntil || inOrWaiting.filter((x) => x.state === 'waiting').length >= MAX_WAITING) return drop(g, 'busy')
     // Its reconnect key: it signed this connection with it (it holds it), not
-    // a weak one, and not one already known (another guest's).
+    // a weak one, and not one already known (another guest's); and its
+    // identity key, when it gives one, proved the same way.
     const key = Buffer.from(String(msg.key || ''), 'base64')
     const proof = Buffer.from(String(msg.sig || ''), 'base64')
-    if (key.length !== KX_BYTES || !bindingSigned(key, g.binding, proof) || keys.has(keyHash(key))) return drop(g, 'protocol')
+    if (key.length !== KX_BYTES || !bindingSigned(key, g.binding, proof) || access.person(keyHash(key))) return drop(g, 'protocol')
+    const identity = identityOf(g, msg.identity)
+    if (identity === false) return drop(g, 'protocol')
+    g.identity = identity
+    // A trusted person: in at once, with its trusted grant.
+    const t = identity && trust ? trust.get(identityFingerprint(identity)) : null
+    if (t) return admit(g, key, inv, { trust: t.fp })
+    // The invitation pausing after a no, or its waiting line full, with room
+    // left: counted (anyone can cause those: leave while waiting, or wait
+    // three times, so they can't be a way around the count).
+    if (access.pausing(inv.id) || inOrWaiting.filter((x) => x.state === 'waiting' && x.guardId === inv.id).length >= MAX_WAITING) return drop(g, 'busy')
     g.state = 'waiting'
     notifyGuests()
     send(g, { t: 'waiting' })
+    const shared = sharedIds()
+    const offer = { projects: inv.grant.projects.filter((id) => shared.has(id)), rights: { ...inv.grant.rights } }
     const answer = await new Promise((resolve) => {
       g.resolveApproval = resolve
-      Promise.resolve(callbacks.askApproval(publicGuest(g))).then(resolve, () => resolve(false))
+      Promise.resolve(callbacks.askApproval({ ...publicGuest(g), offer })).then(resolve, () => resolve(false))
     })
     g.resolveApproval = null
     if (!guests.has(g.id)) return
     if (!(answer === true || (answer && typeof answer === 'object' && answer.yes === true))) {
-      denied()
+      log(`guest ${g.name || '?'} denied`)
+      denied(g)
       drop(g, 'denied')
       return
     }
-    g.keyHash = keyHash(key)
-    if (keys.has(g.keyHash)) return drop(g, 'protocol')
+    // The invitation changed while it waited (revoked, expired, a new code,
+    // used up): not in.
+    if (access.liveInvite(g.entry) !== inv || access.usable(inv) || access.person(keyHash(key))) return drop(g, access.person(keyHash(key)) ? 'protocol' : 'expired')
     // The shared projects the host gave it, as shared at this moment: the
     // ones its answer lists (none when it lists none); a plain yes (true):
-    // all of them.
-    const shared = sharedIds()
-    const given = answer === true ? [...shared] : cleanProjectIds(answer.projects)
-    g.projects = new Set(cleanProjectIds(given.filter((id) => shared.has(id))))
-    keys.set(g.keyHash, entry(key, g.name, g.rights, secretId(g.secret), 0, now(), [], [], [...g.projects]))
-    welcome(g)
+    // all of them. Its rights: the answer's (none when not said).
+    const given = answer === true ? [...sharedIds()] : cleanProjectIds(answer.projects)
+    const grant = cleanGrant({ projects: given.filter((id) => sharedIds().has(id)), rights: answer === true ? null : answer.rights })
+    // Trusted from now on, when the host said so (only with an identity key).
+    let fp = null
+    if (answer !== true && answer.trust === true && identity && trust) {
+      const e = trust.add({ key: identity, name: g.name, projects: grant.projects, rights: grant.rights })
+      fp = e ? e.fp : null
+    }
+    admit(g, key, inv, fp ? { trust: fp } : { grant })
   }
 
-  // Under a limit a minute of a guest's entry (the times of its last ones,
+  // A new guest in, through its invitation (one more use: past its last, the
+  // others waiting with it are turned away).
+  function admit(g, key, inv, { grant = null, trust: fp = null }) {
+    g.person = access.addPerson({ key, name: g.name, sid: g.entry.sid, via: inv.id, identity: g.identity, grant, trust: fp })
+    welcome(g)
+    if (access.used(inv)) dropNotJoined('expired')
+  }
+
+  // Under a limit a minute of a guest's person (the times of its last ones,
   // kept in its `listName`): counted when it is.
-  function within(known, listName, perMinute) {
+  function within(person, listName, perMinute) {
     const t = now()
-    const recent = (known[listName] || []).filter((x) => t - x < 60000)
-    known[listName] = recent
+    const recent = (person[listName] || []).filter((x) => t - x < 60000)
+    person[listName] = recent
     if (recent.length >= perMinute) return false
     recent.push(t)
     return true
   }
 
-  // Under its limit (times of its last asks, kept in its entry's `list`), or
+  // Under its limit (times of its last asks, kept in its person's `list`), or
   // tells the guest it asked too often.
   function allowed(g, listName, perMinute, inAll = Infinity) {
-    const known = keys.get(g.keyHash)
-    if (!known) return false
-    if (known.opened >= inAll || !within(known, listName, perMinute)) {
+    if (!g.person) return false
+    if (g.person.opened >= inAll || !within(g.person, listName, perMinute)) {
       send(g, { t: 'notice', code: 'limit' })
       return false
     }
     return true
   }
+  // The agents the host lists now (their ids).
+  const agentIds = () => new Set(callbacks.agents ? cleanAgents(callbacks.agents()).map((a) => a.id) : [])
 
   function onMessage(g, msg) {
     if (!msg || typeof msg.t !== 'string') return drop(g, 'protocol')
@@ -913,41 +977,59 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     switch (msg.t) {
       case 'resync': {
         if (!g.subscribed.has(msg.id) || !canSee(g, msg.id)) return
-        // Counted in its entry: a new connection does not start from zero.
-        const known = keys.get(g.keyHash)
-        if (!known || !within(known, 'resyncs', RESYNCS_PER_MINUTE)) return
+        // Counted in its person: a new connection does not start from zero.
+        if (!within(g.person, 'resyncs', RESYNCS_PER_MINUTE)) return
         resubscribe(g, msg.id)
         return
       }
       case 'write': {
         if (!g.rights.type || typeof msg.data !== 'string' || msg.data.length > MAX_WRITE || !canSee(g, msg.id)) return
         const data = stripTerminalReplies(msg.data)
-        if (data) callbacks.write(msg.id, data)
+        if (!data) return
+        callbacks.write(msg.id, data)
+        typed(g, msg.id)
         return
       }
       case 'open': {
-        if (!g.rights.open || !msg.spec || (msg.spec.kind !== 'terminal' && msg.spec.kind !== 'agent')) return
-        // In one of its projects, still shared.
-        const project = msg.spec.project
-        if (!isProjectId(project) || !g.projects.has(project) || !sharedIds().has(project)) return
-        if (!allowed(g, 'opens', OPENS_PER_MINUTE, OPENS_IN_ALL)) return
-        keys.get(g.keyHash).opened++
-        keysChanged()
-        callbacks.openPane({ kind: msg.spec.kind, agent: typeof msg.spec.agent === 'string' ? msg.spec.agent.slice(0, 40) : undefined, project }, publicGuest(g))
+        // A terminal or a listed agent, in one of its projects, still shared.
+        const spec = openSpec(msg.spec)
+        if (!spec || !g.projects.has(spec.project) || !sharedIds().has(spec.project)) return
+        if (spec.kind === 'agent' && !agentIds().has(spec.agent)) return send(g, { t: 'notice', code: 'agent' })
+        if (g.rights.open) {
+          if (!allowed(g, 'opens', OPENS_PER_MINUTE, OPENS_IN_ALL)) return
+          g.person.opened++
+          knownChanged()
+          log(`guest ${g.name || '?'} opened ${spec.kind === 'agent' ? `the agent ${spec.agent}` : 'a terminal'}`)
+          callbacks.openPane(spec, publicGuest(g))
+          return
+        }
+        // Without the right: the host is asked (a guest whose Tessel can ask).
+        if (!speaksAgents(g) || typeof callbacks.askOpen !== 'function') return
+        if (!within(g.person, 'openAsks', OPEN_ASKS_PER_MINUTE)) return send(g, { t: 'notice', code: 'limit' })
+        callbacks.askOpen(spec, publicGuest(g))
         return
       }
       case 'close':
         if (!g.rights.close || !canSee(g, msg.id)) return
         if (!allowed(g, 'closes', CLOSES_PER_MINUTE)) return
-        keysChanged()
+        knownChanged()
         callbacks.closePane(msg.id, publicGuest(g))
         return
+      // The pane it has on screen now (presence, the host's eyes only): one
+      // of its panes, or none; a couple a second at most. It gives nothing.
+      case 'focus': {
+        if (!g.features.has('presence') || !within(g.person, 'focuses', FOCUS_PER_MINUTE)) return
+        const id = typeof msg.id === 'string' && /^[\w-]{1,80}$/.test(msg.id) && canSee(g, msg.id) ? msg.id : null
+        if (id === g.focus) return
+        g.focus = id
+        presenceChanged()
+        return
+      }
       // An agent pane's conversation, watched or no longer (read only: no
       // right needed, nothing reaches the pane).
       case 'chat': {
         if (!speaksChat(g) || typeof msg.id !== 'string' || !/^[\w-]{1,80}$/.test(msg.id)) return
-        const known = keys.get(g.keyHash)
-        if (!known) return
+        const person = g.person
         // A stop: only for a conversation it watches (of a project it sees:
         // one it lost is let go already).
         if (msg.on !== true) {
@@ -956,7 +1038,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
         }
         // All of it again (its copy no longer lines up): its own small limit.
         if (msg.resync === true) {
-          if (!g.chats.has(msg.id) || !chatLive(g, msg.id) || !within(known, 'chatResyncs', CHAT_RESYNCS_PER_MINUTE)) return
+          if (!g.chats.has(msg.id) || !chatLive(g, msg.id) || !within(person, 'chatResyncs', CHAT_RESYNCS_PER_MINUTE)) return
           g.chatSent.delete(msg.id)
           const last = chatLast.get(msg.id)
           if (last) sendChatTo(g, msg.id, last)
@@ -964,7 +1046,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
         }
         // Every ask counts (answered or not); past the limit, "busy" once a
         // minute for that pane (its view then waits and asks again later).
-        if (!within(known, 'chatAsks', CHATS_PER_MINUTE)) {
+        if (!within(person, 'chatAsks', CHATS_PER_MINUTE)) {
           const said = g.chatBusySaid.get(msg.id)
           if (said && now() - said < 60000) return
           if (g.chatBusySaid.size >= 64) g.chatBusySaid.clear()
@@ -983,11 +1065,14 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     }
   }
 
-  // Guests not in yet that can no longer get in (the code changed, expired
-  // or got blocked): turned away.
+  // Guests waiting under a code that no longer lets anyone in (its
+  // invitation revoked, expired, used up, blocked or given a new code):
+  // turned away.
   function dropNotJoined(reason) {
     for (const g of [...guests.values()]) {
-      if (g.state !== 'waiting' || (isCurrent(g) && now() <= inviteExpires && !blocked)) continue
+      if (g.state !== 'waiting') continue
+      const inv = access.liveInvite(g.entry)
+      if (inv && !access.usable(inv)) continue
       g.byHost = true
       drop(g, reason)
     }
@@ -1019,6 +1104,16 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     }
     // Counted from the moment it connects, whatever it does next.
     exchanges.push([t, address])
+    const hello = JSON.stringify({ t: 'hello', app: 'tessel-liveshare', v: SHARE_PROTOCOL })
+    // The codes its address may use: one invitation's (an earlier code of
+    // its, kept for its people), or the root ones. None: it hears that this
+    // is a Tessel Live Share (the tunnel's check) and is closed as expired.
+    const codes = access.codesAt(pathOfUrl(req && req.url))
+    if (!codes.length) {
+      socket.send(hello)
+      socket.close(CLOSE_EXPIRED)
+      return
+    }
     const g = {
       id: `g${nextGuest++}`,
       name: '',
@@ -1026,10 +1121,14 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       state: 'handshake',
       socket,
       channel: null,
-      secret: null,
+      entry: null, // the code it opened its first message with
+      // The invitation it is counted against: its address's live one (none
+      // for an earlier code: only coming back works with it).
+      guardId: codes.map((c) => access.liveInvite(c)).find(Boolean)?.id || null,
       binding: null,
       code: null,
-      keyHash: null,
+      person: null,
+      identity: null,
       keysSent: false,
       everJoined: false,
       rights: { ...NO_RIGHTS },
@@ -1040,6 +1139,8 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       chatHeld: new Set(), // conversations held while its connection is behind
       chatBusySaid: new Map(), // pane id -> when it was last told "busy" (past its limit)
       chatHeldTimer: null,
+      focus: null, // the pane it has on screen (presence)
+      typed: new Map(), // pane id -> when it last typed there (presence)
       subscribed: new Map(), // pane id -> { state: 'loading' | 'live', held, exit, project }
       pending: new Map(),
       flushTimer: null,
@@ -1050,7 +1151,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     const hostNonce = newNonce()
     const pair = newKeyPair()
     let commit = null
-    // The keys of this connection under each of the share's secrets: the
+    // The keys of this connection under each code its address may use: the
     // first message tells which one the guest has.
     let candidates = null
     const timer = setTimeout(() => {
@@ -1060,7 +1161,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     const quiet = setTimeout(() => {
       if (g.state === 'handshake') drop(g, 'timeout')
     }, COMMIT_MS)
-    socket.send(JSON.stringify({ t: 'hello', app: 'tessel-liveshare', v: SHARE_PROTOCOL }))
+    socket.send(hello)
     socket.on('pong', () => (g.alive = true))
     socket.on('message', (data, isBinary) => {
       if (!guests.has(g.id)) return
@@ -1087,26 +1188,29 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
         if (!guestNonce || guestNonce.length !== NONCE_BYTES || !commitmentMatches(commit, guestNonce, guestKey)) return drop(g, 'protocol')
         const dh = sharedSecret(pair.privateKey, guestKey)
         if (!dh) return drop(g, 'protocol')
-        candidates = secrets.map((s) => ({ secret: s, session: sessionKeys(s, hostNonce, guestNonce, 'host', { dh, hostKey: pair.publicRaw, guestKey }) }))
+        candidates = codes.filter((c) => access.hasCode(c.sid)).map((c) => ({ code: c, session: sessionKeys(c.secret, hostNonce, guestNonce, 'host', { dh, hostKey: pair.publicRaw, guestKey }) }))
         g.state = 'secured'
         return
       }
       if (!isBinary) return drop(g, 'protocol')
-      // 3. Its first sealed message: under which of the share's secrets.
+      // 3. Its first sealed message: under which of those codes.
       if (!g.channel) {
         for (const c of candidates) {
           const channel = createChannel(c.session)
           const msg = channel.open(data)
           if (!msg) continue
           g.channel = channel
-          g.secret = c.secret
+          g.entry = c.code
           g.code = c.session.code
           g.binding = c.session.binding
+          // An earlier code: only coming back works with it, and nothing
+          // done with it counts against an invitation.
+          g.guardId = access.liveInvite(c.code)?.id || null
           candidates = null
           clearTimeout(timer)
           return onMessage(g, msg)
         }
-        return drop(g, 'refused') // not sealed with this share's secrets
+        return drop(g, 'refused') // not sealed with this address's codes
       }
       const msg = g.channel.open(data)
       if (!msg) return drop(g, 'refused')
@@ -1121,13 +1225,15 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
   }
 
   // A guest that did not answer the last ping is gone (a dead tunnel or
-  // computer): dropped. Started once the server listens.
+  // computer): dropped. Started once the server listens. Expired
+  // invitations go (their waiting guests are turned away), and people
+  // offline too long are forgotten.
   function startPings() {
     clearInterval(pingTimer)
     pingTimer = setInterval(() => {
-      // An expired code: guests still waiting under it are turned away.
-      if (now() > inviteExpires) dropNotJoined('expired')
-      forgetOld()
+      access.prune()
+      dropNotJoined('expired')
+      access.forgetOld()
       for (const g of [...guests.values()]) {
         if (!guests.has(g.id)) continue
         if (!g.alive) {
@@ -1180,6 +1286,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     stop(reason = 'stopped') {
       stopped = true
       clearInterval(pingTimer)
+      clearTimeout(typingTimer)
       for (const g of [...guests.values()]) drop(g, reason)
       for (const st of chatTimes.values()) clearTimeout(st.timer)
       chatTimes.clear()
@@ -1224,6 +1331,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     },
     // The panes whose conversation guests watch now, and who (guest ids).
     chatsWatched: () => [...chatWatchers].filter(([, set]) => set.size).map(([id, set]) => ({ id, guests: [...set] })),
+    presence,
     sendExit(id, exitCode) {
       if (!paneProject(id)) return
       for (const g of guests.values()) {
@@ -1242,13 +1350,34 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     // each guest gets what it sees now.
     panesChanged() {
       const projects = callbacks.projects()
-      pruneProjects(projects)
-      for (const g of guests.values()) if (g.state === 'joined') sendProjects(g, projects)
+      holding++
+      try {
+        access.sharedChanged(projects.map((p) => p.id))
+      } finally {
+        holding--
+      }
+      let any = heldGrants
+      heldGrants = false
+      for (const g of guests.values()) {
+        if (g.state !== 'joined' || !g.person) continue
+        const { projectsChanged, rightsChanged } = syncGrant(g)
+        if (rightsChanged) send(g, { t: 'rights', rights: { ...g.rights } })
+        if (projectsChanged || rightsChanged) any = true
+        sendProjects(g, projects)
+      }
+      if (any) notifyGuests()
+      presenceChanged()
     },
-    // The host's answer to a guest waiting (projects: the ones it gets, none
-    // when not said).
-    approve(guestId, yes, projects) {
-      guests.get(guestId)?.resolveApproval?.(yes ? { yes: true, projects } : false)
+    // The agents guests may ask for changed: guests that list them are told.
+    agentsChanged() {
+      if (!callbacks.agents) return
+      const agents = cleanAgents(callbacks.agents())
+      for (const g of guests.values()) if (g.state === 'joined' && speaksAgents(g)) send(g, { t: 'agents', agents })
+    },
+    // The host's answer to a guest waiting: false, or { projects, rights,
+    // trust } (projects: the ones it gets, none when not said).
+    approve(guestId, yes, { projects, rights, trust: trustIt = false } = {}) {
+      guests.get(guestId)?.resolveApproval?.(yes ? { yes: true, projects, rights, trust: trustIt === true } : false)
     },
     // A pane restarted on the host (same id, a new terminal): guests are told,
     // then get its new screen.
@@ -1264,101 +1393,125 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
         resubscribe(g, id)
       }
     },
-    // Which of the shared projects a guest sees (guestId: one in, or one let
-    // in by its k- id, offline or not): one in gets them at once and loses
-    // the others; kept for its reconnects and a restart.
-    setProjects(guestId, list) {
-      const who = guestById(guestId)
-      if (!who) return false
-      giveProjects(who, list)
+
+    // --- Access (shareAccess.js), as the host's window changes it ----------
+    // One project or one right of someone (a guest in, a person let in, a
+    // trusted person, an invitation; see subjectOf), against what it has
+    // now: two changes in a row never undo each other. A guest in gets it at
+    // once (a project taken away: its panes and conversations stop), one
+    // offline comes back with it.
+    change(subjectId, { project, right, on } = {}) {
+      const subject = subjectOf(subjectId)
+      if (!subject) return false
+      if (project !== undefined && on && !sharedIds().has(project)) return false
+      return access.change(subject, project !== undefined ? { project, on: !!on } : { right, on: !!on })
+    },
+    // Someone's whole grant: { projects (shared ones), rights }.
+    setGrant(subjectId, grant = {}) {
+      const subject = subjectOf(subjectId)
+      if (!subject) return false
+      if (subject.invite) return access.updateInvite(subject.invite, grant, { applyRemovals: false }).ok
+      return access.setGrant(subject, grant)
+    },
+
+    // Invitations (shareAccess.js): created, changed (its people too, when
+    // said), revoked (its people removed too, when said), given a new code,
+    // duplicated. Guests waiting under a code that no longer lets anyone in
+    // are turned away.
+    invites: () => access.invites().map(access.publicInvite),
+    inviteCode: (id) => {
+      const c = access.codeOf(id)
+      return c ? { path: c.path, secret: c.secret } : null
+    },
+    createInvite(spec, opts) {
+      const r = access.createInvite(spec, opts)
+      return r.ok ? { ok: true, invite: access.publicInvite(r.invite) } : r
+    },
+    updateInvite(id, patch, opts) {
+      const r = access.updateInvite(id, patch, opts)
+      if (r.ok) dropNotJoined('expired')
+      return r
+    },
+    revokeInvite(id, { removePeople = false } = {}) {
+      const r = access.revokeInvite(id)
+      if (!r.ok) return r
+      dropNotJoined('expired')
+      let removed = 0
+      if (removePeople) {
+        for (const hash of r.people) {
+          const g = connectionOf(hash)
+          if (g) drop(g, 'removed')
+          if (access.removePerson(hash)) removed++
+        }
+      }
+      return { ok: true, removed }
+    },
+    rotateInvite(id, opts) {
+      const r = access.rotateInvite(id, opts)
+      if (r.ok) dropNotJoined('expired')
+      return r
+    },
+    duplicateInvite(id) {
+      const r = access.duplicateInvite(id)
+      return r.ok ? { ok: true, invite: access.publicInvite(r.invite) } : r
+    },
+
+    // Trust (shareTrust.js): a guest let in with an identity key, trusted
+    // from now on (its grant becomes the trusted one), or no longer (the
+    // people it is keep what they had).
+    trust(guestId) {
+      const subject = subjectOf(guestId)
+      if (!subject || !subject.person) return false
+      const e = access.trustPerson(subject.person)
+      if (!e) return false
+      notifyGuests()
       return true
     },
-    // One shared project given to a guest or taken from it, against what it
-    // sees now: two changes in a row never undo each other.
-    changeProject(guestId, project, on) {
-      const who = guestById(guestId)
-      if (!who || !isProjectId(project)) return false
-      const projects = callbacks.projects()
-      if (on && !projects.some((p) => p.id === project)) return false
-      const seen = who.g ? [...who.g.projects] : [...who.known.projects]
-      giveProjects(who, on ? [...seen, project] : seen.filter((id) => id !== project), projects)
+    untrust(id) {
+      const fp = isTrustId(id) ? id.slice(2) : null
+      if (!fp || !access.untrust(fp)) return false
+      notifyGuests()
       return true
     },
-    // What a guest may do (type, open, close); one in is told.
-    setRights(guestId, rights) {
-      const who = guestById(guestId)
-      if (!who) return false
-      giveRights(who, rights)
-      return true
-    },
-    // One right given or taken (type, open or close), against what the guest
-    // may do now.
-    changeRight(guestId, right, on) {
-      const who = guestById(guestId)
-      if (!who || typeof right !== 'string' || !Object.hasOwn(NO_RIGHTS, right)) return false
-      giveRights(who, { ...(who.g ? who.g.rights : who.known.rights), [right]: !!on })
-      return true
-    },
+    // The trusted people connected now (their fingerprints).
+    trustedOnline: () => new Set([...guests.values()].filter((g) => g.state === 'joined' && g.person && g.person.trust).map((g) => g.person.trust)),
+
     removeGuest(guestId) {
       const g = guests.get(guestId)
       if (g) drop(g, 'removed')
     },
     // Guests let in who are not connected now (their connection dropped, or
     // they are coming back after a restart): { id: 'k-<key hash>', name,
-    // rights, projects }.
+    // rights, projects, invite, trusted, trustable }.
     offlineGuests() {
-      forgetOld()
-      const online = new Set([...guests.values()].filter((g) => g.state === 'joined').map((g) => g.keyHash))
-      return [...keys].filter(([hash]) => !online.has(hash)).map(([hash, k]) => ({ id: knownId(hash), name: k.name, rights: { ...k.rights }, projects: [...k.projects] }))
+      access.forgetOld()
+      const on = online()
+      return access
+        .people()
+        .filter((p) => !on.has(p.hash))
+        .map((p) => {
+          const g = access.grantOf(p)
+          const shared = sharedIds()
+          return { id: personId(p.hash), name: p.name, rights: cleanRights(g.rights), projects: g.projects.filter((x) => shared.has(x)), invite: access.viaOf(p), trusted: !!access.trustedOf(p), trustable: !!p.identity }
+        })
     },
     // Removes a guest let in, connected or not (its id from offlineGuests):
-    // it can't come back.
+    // it can't come back with its reconnect key.
     removeKnown(id) {
-      const hash = hashOf(id)
-      if (!hash) return false
-      const g = [...guests.values()].find((x) => x.keyHash === hash)
+      const p = access.personById(id)
+      if (!p) return false
+      const g = connectionOf(p.hash)
       if (g) drop(g, 'removed')
-      if (keys.delete(hash)) {
-        pruneSecrets()
-        keysChanged()
-      }
+      access.removePerson(p.hash)
       return true
     },
-    // A new invite code's secret: the old code lets no new guest in, and
-    // guests waiting under it are turned away; guests let in stay, and come
-    // back with the secret they had. Good for INVITE_TTL_MS from now, and
-    // unblocks a blocked code.
-    rotate(newSecret) {
-      secrets = [newSecret, ...secrets]
-      pruneSecrets()
-      inviteExpires = now() + INVITE_TTL_MS
-      blocked = false
-      unfinished = []
-      roomFull = []
-      dropNotJoined('expired')
-      return inviteExpires
+    // The person a guest in or offline is (for trust and removal).
+    personOf(guestId) {
+      const subject = subjectOf(guestId)
+      return subject && subject.person ? access.person(subject.person) : null
     },
-    inviteExpires: () => inviteExpires,
-    inviteBlocked: () => blocked,
-    // To keep across a restart of this Tessel: the guests let in (their
-    // public keys, names, rights, projects) and the share's earlier secrets.
-    knownGuests: () => {
-      const online = new Set([...guests.values()].filter((g) => g.state === 'joined').map((g) => g.keyHash))
-      return [...keys].map(([hash, k]) => ({
-        key: k.key.toString('base64'),
-        name: k.name,
-        rights: { ...k.rights },
-        projects: [...k.projects],
-        sid: k.sid,
-        opened: k.opened,
-        lastSeen: online.has(hash) ? now() : k.lastSeen,
-        opens: [...k.opens],
-        closes: [...k.closes]
-      }))
-    },
-    earlierSecrets: () => secrets.slice(1),
-    // The block, to keep across a restart.
-    guardState: () => ({ blocked, unfinished: [...unfinished], roomFull: [...roomFull] }),
+    // To keep across a restart of this Tessel: invitations, codes, people.
+    accessState: () => access.toJSON(),
     guests: () => [...guests.values()].filter((g) => !inHandshake(g)).map(publicGuest)
   }
 }

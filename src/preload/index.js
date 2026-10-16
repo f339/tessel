@@ -683,37 +683,48 @@ const api = {
     }
   },
   // Live Share (src/main/liveShare.js). Host: start / stop sharing (with the
-  // projects to share), a project added to the share or taken out (share),
-  // the shared projects' layouts as they change, a yes / no for each guest
-  // (onAsk) with the projects it gets, what each guest may do (setRights,
-  // or one right: setGuestRight) and sees (setGuestProjects, or one
-  // project: setGuestProject), offline guests too, a new invite code, the
-  // guests' requests to open or close a pane (onHostRequest). Guest: join
-  // with an invite code, leave, open a terminal or agent on the host (in one
-  // of its projects); the host's projects, panes and the guest's rights come
-  // with onGuest, the host's notices (too many asks) with onNotice.
+  // projects to share and the first invitation), a project added to the
+  // share or taken out (share), the shared projects' layouts and the agents
+  // guests may ask for as they change, invitations (create, update with what
+  // it means for the people who joined with it, revoke, a new code,
+  // duplicate), a yes / no for each guest (onAsk) with the projects and
+  // rights it gets and whether it is trusted from now on, one project or
+  // right of anyone at a time (access: a guest, a person offline, a trusted
+  // person, an invitation), trust, removal, the guests' requests to open or
+  // close a pane (onHostRequest), who looks at which pane (onPresence).
+  // Guest: join with an invite code, leave, open a terminal or an agent on
+  // the host (in one of its projects), say which of the host's panes is on
+  // screen (focus); the host's projects, panes, agents and the guest's rights
+  // come with onGuest, the host's notices (too many asks) with onNotice.
   liveShare: {
     state: () => ipcRenderer.invoke('liveShare:state'),
-    start: ({ name, projects } = {}) => ipcRenderer.invoke('liveShare:start', { name, projects }),
+    start: ({ name, projects, invite } = {}) => ipcRenderer.invoke('liveShare:start', { name, projects, invite }),
     stop: () => ipcRenderer.invoke('liveShare:stop'),
     share: ({ id, shared } = {}) => ipcRenderer.invoke('liveShare:share', { id, shared }),
     setLayouts: (list) => ipcRenderer.send('liveShare:layouts', list),
-    approve: ({ guestId, yes, projects } = {}) => ipcRenderer.invoke('liveShare:approve', { guestId, yes, projects }),
-    setRights: ({ guestId, rights } = {}) => ipcRenderer.invoke('liveShare:rights', { guestId, rights }),
-    setGuestProjects: ({ guestId, projects } = {}) => ipcRenderer.invoke('liveShare:guestProjects', { guestId, projects }),
-    setGuestRight: ({ guestId, right, on } = {}) => ipcRenderer.invoke('liveShare:guestRight', { guestId, right, on }),
-    setGuestProject: ({ guestId, project, on } = {}) => ipcRenderer.invoke('liveShare:guestProject', { guestId, project, on }),
-    newInvite: () => ipcRenderer.invoke('liveShare:newInvite'),
-    removeGuest: ({ guestId } = {}) => ipcRenderer.invoke('liveShare:removeGuest', { guestId }),
-    removeKnown: ({ id } = {}) => ipcRenderer.invoke('liveShare:removeKnown', { id }),
+    setAgents: (list) => ipcRenderer.send('liveShare:agents', list),
+    approve: ({ guestId, yes, projects, rights, trust } = {}) => ipcRenderer.invoke('liveShare:approve', { guestId, yes, projects, rights, trust }),
+    access: ({ subject, project, right, on } = {}) => ipcRenderer.invoke('liveShare:access', { subject, project, right, on }),
+    createInvite: (spec = {}) => ipcRenderer.invoke('liveShare:createInvite', spec),
+    updateInvite: ({ id, patch, applyRemovals, applyAdditions } = {}) => ipcRenderer.invoke('liveShare:updateInvite', { id, patch, applyRemovals, applyAdditions }),
+    revokeInvite: ({ id, removePeople } = {}) => ipcRenderer.invoke('liveShare:revokeInvite', { id, removePeople }),
+    rotateInvite: ({ id } = {}) => ipcRenderer.invoke('liveShare:rotateInvite', { id }),
+    duplicateInvite: ({ id } = {}) => ipcRenderer.invoke('liveShare:duplicateInvite', { id }),
+    trust: ({ guestId } = {}) => ipcRenderer.invoke('liveShare:trust', { guestId }),
+    untrust: ({ id } = {}) => ipcRenderer.invoke('liveShare:untrust', { id }),
+    renameTrusted: ({ id, name } = {}) => ipcRenderer.invoke('liveShare:renameTrusted', { id, name }),
+    removeGuest: ({ guestId, untrust } = {}) => ipcRenderer.invoke('liveShare:removeGuest', { guestId, untrust }),
     join: ({ invite, name } = {}) => ipcRenderer.invoke('liveShare:join', { invite, name }),
     leave: () => ipcRenderer.invoke('liveShare:leave'),
     open: ({ kind, agent, project } = {}) => ipcRenderer.invoke('liveShare:open', { kind, agent, project }),
+    focus: (id) => ipcRenderer.send('liveShare:focus', typeof id === 'string' ? id : null),
     // Guest: a host's agent pane's conversation watched here (read only),
     // which comes with onChat.
     chatWatch: ({ id, on } = {}) => ipcRenderer.invoke('liveShare:chatWatch', { id, on: !!on }),
     onChat: (cb) => subscribe('liveShare:chat', cb),
     onHost: (cb) => subscribe('liveShare:host', cb),
+    onPresence: (cb) => subscribe('liveShare:presence', cb),
+    onInviteBlocked: (cb) => subscribe('liveShare:inviteBlocked', cb),
     onGuest: (cb) => subscribe('liveShare:guest', cb),
     onAsk: (cb) => subscribe('liveShare:ask', cb),
     onHostRequest: (cb) => subscribe('liveShare:hostRequest', cb),

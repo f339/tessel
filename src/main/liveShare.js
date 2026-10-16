@@ -3,23 +3,32 @@
 // live), type in your panes, open new terminals and agents, and close panes.
 //
 // Host: Share starts a server on 127.0.0.1 (liveShare/shareHost.js) and a
-// Cloudflare quick tunnel to it (liveShare/shareTunnel.js), and gives an
-// invite code: the address and a secret that encrypts everything
-// (liveShare/shareCrypto.js). You share one project or several (chosen when
-// you start; added or taken out at any time: liveShare:share). Each guest
-// still waits for your yes (with the shared projects you tick for it), and
-// then only watches its projects until you let them type, open or close
-// (liveShare:guestRight); what each guest sees can change later
-// (liveShare:guestProject), a guest offline too. Guests get each pane's
-// screen as it is, never its scrollback (visibleScreen). Stop sharing (or
-// quitting Tessel) ends the tunnel and every guest's view. A restart of
+// Cloudflare quick tunnel to it (liveShare/shareTunnel.js), with a first
+// invitation. Each invitation (liveShare/shareAccess.js) is an invite code of
+// its own: the share's address with the invitation's path, and a secret that
+// encrypts everything (liveShare/shareCrypto.js); with a label, a lifetime
+// (an hour, a day, a week, or none), optional uses, and the projects and
+// rights its guests are offered (liveShare:createInvite, updateInvite,
+// revokeInvite, rotateInvite, duplicateInvite). You share one project or
+// several (chosen when you start; added or taken out at any time:
+// liveShare:share). Each guest still waits for your yes (the prompt comes
+// with its invitation's projects and rights), unless it is someone you trust
+// (liveShare/shareTrust.js, kept in liveshare-trusted.json: its identity key,
+// the projects and rights it gets); what each person, trusted person or
+// invitation gets changes at any time, one project or right at a time
+// (liveShare:access), a guest offline too. Guests get each pane's screen as
+// it is, never its scrollback (visibleScreen). Stop sharing (or quitting
+// Tessel) ends the tunnel and every guest's view (trust stays). A restart of
 // Tessel (an update, a crash, a new version in development) does not: the
-// next Tessel takes the share back (resumeSharing: the same tunnel and invite
-// code, the same projects), and guests reconnect.
+// next Tessel takes the share back (resumeSharing: the same tunnel, its
+// invitations and codes, the same projects, the people let in), and guests
+// reconnect. A share saved before invitations is taken back with its one
+// code, as a root invitation.
 //
-// Guest: Join with the code connects (liveShare/shareGuest.js); each of the
-// host's projects it sees becomes a Live Share project in the window, with
-// the host's panes. They are not terminals of this computer:
+// Guest: Join with the code connects (liveShare/shareGuest.js), with this
+// Tessel's identity key (made once, kept in liveshare-identity.json: what a
+// host trusts); each of the host's projects it sees becomes a Live Share
+// project in the window, with the host's panes. They are not terminals of this computer:
 // pty:attach/write/kill of their ids come here (isGuestPane), their output
 // goes through the window's usual pty:data and pty:exit, and they are never
 // saved with the layout. A connection that drops is taken up again with this
@@ -44,11 +53,14 @@ import os from 'os'
 import { join } from 'path'
 import { Terminal as HeadlessTerminal } from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
-import { createShareHost, cleanRights, cleanProjectIds, isProjectId, MAX_PROJECTS } from './liveShare/shareHost.js'
+import { createShareHost, cleanAgents, isAgentId } from './liveShare/shareHost.js'
+import { cleanProjectIds, isProjectId, MAX_PROJECTS } from './liveShare/shareGrant.js'
+import { createTrustStore, isTrustId, trustId } from './liveShare/shareTrust.js'
+import { cleanRights, isRightId } from '../shared/liveShareRights'
 import { createShareGuest } from './liveShare/shareGuest.js'
-import { newSecret, encodeInvite, decodeInvite, newSigningKey, exportSigningKey, importSigningKey } from './liveShare/shareCrypto.js'
+import { encodeInvite, decodeInvite, newSigningKey, exportSigningKey, importSigningKey } from './liveShare/shareCrypto.js'
 import { ensureCloudflared, startTunnel, waitReachable, waitRegistered, tunnelLogTail, endLeftoverTunnel, tunnelState, stopTunnelPid, stopTunnelLater, processState } from './liveShare/shareTunnel.js'
-import { createSessionFile } from './liveShare/sharePersist.js'
+import { createSessionFile, createKeptFile } from './liveShare/sharePersist.js'
 import { pidRunning as pidAlive } from './processTree.js'
 import { trimBuffer, HOST_BUFFER_BYTES } from './ptyProtocol.js'
 import { guestChatPayload, cleanChatPanes, cleanChatMessage, mergeChatEvents } from './liveShare/shareChat.js'
@@ -256,12 +268,36 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   const warn = (msg) => (log?.warn ? log.warn('liveshare', msg) : info(msg))
   const hostFile = createSessionFile(join(dataDir, 'liveshare-host.json'))
   const guestFile = createSessionFile(join(dataDir, 'liveshare-guest.json'))
+  const trustFile = createKeptFile(join(dataDir, 'liveshare-trusted.json'))
+  const identityFile = createKeptFile(join(dataDir, 'liveshare-identity.json'))
   let suspended = false
 
+  // The people this host trusts (kept across shares and restarts).
+  const trust = createTrustStore({
+    entries: (trustFile.read() || {}).trusted,
+    save: (trusted) => trustFile.write({ trusted }),
+    onChange: () => pushHost(),
+    log: info
+  })
+  // This Tessel's identity key as a guest: made the first time it joins.
+  let identityKey = null
+  function guestIdentity() {
+    if (identityKey) return identityKey
+    const saved = identityFile.read()
+    identityKey = (saved && importSigningKey(saved.key)) || null
+    if (!identityKey) {
+      identityKey = newSigningKey()
+      identityFile.write({ key: exportSigningKey(identityKey) })
+    }
+    return identityKey
+  }
+  // The agents the host's window lists for guests ([{ id, name }]).
+  let hostAgents = []
+
   // --- Host --------------------------------------------------------------
-  // sharing: { state, server, tunnel: { url, pid, stop }, secret, invite,
-  // guests, hostName, port, progress, error, blocked, projects (the ids of the
-  // projects shared, the window's, in order; kept across a restart) }
+  // sharing: { state, server, tunnel: { url, pid, stop }, guests, hostName,
+  // hostKey, port, progress, error, projects (the ids of the projects shared,
+  // the window's, in order; kept across a restart) }
   let sharing = null
   // What the window shows of the projects shared (liveShare:layouts):
   // project id -> cleaned layout; layoutsRev counts its changes.
@@ -274,42 +310,62 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   let changedTimer = null
   let hostTimer = null // keeps the saved share fresh, watches an adopted tunnel
 
-  const hostStatus = () =>
-    sharing
-      ? {
-          state: sharing.state,
-          invite: sharing.state === 'sharing' ? sharing.invite : null,
-          expiresAt: sharing.state === 'sharing' ? sharing.server?.inviteExpires() || null : null,
-          inviteBlocked: !!(sharing.server && sharing.server.inviteBlocked && sharing.server.inviteBlocked()),
-          projectIds: [...(sharing.projects || [])],
-          guests: sharing.guests,
-          // Who reads which conversation of yours: [{ id (pane), guests }].
-          reading: sharing.server && sharing.server.chatsWatched ? sharing.server.chatsWatched() : [],
-          // Guests let in who are not connected now (they come back by
-          // themselves; Remove keeps them out).
-          offline: sharing.server && sharing.server.offlineGuests ? sharing.server.offlineGuests() : [],
-          progress: sharing.progress ?? null,
-          error: sharing.error || null
-        }
-      : { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectIds: [], guests: [], reading: [], offline: [], progress: null, error: null }
+  // An invitation's code: the share's address with its path, and its secret.
+  function inviteCode(s, id) {
+    const c = s.server && s.tunnel ? s.server.inviteCode(id) : null
+    if (!c) return null
+    try {
+      const url = new URL(s.tunnel.url)
+      url.pathname = c.path ? `/i/${c.path}` : '/'
+      return encodeInvite({ url: url.toString(), secret: c.secret })
+    } catch {
+      return null
+    }
+  }
+  // The trusted people, as the window shows them (online: in the share now).
+  function trustedList() {
+    const on = sharing && sharing.server ? sharing.server.trustedOnline() : new Set()
+    return trust.list().map((e) => ({ id: trustId(e.fp), name: e.name, projects: [...e.grant.projects], rights: { ...e.grant.rights }, since: e.since, lastSeen: e.lastSeen, online: on.has(e.fp) }))
+  }
+  const hostStatus = () => {
+    const s = sharing
+    const live = !!(s && s.state === 'sharing' && s.server)
+    return {
+      state: s ? s.state : 'off',
+      projectIds: s ? [...(s.projects || [])] : [],
+      // Its invitations, each with its code (only while sharing).
+      invites: live ? s.server.invites().map((inv) => ({ ...inv, code: inviteCode(s, inv.id) })) : [],
+      guests: s ? s.guests || [] : [],
+      // Guests let in who are not connected now (they come back by
+      // themselves; Remove keeps them out).
+      offline: live ? s.server.offlineGuests() : [],
+      trusted: trustedList(),
+      // Which of your panes guests have on screen, type in, or read as a
+      // chat: [{ id (pane), guests: [{ id, watching, typing, reading }] }].
+      presence: live ? s.server.presence() : [],
+      progress: s ? (s.progress ?? null) : null,
+      error: (s && s.error) || null
+    }
+  }
   const pushHost = () => send('liveShare:host', hostStatus())
-  // Who reads which conversation changed (guests start and stop watching
-  // as they like): said at most every 250 ms, the latest at the end.
-  const READERS_PUSH_MS = 250
-  let readersTimer = null
-  let readersAt = 0
-  function pushReaders() {
-    if (readersTimer) return
-    const wait = readersAt + READERS_PUSH_MS - Date.now()
-    readersTimer = setTimeout(
+  // Presence changed (guests look at, type in, read your panes): said at
+  // most every 250 ms, the latest at the end.
+  const PRESENCE_PUSH_MS = 250
+  let presenceTimer = null
+  let presenceAt = 0
+  function pushPresence() {
+    if (presenceTimer) return
+    const wait = presenceAt + PRESENCE_PUSH_MS - Date.now()
+    presenceTimer = setTimeout(
       () => {
-        readersTimer = null
-        readersAt = Date.now()
-        if (sharing) pushHost()
+        presenceTimer = null
+        presenceAt = Date.now()
+        const s = sharing
+        if (s && s.state === 'sharing' && s.server) send('liveShare:presence', s.server.presence())
       },
       Math.max(0, wait)
     )
-    readersTimer.unref?.()
+    presenceTimer.unref?.()
   }
 
   // Which project of a share each of its terminals is in, from the layouts (a
@@ -502,55 +558,60 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     const s = sharing
     if (!s || s.state !== 'sharing' || !s.tunnel || !s.server) return
     hostFile.write({
-      secret: Buffer.from(s.secret).toString('base64'),
+      format: 2,
       url: s.tunnel.url,
       port: s.port,
       pid: s.tunnel.pid || 0,
       hostName: s.hostName,
       hostKey: exportSigningKey(s.hostKey),
-      expiresAt: s.server.inviteExpires(),
       projectIds: [...(s.projects || [])],
-      known: s.server.knownGuests(),
-      secrets: s.server.earlierSecrets().map((x) => Buffer.from(x).toString('base64')),
-      guard: s.server.guardState()
+      access: s.server.accessState()
     })
   }
 
-  function makeServer(s, secret, extra = {}) {
+  // extra: what a share taken back had (access: its invitations, codes and
+  // people; or, saved before invitations, its one code: secret, known,
+  // secrets, guard, inviteExpires, knownAt).
+  function makeServer(s, extra = {}) {
     return createShareHost({
-      secret,
       hostName: s.hostName,
       hostKey: s.hostKey,
       log: info,
+      trust,
       ...extra,
       callbacks: {
         projects: () => sharedProjects(s),
         paneProject: (id) => homes(s).get(id) || null,
         chatProject: (id) => chatHomes(s).get(id) || null,
-        onChatsWatched: () => sharing === s && pushReaders(),
+        onChatsWatched: () => sharing === s && pushPresence(),
+        onPresence: () => sharing === s && pushPresence(),
         ...(chatReader ? { chatWatch: (id, on) => (on ? openFeed(s, id) : closeFeed(id)) } : {}),
         snapshot,
         write: (id, data) => host.send('write', { id, data }),
+        agents: () => hostAgents,
         openPane: (spec, guest) => send('liveShare:hostRequest', { action: 'open', spec, guest }),
+        askOpen: (spec, guest) => send('liveShare:hostRequest', { action: 'ask-open', spec, guest }),
         closePane: (id, guest) => send('liveShare:hostRequest', { action: 'close', id, guest }),
         askApproval: (guest) =>
           new Promise((resolve) => {
             asks.set(guest.id, resolve)
-            send('liveShare:ask', { guestId: guest.id, name: guest.name, code: guest.code || null })
+            send('liveShare:ask', { guestId: guest.id, name: guest.name, code: guest.code || null, invite: guest.invite || null, offer: guest.offer || null, trustable: !!guest.trustable })
           }),
         onGuests: (list) => {
           s.guests = list
           for (const id of [...asks.keys()]) if (!list.some((g) => g.id === id && g.state === 'waiting')) asks.delete(id)
           pushHost()
         },
-        onInviteBlocked: () => {
-          info('invite code blocked: too many connections stopped after the handshake')
+        onInviteBlocked: (id) => {
+          info(`invitation ${id} blocked: too many connections stopped after the handshake`)
           saveHost()
           pushHost()
+          send('liveShare:inviteBlocked', { id })
         },
         onKnownChanged: () => {
           saveHost()
-          pushHost()
+          // (While it starts, the window has nothing of it to show yet.)
+          if (sharing === s && s.state === 'sharing') pushHost()
         }
       }
     })
@@ -578,6 +639,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     }
     for (const resolve of asks.values()) resolve(false)
     asks.clear()
+    clearTimeout(presenceTimer)
+    presenceTimer = null
     hostFile.clear()
     closeAllFeeds()
     layouts = new Map()
@@ -605,8 +668,10 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     hostTimer.unref?.()
   }
 
-  // projects: the ids of the projects to share (the window's).
-  async function startSharing({ name, projects } = {}) {
+  // projects: the ids of the projects to share (the window's); invite: the
+  // first invitation ({ label, lifetime, maxUses, rights }: it offers every
+  // project shared).
+  async function startSharing({ name, projects, invite = {} } = {}) {
     if (sharing && sharing.state !== 'error') return { ok: true, ...hostStatus() }
     const s = { state: 'preparing', guests: [], progress: null, cancelled: false, hostName: str(name, 40) || defaultShareName(), hostKey: newSigningKey(), projects: cleanProjectIds(projects) }
     sharing = s
@@ -625,8 +690,9 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       s.progress = null
       s.state = 'starting'
       pushHost()
-      s.secret = newSecret()
-      s.server = makeServer(s, s.secret)
+      s.server = makeServer(s)
+      const first = s.server.createInvite({ ...(invite && typeof invite === 'object' ? invite : {}), projects: s.projects })
+      if (!first.ok) throw new Error(t('main.liveShare.badInviteSpec', 'The first invitation could not be made ({{reason}}).', { reason: first.reason }))
       s.port = await s.server.start()
       if (s.cancelled) return { ok: false }
       s.tunnel = await startTunnel({
@@ -664,7 +730,6 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         )
       }
       if (s.cancelled) return { ok: false }
-      s.invite = encodeInvite({ url: s.tunnel.url, secret: s.secret })
       s.state = 'sharing'
       info(`sharing at ${s.tunnel.url}`)
       saveHost()
@@ -736,23 +801,33 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     if (check() === 'stopped') return fail('stopped meanwhile')
     if (check() !== 'ok') return false
     if (state === 'gone' || state === 'other' || (state === 'unknown' && !pidRunning(pid))) return fail('its tunnel stopped')
-    let secret
-    let hostKey
-    try {
-      secret = Buffer.from(String(saved.secret), 'base64')
-      hostKey = importSigningKey(saved.hostKey)
-    } catch {
-      return fail('unreadable')
-    }
-    if (secret.length !== 32 || !hostKey || !/^wss?:\/\//.test(String(saved.url)) || !(saved.port > 0)) return fail('unreadable')
-    const earlier = (Array.isArray(saved.secrets) ? saved.secrets : []).map((x) => Buffer.from(String(x), 'base64')).filter((x) => x.length === 32)
+    const hostKey = importSigningKey(saved.hostKey)
+    if (!hostKey || !/^wss?:\/\//.test(String(saved.url)) || !(saved.port > 0)) return fail('unreadable')
     // Its projects (a share saved by a Tessel that shared only one: that
-    // one), and what each guest let in sees (saved without it: the projects
-    // shared then, which is what it saw).
+    // one).
     const projects = cleanProjectIds(Array.isArray(saved.projectIds) ? saved.projectIds : [saved.projectId])
-    const known = (Array.isArray(saved.known) ? saved.known : []).map((k) => (k && typeof k === 'object' && !Array.isArray(k.projects) ? { ...k, projects } : k))
-    const s = { state: 'starting', guests: [], progress: null, cancelled: false, hostName: str(saved.hostName, 40) || defaultShareName(), secret, hostKey, adopted: true, projects }
-    const server = makeServer(s, secret, { known, knownAt: saved.savedAt, secrets: earlier, guard: saved.guard, inviteExpires: Number(saved.expiresAt) || undefined })
+    let extra
+    if (saved.format === 2) {
+      if (!saved.access || typeof saved.access !== 'object') return fail('unreadable')
+      extra = { access: saved.access }
+    } else {
+      // Saved before invitations: its one code becomes a root invitation,
+      // with its earlier secrets, its block and its guests (each with what
+      // it saw; saved without it: the projects shared then, which is what it
+      // saw).
+      let secret
+      try {
+        secret = Buffer.from(String(saved.secret), 'base64')
+      } catch {
+        return fail('unreadable')
+      }
+      if (secret.length !== 32) return fail('unreadable')
+      const earlier = (Array.isArray(saved.secrets) ? saved.secrets : []).map((x) => Buffer.from(String(x), 'base64')).filter((x) => x.length === 32)
+      const known = (Array.isArray(saved.known) ? saved.known : []).map((k) => (k && typeof k === 'object' && !Array.isArray(k.projects) ? { ...k, projects } : k))
+      extra = { secret, known, knownAt: saved.savedAt, secrets: earlier, guard: saved.guard, inviteExpires: Number(saved.expiresAt) || undefined }
+    }
+    const s = { state: 'starting', guests: [], progress: null, cancelled: false, hostName: str(saved.hostName, 40) || defaultShareName(), hostKey, adopted: true, projects }
+    const server = makeServer(s, extra)
     s.server = server
     // Its port: the last Tessel may take a moment to let it go.
     let port = 0
@@ -782,7 +857,6 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       // seconds at most); if Windows can't say in time, the next Tessel does.
       stopNow: () => stopTunnelLater(dataDir, pid)
     }
-    s.invite = encodeInvite({ url: s.tunnel.url, secret })
     s.state = 'sharing'
     sharing = s
     info(`sharing taken back after a restart (${s.tunnel.url})`)
@@ -792,19 +866,16 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     return true
   }
 
-  // A new invite code: the old one stops letting anyone in (guests already
-  // in stay, guests waiting under it are turned away); good for an hour.
-  function newInvite() {
+  // An access change made through the share server, while sharing (the
+  // server's onKnownChanged saves it and shows it).
+  function withServer(fn) {
     const s = sharing
-    if (!s || s.state !== 'sharing' || !s.server || !s.tunnel) return { ok: false }
-    s.secret = newSecret()
-    s.server.rotate(s.secret)
-    s.invite = encodeInvite({ url: s.tunnel.url, secret: s.secret })
-    info('new invite code')
-    saveHost()
-    pushHost()
-    return { ok: true, ...hostStatus() }
+    if (!s || s.state !== 'sharing' || !s.server) return { ok: false, reason: 'not-sharing' }
+    return fn(s.server, s)
   }
+  // A subject id from the window (a guest, a person, a trusted person, an
+  // invitation): plain text, bounded.
+  const subjectId = (id) => (typeof id === 'string' && /^[\w-]{1,48}$/.test(id) ? id : '')
 
   // A project added to the share or taken out of it, at any time (also while
   // it starts). Taken out: its panes vanish for every guest at once, and no
@@ -869,9 +940,12 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
           // Whether the host's Tessel shares conversations, and its panes
           // that have one.
           chat: joined.features.has('chat'),
-          chats: guestChatsList(joined)
+          chats: guestChatsList(joined),
+          // The agents the host lists (its Tessel can be asked to open one,
+          // and asked to open without the right): null for an older host.
+          agents: joined.features.has('agents') ? joined.agents : null
         }
-      : { state: 'off', host: null, session: null, panes: [], projects: [], reason: null, rights: null, code: null, chat: false, chats: [] }
+      : { state: 'off', host: null, session: null, panes: [], projects: [], reason: null, rights: null, code: null, chat: false, chats: [], agents: null }
   const pushGuest = () => send('liveShare:guest', guestStatus())
 
   function saveGuest(g) {
@@ -1007,6 +1081,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       secret: g.secret,
       name: g.name,
       signingKey: g.signingKey,
+      identityKey: guestIdentity(),
       back: g.admitted,
       hostKey: g.hostKey,
       callbacks: {
@@ -1037,6 +1112,11 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         },
         onFeatures: (list) => {
           if (joined === g && g.client === client) g.features = new Set(Array.isArray(list) ? list : [])
+        },
+        onAgents: (list) => {
+          if (joined !== g || g.client !== client) return
+          g.agents = cleanAgents(list)
+          pushGuest()
         },
         // A conversation the window watches, checked again (shareChat.js):
         // what changed since what this guest has, put together here; the
@@ -1143,6 +1223,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
       // title, agentId, accent, terminal, last }), the ones the window
       // watches, and those this connection asked the host for.
       features: new Set(),
+      agents: [],
       chats: new Map(),
       chatByLocal: new Map(),
       chatWanted: new Set(),
@@ -1299,30 +1380,78 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   ipcMain.handle('liveShare:share', (_evt, { id, shared } = {}) => setShared(id, !!shared))
   // What a guest may do, and the shared projects it sees: guestId is a
   // guest in, or one let in by its k- id (offline: it comes back with them).
-  ipcMain.handle('liveShare:rights', (_evt, { guestId, rights } = {}) => ({ ok: !!sharing?.server?.setRights(guestId, rights) }))
-  ipcMain.handle('liveShare:guestProjects', (_evt, { guestId, projects } = {}) => ({ ok: !!sharing?.server?.setProjects(guestId, projects) }))
-  // One right or one project turned on or off, against what the guest has
-  // now (two clicks in a row never undo each other).
-  ipcMain.handle('liveShare:guestRight', (_evt, { guestId, right, on } = {}) => ({ ok: !!sharing?.server?.changeRight(guestId, right, !!on) }))
-  ipcMain.handle('liveShare:guestProject', (_evt, { guestId, project, on } = {}) => ({ ok: !!sharing?.server?.changeProject(guestId, project, !!on) }))
-  ipcMain.handle('liveShare:newInvite', () => newInvite())
-  // The host's answer to a guest waiting, and the shared projects it gets:
-  // the ones listed (none when no list comes).
-  ipcMain.handle('liveShare:approve', (_evt, { guestId, yes, projects } = {}) => {
+  // Access, one change at a time, against what the subject has now (two
+  // clicks in a row never undo each other): one project or one right of a
+  // guest in, a person let in (offline: it comes back with it), a trusted
+  // person (also while not sharing) or an invitation.
+  ipcMain.handle('liveShare:access', (_evt, { subject, project, right, on } = {}) => {
+    const id = subjectId(subject)
+    const change = project !== undefined ? (isProjectId(project) ? { project, on: !!on } : null) : isRightId(right) ? { right, on: !!on } : null
+    if (!id || !change) return { ok: false }
+    if (!sharing || sharing.state !== 'sharing') {
+      // Not sharing: only a trusted person can change (its projects: any of
+      // this window's).
+      const e = trust.byId(id)
+      return { ok: !!e && trust.change(e.fp, change) }
+    }
+    return withServer((server) => ({ ok: !!server.change(id, change) }))
+  })
+  // A trusted person renamed (the label the host knows it by).
+  ipcMain.handle('liveShare:renameTrusted', (_evt, { id, name } = {}) => {
+    const e = trust.byId(subjectId(id))
+    return { ok: !!e && trust.rename(e.fp, typeof name === 'string' ? name : '') }
+  })
+  // Invitations: { label, lifetime, maxUses, projects, later, rights }.
+  ipcMain.handle('liveShare:createInvite', (_evt, spec = {}) => withServer((server, s) => {
+    const r = server.createInvite(spec)
+    return r.ok ? { ok: true, invite: { ...r.invite, code: inviteCode(s, r.invite.id) } } : r
+  }))
+  // A change of an invitation (patch: what changes), made to its people too
+  // as said (applyRemovals: what it no longer gives is taken from them;
+  // applyAdditions: what it now gives is given to them).
+  ipcMain.handle('liveShare:updateInvite', (_evt, { id, patch, applyRemovals = true, applyAdditions = false } = {}) =>
+    withServer((server) => server.updateInvite(subjectId(id), patch && typeof patch === 'object' ? patch : {}, { applyRemovals: applyRemovals !== false, applyAdditions: applyAdditions === true }))
+  )
+  ipcMain.handle('liveShare:revokeInvite', (_evt, { id, removePeople = false } = {}) => withServer((server) => server.revokeInvite(subjectId(id), { removePeople: removePeople === true })))
+  ipcMain.handle('liveShare:rotateInvite', (_evt, { id } = {}) => withServer((server) => server.rotateInvite(subjectId(id))))
+  ipcMain.handle('liveShare:duplicateInvite', (_evt, { id } = {}) => withServer((server, s) => {
+    const r = server.duplicateInvite(subjectId(id))
+    return r.ok ? { ok: true, invite: { ...r.invite, code: inviteCode(s, r.invite.id) } } : r
+  }))
+  // The host's answer to a guest waiting: the shared projects it gets (the
+  // ones listed; none when no list comes), its rights, and whether it is
+  // trusted from now on.
+  ipcMain.handle('liveShare:approve', (_evt, { guestId, yes, projects, rights, trust: trustIt } = {}) => {
     const resolve = asks.get(guestId)
     asks.delete(guestId)
-    if (resolve) resolve(yes ? { yes: true, projects: cleanProjectIds(projects) } : false)
+    if (resolve) resolve(yes ? { yes: true, projects: cleanProjectIds(projects), rights: cleanRights(rights), trust: trustIt === true } : false)
     return { ok: !!resolve }
   })
-  ipcMain.handle('liveShare:removeGuest', (_evt, { guestId } = {}) => {
-    sharing?.server?.removeGuest(guestId)
-    return { ok: true }
+  // Trust a guest let in (connected or offline), or stop trusting someone.
+  ipcMain.handle('liveShare:trust', (_evt, { guestId } = {}) => withServer((server) => ({ ok: !!server.trust(subjectId(guestId)) })))
+  ipcMain.handle('liveShare:untrust', (_evt, { id } = {}) => {
+    const tid = subjectId(id)
+    if (!isTrustId(tid)) return { ok: false }
+    if (sharing && sharing.state === 'sharing' && sharing.server) return withServer((server) => ({ ok: !!server.untrust(tid) }))
+    const e = trust.byId(tid)
+    return { ok: !!e && trust.remove(e.fp) }
   })
-  // A guest let in who is offline: it can't come back.
-  ipcMain.handle('liveShare:removeKnown', (_evt, { id } = {}) => {
-    const ok = !!sharing?.server?.removeKnown(String(id || ''))
-    if (ok) pushHost()
-    return { ok }
+  // A guest removed (connected, or offline: k- id): it can't come back with
+  // its reconnect key; untrust: it is no longer trusted either.
+  ipcMain.handle('liveShare:removeGuest', (_evt, { guestId, untrust = false } = {}) =>
+    withServer((server) => {
+      const id = subjectId(guestId)
+      const person = server.personOf(id)
+      if (untrust && person && person.trust) server.untrust(trustId(person.trust))
+      if (id.startsWith('k-')) return { ok: !!server.removeKnown(id) }
+      server.removeGuest(id)
+      return { ok: true }
+    })
+  )
+  // The agents the window lists for guests (the ones it can start).
+  ipcMain.on('liveShare:agents', (_evt, list) => {
+    hostAgents = cleanAgents(list)
+    sharing?.server?.agentsChanged()
   })
   ipcMain.handle('liveShare:join', (_evt, opts) => joinSession({ invite: opts && opts.invite, name: opts && opts.name }))
   ipcMain.handle('liveShare:leave', () => {
@@ -1355,13 +1484,28 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     }
     return { ok: true, last: entry.last || null }
   })
+  // A terminal or an agent of the host's (one it lists) opened on the host,
+  // in one of its projects this guest sees: at once with the right; without
+  // it, a host that can be asked is asked (asked: true).
   ipcMain.handle('liveShare:open', (_evt, spec = {}) => {
-    if (!joined || joined.state !== 'joined') return { ok: false }
-    if (!may(joined, 'open')) return { ok: false, reason: 'rights' }
-    const project = spec && joined.projects.some((p) => p.id === spec.project) ? spec.project : null
+    const g = joined
+    if (!g || g.state !== 'joined') return { ok: false }
+    const canAsk = g.features.has('agents')
+    if (!may(g, 'open') && !canAsk) return { ok: false, reason: 'rights' }
+    const project = spec && g.projects.some((p) => p.id === spec.project) ? spec.project : null
     if (!project) return { ok: false, reason: 'project' }
-    joined.client.open({ kind: spec.kind === 'agent' ? 'agent' : 'terminal', agent: str(spec.agent, 40) || undefined, project })
-    return { ok: true }
+    const agent = spec.kind === 'agent' ? spec.agent : null
+    if (agent !== null && (!isAgentId(agent) || (canAsk && !g.agents.some((a) => a.id === agent)))) return { ok: false, reason: 'agent' }
+    g.client.open(agent ? { kind: 'agent', agent, project } : { kind: 'terminal', project })
+    return { ok: true, asked: !may(g, 'open') }
+  })
+  // The host's pane this window has on screen (null: none of the host's),
+  // for the host's eyes only.
+  ipcMain.on('liveShare:focus', (_evt, id) => {
+    const g = joined
+    if (!g || g.state !== 'joined') return
+    const pane = typeof id === 'string' ? g.byLocal.get(id) || g.chatByLocal.get(id) : null
+    g.client.focus(pane ? pane.remoteId : null)
   })
 
   // A share or a session the last Tessel left (a restart, an update, a
