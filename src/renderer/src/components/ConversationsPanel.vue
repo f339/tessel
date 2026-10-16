@@ -14,8 +14,11 @@
 // agent filter, a search box, and a switch to show Tessel's own notices. A
 // thread can be copied as text, and an agent's name goes to its pane while
 // it is open.
+// In a Live Share project (source): the host's activity of that project and
+// what its terminal agents said, from the host (masked there), followed
+// while the tab is shown; "You" is the host there.
 import { senderDetails } from '../senderIdentity'
-import { computed, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
 import { Check, ChevronRight, Copy, LocateFixed, MessagesSquare, Search, SquareTerminal, Users, X } from 'lucide-vue-next'
 import BrandIcon from './BrandIcon.vue'
 import ThemedSelect from './ui/ThemedSelect.vue'
@@ -38,7 +41,10 @@ const props = defineProps({
   workspaceId: { type: String, default: null },
   now: { type: Number, default: () => Date.now() },
   // Shown now: the threads are built only then (the log changes often).
-  active: { type: Boolean, default: true }
+  active: { type: Boolean, default: true },
+  // A Live Share host's project: { project, host, events, teams, follow(on),
+  // terminal({ from, known }) } (liveShareWindowFeeds.js activitySource).
+  source: { type: Object, default: null }
 })
 const emit = defineEmits(['focus-pane', 'toast'])
 
@@ -71,6 +77,38 @@ const paneAlive = (id) => !!id && !!panes.value[id]
 // the key it gave), and nothing is rebuilt when nothing did.
 const MAX_ASKS = 32
 const terminal = shallowRef({}) // ask -> { key, items, paneId, wsId, title, agentId, sessionId, host, hostLabel }
+// A Live Share host's project: its log and its teams, from the host.
+const logEvents = computed(() => (props.source ? props.source.events || [] : props.events))
+const logTeams = computed(() => (props.source ? props.source.teams || [] : props.teams))
+// Followed while the tab is shown (the host's window sends it only then).
+let followed = null
+watch(
+  () => (props.active && props.source ? props.source.project : null),
+  () => {
+    if (followed) followed.follow(false)
+    followed = props.active && props.source ? props.source : null
+    if (followed) followed.follow(true)
+  },
+  { immediate: true }
+)
+onBeforeUnmount(() => followed && followed.follow(false))
+// What the host's terminal agents said (their panes here, by their ids).
+async function askHost() {
+  const had = terminal.value
+  const known = {}
+  for (const [ask, e] of Object.entries(had)) known[ask] = e.key
+  const res = await props.source.terminal({ from: from.value, known })
+  if (!res || !res.ok || !res.panes || typeof res.panes !== 'object') return
+  const next = {}
+  for (const [paneId, r] of Object.entries(res.panes)) {
+    if (!r || typeof r.key !== 'string') continue
+    const meta = { paneId, wsId: props.workspaceId, title: r.title || '', agentId: r.agentId || null, sessionId: paneId, host: 'local', hostLabel: '' }
+    if (r.same && had[paneId]) next[paneId] = had[paneId]
+    else if (Array.isArray(r.items)) next[paneId] = { key: r.key, items: r.items, ...meta }
+  }
+  const keys = Object.keys(next)
+  if (keys.length !== Object.keys(had).length || keys.some((k) => next[k] !== had[k])) terminal.value = next
+}
 function terminalAsks() {
   const open = new Map() // paneId -> { pane, wsId, hostLabel }, every workspace's
   // A chat's conversation goes through Tessel: never read from its file.
@@ -114,7 +152,7 @@ let asking = false
 let askAgain = false
 async function askTerminal() {
   const api = window.shellApi && window.shellApi.conversations
-  if (!props.active || !api || typeof api.terminal !== 'function') return
+  if (!props.active || (!props.source && (!api || typeof api.terminal !== 'function'))) return
   if (asking) {
     askAgain = true
     return
@@ -123,6 +161,10 @@ async function askTerminal() {
   try {
     do {
       askAgain = false
+      if (props.source) {
+        await askHost()
+        continue
+      }
       // Without App (its watch notes them too): what this tab sees.
       notePanes(props.projects)
       const asks = terminalAsks()
@@ -163,9 +205,11 @@ async function askTerminal() {
   }
 }
 const terminalSignature = computed(() =>
-  terminalAsks()
-    .map((a) => `${a.ask}:${a.sessionId}:${a.hostId || ''}`)
-    .join('|')
+  props.source
+    ? `lshare:${props.source.project}` // i18n-ignore
+    : terminalAsks()
+        .map((a) => `${a.ask}:${a.sessionId}:${a.hostId || ''}`)
+        .join('|')
 )
 
 // --- The threads --------------------------------------------------------------------------
@@ -189,9 +233,15 @@ const terminalEntries = computed(() =>
 )
 const threads = computed(() => {
   if (!props.active) return cache.value
-  cache.value = buildThreads(props.events, {
-    t,
-    teams: props.teams,
+  // In a host's project, "You" is the host.
+  const host = props.source ? props.source.host || '?' : null
+  const tt = host
+    ? (key, en, vars) =>
+        key === 'conversations.you' ? host : key === 'conversations.withAgent' ? t('conversations.hostWithAgent', '{{host}} and {{agent}}', { host, agent: (vars && vars.agent) || '' }) : t(key, en, vars)
+    : t
+  cache.value = buildThreads(logEvents.value, {
+    t: tt,
+    teams: logTeams.value,
     panes: panes.value,
     wsId: scope.value === 'workspace' ? props.workspaceId : null,
     from: from.value,

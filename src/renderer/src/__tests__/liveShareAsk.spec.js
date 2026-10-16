@@ -6,6 +6,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { nextTick } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import LiveShareAsk from '../components/LiveShareAsk.vue'
+import { NO_RIGHTS } from '../../../shared/liveShareRights'
 
 const PROJECTS = [
   { id: 'ws-1', name: 'tessel' },
@@ -19,7 +20,7 @@ const bob = {
   name: 'Bob',
   code: '123 456',
   invite: { id: 'iv-aaaaaaaaaa', label: 'Design team' },
-  offer: { projects: ['ws-2'], rights: { type: false, open: true, close: false } },
+  offer: { projects: ['ws-2'], rights: { ...NO_RIGHTS, type: false, open: true, close: false } },
   trustable: true
 }
 
@@ -51,10 +52,11 @@ describe('LiveShareAsk: someone asks to join', () => {
     const w = mount(LiveShareAsk, { props: { ask: bob, projects: PROJECTS } })
     await nextTick()
     expect(boxes(w, 'ls-ask-project-')).toEqual([false, true, false])
-    expect(boxes(w, 'ls-right-')).toEqual([false, true, false])
+    // (Every right of the catalog, in its order: type, open, close, then the rest off.)
+    expect(boxes(w, 'ls-right-')).toEqual([false, true, false, false, false, false, false, false, false])
     await arm()
     await w.find('[data-test="ls-ask-allow"]').trigger('click')
-    expect(w.emitted('answer')).toEqual([[{ key: 'g1', yes: true, projects: ['ws-2'], rights: { type: false, open: true, close: false }, trust: false }]])
+    expect(w.emitted('answer')).toEqual([[{ key: 'g1', yes: true, projects: ['ws-2'], rights: { ...NO_RIGHTS, type: false, open: true, close: false }, trust: false }]])
   })
 
   it('the boxes can be changed before allowing', async () => {
@@ -65,7 +67,7 @@ describe('LiveShareAsk: someone asks to join', () => {
     type.element.checked = true
     await type.trigger('change')
     await w.find('[data-test="ls-ask-allow"]').trigger('click')
-    expect(w.emitted('answer')[0][0]).toMatchObject({ projects: ['ws-1', 'ws-2'], rights: { type: true, open: true, close: false } })
+    expect(w.emitted('answer')[0][0]).toMatchObject({ projects: ['ws-1', 'ws-2'], rights: { ...NO_RIGHTS, type: true, open: true, close: false } })
   })
 
   it('without an invitation’s offer: every project shared ticked, every right off', async () => {
@@ -73,7 +75,7 @@ describe('LiveShareAsk: someone asks to join', () => {
     await nextTick()
     expect(w.find('[data-test="ls-ask-invite"]').exists()).toBe(false)
     expect(boxes(w, 'ls-ask-project-')).toEqual([true, true, true])
-    expect(boxes(w, 'ls-right-')).toEqual([false, false, false])
+    expect(boxes(w, 'ls-right-')).toEqual([false, false, false, false, false, false, false, false, false])
   })
 
   it('Trust this person: only once the code was checked, and only for a Tessel that can be trusted', async () => {
@@ -108,7 +110,7 @@ describe('LiveShareAsk: someone asks to join', () => {
     await w.find('[data-test="live-share-ask"]').trigger('keydown', { key: 'Escape' })
     expect(w.emitted('answer')).toBeUndefined()
     await w.find('[data-test="ls-ask-deny"]').trigger('click')
-    expect(w.emitted('answer')).toEqual([[{ key: 'g1', yes: false, projects: ['ws-2'], rights: { type: false, open: true, close: false }, trust: false }]])
+    expect(w.emitted('answer')).toEqual([[{ key: 'g1', yes: false, projects: ['ws-2'], rights: { ...NO_RIGHTS, type: false, open: true, close: false }, trust: false }]])
   })
 
   it('none ticked: Allow waits and says why; a project shared while it waits comes unticked and re-arms', async () => {

@@ -5,6 +5,26 @@
       "outdatedHost": "Le Tessel de l'hôte est trop ancien pour cela : l'hôte doit mettre Tessel à jour.",
       "ended": "La session Live Share est terminée.",
       "localOnly": "Cela ne fonctionne que sur l'ordinateur de l'hôte."
+    },
+    "toast": {
+      "taskConfirm": "{{host}} doit confirmer : cette tâche a sa propre copie du projet, supprimée avec elle.",
+      "deleteAsk": "{{name}} demande de supprimer la tâche « {{title}} » avec sa propre copie du projet.",
+      "deleteAskGone": "Cette demande ne tient plus : rien n'a été supprimé."
+    },
+    "panels": {
+      "offline": "la connexion à l'hôte est coupée.",
+      "busy": "l'hôte est occupé : nouvelle lecture dans un instant.",
+      "failed": "l'hôte n'a pas pu la lire."
+    },
+    "review": {
+      "notFound": "La branche de cette tâche n'a pas pu être lue chez l'hôte.",
+      "noAccess": "Vous n'avez plus accès à ce projet.",
+      "outdated": "L'hôte doit mettre Tessel à jour pour afficher ceci.",
+      "hostOnly": "Seul l'hôte ({{host}}) peut fusionner cette tâche.",
+      "checkFailed": "Le Tessel de {{host}} n'a pas pu vérifier les conflits de cette branche."
+    },
+    "deleteAsk": {
+      "review": "Examiner…"
     }
   },
   "explorer": {
@@ -35,6 +55,9 @@
     "board": {
       "readOnly": "Lecture seule : l'hôte ne vous a pas permis de gérer les tâches.",
       "sourceFailed": "Le tableau des tâches de l'hôte n'a pas pu être lu : {{error}}"
+    },
+    "card": {
+      "reviewHostHint": "Voir les modifications chez l'hôte (lecture seule)"
     }
   },
   "taskHistory": {
@@ -51,5 +74,14 @@
       "hostNoReading": "Pas encore de relevé",
       "hostEmpty": "L'hôte n'a pas encore d'utilisation à afficher."
     }
+  },
+  "app": {
+    "task": {
+      "guestAsksDelete": "{{name}} demande de supprimer cette tâche (Live Share).",
+      "guestAskBusy": "Répondez d'abord à la question ouverte, puis revenez à la demande."
+    }
+  },
+  "review": {
+    "hostReadOnly": "Lecture seule : seul l'hôte ({{host}}) peut fusionner, abandonner ou demander des modifications."
   }
 }

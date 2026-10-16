@@ -39,9 +39,12 @@ function until(fn, ms = 10000, label = '') {
 }
 
 // An sshd stand-in: answers the prep command with HOME, records forwards,
-// cancels and the pane's command, and can dial a forwarded socket.
+// cancels, the pane's command, its PTY request and window changes, and can
+// dial a forwarded socket. onPty: called as a PTY request arrives (before it
+// is answered).
+let onPty = null
 function startServer() {
-  const events = { execs: [], forwards: [], cancels: [], connections: 0, tokenFiles: [] }
+  const events = { execs: [], forwards: [], cancels: [], connections: 0, tokenFiles: [], ptys: [], windowChanges: [] }
   const clients = new Set()
   const server = new Server({ hostKeys: [makeKey().private] }, (client) => {
     events.connections++
@@ -65,8 +68,15 @@ function startServer() {
       })
       client.on('session', (accept) => {
         const session = accept()
-        session.on('pty', (ok) => ok && ok())
-        session.on('window-change', (ok) => ok && ok())
+        session.on('pty', (ok, _no, info) => {
+          events.ptys.push({ cols: info.cols, rows: info.rows, term: info.term })
+          if (onPty) onPty(info)
+          ok && ok()
+        })
+        session.on('window-change', (ok, _no, info) => {
+          events.windowChanges.push({ cols: info.cols, rows: info.rows })
+          ok && ok()
+        })
         session.on('exec', (ok, _no, info) => {
           const stream = ok()
           events.execs.push(info.command)
@@ -147,6 +157,7 @@ beforeEach(async () => {
   broadcasts = []
 })
 afterEach(async () => {
+  onPty = null
   if (bridge) bridge.shutdown()
   bridge = null
   await server.close()
@@ -264,4 +275,39 @@ describe('remote-agent pane on ssh2', () => {
     expect(bridge.tunnel.paneCount()).toBe(0)
     expect([...logs, ...broadcasts].join('\n')).not.toContain(TOKEN)
   })
+})
+
+// An agent's pane waits for its socket and env file before its shell opens,
+// then opens its channel: resized at either moment, the host's terminal ends
+// up at the pane's size (the agent reads it when it starts).
+describe("remote-agent pane: the host's terminal size follows the pane", () => {
+  const sizeNow = () => {
+    const last = server.events.windowChanges[server.events.windowChanges.length - 1] || server.events.ptys[server.events.ptys.length - 1]
+    return last ? { cols: last.cols, rows: last.rows } : null
+  }
+
+  it('resized while its socket is bound: the shell opens at the new size', async () => {
+    makeBridge()
+    const { pty, out } = agentPane()
+    pty.resize(235, 18)
+    await until(() => out.text.includes('shell ready'))
+    expect(server.events.ptys).toEqual([{ cols: 235, rows: 18, term: 'xterm-256color' }])
+    expect(server.events.windowChanges).toEqual([])
+  }, 30000)
+
+  it('resized while its channel opens: the shell gets the new size once it is open', async () => {
+    makeBridge()
+    let target = null
+    onPty = () => {
+      const p = target
+      target = null
+      if (p) p.resize(235, 18)
+    }
+    const { pty, out } = agentPane()
+    target = pty
+    await until(() => out.text.includes('shell ready'))
+    expect(server.events.ptys).toEqual([{ cols: 80, rows: 24, term: 'xterm-256color' }])
+    await until(() => server.events.windowChanges.length > 0, 5000, 'a window change').catch(() => {})
+    expect(sizeNow()).toEqual({ cols: 235, rows: 18 })
+  }, 30000)
 })

@@ -376,8 +376,9 @@ export function createSshHostBridge({
         .then(() => {
           if (killed || exited) return { stream: null }
           const command = commandFor()
-          const opts = command ? { command, pty: { ...pty, cols: size.cols, rows: size.rows } } : { pty: { ...pty, cols: size.cols, rows: size.rows } }
-          return manager.open(hostId, spec, command ? 'exec' : 'shell', opts)
+          const asked = { ...pty, cols: size.cols, rows: size.rows }
+          const opts = command ? { command, pty: asked } : { pty: asked }
+          return manager.open(hostId, spec, command ? 'exec' : 'shell', opts).then((res) => ({ ...res, asked }))
         })
         .then((res) => {
           if (!res.stream) return
@@ -417,6 +418,20 @@ export function createSshHostBridge({
           // After the output still buffered in the stream.
           if (s.tesselClosed) timers.setTimeout(onClose, 0)
           else s.once('close', () => timers.setTimeout(onClose, 0))
+          // Resized while the channel was opening (the pane is created at
+          // 80x24 and fitted once on screen, often during the sign-in or the
+          // channel's own round trips): that size was asked for too late for
+          // the PTY request, and resize() had no channel to send it to. The
+          // host's terminal takes the pane's size now, before anything typed
+          // meanwhile (an agent's command) reaches it; a TUI started there
+          // reads it, and drew for 80x24 in a shorter, wider pane otherwise.
+          if (res.asked && (res.asked.cols !== size.cols || res.asked.rows !== size.rows)) {
+            try {
+              s.setWindow(size.rows, size.cols, 0, 0)
+            } catch {
+              /* resize race */
+            }
+          }
           for (const q of queued) s.write(q)
           queued = []
           queuedBytes = 0

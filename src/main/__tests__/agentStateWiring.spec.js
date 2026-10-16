@@ -77,8 +77,10 @@ function wire(hostRecords = new Map()) {
     setTeamSecret,
     revokeTeamSecret,
     agentStateDir: dir,
-    // Live Share is off (liveShare.js; covered by liveShareMain.spec.js).
+    // Live Share is off (liveShare.js; covered by liveShareMain.spec.js); a
+    // shared project's folder (lshare://) never starts a terminal here.
     liveShare: null,
+    isLsharePath: (p) => typeof p === 'string' && p.startsWith('lshare://'),
     log: { error: vi.fn() }
   })
   return { handlers, records: hostRecords, setup, ptyInfo }

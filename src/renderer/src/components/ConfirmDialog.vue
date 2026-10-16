@@ -17,10 +17,14 @@ const props = defineProps({
   details: { type: Array, default: () => [] },
   // An optional checkbox under the text ("Don't ask again"): its state goes
   // with the answer (answer, checked).
-  checkLabel: { type: String, default: '' }
+  checkLabel: { type: String, default: '' },
+  // Cancel has the focus (someone else asked for this: a key typed meanwhile
+  // never confirms it).
+  focusCancel: { type: Boolean, default: false }
 })
 const emit = defineEmits(['answer'])
 const okEl = ref(null)
+const cancelEl = ref(null)
 const checked = ref(false)
 function answer(value) {
   if (props.checkLabel) emit('answer', value, checked.value)
@@ -31,7 +35,7 @@ let previousFocus = null
 
 onMounted(() => {
   previousFocus = document.activeElement
-  okEl.value?.focus()
+  ;(props.focusCancel ? cancelEl.value : okEl.value)?.focus()
 })
 onUnmounted(() => {
   if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
@@ -85,7 +89,7 @@ function trapTab(event) {
         {{ checkLabel }}
       </label>
       <div class="confirm-actions">
-        <button class="confirm-btn" @click="answer(false)">{{ t('app.confirm.cancel', 'Cancel') }}</button>
+        <button ref="cancelEl" class="confirm-btn" data-test="confirm-cancel" @click="answer(false)">{{ t('app.confirm.cancel', 'Cancel') }}</button>
         <button v-if="altLabel" class="confirm-btn" @click="answer('alt')">{{ altLabel }}</button>
         <button
           ref="okEl"

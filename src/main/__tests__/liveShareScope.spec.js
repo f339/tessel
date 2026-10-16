@@ -99,8 +99,16 @@ describe('rules by name', () => {
   it('write-protects what runs by itself, unless the guest may type', () => {
     for (const p of ['.claude/settings.json', '.claude', 'sub/.claude/agents/x.md', '.codex/config.toml', '.gemini/settings.json', '.cursor/rules', '.mcp.json', 'sub/.mcp.json', '.vscode/tasks.json', '.husky/pre-commit', '.envrc', '.tessel/setup.ps1', '.VSCODE/launch.json'])
       expect(isProtectedRel(p), p).toBe(true)
-    for (const p of ['src/a.js', '.mcp.json.bak', 'claude/settings.json', 'CLAUDE.md', '.tessel/notes.md', ''])
+    // What git ignores and how it reads files, hook managers' configs and
+    // folders, an agent's instructions and the notes (any depth, any case).
+    for (const p of ['.gitignore', 'sub/.GITIGNORE', '.gitattributes', '.gitmodules', '.pre-commit-config.yaml', 'lefthook.yml', '.lefthook.yaml', 'lefthook-local.yml', '.lintstagedrc', '.lintstagedrc.json', 'lint-staged.config.mjs', 'commitlint.config.js', '.commitlintrc.yaml', '.githooks/pre-commit', 'CLAUDE.md', 'docs/AGENTS.md', 'GEMINI.md', '.cursorrules', '.github/copilot-instructions.md', '.tessel/notes.md', '.tessel'])
+      expect(isProtectedRel(p), p).toBe(true)
+    for (const p of ['src/a.js', '.mcp.json.bak', 'claude/settings.json', 'claude.md.txt', 'gitignore', 'lint-staged.js', ''])
       expect(isProtectedRel(p), p).toBe(false)
+    // The folder the project's git runs hooks from (core.hooksPath).
+    expect(isProtectedRel('tools/hooks/pre-commit', ['tools/hooks'])).toBe(true)
+    expect(isProtectedRel('tools/hooksx/a', ['tools/hooks'])).toBe(false)
+    expect(writeAllowed('tools/hooks/pre-commit', { edit: true }, ['tools/hooks'])).toBe(false)
     expect(writeAllowed('.mcp.json', { edit: true })).toBe(false)
     expect(writeAllowed('.mcp.json', { edit: true, type: 'yes' })).toBe(false)
     expect(writeAllowed('.mcp.json', { edit: true, type: true })).toBe(true)
@@ -227,9 +235,15 @@ describe('resolving a guest path', () => {
     expect((await scope.resolve(root, '.env', { settings: off })).ok).toBe(true)
     expect((await scope.resolve(root, 'build/out.js', { settings: off })).ok).toBe(true)
     expect((await scope.resolve(root, 'debug.log', { settings: off })).ok).toBe(true)
-    // A .gitignore change shows once the project's cache is cleared (its watch).
+    // A path seen ignored stays hidden for the share, whatever a .gitignore
+    // says later (a folder seen ignored: what is in it too); a new share
+    // (reset) asks git again.
     fs.writeFileSync(join(root, '.gitignore'), '*.log\n')
     scope.invalidate(root)
+    expect((await scope.resolve(root, 'build/out.js')).code).toBe('not-found')
+    put(root, 'build/later.js')
+    expect((await scope.resolve(root, 'build/later.js')).code).toBe('not-found')
+    scope.reset()
     expect((await scope.resolve(root, 'build/out.js')).ok).toBe(true)
     // Through a junction to an ignored folder too.
     fs.writeFileSync(join(root, '.gitignore'), 'build/\n')

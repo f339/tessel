@@ -16,6 +16,7 @@ import WorkspaceSidebar from './components/WorkspaceSidebar.vue'
 import WorktreeCleanupDialog from './components/sidebar/WorktreeCleanupDialog.vue'
 import StatusBar from './components/StatusBar.vue'
 import { buildProjectCards, cardTargetPane, portProbes, orderWorkspaces } from './sidebarModel'
+import { listsChildren } from './agentChildrenFeed'
 import { createProjectWorktrees } from './projectWorktrees'
 import { prAgentTargets } from './prAgentTargets'
 import { withWorktreePath } from './prAgentPrompts'
@@ -77,16 +78,16 @@ import ImageViewer from './components/ImageViewer.vue'
 import FileViewer from './components/FileViewer.vue'
 import { fileKind, isViewed } from '../../shared/fileKinds'
 import { remoteRoot, isRemotePath, parseRemotePath } from '../../shared/remotePath'
-import { isLsharePath } from '../../shared/liveSharePath'
-import { localOnlyText } from './liveShareGuestAccess'
+import { isLsharePath, lshareRoot } from '../../shared/liveSharePath'
+import { localOnlyText, lshareAccess } from './liveShareGuestAccess'
 import NotificationsMenu from './components/NotificationsMenu.vue'
 import FileFinder from './components/FileFinder.vue'
 import UsageMenu from './components/UsageMenu.vue'
 import { acquirePassthrough, trackPointerDrag } from './browser/webviewPassthrough'
-import { pageOf } from './browser/pageHost'
+import { pageOf, pageGuests } from './browser/pageHost'
 import { paneDropZone, placeLeaf, sidePageFromLeaf, leafFromSidePage, saveSideBrowsers, restoreSideBrowsers, newSidePageId } from './browser/pageMove'
 import { createAgentBrowserTargets, addPageNear } from './browser/agentBrowserTargets'
-import { inheritsAgentSession } from './browser/agentSession'
+import { inheritsAgentSession, inheritsGuestSession } from './browser/agentSession'
 import { createAgentTerminalTargets, paneRunsYolo, placeNear, ownTerminalOf, MAX_OPEN_PANES } from './agentTerminal/agentTerminalTargets'
 import { onTerminalControl, onTerminalLog, forgetTerminal } from './agentTerminal/agentTerminalState'
 import { rulesOfAction } from '../../shared/terminalRules'
@@ -138,7 +139,8 @@ import {
   getEditorPane,
   setEditorHooks,
   startDiskWatch,
-  autoSaveSettingsChanged
+  autoSaveSettingsChanged,
+  recheckSharedDocs
 } from './editor/documents'
 import { openTab, validSavedFiles, samePath, fileName, docPathOf, diffTabPath } from './editor/editorTabs'
 import { openEditorsOf } from './explorer/openEditors'
@@ -420,7 +422,7 @@ function makeBrowserLeaf(id = null, url = BLANK_URL) {
 // up. activate: false leaves the active pane and the tab on screen as they
 // are (a link opened in the background from a page, like a browser's
 // middle-click).
-function openInBrowser({ url = BLANK_URL, ws = currentWs.value, newPane = false, focusAddress = false, activate = true, agentSession = false } = {}) {
+function openInBrowser({ url = BLANK_URL, ws = currentWs.value, newPane = false, focusAddress = false, activate = true, agentSession = false, guestSession = false } = {}) {
   if (!ws) return null
   const target = allowedBrowserUrl(url) || BLANK_URL
   const active = ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
@@ -433,6 +435,9 @@ function openInBrowser({ url = BLANK_URL, ws = currentWs.value, newPane = false,
     leaf = makeBrowserLeaf(null, target)
     // Opened from a page of the agents' separate session: stays in it.
     if (agentSession) leaf.agentSession = true
+    // Opened by a Live Share guest's click (or from such a page): the
+    // browser's guest session, none of your logins.
+    if (guestSession) leaf.guestSession = true
     keepView(leaf, active, ws)
     ws.tree = addTabLeaf(ws.tree, leaf, makeSplit)
   } else if (target !== BLANK_URL) leaf.url = target
@@ -881,8 +886,11 @@ const confirmState = ref(null)
 // Import cookies from another browser (CookieImportDialog): opened from a
 // browser pane's menu and from Settings > Browser.
 const cookieImportOpen = ref(false)
+// ifFree: only when no other question is open (null then: nothing asked;
+// the open one is never replaced). focusCancel: Cancel has the focus.
 function askConfirm(opts) {
   return new Promise((resolve) => {
+    if (confirmState.value && opts && opts.ifFree) return resolve(null)
     if (confirmState.value) confirmState.value.resolve(false)
     confirmState.value = { ...opts, resolve }
   })
@@ -1827,7 +1835,9 @@ function serializeNode(node) {
       url: allowedBrowserUrl(node.url) || BLANK_URL,
       zoom: Number.isFinite(node.zoom) ? node.zoom : null,
       viewPath: node.viewPath || undefined,
-      agentSession: node.agentSession ? true : undefined
+      agentSession: node.agentSession ? true : undefined,
+      guestSession: node.guestSession ? true : undefined,
+      hiddenFromGuests: node.hiddenFromGuests ? true : undefined
     }
   }
   if (node.type === 'leaf') {
@@ -1959,6 +1969,8 @@ async function deserializeNode(snap, cwd = null) {
     if (Number.isFinite(snap.zoom) && (snap.zoom !== 0 || settings.compactDefaults)) leaf.zoom = Math.max(-3, Math.min(5, snap.zoom))
     if (validViewPath(snap.viewPath)) leaf.viewPath = snap.viewPath
     if (snap.agentSession === true) leaf.agentSession = true
+    if (snap.guestSession === true) leaf.guestSession = true
+    if (snap.hiddenFromGuests === true) leaf.hiddenFromGuests = true
     return leaf
   }
   if (snap.type === 'leaf') {
@@ -2476,6 +2488,37 @@ const liveShare = createLiveShareWindow({
   agentName: (id) => (agentById(id) || {}).name || null,
   activePaneId: () => activeId.value,
   layoutReady: () => layoutReady.value,
+  // Phase 2c: each browser pane's page (its webContents id once ready), and
+  // a shared project's activity for the guests who follow it.
+  pageGuest: (id) => (Number.isSafeInteger(pageGuests[id]) ? pageGuests[id] : null),
+  activityOf: (wsId) => projectActivity(wsId),
+  activityRev: () => activity.length,
+  // This computer's board, for guests: read (each shared project's cards)
+  // and changed when a guest with the right asks (liveShareWindow.js checks).
+  // A card a guest added or renamed, an answer it gave: marked with its name,
+  // so what agents read says it came from a Live Share guest.
+  taskBoard: {
+    tasks: () => boardTasks,
+    add: ({ title, wsId, guest }) => {
+      const card = addTask({ title, wsId })
+      if (guest) updateTask(card.id, { guestBy: String(guest).slice(0, 40) })
+      return card
+    },
+    move: (id, column) => updateTask(id, { column }),
+    rename: (id, title, guest) => updateTask(id, { title, ...(guest ? { guestBy: String(guest).slice(0, 40) } : {}) }),
+    remove: (id) => removeTask(id),
+    answer: (id, reply, guest) => resolveDecision(id, reply, { guest }),
+    // A card with its own copy (a guest's ✕, once you chose to look at it):
+    // your usual delete, Cancel first, which deletes that copy and its branch
+    // with it; stands() says whether the guest's request still holds.
+    removeWithCopy: (id, who, stands) => deleteTask(id, { askedBy: who, stands })
+  },
+  // Each shared project's panes as their headers show them, its finished
+  // tasks, and whether the Task history tab is on screen (a guest's: the
+  // host's history is read while it is).
+  paneAgents: (wsId) => liveSharePaneRows(wsId),
+  historyRecords: () => taskHistory,
+  historyShown: () => taskPanelOpen.value && sideTab.value === 'taskHistory',
   // Panes of this computer left in a Live Share project when it ends: a
   // project of their own, so nothing running is lost.
   adoptLeaves: (leaves) => {
@@ -2875,12 +2918,65 @@ const sideRoot = computed(() => {
   const ws = currentWs.value
   if (!ws) return null
   if (ws.remote) return remoteRoot(ws.remote.hostId, ws.remote.path)
+  // A Live Share host's project: its virtual root (lshare://…), which Files,
+  // Changes and the editor read from the host (main's guestFs.js).
+  if (ws.liveShare) return lshareRoot(ws.liveShare.project)
   // A worktree's grid on screen (paneViews.js): Files and Changes show that
   // copy, not the project folder.
   const active = ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
   if (active && viewKey(active, ws.cwd)) return leafViewPath(active)
   return ws.cwd
 })
+// A Live Share host gave the edit right in one of its projects: the files of
+// it open read-only are read again (editable now, unless the host says no).
+watch(
+  () => Object.keys(lshareAccess).filter((p) => lshareAccess[p].edit && lshareAccess[p].state === 'ok').join('\n'),
+  (now, before) => {
+    const had = new Set(String(before || '').split('\n'))
+    for (const project of now.split('\n')) if (project && !had.has(project)) recheckSharedDocs(project)
+  }
+)
+// The Tasks tab of a Live Share host's project: the host's board (a source,
+// liveShareWindow.js taskSource), never this computer's.
+const sideTaskSource = computed(() => {
+  const ws = currentWs.value
+  return ws && ws.liveShare ? liveShare.taskSource(ws.liveShare.project) : null
+})
+// Its Task history tab: the host's finished tasks (costs in dollars only
+// with "See my usage").
+const sideHistorySource = computed(() => {
+  const ws = currentWs.value
+  return ws && ws.liveShare ? liveShare.historySource(ws.liveShare.project) : null
+})
+// A host's task branch opened from its board's Review: read only.
+const guestReview = computed(() => liveShare.reviewSource())
+// ...its Agents tab: the host's past conversations of it; its Conversations
+// tab (and the Activity panel): the host's activity of it.
+const sideSessionSource = computed(() => {
+  const ws = currentWs.value
+  return ws && ws.liveShare ? liveShare.sessionSource(ws.liveShare.project) : null
+})
+const sideActivitySource = computed(() => {
+  const ws = currentWs.value
+  return ws && ws.liveShare ? liveShare.activitySource(ws.liveShare.project) : null
+})
+// A project's activity for Live Share guests who follow it: its own events,
+// its panes' and its teams' (newest last), with its teams' names.
+function projectActivity(wsId) {
+  const ws = wsById(wsId)
+  if (!ws) return { events: [], teams: [] }
+  const panes = new Set()
+  forEachLeaf(ws.tree, (l) => panes.add(l.id))
+  const own = teams.value.filter((tm) => teamWsId(tm.id) === wsId)
+  const teamIds = new Set(own.map((tm) => tm.id))
+  const events = []
+  for (let i = activity.length - 1; i >= 0 && events.length < 600; i--) {
+    const e = activity[i]
+    if (!e) continue
+    if (e.wsId === wsId || (e.wsId == null && ((e.paneId && panes.has(e.paneId)) || (e.teamId && teamIds.has(e.teamId))))) events.push(toRaw(e))
+  }
+  return { events: events.reverse(), teams: own.map((tm) => ({ id: tm.id, name: tm.name, color: tm.color || null })) }
+}
 const sideRemote = computed(() => {
   const ws = currentWs.value
   return ws && ws.remote ? { hostId: ws.remote.hostId, host: remoteHostLabel(ws.remote.hostId), path: ws.remote.path } : null
@@ -3155,10 +3251,20 @@ provide('panelCtx', {
   // ...and the text size of a host's terminal in its pane (on your screen only).
   liveShareTextSize: (id, size) => liveShare.setGuestTextSize(id, size),
   liveShareChatSource: (id) => liveShare.chatSource(id),
+  // ...a host pane's model, effort and state as its header shows them on the
+  // host, and its sub-agents (asked of the host).
+  liveSharePaneAgent: (id) => liveShare.paneAgent(id),
+  liveShareChildrenSource: (id) => liveShare.childrenSource(id),
   // Live Share, as the host: the guests reading a pane's conversation now,
   // and who watches, types in or reads each pane (LiveSharePresence).
   liveShareReaders: (id) => liveShare.readersOf(id),
   liveSharePresence: (id) => liveShare.presenceOf(id),
+  // ...a page of a shared project: its eye (guests watching) and "Hide this
+  // page from guests". As a guest: a host's page shown here (its frames,
+  // your input with the right).
+  liveSharePageShare: (id) => liveShare.pageShare(id),
+  setLiveSharePageHidden: (id, hidden) => liveShare.setPageHidden(id, hidden),
+  liveSharePageSource: (id) => liveShare.pageSource(id),
   // A terminal agent's chat view (nothing restarts): what you write there,
   // and its agent's real end (back to the terminal).
   sendFromChatView: (id, text, callbacks) => sendFromChatView(id, text, callbacks),
@@ -3224,10 +3330,13 @@ provide('panelCtx', {
   // A link a page opens in a new pane (middle-click, Ctrl+click, its menu),
   // in the workspace of the pane it came from, next to it.
   // A page of the agents' separate session opens its new panes in that session.
-  openBrowserPane: (url, { fromId = null, activate = false } = {}) => {
+  // A Live Share guest's click (guestSession), or a page of the guest
+  // session, opens its new panes in the guest session.
+  openBrowserPane: (url, { fromId = null, activate = false, guestSession = false } = {}) => {
     const ws = (fromId && wsOfLeaf(fromId)) || currentWs.value
     const from = fromId && ws ? findLeafIn(ws.tree, fromId) : null
-    return openInBrowser({ url, ws, newPane: true, activate, agentSession: inheritsAgentSession(from) })
+    const guest = guestSession === true || inheritsGuestSession(from)
+    return openInBrowser({ url, ws, newPane: true, activate, agentSession: !guest && inheritsAgentSession(from), guestSession: guest })
   },
   // A chat agent pane: open or resume its Claude (asks to trust its folder
   // the first time), and the permissions it runs with.
@@ -5175,7 +5284,8 @@ function moveSidePageToGrid(pageId, target) {
   }
   const anchorId = target.kind === 'pane' ? target.id : ws.activeId && findLeafIn(ws.tree, ws.activeId) ? ws.activeId : firstLeafId(ws.tree)
   const anchor = anchorId ? findLeafIn(ws.tree, anchorId) : null
-  const leaf = leafFromSidePage(page, (url) => makeBrowserLeaf(null, url))
+  // Hidden from guests when it never said, while that project is shared.
+  const leaf = leafFromSidePage(page, (url) => makeBrowserLeaf(null, url), { hiddenDefault: liveShare.isShared(ws.id) })
   keepView(leaf, anchor, ws)
   const next = placeLeaf(ws.tree, target, leaf, { anchorId, makeSplit })
   if (!next) return
@@ -5968,6 +6078,66 @@ watch(
   { immediate: true }
 )
 
+// A Live Share host's pane in its guest's sidebar and Dashboard: what the
+// host's header shows of it (liveShareWindow.js paneAgent), never this
+// computer's state of it. Its team is the host's (by name: its id means
+// nothing here), its task copy by branch; nothing here can sleep it.
+function hostPaneRow(h) {
+  const agent = h.kind === 'agent' || h.kind === 'chat'
+  return {
+    kind: agent ? h.kind : 'shell',
+    agentId: h.agentId || null,
+    state: agent ? h.state || 'ready' : 'ready',
+    sleeping: !!h.sleeping,
+    ...(h.kind === 'chat' ? { chatStatus: null, model: null, effort: null, headerModel: h.model || null } : {}),
+    attention: !!h.attention,
+    reset: h.reset || '',
+    held: false,
+    typingHold: false,
+    teamUnread: 0,
+    toolsDown: false,
+    team: null,
+    teamName: h.team ? h.team.name : null,
+    lead: !!(h.team && h.team.lead),
+    workerOf: null,
+    task: agent ? h.task || null : null,
+    track: null,
+    pid: null,
+    copyBranch: h.copy ? h.copy.branch : '',
+    since: h.since || 0,
+    sessionId: null,
+    liveShare: true
+  }
+}
+// The same panes the other way round: a shared project's panes as this
+// computer's headers show them, for its guests (liveShareWindow.js
+// paneAgents; main keeps where each agent's conversation is, and sends
+// guests the rest).
+function liveSharePaneRows(wsId) {
+  const p = sidebarProjects.value.find((x) => x.id === wsId)
+  if (!p) return []
+  return p.panes
+    .filter((x) => !x.liveShare)
+    .map((x) => {
+      const agent = x.kind === 'agent' || x.kind === 'chat'
+      const team = x.team ? teamById(x.team) : null
+      return {
+        id: x.id,
+        kind: agent ? x.kind : 'shell',
+        agentId: x.agentId,
+        model: agent ? x.headerModel || paneModels[x.id] || '' : '',
+        state: agent ? x.state : null,
+        sleeping: !!x.sleeping,
+        since: x.since || 0,
+        task: x.task || '',
+        attention: !!x.attention,
+        reset: x.reset || '',
+        team: team ? { name: team.name || '', lead: !!x.lead } : null,
+        copy: x.copyPath ? { branch: x.copyBranch || '' } : null,
+        children: x.kind === 'agent' && x.sessionId && listsChildren(x.agentId) ? { agent: x.agentId, sessionId: x.sessionId, ...(x.accountId !== undefined ? { accountId: x.accountId } : {}) } : null
+      }
+    })
+}
 const sidebarProjects = computed(() =>
   workspaces.value.map((w) => {
     const panes = []
@@ -5977,6 +6147,8 @@ const sidebarProjects = computed(() =>
       const chat = leaf.kind === 'chat'
       const task = taskOfPane(leaf.id)
       const tracked = trackedState[leaf.id]
+      // A Live Share host's pane: the host's own view of it.
+      const host = leaf.backend === 'liveshare' ? liveShare.paneAgent(leaf.id) : null
       panes.push({
         id: leaf.id,
         num: leaf.num || 0, paneName: leaf.paneName, agentLabel: programLabel(leaf),
@@ -6012,7 +6184,8 @@ const sidebarProjects = computed(() =>
         sessionId: leaf.sessionId || null,
         // An agent on an SSH host (its conversation file is there).
         remoteHostId: leaf.remoteHostId || null,
-        ...(leaf.accountId !== undefined ? { accountId: leaf.accountId } : {})
+        ...(leaf.accountId !== undefined ? { accountId: leaf.accountId } : {}),
+        ...(host ? hostPaneRow(host) : {})
       })
     })
     const copies = boardTasks
@@ -6540,7 +6713,13 @@ const activityScopes = computed(() => {
   const ws = currentWs.value
   const out = []
   if (ws) {
-    out.push({ value: 'workspace', label: t('app.notify.workspace', 'Workspace: {{name}}', { name: ws.name }), wsId: ws.id, teamId: null, notesDir: ws.cwd || null })
+    out.push({ value: 'workspace', label: t('app.notify.workspace', 'Workspace: {{name}}', { name: ws.name }), wsId: ws.id, teamId: null, notesDir: (!ws.liveShare && ws.cwd) || null })
+  }
+  // A Live Share project: the host's project and its teams, nothing of yours.
+  if (ws && ws.liveShare) {
+    const src = sideActivitySource.value
+    for (const team of (src && src.teams) || []) out.push({ value: 'team:' + team.id, label: t('app.activity.team', 'Team: {{name}}', { name: team.name }), wsId: null, teamId: team.id, notesDir: null })
+    return out
   }
   for (const team of teams.value) {
     const home = wsById(teamWsId(team.id)) || ws
@@ -6549,6 +6728,17 @@ const activityScopes = computed(() => {
   out.push({ value: 'all', label: t('app.activity.all', 'All workspaces'), wsId: null, teamId: null, notesDir: (ws && ws.cwd) || null })
   return out
 })
+
+// A Live Share project: the host's activity of it (followed while the
+// panel is open), only its own scope.
+const activityEvents = computed(() => (activityOpen.value && sideActivitySource.value ? sideActivitySource.value.events : activity))
+watch(
+  () => (activityOpen.value && currentWs.value && currentWs.value.liveShare ? currentWs.value.liveShare.project : null),
+  (project, before) => {
+    if (before) liveShare.activitySource(before)?.follow(false)
+    if (project) liveShare.activitySource(project)?.follow(true)
+  }
+)
 
 function openActivity(scope = 'workspace') {
   closeMenus()
@@ -7355,30 +7545,45 @@ function onWorktreesCleaned() {
 // ✕ on a card: asked first. A task working in its own copy of the project
 // also has that copy and branch deleted (with its agent closed), so nothing
 // is left behind with no way to merge it; the dialog says what is lost.
-async function deleteTask(taskId) {
+// askedBy: a Live Share guest's name, when the guest asked for it (said
+// first, Cancel has the focus, never over another open question; the card
+// must still be there and the guest's request still hold once you answer:
+// stands()). -> true (deleted), false (not), null (another question was open).
+async function deleteTask(taskId, { askedBy = null, stands = null } = {}) {
   const task = boardTasks.find((t) => t.id === taskId)
-  if (!task) return
+  if (!task) return false
   const wt = task.worktree && !task.mergedAt ? task.worktree : null
   const leaf = task.paneId ? findLeaf(task.paneId) : null
+  const text = wt
+    ? leaf
+      ? t('app.task.deleteCopyAgent', '{{name}} closes, and its copy ({{path}}) and branch {{branch}} are deleted with any work not merged yet. To keep the work, open Review and merge it first. This cannot be undone.', { name: leaf.paneName || leaf.title, path: wt.path, branch: wt.branch })
+      : t('app.task.deleteCopy', 'its copy ({{path}}) and branch {{branch}} are deleted with any work not merged yet. To keep the work, open Review and merge it first. This cannot be undone.', { path: wt.path, branch: wt.branch })
+    : t('app.task.deleteCard', 'The card is removed from the board.')
   const ok = await askConfirm({
     title: t('app.task.deleteTitle', 'Delete "{{title}}"?', { title: task.title }),
-    text: wt
-      ? leaf
-        ? t('app.task.deleteCopyAgent', '{{name}} closes, and its copy ({{path}}) and branch {{branch}} are deleted with any work not merged yet. To keep the work, open Review and merge it first. This cannot be undone.', { name: leaf.paneName || leaf.title, path: wt.path, branch: wt.branch })
-        : t('app.task.deleteCopy', 'its copy ({{path}}) and branch {{branch}} are deleted with any work not merged yet. To keep the work, open Review and merge it first. This cannot be undone.', { path: wt.path, branch: wt.branch })
-      : t('app.task.deleteCard', 'The card is removed from the board.'),
+    text: askedBy ? `${t('app.task.guestAsksDelete', '{{name}} asks to delete this task (Live Share).', { name: askedBy })} ${text}` : text,
     confirmLabel: t('app.common.delete', 'Delete'),
-    danger: !!wt
+    danger: !!wt,
+    ...(askedBy ? { focusCancel: true, ifFree: true } : {})
   })
-  if (!ok) return
+  if (ok === null) {
+    showToast(t('app.task.guestAskBusy', 'Answer the open question first, then look at the request again.'), { timeout: 5000 })
+    return null
+  }
+  if (!ok) return false
+  if (askedBy && (!boardTasks.some((x) => x.id === task.id) || (typeof stands === 'function' && !stands()))) {
+    showToast(t('liveShare.toast.deleteAskGone', 'That request no longer stands: nothing was deleted.'), { timeout: 5000 })
+    return false
+  }
   if (wt) {
     const rm = await removeTaskCopy(task, true)
     if (!rm || !rm.ok) {
       showToast(t('app.task.cardKept', 'The card was kept: its copy could not be deleted ({{error}}).', { error: (rm && rm.error) || t('app.common.unknownError', 'unknown error') }), { kind: 'error', timeout: 9000 })
-      return
+      return false
     }
   }
   removeTask(task.id)
+  return true
 }
 provide('deleteTask', deleteTask)
 
@@ -9967,11 +10172,13 @@ function askDecision(task, r, from) {
   nativeNotify({ title: needs, body: r.question, paneId: from.id })
 }
 
-function resolveDecision(taskId, answer) {
+// guest: a Live Share guest's name, when it answered (the agent is told so).
+function resolveDecision(taskId, answer, { guest = null } = {}) {
   const task = boardTasks.find((t) => t.id === taskId)
   const text = String(answer || '').trim()
   if (!task || !task.gate || task.gate.status !== 'pending' || !text) return
-  updateTask(task.id, { gate: { ...task.gate, status: 'resolved', answer: text.slice(0, 500), resolvedAt: Date.now() } })
+  const by = typeof guest === 'string' && guest ? guest.slice(0, 40) : null
+  updateTask(task.id, { gate: { ...task.gate, status: 'resolved', answer: text.slice(0, 500), resolvedAt: Date.now(), ...(by ? { answeredBy: by } : {}) } })
   recordActivity({ type: 'task', action: 'decided', paneId: task.gate.by, title: task.title, wsId: task.wsId, detail: text })
   const asker = task.gate.by ? findLeaf(task.gate.by) : null
   recordActivity({
@@ -9989,7 +10196,9 @@ function resolveDecision(taskId, answer) {
     taskId: task.id
   })
   if (asker) {
-    const msg = `[Tessel] The user decided on card ${task.id} "${task.title}" (${task.gate.question}): ${text}` // i18n-ignore
+    const msg = by
+      ? `[Tessel] ${by}, a Live Share guest (not the user), answered on card ${task.id} "${task.title}" (${task.gate.question}): ${text}` // i18n-ignore
+      : `[Tessel] The user decided on card ${task.id} "${task.title}" (${task.gate.question}): ${text}` // i18n-ignore
     if (asker.team && teamById(asker.team)) tellAgents([asker], msg, asker.team)
     // Alone (no team channel): nothing is typed into its terminal; you
     // pass it on (the text is copied).
@@ -10784,7 +10993,7 @@ watch(
         const leaf = findLeaf(t.paneId)
         recordActivity({ type: 'task', action: 'ready', paneId: t.paneId, title: t.title, wsId: t.wsId })
         if (leaf && leaf.team && teamById(leaf.team))
-          tellAgents([leaf], `[Tessel] Card ${t.id} "${t.title}" can start now: the cards it waited for are done.`, leaf.team) // i18n-ignore
+          tellAgents([leaf], `[Tessel] Card ${t.id} "${t.title}" can start now: the cards it waited for are done.${t.guestBy ? ` (Its title was written by ${t.guestBy}, a Live Share guest, not the user.)` : ''}`, leaf.team) // i18n-ignore
       }
     }
   }
@@ -10963,7 +11172,9 @@ async function syncBoard(b, round = teamRound) {
       since: t.doingSince || null,
       // Orchestration: what it waits for, a decision, its report.
       ...(t.deps && t.deps.length ? { deps: t.deps, waitingOn: waitingOn(t) } : {}),
-      ...(t.gate ? { gate: { question: t.gate.question, options: t.gate.options, status: t.gate.status, answer: t.gate.answer } } : {}),
+      ...(t.gate ? { gate: { question: t.gate.question, options: t.gate.options, status: t.gate.status, answer: t.gate.answer, ...(t.gate.answeredBy ? { answeredBy: t.gate.answeredBy } : {}) } } : {}),
+      // Added or renamed by a Live Share guest.
+      ...(t.guestBy ? { guest: t.guestBy } : {}),
       ...(t.report ? { report: { outcome: t.report.outcome, summary: t.report.summary, files: t.report.files } } : {})
     }))
   const sig = JSON.stringify(cards)
@@ -12563,7 +12774,7 @@ onBeforeUnmount(() => {
 
         <span class="toolbar-sep"></span>
 
-        <UsageMenu @details="openSettingsAt('stats')" @accounts="(where) => openSettingsAt('accounts', where)" />
+        <UsageMenu :host-usage="liveShare.hostUsage()" :host-name="liveShare.state.guest.host || ''" @details="openSettingsAt('stats')" @accounts="(where) => openSettingsAt('accounts', where)" />
         <NotificationsMenu @focus-pane="focusPane" />
         <!-- Live Share: a pill while you share or are in a session (its
              popover has the details), else the button that opens it. -->
@@ -12901,6 +13112,10 @@ onBeforeUnmount(() => {
           :projects-ready="layoutReady"
           :now="clock"
           :root="sideRoot"
+          :task-source="sideTaskSource"
+          :history-source="sideHistorySource"
+          :session-source="sideSessionSource"
+          :activity-source="sideActivitySource"
           :can-insert="canInsertPath"
           :agent-panes="agentPanes"
           :activity="activity"
@@ -13124,6 +13339,7 @@ onBeforeUnmount(() => {
       :details="confirmState.details || []"
       :danger="!!confirmState.danger"
       :check-label="confirmState.checkLabel || ''"
+      :focus-cancel="!!confirmState.focusCancel"
       @answer="answerConfirm"
     />
 
@@ -13174,6 +13390,15 @@ onBeforeUnmount(() => {
       :actions="reviewActions"
       @close="reviewTaskId = null"
     />
+    <!-- A Live Share host's task branch: read only (the host merges). -->
+    <ReviewPanel
+      v-else-if="guestReview"
+      :key="'ls:' + guestReview.task.id"
+      :task="guestReview.task"
+      :source="guestReview"
+      :actions="{}"
+      @close="liveShare.closeReview()"
+    />
 
     <NotesPanel
       v-if="notesView"
@@ -13188,7 +13413,7 @@ onBeforeUnmount(() => {
     <ActivityPanel
       v-if="activityOpen"
       v-model:scope="activityScope"
-      :events="activity"
+      :events="activityEvents"
       :live="agentStates"
       :scopes="activityScopes"
       @focus-pane="(id) => ((activityOpen = false), focusPane(id))"

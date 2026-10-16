@@ -28,7 +28,9 @@ function same(a, b) {
 // auth: { password?, publicKeys?: [openssh public key text], kbd?: true,
 //         methods?: ['publickey', 'password', 'keyboard-interactive'] }
 // onExec(command, stream, info): optional; default writes "ran:<command>".
-export function startSshServer({ hostKey = makeKey().private, auth = {}, onExec, onShell, maxSessions = 0 } = {}) {
+// onPty(info): optional; called as a channel's PTY request arrives (before
+// it is answered), so a test can act while the client is opening it.
+export function startSshServer({ hostKey = makeKey().private, auth = {}, onExec, onShell, onPty, maxSessions = 0 } = {}) {
   const events = { connections: 0, auth: [], channels: [], windowChanges: [], sessions: 0 }
   const clients = new Set()
   const allowed = (auth.publicKeys || []).map((k) => utils.parseKey(k))
@@ -69,6 +71,7 @@ export function startSshServer({ hostKey = makeKey().private, auth = {}, onExec,
         let ptyInfo = null
         session.on('pty', (ok, _no, info) => {
           ptyInfo = info
+          if (onPty) onPty(info)
           ok && ok()
         })
         session.on('window-change', (ok, _no, info) => {

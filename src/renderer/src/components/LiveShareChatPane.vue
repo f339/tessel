@@ -19,6 +19,10 @@ const isMaximized = computed(() => !!ctx.maximizedId && ctx.maximizedId.value ==
 const chatShown = computed(() => ls.value.view !== 'terminal')
 const source = computed(() => (ctx.liveShareChatSource ? ctx.liveShareChatSource(props.node.id) : null))
 const title = computed(() => props.node.title || ls.value.agentId || '')
+// What the host's own header shows of it (its model and effort, whether it
+// works), as the host's Tessel sends it (liveShareWindow.js paneAgent).
+const info = computed(() => (ctx.liveSharePaneAgent ? ctx.liveSharePaneAgent(props.node.id) : null))
+const iconState = computed(() => (info.value && !info.value.sleeping ? ({ working: 'busy', monitoring: 'monitoring', approval: 'attention', waiting: 'attention', unknown: 'unknown' })[info.value.state] || 'idle' : null))
 const toggleTitle = computed(() =>
   chatShown.value
     ? t('liveShare.guestView.showTerminal', 'Your view: chat. Show the terminal (only on your screen: {{host}}’s pane does not change)', { host: host.value })
@@ -46,10 +50,12 @@ function toggle() {
   >
     <div class="pane-nav agent" :style="node.accent ? { '--accent': node.accent } : null" data-test="pane-header">
       <div class="pane-nav-left">
-        <span class="pane-icon agent" :style="node.accent ? { '--accent': node.accent } : null" :data-agent="ls.agentId || undefined" :aria-label="title">
+        <span class="pane-icon agent" :class="iconState" :style="node.accent ? { '--accent': node.accent } : null" :data-agent="ls.agentId || undefined" :aria-label="title">
           <BrandIcon :kind="ls.agentId || 'claude'" :accent="node.accent || null" :size="15" />
+          <span v-if="iconState" class="pane-status-dot"></span>
         </span>
         <span class="pane-title" data-test="pane-title">{{ title }}</span>
+        <span v-if="info && info.model" class="pane-model-chip static" data-test="pane-model-chip" :aria-label="t('pane.sessionOptions.chipStatic', 'Model: {{model}}', { model: info.model })">{{ info.model }}</span>
       </div>
       <div class="pane-nav-actions" @mousedown.stop>
         <!-- your own view: its chat or its terminal (on your screen only) -->

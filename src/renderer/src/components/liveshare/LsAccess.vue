@@ -16,6 +16,7 @@ import LsAvatars from './LsAvatars.vue'
 import ThemedSelect from '../ui/ThemedSelect.vue'
 import { accessPeople, invitesOf, projectAccess, inviteName, inviteExpiry, personName } from '../../liveShareAccess'
 import { shownRights, rightWords } from '../../liveShareRights'
+import { setRight as withRight } from '../../../../shared/liveShareRights'
 import { t } from '../../i18n'
 
 const props = defineProps({
@@ -71,7 +72,7 @@ async function answer(themToo) {
   const patch =
     a.what === 'project'
       ? { projects: a.on ? [...new Set([...(inv.projects || []), a.key])] : (inv.projects || []).filter((id) => id !== a.key) }
-      : { rights: { ...(inv.rights || {}), [a.key]: !!a.on } }
+      : { rights: withRight(inv.rights, a.key, a.on) }
   const r = await ctx.run(busyKey(inv.id, a.what, a.key), () => ctx.api.updateInvite({ id: inv.id, patch, applyRemovals: !a.on && themToo, applyAdditions: a.on && themToo }))
   if (r && r.ok && themToo && Number.isInteger(r.applied) && r.applied > 0)
     ctx.notice(r.applied === 1 ? t('liveShare.invite.savedApplied', 'Saved, and changed for {{count}} person.', { count: 1 }) : t('liveShare.invite.savedApplied', 'Saved, and changed for {{count}} people.', { count: r.applied }))

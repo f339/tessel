@@ -758,7 +758,7 @@
       "forbidden": "L'hôte ne vous a pas donné le droit de faire cela.",
       "revoked": "Votre accès a changé avant que ce soit fait : rien n'a été modifié.",
       "notFound": "Introuvable chez l'hôte.",
-      "notAllowed": "Les invités ne peuvent pas modifier ce fichier ou ce dossier.",
+      "notAllowed": "Les invités ne peuvent pas modifier ce fichier ou ce dossier (ou quelque chose de masqué ou de protégé à l'intérieur).",
       "exists": "Ce nom est déjà pris ici.",
       "notFile": "Ce n'est pas un fichier.",
       "isFolder": "C'est un dossier.",
@@ -779,7 +779,9 @@
       "offline": "L'hôte n'a pas répondu.",
       "badAnswer": "L'hôte a envoyé une réponse que Tessel n'accepte pas.",
       "localOnly": "Non disponible pour un projet partagé avec vous.",
-      "tooLargeToSend": "Trop volumineux pour être envoyé à l'hôte (plus de 768 Ko)."
+      "tooLargeToSend": "Trop volumineux pour être envoyé à l'hôte (plus de 768 Ko).",
+      "stagedOutside": "Des fichiers hors de ce projet sont indexés chez l'hôte : l'hôte doit d'abord en faire un commit ou les retirer de l'index.",
+      "stagedHidden": "Des fichiers que l'hôte masque aux invités sont indexés : l'hôte doit d'abord en faire un commit ou les retirer de l'index."
     },
     "automations": {
       "unreadable": "Vos automatisations n'ont pas pu être lues : {{error}}. Rien ne s'exécute tant que Tessel ne les a pas lues.",
@@ -1014,7 +1016,8 @@
         "timeout": "Cloudflare n'a pas donné d'adresse de tunnel à temps. Réessayez.",
         "stopped": "cloudflared s'est arrêté avant de donner une adresse ({{detail}}).",
         "start": "cloudflared n'a pas pu démarrer ({{detail}})."
-      }
+      },
+      "lshareFolder": "Ce dossier est sur l'ordinateur d'un hôte Live Share : un terminal ne peut pas y démarrer ici."
     },
     "agyPlugins": {
       "notInstalled": "L'Antigravity CLI n'est pas installée.",

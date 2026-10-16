@@ -1,5 +1,6 @@
 // Live Share phase 2: the host's answers to a guest's requests on a shared
-// project's files, notes and git changes.
+// project's files, notes and git changes; with phase 2b, a file's Local
+// History (its Timeline) and a task branch's changes (the review, read only).
 //
 // A guest's Files, editor and Changes views send requests ({ op, project,
 // args }, src/shared/liveSharePath.js for the paths); the host's Live Share
@@ -23,6 +24,21 @@
 //   is above the project: only what is inside it, relative to it; what is
 //   hidden counted, never named), without git's author emails or a remote
 //   URL's credentials, cut to the limits both sides agree on (LSHARE_LIMITS);
+// - every git command a guest's request makes runs with the repository's
+//   hooks, filters, fsmonitor and other settings that run programs off,
+//   trusted or not (gitSafety.js runAsGuest), and a guest's commit with
+//   --no-verify; files git reads through a filter (git-lfs, git-crypt...) are
+//   never staged or restored for a guest (staged without it, a secret could
+//   be committed in clear);
+// - a stage, unstage or discard of a folder is made on the changed files
+//   below it a guest may see (a discard: only those it may write);
+// - a project below its repository's top: history, commit numbers and the
+//   branch's count of commits only for the project's own files, and a
+//   commit refused while something outside the project is staged;
+// - searches never say how many hidden files matched (that would tell what
+//   a hidden file holds): hidden files are left out before matching;
+// - the git work behind a request (git check-ignore) counts against the
+//   guest's budget (ctx.spend('git')), one run per request at most;
 // - errors as fixed codes (LSHARE_CODES), never the host's own text, which
 //   names its folders; only git's words go out, its paths hidden and secrets
 //   masked (shareChat.js), cut to 300 characters;
@@ -31,15 +47,18 @@
 // handle() -> { ok: true, data } | { ok: false, code, detail? }: what the
 // host's 'res' message carries.
 import fs from 'fs'
+import { join } from 'path'
 import { t } from '../i18n'
 import * as explorer from '../explorer'
 import * as sourceControl from '../sourceControl'
 import { looksBinary, hashOf, signatureOf, writeForEdit, headContent } from '../editorFiles'
 import { listProjectFiles } from '../fileOpen'
+import { createGuestReview } from './shareReview'
 import { fileKind, extOf, IMAGE_MIME } from '../../shared/fileKinds'
 import { cleanRel, segmentOk, isShareProjectId, LSHARE_LIMITS as L } from '../../shared/liveSharePath'
 import { guestText, cleanRoots, maskSecrets } from './shareChat'
-import { createShareScope, assertNoHostPaths, writeAllowed, hiddenByName, relFrom } from './shareScope'
+import { createShareScope, assertNoHostPaths, writeAllowed, hiddenByName, relFrom, touchesSpecial, hidesPrivate, checkIgnore } from './shareScope'
+import { runAsGuest, localGitArgs } from '../gitSafety'
 
 // --- Argument shapes -----------------------------------------------------------------
 const OK = (value) => ({ ok: true, value })
@@ -166,6 +185,11 @@ export function maskUrl(u) {
   }
 }
 
+// An email in a commit message (a Signed-off-by or Co-authored-by trailer):
+// masked.
+const EMAIL = /[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g
+export const noEmails = (text) => String(text || '').replace(EMAIL, '…')
+
 // --- Rights ----------------------------------------------------------------------------
 const OPS = {}
 // The right an op needs: 'view' (comes with the project), 'edit' or 'git';
@@ -194,10 +218,12 @@ function op(name, spec) {
 }
 
 // One folder listed for a guest: its entries a guest may see, by name; a
-// link inside the project shown as one, a link out of it left out.
-async function listFolder(env, dir, dotfiles) {
+// link inside the project shown as one, a link out of it left out. In two
+// steps (read, then what is hidden of every folder at once), so a listing of
+// many folders asks git once.
+function readFolder(env, dir, dotfiles) {
   const res = explorer.listDir({ root: env.info.real, dir: dir.real, dotfiles })
-  if (!res.ok) return fail('not-found')
+  if (!res.ok) return null
   const kids = []
   let hidden = 0
   for (const e of res.entries) {
@@ -221,20 +247,34 @@ async function listFolder(env, dir, dotfiles) {
     }
     kids.push(k)
   }
-  const off = await env.scope.hiddenOf(env.info, [...new Set(kids.flatMap((k) => [k.rel, k.realRel, k.linkRel]).filter(Boolean))], env.settings)
+  return { kids, hidden, truncated: !!res.truncated }
+}
+const kidNames = (read) => read.kids.flatMap((k) => [k.rel, k.realRel, k.linkRel]).filter(Boolean)
+function folderData(read, off) {
   const entries = []
-  for (const k of kids) {
+  let hidden = read.hidden
+  for (const k of read.kids) {
     if (off.has(k.rel) || off.has(k.realRel) || (k.linkRel && off.has(k.linkRel))) hidden++
     else entries.push({ name: k.name, dir: k.dir, ...(k.link ? { link: true } : {}) })
   }
-  return done({ entries, truncated: !!res.truncated, hidden })
+  return { entries, truncated: read.truncated, hidden }
+}
+// The folder itself (resolved with skipIgnore) is checked with its entries.
+const dirNames = (dir) => [dir.rel, dir.realRel].filter(Boolean)
+const dirHidden = (dir, off) => dirNames(dir).some((r) => off.has(r))
+async function listFolder(env, dir, dotfiles) {
+  const read = readFolder(env, dir, dotfiles)
+  if (!read) return fail('not-found')
+  const off = await env.scope.hiddenOf(env.info, [...new Set([...dirNames(dir), ...kidNames(read)])], env.settings, { charge: env.charge })
+  if (dirHidden(dir, off)) return fail('not-found')
+  return done(folderData(read, off))
 }
 
 op('fs.list', {
   bulk: true,
   args: { dir: opt(A.dir, ''), dotfiles: opt(A.bool, true) },
   async run(a, env) {
-    const dir = await env.resolve(a.dir, { kind: 'dir' })
+    const dir = await env.resolve(a.dir, { kind: 'dir', skipIgnore: true })
     if (!dir.ok) return fail(dir.code)
     return listFolder(env, dir, a.dotfiles)
   }
@@ -247,24 +287,38 @@ op('fs.listMany', {
   async run(a, env) {
     const results = []
     let total = 0
-    for (const start of a.dirs) {
-      let rel = start
-      for (let guard = 0; guard <= 32; guard++) {
+    // In rounds: the folders asked (then, chained, their single subfolders),
+    // read, then what git ignores of all of them and all their entries,
+    // asked at once.
+    let round = a.dirs.map((rel) => ({ rel, depth: 0 }))
+    while (round.length) {
+      const listed = []
+      for (const item of round) {
         if (total >= L.listManyEntries) {
-          results.push({ dir: rel, ok: false, code: 'too-large' })
-          break
+          results.push({ dir: item.rel, ok: false, code: 'too-large' })
+          continue
         }
-        const dir = await env.resolve(rel, { kind: 'dir' })
-        const res = dir.ok ? await listFolder(env, dir, a.dotfiles) : dir
-        if (!res.ok) {
-          results.push({ dir: rel, ok: false, code: res.code })
-          break
+        const dir = await env.resolve(item.rel, { kind: 'dir', skipIgnore: true })
+        const read = dir.ok ? readFolder(env, dir, a.dotfiles) : null
+        if (!read) {
+          results.push({ dir: item.rel, ok: false, code: dir.ok ? 'not-found' : dir.code })
+          continue
         }
-        total += res.data.entries.length
-        results.push({ dir: rel, ok: true, ...res.data })
-        if (!a.chain || res.data.entries.length !== 1 || !res.data.entries[0].dir) break
-        rel = join2(rel, res.data.entries[0].name)
+        total += read.kids.length
+        listed.push({ item, dir, read })
       }
+      const off = await env.scope.hiddenOf(env.info, [...new Set(listed.flatMap(({ dir, read }) => [...dirNames(dir), ...kidNames(read)]))], env.settings, { charge: env.charge })
+      const next = []
+      for (const { item, dir, read } of listed) {
+        if (dirHidden(dir, off)) {
+          results.push({ dir: item.rel, ok: false, code: 'not-found' })
+          continue
+        }
+        const data = folderData(read, off)
+        results.push({ dir: item.rel, ok: true, ...data })
+        if (a.chain && item.depth < 32 && data.entries.length === 1 && data.entries[0].dir) next.push({ rel: join2(item.rel, data.entries[0].name), depth: item.depth + 1 })
+      }
+      round = next
     }
     return done({ results })
   }
@@ -283,24 +337,23 @@ op('fs.searchNames', {
   async run(a, env) {
     const scope = a.dir ? await env.resolve(a.dir, { kind: 'dir' }) : null
     if (scope && !scope.ok) return fail(scope.code)
-    const res = await explorer.searchNames({ root: env.info.real, dir: scope ? scope.real : undefined, query: a.query, dotfiles: a.dotfiles, limit: explorer.SEARCH_LIMIT })
+    // Hidden names are left out before matching, and never counted.
+    const res = await explorer.searchNames({ root: env.info.real, dir: scope ? scope.real : undefined, query: a.query, dotfiles: a.dotfiles, limit: explorer.SEARCH_LIMIT, skip: (rel) => hiddenByName(rel, env.settings) })
     if (!res.ok) return fail('failed')
     const found = []
-    let hidden = 0
     for (const r of res.results) {
       const rel = wireRel(env, r.path)
-      if (rel) found.push({ rel, dir: !!r.dir })
-      else hidden++
+      if (rel && !hiddenByName(rel, env.settings)) found.push({ rel, dir: !!r.dir })
     }
-    const off = await env.scope.hiddenOf(env.info, found.map((r) => r.rel), env.settings)
+    const off = await env.scope.hiddenOf(env.info, found.map((r) => r.rel), env.settings, { charge: env.charge })
     const results = []
     let truncated = !!res.truncated
     for (const r of found) {
-      if (off.has(r.rel)) hidden++
-      else if (results.length >= a.limit) truncated = true
+      if (off.has(r.rel)) continue
+      if (results.length >= a.limit) truncated = true
       else results.push(r)
     }
-    return done({ results, truncated, hidden })
+    return done({ results, truncated, hidden: 0 })
   }
 })
 
@@ -310,24 +363,25 @@ op('fs.searchContent', {
   keep: ['results.*.text'],
   args: { query: A.query(L.contentQuery), limit: opt(A.int(1, L.results), L.results) },
   async run(a, env) {
-    const res = await explorer.searchContent({ root: env.info.real, query: a.query, limit: explorer.SEARCH_LIMIT })
+    // Hidden files are not searched (by name, before matching), the ignored
+    // ones a search found are dropped, and no count of them is ever given:
+    // it would tell what a hidden file holds.
+    const res = await explorer.searchContent({ root: env.info.real, query: a.query, limit: explorer.SEARCH_LIMIT, skip: (rel) => hiddenByName(rel, env.settings) })
     if (!res.ok) return fail('failed')
     const found = []
-    let hidden = 0
     for (const r of res.results) {
       const rel = wireRel(env, r.path)
-      if (rel) found.push({ rel, line: r.line, text: clip(r.text, 1000) })
-      else hidden++
+      if (rel && !hiddenByName(rel, env.settings)) found.push({ rel, line: r.line, text: clip(r.text, 1000) })
     }
-    const off = await env.scope.hiddenOf(env.info, [...new Set(found.map((r) => r.rel))], env.settings)
+    const off = await env.scope.hiddenOf(env.info, [...new Set(found.map((r) => r.rel))], env.settings, { charge: env.charge })
     const results = []
     let truncated = !!res.truncated
     for (const r of found) {
-      if (off.has(r.rel)) hidden++
-      else if (results.length >= a.limit) truncated = true
+      if (off.has(r.rel)) continue
+      if (results.length >= a.limit) truncated = true
       else results.push(r)
     }
-    return done({ results, truncated, hidden })
+    return done({ results, truncated, hidden: 0 })
   }
 })
 
@@ -346,7 +400,7 @@ op('fs.fileList', {
       else named.push(rel)
     }
     // git's list leaves out what it ignores; a walk (git failed) does not.
-    const off = res.source === 'git' ? new Set() : await env.scope.hiddenOf(env.info, named, env.settings)
+    const off = res.source === 'git' ? new Set() : await env.scope.hiddenOf(env.info, named, env.settings, { charge: env.charge })
     const files = []
     let truncated = !!res.truncated
     for (const rel of named) {
@@ -444,14 +498,18 @@ op('fs.sparse', {
     if (!res.ok) return fail('failed')
     if (!res.sparse) return done({ sparse: false, dirs: [] })
     const named = res.dirs.map((d) => cleanRel(String(d.rel || '').split(/[\\/]+/).filter(Boolean).join('/'))).filter(Boolean)
-    const off = await env.scope.hiddenOf(env.info, named, env.settings)
+    const off = await env.scope.hiddenOf(env.info, named, env.settings, { charge: env.charge })
     return done({ sparse: true, dirs: named.filter((r) => !off.has(r)).slice(0, L.entries) })
   }
 })
 
 // May the guest save this file (edit, and the type right for the files that
-// run things by themselves)? Checked on both names it has.
-const canWrite = (env, r) => env.rights.edit === true && writeAllowed(r.rel, env.rights) && writeAllowed(r.realRel, env.rights)
+// run things by themselves, the folder git runs its hooks from included)?
+// Checked on both names it has. env.extra: that folder (protectedOf).
+const mayWrite = (env, rel) => writeAllowed(rel, env.rights, env.extra)
+const canWrite = (env, r) => env.rights.edit === true && mayWrite(env, r.rel) && mayWrite(env, r.realRel)
+// A move, a new name or the Recycle Bin: never .git or .tessel themselves.
+const special = (r) => touchesSpecial(r.rel) || touchesSpecial(r.realRel || '')
 
 op('fs.read', {
   bulk: true,
@@ -553,7 +611,6 @@ op('fs.write', {
     const res = await writeForEdit({ file: r.exists ? r.real : r.entry, text: a.text, bom: a.bom, ...(a.expectHash ? { expectHash: a.expectHash } : {}) })
     if (res.conflict) return fail('conflict')
     if (!res.ok) return fail('failed')
-    if (/(^|\/)\.gitignore$/i.test(r.realRel)) env.scope.invalidate(env.info.real)
     return done({ size: res.size, mtimeMs: res.mtimeMs, sig: res.sig, hash: res.hash })
   }
 })
@@ -569,11 +626,10 @@ op('fs.create', {
     // A name a guest could not see once made (.git, .env...) is not made.
     if (!target.ok) return fail(target.code === 'not-found' ? 'not-allowed' : target.code)
     if (target.exists) return fail('exists')
-    if (!canWrite(env, target)) return fail('not-allowed')
+    if (special(target) || !canWrite(env, target)) return fail('not-allowed')
     if (!(await stillAllowed(env))) return fail('revoked')
     const res = explorer.create({ root: env.info.real, dir: target.parentReal, name: a.name, folder: a.folder })
     if (!res.ok) return fail(fs.existsSync(target.entry) ? 'exists' : 'failed')
-    env.scope.invalidate(env.info.real)
     return done({ rel })
   }
 })
@@ -590,11 +646,14 @@ op('fs.rename', {
     if (!to.ok) return fail(to.code === 'not-found' ? 'not-allowed' : to.code)
     // Only a change of case on Windows is the same file.
     if (to.exists && lower(to.entry) !== lower(from.entry)) return fail('exists')
-    if (!canWrite(env, from) || !canWrite(env, to)) return fail('not-allowed')
+    if (special(from) || special(to) || !canWrite(env, from) || !canWrite(env, to)) return fail('not-allowed')
+    // A folder with anything hidden or protected below: it would show under
+    // its new name, or leave its place.
+    if (from.isDir && (await env.scope.hiddenBelow(env.info, from.realRel, { settings: env.settings, rights: env.rights, extra: env.extra, charge: env.charge }))) return fail('not-allowed')
     if (!(await stillAllowed(env))) return fail('revoked')
     const res = explorer.rename({ root: env.info.real, path: from.entry, name: a.name })
     if (!res.ok) return fail('failed')
-    env.scope.invalidate(env.info.real)
+    env.scope.invalidatePaths(env.info.real, [from.realRel, toRel])
     return done({ rel: toRel })
   }
 })
@@ -605,12 +664,13 @@ op('fs.trash', {
   async run(a, env) {
     const r = await env.resolve(a.path, { mustExist: true })
     if (!r.ok) return fail(r.code)
-    if (!canWrite(env, r)) return fail('not-allowed')
+    if (special(r) || !canWrite(env, r)) return fail('not-allowed')
+    if (r.isDir && (await env.scope.hiddenBelow(env.info, r.realRel, { settings: env.settings, rights: env.rights, extra: env.extra, charge: env.charge }))) return fail('not-allowed')
     if (typeof env.ctx.trashItem !== 'function') return fail('unavailable')
     if (!(await stillAllowed(env))) return fail('revoked')
     const res = await explorer.trash({ root: env.info.real, path: r.entry }, env.ctx.trashItem)
     if (!res.ok) return fail('failed')
-    env.scope.invalidate(env.info.real)
+    env.scope.invalidatePaths(env.info.real, [r.realRel])
     return done({ rel: a.path })
   }
 })
@@ -619,6 +679,7 @@ op('fs.trash', {
 const NOTES = '.tessel/notes.md'
 
 op('notes.load', {
+  bulk: true,
   keep: ['text'],
   async run(a, env) {
     const r = await env.resolve(NOTES, { mustExist: false })
@@ -636,6 +697,8 @@ op('notes.save', {
   args: { text: A.text(L.notesBytes), baseMtime: opt(A.num, null) },
   async run(a, env) {
     if (Buffer.byteLength(a.text, 'utf8') > L.notesBytes) return fail('too-large')
+    // Agents read the notes: saved by a guest only with the type right too.
+    if (!mayWrite(env, NOTES)) return fail('not-allowed')
     let r = await env.resolve(NOTES, { mustExist: false })
     if (!r.ok && r.code === 'not-found') {
       // No .tessel folder yet: made, as the host's own first open does.
@@ -710,15 +773,6 @@ function projectEntries(env, place, list, fields) {
     entries.push(out)
   }
   return { entries, hidden, truncated }
-}
-
-// Before a change on files: each is one a guest may see (by name, and on
-// disk where it is there; a file deleted with its folder by name).
-async function visiblePaths(env, rels) {
-  const off = await env.scope.hiddenOf(env.info, rels, env.settings)
-  if (off.size) return false
-  for (const rel of rels) if (!(await env.resolve(rel, { mustExist: 'any' })).ok) return false
-  return true
 }
 
 // The place of the project in its repository, or the answer to give.
@@ -806,14 +860,17 @@ op('scm.history', {
   serial: true,
   args: { limit: opt(A.int(1, L.historyLimit), 50), base: opt(A.ref, null) },
   async run(a, env) {
-    const res = await sourceControl.scmHistory({ root: env.info.real, limit: a.limit, ...(a.base ? { base: a.base } : {}) })
+    const { place, failed } = await placeOrFail(env)
+    if (failed) return failed
+    // A project below its repository's top: its own commits only.
+    const res = await sourceControl.scmHistory({ root: env.info.real, limit: a.limit, ...(a.base ? { base: a.base } : {}), ...(place.prefix ? { paths: [place.prefix] } : {}) })
     if (!res.ok) return gitFail(env, res.error)
-    // No author emails: name, time and message only.
+    // No emails: name, time and message only (a trailer's email masked).
     const items = (Array.isArray(res.items) ? res.items : []).slice(0, a.limit).map((c) => ({
       id: c.id,
       parentIds: (Array.isArray(c.parentIds) ? c.parentIds : []).filter(sourceControl.isCommitId).slice(0, 16),
-      subject: clip(c.subject, 1000),
-      message: clip(c.message, L.message),
+      subject: noEmails(clip(c.subject, 1000)),
+      message: noEmails(clip(c.message, L.message)),
       author: clip(c.author, 200),
       displayId: clip(c.displayId, 16),
       timestamp: num(c.timestamp) ?? undefined,
@@ -832,6 +889,7 @@ op('scm.history', {
 })
 
 op('scm.commitFiles', {
+  bulk: true,
   serial: true,
   args: { commit: A.commit },
   async run(a, env) {
@@ -848,11 +906,12 @@ op('scm.branchCompare', {
   kind: 'heavy',
   serial: true,
   async run(a, env) {
-    const res = await sourceControl.scmBranchCompare({ root: env.info.real })
-    if (!res.ok) return gitFail(env, res.error)
-    if (!res.base) return done({ base: null })
     const { place, failed } = await placeOrFail(env)
     if (failed) return failed
+    // A project below its repository's top: commits counted for its files.
+    const res = await sourceControl.scmBranchCompare({ root: env.info.real, ...(place.prefix ? { paths: [place.prefix] } : {}) })
+    if (!res.ok) return gitFail(env, res.error)
+    if (!res.base) return done({ base: null })
     const { entries, hidden, truncated } = projectEntries(env, place, res.files, ['status', 'added', 'removed', 'binary'])
     // A project below its repository's top: the line totals would count the
     // rest of the repository too, so none.
@@ -876,6 +935,7 @@ op('scm.branchCompare', {
 
 op('scm.fileHistory', {
   kind: 'heavy',
+  bulk: true,
   serial: true,
   args: { path: A.path, limit: opt(A.int(1, L.historyLimit), 50) },
   async run(a, env) {
@@ -885,7 +945,7 @@ op('scm.fileHistory', {
     if (!r.ok) return fail(r.code)
     const res = await sourceControl.scmFileHistory({ root: env.info.real, path: toTop(place, a.path), limit: a.limit })
     if (!res.ok) return gitFail(env, res.error)
-    const items = (Array.isArray(res.items) ? res.items : []).slice(0, a.limit).map((c) => ({ id: c.id, author: clip(c.author, 200), time: num(c.time) ?? 0, message: clip(c.message, L.message) }))
+    const items = (Array.isArray(res.items) ? res.items : []).slice(0, a.limit).map((c) => ({ id: c.id, author: clip(c.author, 200), time: num(c.time) ?? 0, message: noEmails(clip(c.message, L.message)) }))
     return done({ items, hasMore: !!res.hasMore, uncommitted: !!res.uncommitted, rel: a.path })
   }
 })
@@ -894,15 +954,41 @@ op('scm.commitInfo', {
   serial: true,
   args: { commit: A.commit },
   async run(a, env) {
-    const res = await sourceControl.scmCommitInfo({ root: env.info.real, commit: a.commit })
+    const { place, failed } = await placeOrFail(env)
+    if (failed) return failed
+    // A project below its repository's top: the numbers of its files only.
+    const res = await sourceControl.scmCommitInfo({ root: env.info.real, commit: a.commit, ...(place.prefix ? { paths: [place.prefix] } : {}) })
     if (!res.ok) return gitFail(env, res.error)
     const s = res.stats || {}
     return done({ stats: { files: num(s.files) ?? 0, insertions: num(s.insertions) ?? 0, deletions: num(s.deletions) ?? 0 }, webUrl: maskUrl(res.webUrl) })
   }
 })
 
-// Stage, unstage, discard: the files a guest names, each one it may see.
-function changeOp(name, call) {
+// The changed files a guest's stage, unstage or discard is made on: the
+// files it names, and for a folder the changed files below it, each one it
+// may see (a discard: also one it may write; a rename's old name too when
+// visible). -> { rels } | { failed }
+async function changedFiles(env, place, asked, { write = false } = {}) {
+  const st = await sourceControl.scmStatus({ root: env.info.real })
+  if (!st.ok) return { failed: gitFail(env, st.error) }
+  if (!st.repo) return { failed: fail('not-repo') }
+  const want = asked.map(lower)
+  const under = (rel) => want.some((w) => lower(rel) === w || lower(rel).startsWith(`${w}/`))
+  const found = new Set()
+  for (const e of Array.isArray(st.entries) ? st.entries : []) {
+    for (const p of [e && e.path, e && e.oldPath]) {
+      const rel = typeof p === 'string' && underRoot(place, p) ? fromTop(place, p) : null
+      if (rel && under(rel) && !hiddenByName(rel, env.settings)) found.add(rel)
+    }
+  }
+  const off = await env.scope.hiddenOf(env.info, [...found], env.settings, { charge: env.charge })
+  const rels = [...found].filter((r) => !off.has(r) && !touchesSpecial(r) && (!write || mayWrite(env, r)))
+  return rels.length ? { rels } : { failed: fail('not-found') }
+}
+
+// Stage, unstage, discard: the changed files a guest may see (changedFiles),
+// never one git reads through a filter (stage, discard).
+function changeOp(name, call, { write = false, filtered = false } = {}) {
   op(name, {
     kind: 'write',
     right: 'git',
@@ -911,17 +997,20 @@ function changeOp(name, call) {
     async run(a, env) {
       const { place, failed } = await placeOrFail(env)
       if (failed) return failed
-      if (!(await visiblePaths(env, a.paths))) return fail('not-found')
+      const picked = await changedFiles(env, place, a.paths, { write })
+      if (picked.failed) return picked.failed
+      const tops = picked.rels.map((p) => toTop(place, p))
+      if (filtered && (await sourceControl.filteredPaths(place.top, tops)).length) return fail('not-allowed')
       if (!(await stillAllowed(env))) return fail('revoked')
-      const res = await call({ root: env.info.real, paths: a.paths.map((p) => toTop(place, p)) }, env)
+      const res = await call({ root: env.info.real, paths: tops }, env)
       if (!res.ok) return gitFail(env, res.error)
-      return done(name === 'scm.discard' ? { restored: num(res.restored) ?? 0, trashed: num(res.trashed) ?? 0 } : {})
+      return done(name === 'scm.discard' ? { restored: num(res.restored) ?? 0, trashed: num(res.trashed) ?? 0, count: picked.rels.length } : { count: picked.rels.length })
     }
   })
 }
-changeOp('scm.stage', (q) => sourceControl.scmStage(q))
+changeOp('scm.stage', (q) => sourceControl.scmStage(q), { filtered: true })
 changeOp('scm.unstage', (q) => sourceControl.scmUnstage(q))
-changeOp('scm.discard', (q, env) => sourceControl.scmDiscard(q, env.ctx.trashItem))
+changeOp('scm.discard', (q, env) => sourceControl.scmDiscard(q, env.ctx.trashItem), { write: true, filtered: true })
 
 op('scm.commit', {
   kind: 'write',
@@ -930,12 +1019,205 @@ op('scm.commit', {
   args: { message: A.text(L.message) },
   async run(a, env) {
     if (!a.message.replace(/\0/g, '').trim()) return fail('no-message')
-    const { failed } = await placeOrFail(env)
+    const { place, failed } = await placeOrFail(env)
     if (failed) return failed
+    // Nothing staged that the guest can't see (outside the project, or
+    // hidden or ignored for guests inside it): the host commits it first.
+    const staged = await sourceControl.stagedPaths(place.top)
+    if (!staged) return fail('failed')
+    if (staged.some((p) => !underRoot(place, p))) return fail('staged-outside')
+    const inside = staged.map((p) => fromTop(place, p))
+    if (inside.some((rel) => !rel || hiddenByName(rel, env.settings) || touchesSpecial(rel))) return fail('staged-hidden')
+    if ((await env.scope.hiddenOf(env.info, inside, env.settings, { charge: env.charge })).size) return fail('staged-hidden')
+    // A file the host staged by force that git's rules ignore (git no longer
+    // says so of a staged file without --no-index): one check for all of
+    // them, counted in the guest's budget; git failing: refused.
+    if (inside.length && hidesPrivate(env.settings)) {
+      if (!env.charge()) return fail('busy')
+      const ignored = await env.ctx.ignoreCheck(env.info.real, await localGitArgs(place.top), inside, { noIndex: true })
+      if (!ignored || ignored.size) return fail('staged-hidden')
+    }
     if (!(await stillAllowed(env))) return fail('revoked')
     const res = await sourceControl.scmCommit({ root: env.info.real, message: a.message })
     if (!res.ok) return gitFail(env, res.error)
     return done({ sha: sourceControl.isCommitId(res.sha) ? res.sha : null })
+  }
+})
+
+// --- Local History (phase 2b: the explorer's Timeline) ---------------------------
+// The versions the host's editor kept of a file at its saves (localHistory.js,
+// ctx.localHistory). Its records are named by the file's path as the host's
+// editor had it: the project's folder as the window gives it, then the path
+// (its real path too, for a file opened through a link).
+const LOCAL_ID = /^[a-z0-9]{6,32}$/
+function localKeys(env, r) {
+  const keys = []
+  for (const k of [join(env.info.root, ...r.rel.split('/')), r.real, r.entry]) if (typeof k === 'string' && k && !keys.some((x) => lower(x) === lower(k))) keys.push(k)
+  return keys
+}
+op('history.local', {
+  args: { path: A.path },
+  async run(a, env) {
+    const lh = env.ctx.localHistory
+    if (!lh || typeof lh.list !== 'function') return fail('unavailable')
+    // A file deleted since still has its versions.
+    const r = await env.resolve(a.path, { mustExist: 'any' })
+    if (!r.ok) return fail(r.code)
+    if (r.exists && !r.isFile) return fail('not-file')
+    for (const key of localKeys(env, r)) {
+      const res = await lh.list({ path: key })
+      const list = res && res.ok && Array.isArray(res.entries) ? res.entries : []
+      if (!list.length) continue
+      const entries = list
+        .filter((e) => e && LOCAL_ID.test(String(e.id)) && Number.isFinite(e.timestamp))
+        .slice(0, L.localEntries)
+        .map((e) => ({ id: e.id, source: e.source === 'save' ? 'save' : 'other', timestamp: e.timestamp }))
+      return done({ entries, rel: a.path })
+    }
+    return done({ entries: [], rel: a.path })
+  }
+})
+op('history.localRead', {
+  bulk: true,
+  keep: ['text'],
+  args: { path: A.path, id: (v) => (typeof v === 'string' && LOCAL_ID.test(v) ? OK(v) : BAD) },
+  async run(a, env) {
+    const lh = env.ctx.localHistory
+    if (!lh || typeof lh.read !== 'function') return fail('unavailable')
+    const r = await env.resolve(a.path, { mustExist: 'any' })
+    if (!r.ok) return fail(r.code)
+    if (r.exists && !r.isFile) return fail('not-file')
+    for (const key of localKeys(env, r)) {
+      const res = await lh.read({ path: key, id: a.id })
+      if (!res || !res.ok || typeof res.text !== 'string') continue
+      if (Buffer.byteLength(res.text, 'utf8') > L.textBytes) return fail('too-large')
+      return done({ text: res.text })
+    }
+    return fail('not-found')
+  }
+})
+
+// --- A task branch's changes (phase 2b: the review, read only) -------------------
+// A card of the project's board with its own copy (ctx.taskCopy(project, id)
+// -> { path, branch, target }, the host's window's: never sent), read from
+// the project's folder as a guest's git (shareReview.js: no hooks, filters
+// or drivers, literal paths, each git process in the guest's budget). What
+// the guest gets is inside the project only, relative to it, the hidden
+// files counted by name, never named; no author emails (commit messages'
+// masked too), no merge, discard, commit or push (the host's alone). A diff
+// is only ever of one of the files the branch changed that the guest sees.
+const TASK_ID = (v) => (typeof v === 'string' && /^[\w.-]{1,100}$/.test(v) ? OK(v) : BAD)
+function taskPlace(env, a) {
+  const copy = typeof env.ctx.taskCopy === 'function' ? env.ctx.taskCopy(env.project, a.task) : null
+  if (!copy) return { failed: fail('not-found') }
+  return { copy, args: { root: env.info.root, path: copy.path, branch: copy.branch, target: copy.target } }
+}
+// The repository's top -> the project's place below it.
+function placeFromTop(env, top) {
+  if (typeof top !== 'string' || !top) return null
+  try {
+    const topReal = fs.realpathSync.native(top)
+    const prefix = relFrom(topReal, env.info.real)
+    if (prefix === null) return null
+    env.hostPaths.push(top, topReal)
+    return { prefix }
+  } catch {
+    return null
+  }
+}
+// Paths from the repository's top -> the ones a guest may name, and how
+// many of the project's it may not (by name and what git ignores: never by
+// what they hold).
+async function visibleFromTop(env, place, list) {
+  const named = []
+  let hidden = 0
+  for (const p of Array.isArray(list) ? list : []) {
+    if (typeof p !== 'string' || !underRoot(place, p)) continue
+    const rel = fromTop(place, p)
+    if (!rel || hiddenByName(rel, env.settings) || touchesSpecial(rel)) hidden++
+    else named.push(rel)
+  }
+  const off = named.length ? await env.scope.hiddenOf(env.info, named, env.settings, { charge: env.charge }) : new Set()
+  return { rels: named.filter((r) => !off.has(r)), hidden: hidden + named.filter((r) => off.has(r)).length }
+}
+// The branch's facts and the place of the project in its repository.
+async function branchOf(env, a) {
+  const t0 = taskPlace(env, a)
+  if (t0.failed) return t0
+  const res = await env.review.info(t0.args, env.charge)
+  if (!res || !res.ok) return { failed: fail(res && typeof res.code === 'string' ? res.code : 'failed') }
+  const place = placeFromTop(env, res.repo)
+  if (!place) return { failed: fail('failed') }
+  return { branch: res, place }
+}
+op('review.info', {
+  kind: 'heavy',
+  serial: true,
+  args: { task: TASK_ID },
+  async run(a, env) {
+    const { branch: res, place, failed } = await branchOf(env, a)
+    if (failed) return failed
+    const shown = await visibleFromTop(env, place, res.files.map((f) => f && f.path))
+    const byRel = new Map(res.files.filter((f) => f && typeof f.path === 'string').map((f) => [fromTop(place, f.path), f]))
+    const files = []
+    let truncated = false
+    for (const rel of shown.rels) {
+      if (files.length >= L.scmEntries) {
+        truncated = true
+        break
+      }
+      const f = byRel.get(rel)
+      files.push({
+        path: rel,
+        status: /^[AMDUX]$/.test(f.status) ? f.status : 'M',
+        added: num(f.added) ?? 0,
+        removed: num(f.removed) ?? 0,
+        binary: !!f.binary,
+        ...(typeof f.blob === 'string' && /^[0-9a-f]{7,64}$/.test(f.blob) ? { blob: f.blob } : {})
+      })
+    }
+    const conflicts = await visibleFromTop(env, place, res.conflicts)
+    const uncommitted = await visibleFromTop(env, place, res.uncommitted)
+    return done({
+      branch: clip(res.branch, 200),
+      target: clip(res.target, 200),
+      head: sourceControl.isCommitId(res.head) ? res.head : null,
+      files,
+      hidden: shown.hidden,
+      truncated,
+      commits: res.commits
+        .slice(0, L.historyLimit)
+        .filter((c) => c && sourceControl.isCommitId(c.sha))
+        .map((c) => ({ sha: c.sha, author: clip(c.author, 200), time: num(c.time) ?? 0, subject: clip(noEmails(c.subject), 1000), body: clip(noEmails(c.body), L.message) })),
+      conflicts: conflicts.rels.slice(0, L.scmEntries),
+      uncommitted: uncommitted.rels.slice(0, L.scmEntries),
+      mergeCheck: res.mergeCheck === 'failed' ? 'failed' : 'done',
+      behind: num(res.behind) ?? 0,
+      copyExists: !!res.copyExists
+    })
+  }
+})
+op('review.diff', {
+  bulk: true,
+  serial: true,
+  keep: ['text'],
+  maxBytes: 3 * 1024 * 1024,
+  args: { task: TASK_ID, file: A.path },
+  async run(a, env) {
+    const { branch, place, failed } = await branchOf(env, a)
+    if (failed) return failed
+    // Exactly one of the files the branch changed that the guest sees (never
+    // a folder or a pattern of git's).
+    const shown = await visibleFromTop(env, place, branch.files.map((f) => f && f.path))
+    if (!shown.rels.includes(a.file)) return fail('not-found')
+    const res = await env.review.diff(branch, toTop(place, a.file), env.charge)
+    if (!res.ok) return fail(res.code || 'failed')
+    // Only the changes: git's header names the file from the repository's
+    // top (the folders above the project).
+    const at = res.text.search(/^@@ /m)
+    const text = at >= 0 ? res.text.slice(at) : /^Binary files .* differ$/m.test(res.text) ? 'Binary files differ' : ''
+    if (Buffer.byteLength(text, 'utf8') > L.diffBytes) return done({ text: text.slice(0, L.diffBytes), truncated: true, rel: a.file })
+    return done({ text, truncated: !!res.truncated, rel: a.file })
   }
 })
 
@@ -951,10 +1233,14 @@ function rootOf(roots, project) {
   return typeof v === 'string' ? v : null
 }
 
-// createShareRequests({ scope?, log? }) -> { handle(req, ctx), scope }
+// createShareRequests({ scope?, log?, ignoreCheck? }) -> { handle(req, ctx), scope }
 // req: { op, project, args } as the guest sent it.
-// ctx: { roots, rights, settings, trashItem?, recheck? }: the host's.
-export function createShareRequests({ scope = createShareScope(), log = null } = {}) {
+// ctx: { roots, rights, settings, trashItem?, recheck?, spend?, localHistory?
+// (the editor's Local History: list, read), taskCopy? ((project, task id) ->
+// the card's copy { path, branch, target } | null) }: the host's.
+// ignoreCheck: git check-ignore (shareScope.js checkIgnore; tests give theirs).
+// review: a task branch's reading for guests (shareReview.js).
+export function createShareRequests({ scope = createShareScope(), log = null, ignoreCheck = checkIgnore, review = createGuestReview() } = {}) {
   const chains = new Map() // project's real folder -> the git work queued on it
   function serial(key, fn) {
     const prev = chains.get(key) || Promise.resolve()
@@ -983,20 +1269,32 @@ export function createShareRequests({ scope = createShareScope(), log = null } =
     const info = scope.root(rootPath)
     if (!info) return fail('no-project')
     const settings = ctx.settings && typeof ctx.settings === 'object' ? ctx.settings : {}
+    // The git work it causes counts against the guest's budget.
+    const charge = () => (typeof ctx.spend === 'function' ? ctx.spend('git') !== false : true)
     const env = {
       info,
+      project,
+      review,
       rights,
       settings,
-      ctx,
+      ctx: { ...ctx, ignoreCheck },
       scope,
+      charge,
+      extra: null,
       place: undefined,
       hostPaths: [info.root, info.real],
-      resolve: (rel, opts = {}) => scope.resolve(rootPath, rel, { settings, ...opts })
+      resolve: (rel, opts = {}) => scope.resolve(rootPath, rel, { settings, charge, ...opts })
     }
     let res
     try {
-      res = await (spec.serial ? serial(lower(info.real), () => spec.run(a, env)) : spec.run(a, env))
+      // Every git command of a guest's request: hooks, filters and the other
+      // settings that run programs off (gitSafety.js).
+      res = await runAsGuest(async () => {
+        if (spec.kind === 'write' || name === 'fs.read') env.extra = await scope.protectedOf(info)
+        return spec.serial ? serial(lower(info.real), () => spec.run(a, env)) : spec.run(a, env)
+      })
     } catch (err) {
+      if (err && err.code === 'busy') return fail('busy')
       if (log && log.warn) log.warn('liveshare', `request ${name} failed: ${err && err.message}`) // i18n-ignore log line
       return fail('failed')
     }

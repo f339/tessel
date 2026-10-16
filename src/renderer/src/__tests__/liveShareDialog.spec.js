@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import LiveShareDialog from '../components/LiveShareDialog.vue'
 import { fakeApi, OFF_HOST, OFF_GUEST, invite, guest, sharing } from './liveShareFakes'
+import { NO_RIGHTS } from '../../../shared/liveShareRights'
 
 const PROJECTS = { projects: [{ id: 'ws-1', name: 'tessel' }, { id: 'ws-2', name: 'site' }], projectIds: ['ws-1'] }
 
@@ -44,7 +45,7 @@ describe('LiveShareDialog: before sharing', () => {
     // The first invitation: 1 hour, watch only, unless you change it.
     expect(wrapper.find('[data-test="ls-first-toggle"]').text()).toContain('1 hour, watch only')
     await wrapper.find('[data-test="ls-start"]').trigger('click')
-    expect(api.start).toHaveBeenCalledWith({ name: 'ada', projects: ['ws-1'], invite: { label: '', lifetime: 'hour', maxUses: 0, rights: { type: false, open: false, close: false } } })
+    expect(api.start).toHaveBeenCalledWith({ name: 'ada', projects: ['ws-1'], invite: { label: '', lifetime: 'hour', maxUses: 0, rights: { ...NO_RIGHTS, type: false, open: false, close: false } } })
     wrapper.unmount()
   })
 
@@ -63,7 +64,7 @@ describe('LiveShareDialog: before sharing', () => {
     await flushPromises()
     expect(wrapper.find('[data-test="ls-first-toggle"]').text()).toContain('1 day, open')
     await wrapper.find('[data-test="ls-start"]').trigger('click')
-    expect(api.start).toHaveBeenCalledWith({ name: 'ada', projects: ['ws-1'], invite: { label: 'Team', lifetime: 'day', maxUses: 3, rights: { type: false, open: true, close: false } } })
+    expect(api.start).toHaveBeenCalledWith({ name: 'ada', projects: ['ws-1'], invite: { label: 'Team', lifetime: 'day', maxUses: 3, rights: { ...NO_RIGHTS, type: false, open: true, close: false } } })
     wrapper.unmount()
   })
 
@@ -220,10 +221,10 @@ describe('LiveShareDialog: Join', () => {
     expect(api.join).toHaveBeenCalledWith({ invite: 'tessel-ls:xyz', name: 'Bob' })
     await guestSays({ state: 'waiting', code: '123 456' })
     expect(wrapper.find('[data-test="ls-code"]').text()).toBe('Your code is 123 456. Tell your host, so they know it is you.')
-    await guestSays({ state: 'joined', host: 'Ada', rights: { type: false, open: false, close: false } })
+    await guestSays({ state: 'joined', host: 'Ada', rights: { ...NO_RIGHTS, type: false, open: false, close: false } })
     expect(wrapper.find('[data-test="ls-no-projects"]').text()).toBe('Ada has not given you a project to see yet.')
     expect(wrapper.find('[data-test="ls-rights"]').text()).toBe('You can watch. The host has not let you type yet.')
-    await guestSays({ state: 'joined', host: 'Ada', projects: [{ id: 'ws-a', layout: null }], rights: { type: true, open: true, close: false } })
+    await guestSays({ state: 'joined', host: 'Ada', projects: [{ id: 'ws-a', layout: null }], rights: { ...NO_RIGHTS, type: true, open: true, close: false } })
     expect(wrapper.find('[data-test="ls-rights"]').text()).toBe('You can watch and type in its terminals and agents, open terminals and agents.')
     await wrapper.find('[data-test="ls-leave"]').trigger('click')
     expect(api.leave).toHaveBeenCalled()

@@ -18,8 +18,18 @@
 //   with those settings overridden to nothing (neutralize()).
 // The user's own global settings (git-lfs and the like) are not the
 // repository's: they are left alone.
+//
+// A Live Share guest's request (liveShare/shareRequests.js runs it inside
+// runAsGuest) is different: every git call it makes runs with all of those
+// settings off, from every config file (the repository's even when trusted,
+// what it includes, the user's own), with no hooks at all (core.hooksPath to
+// an empty folder of Tessel's), no commit signing and no automatic gc. A
+// guest who may edit files could otherwise make the host's git run them: a
+// hook manager's config, a filter script, an fsmonitor hook in the project.
 import fs from 'fs'
+import os from 'os'
 import crypto from 'crypto'
+import { AsyncLocalStorage } from 'async_hooks'
 import { dirname, join, resolve } from 'path'
 import { run } from './agentTools'
 
@@ -205,6 +215,7 @@ const LOCAL_TTL_MS = 5000
 // each (each start blocks the main thread).
 const localInflight = new Map() // key + options -> Promise of args
 export function localGitArgs(top, { ask = true, hooksDir } = {}) {
+  if (inGuestGit()) return guestGitArgs(top)
   const key = `local:${String(top).toLowerCase()}`
   const hit = localCache.get(key)
   if (hit && Date.now() - hit.at < LOCAL_TTL_MS) return Promise.resolve(hit.args)
@@ -236,5 +247,58 @@ async function readLocalGitArgs(top, key, { ask, hooksDir }) {
   }
   localCache.set(key, { at: Date.now(), args })
   if (localCache.size > 500) localCache.delete(localCache.keys().next().value)
+  return args
+}
+
+// --- A Live Share guest's git -------------------------------------------------------
+const guestScope = new AsyncLocalStorage()
+// fn run as a guest's request: every git call inside gets guestGitArgs.
+export const runAsGuest = (fn) => guestScope.run(true, fn)
+export const inGuestGit = () => guestScope.getStore() === true
+
+// An empty folder of Tessel's for core.hooksPath (a path that does not
+// exist could be made by anyone on the drive): made once, made again if
+// anything is found in it.
+let noHooks = null
+export function emptyHooksDir() {
+  try {
+    if (noHooks && fs.readdirSync(noHooks).length === 0) return noHooks
+  } catch {
+    noHooks = null
+  }
+  noHooks = fs.mkdtempSync(join(os.tmpdir(), 'tessel-nohooks-'))
+  return noHooks
+}
+
+// The settings that run programs, from every config file the repository
+// reads (system, user, the repository's and what it includes), and the merge
+// drivers (a merge runs them).
+const MERGE_DRIVER_RE = /^merge\.(.+)\.driver$/i
+export const GUEST_CONFIG_ARGS = ['config', '--includes', '-z', '--get-regexp', `${RISKY_PATTERN}|^merge\\..+\\.driver$`]
+// What a guest's git always gets beyond them (credential.helper empty: no
+// helper at all).
+export const GUEST_FIXED_ARGS = ['-c', 'commit.gpgSign=false', '-c', 'tag.gpgSign=false', '-c', 'diff.external=', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'core.alternateRefsCommand=', '-c', 'core.sshCommand=ssh', '-c', 'credential.helper=']
+// The merge drivers named in config output, each turned off.
+export function mergeDriverArgs(out) {
+  const names = new Set()
+  for (const rec of String(out || '').split('\0')) {
+    const key = (rec.includes('\n') ? rec.slice(0, rec.indexOf('\n')) : rec).trim()
+    const m = MERGE_DRIVER_RE.exec(key)
+    // eslint-disable-next-line no-control-regex -- control characters are what it refuses
+    if (m && !/[\u0000-\u001f=]/.test(m[1])) names.add(m[1])
+  }
+  return [...names].sort().flatMap((n) => ['-c', `merge.${n}.driver=`])
+}
+const guestCache = new Map() // top -> { at, args }
+export async function guestGitArgs(top) {
+  const key = `guest:${String(top).toLowerCase()}`
+  const hit = guestCache.get(key)
+  if (hit && Date.now() - hit.at < LOCAL_TTL_MS) return hit.args
+  const res = await run('git', ['-C', top, ...GUEST_CONFIG_ARGS], { timeout: 10000 })
+  const risky = res.ok ? parseRisky(res.stdout) : []
+  // Every hook off whatever the config says (also a hooksPath it sets).
+  const args = [...neutralize(risky, { hooksDir: emptyHooksDir() }), ...GUEST_FIXED_ARGS, ...(res.ok ? mergeDriverArgs(res.stdout) : [])]
+  guestCache.set(key, { at: Date.now(), args })
+  if (guestCache.size > 200) guestCache.delete(guestCache.keys().next().value)
   return args
 }

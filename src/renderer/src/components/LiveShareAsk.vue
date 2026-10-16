@@ -19,7 +19,7 @@
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { UserPlus, XCircle, SquareTerminal } from 'lucide-vue-next'
 import RightsChecks from './liveshare/RightsChecks.vue'
-import { cleanRights } from '../../../shared/liveShareRights'
+import { cleanRights, setRight } from '../../../shared/liveShareRights'
 import { viaName } from '../liveShareAccess'
 import { t } from '../i18n'
 
@@ -73,7 +73,7 @@ function toggle(p) {
   ticked.value = next
 }
 function toggleRight(id, on) {
-  rights.value = { ...rights.value, [id]: !!on }
+  rights.value = setRight(rights.value, id, on)
 }
 const viaText = computed(() => {
   const a = props.ask

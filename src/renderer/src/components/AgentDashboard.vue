@@ -118,14 +118,17 @@ function pill(r) {
 // Its team, as in the sidebar: the team's number (the lead's outlined).
 const panel = inject('panelCtx', null)
 function teamOf(r) {
+  // A Live Share host's pane: the host's name for its team.
+  if (r.teamName) return r.teamName
   if (!r.team || !panel || typeof panel.teamById !== 'function') return ''
   const team = panel.teamById(r.team)
   return team && team.name ? team.name : ''
 }
 
 // Idle terminal agents that can sleep (a chat has no sleep; the pane you are
-// in stays awake: App's sleepPanes says why when it skips one).
-const sleepable = computed(() => rows.value.filter((r) => dashboardBucket(r) === 'idle' && !r.chat && !r.focused))
+// in stays awake: App's sleepPanes says why when it skips one; a Live Share
+// host's pane is the host's to put to sleep).
+const sleepable = computed(() => rows.value.filter((r) => dashboardBucket(r) === 'idle' && !r.chat && !r.focused && !r.liveShare))
 // Esc in the search box clears it first (then a fullscreen panel restores).
 function clearOnEsc(e) {
   if (!view.query) return

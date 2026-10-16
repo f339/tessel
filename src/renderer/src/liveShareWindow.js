@@ -38,6 +38,28 @@
 // opened there anyway (a page, a file) comes back to a project of yours when
 // its project goes.
 //
+// Phase 2, host: each shared project's task board goes to main as it changes
+// (setTasks: guests get a masked copy), a guest's change of a board (main's
+// 'task' request, already checked there) is checked again here (the guest
+// still in, with the right to manage tasks, seeing the project, the card on
+// that project's board) and made with deps.taskBoard; every change a guest
+// makes (a save, a commit, a task...) is a toast (onGuestAction, actionText).
+// Guest: what you may do in each of the host's projects goes to the panels
+// (liveShareGuestAccess.js: edit, git, tasks, or why not: no access any
+// more, a host too old, the session over), and the host's board of the
+// project on screen comes as a source for the Tasks tab (taskSource),
+// followed while it is on screen; its changes go to the host.
+//
+// Phase 2b, host: each shared project's panes as their headers and the
+// Dashboard show them (deps.paneAgents) and its finished tasks
+// (deps.historyRecords) go to main as they change; a guest asking to delete a
+// card with its own copy of the project makes you confirm, as your own ✕
+// does (deps.taskBoard.removeWithCopy). Guest: the host's panes' model,
+// effort, state and task for their headers, the sidebar and the Dashboard
+// (paneAgent), a pane's sub-agents (childrenSource), the host's usage with the
+// right (hostUsage), a project's task history (historySource, read while its
+// tab is shown) and a task branch's review, read only (reviewSource).
+//
 // Your own view of a host's agent pane: its header's chat button shows its
 // conversation as a chat (read only: nothing is sent from it) or its terminal
 // again, on your screen only (setGuestView: the host's pane, its mode, its
@@ -47,6 +69,10 @@
 // view says so. The conversation comes from the host (chatSource: main's
 // liveShare:chatWatch, read only); a host whose Tessel does not share
 // conversations yet: the chat view says so.
+//
+// Phase 2c (liveShareWindowFeeds.js): your browser panes in the shared
+// projects and the activity guests follow go to main; as a guest, the host's
+// browser panes, its past conversations and its activity come to the panels.
 import { reactive, watch } from 'vue'
 import { t } from './i18n'
 import { buildGuestTree, hostLayoutFromWorkspace, hostChatsFromWorkspace, GUEST_CHAT_AGENTS } from './liveShareLayout'
@@ -54,6 +80,9 @@ import { cleanRights } from '../../shared/liveShareRights'
 import { shownRights } from './liveShareRights'
 import { initials, inviteName, personName, joinedGuests } from './liveShareAccess'
 import { LS_TEXT_SIZES } from './liveShareFit'
+import { setLshareAccess, endLshareSession, forgetLshareAccess } from './liveShareGuestAccess'
+import { COLUMNS } from '../../shared/taskModel'
+import { createLiveShareFeeds } from './liveShareWindowFeeds'
 
 // Typing shown on a pane is main's (typed in the last 3 s, said again every
 // 4 s while it goes on and when it ends); one main never said the end of (a
@@ -100,6 +129,54 @@ export function rightsText(rights) {
 // the host.
 export const guestWsName = (project, host) => t('liveShare.wsName2', '{{project}} — {{host}}', { project, host: host || '?' })
 
+// A change a guest made (main's guestAction entry), in words: "Ana saved
+// src/app.js".
+export function actionText(a) {
+  if (!a || typeof a !== 'object') return ''
+  const name = a.name || t('liveShare.guest', 'A guest')
+  const path = a.path || ''
+  const count = Number.isInteger(a.count) ? a.count : 0
+  const title = a.detail || ''
+  switch (a.kind) {
+    case 'save':
+      return t('liveShare.action.save', '{{name}} saved {{path}}', { name, path })
+    case 'create':
+      return t('liveShare.action.create', '{{name}} created {{path}}', { name, path })
+    case 'rename':
+      return t('liveShare.action.rename', '{{name}} renamed {{path}} to {{to}}', { name, path, to: a.to || '' })
+    case 'trash':
+      return t('liveShare.action.trash', '{{name}} moved {{path}} to the Recycle Bin', { name, path })
+    case 'notes':
+      return t('liveShare.action.notes', '{{name}} saved the notes', { name })
+    case 'stage':
+      return count === 1 && a.paths ? t('liveShare.action.stageOne', '{{name}} staged {{path}}', { name, path: a.paths[0] }) : t('liveShare.action.stage', '{{name}} staged {{count}} files', { name, count })
+    case 'unstage':
+      return count === 1 && a.paths ? t('liveShare.action.unstageOne', '{{name}} unstaged {{path}}', { name, path: a.paths[0] }) : t('liveShare.action.unstage', '{{name}} unstaged {{count}} files', { name, count })
+    case 'discard':
+      return count === 1 && a.paths ? t('liveShare.action.discardOne', '{{name}} discarded the changes of {{path}}', { name, path: a.paths[0] }) : t('liveShare.action.discard', '{{name}} discarded the changes of {{count}} files', { name, count })
+    case 'commit':
+      return t('liveShare.action.commit', '{{name}} committed “{{message}}”', { name, message: title })
+    case 'taskAdd':
+      return t('liveShare.action.taskAdd', '{{name}} added a task: {{title}}', { name, title })
+    case 'taskMove':
+      return t('liveShare.action.taskMove', '{{name}} moved “{{title}}” to {{column}}', { name, title, column: columnName(a.column) })
+    case 'taskEdit':
+      return a.from ? t('liveShare.action.taskRenamed', '{{name}} renamed the task “{{from}}” to “{{title}}”', { name, from: a.from, title }) : t('liveShare.action.taskEdit', '{{name}} renamed a task: {{title}}', { name, title })
+    case 'taskRemove':
+      return t('liveShare.action.taskRemove', '{{name}} deleted the task “{{title}}”', { name, title })
+    case 'taskAnswer':
+      return a.answer ? t('liveShare.action.taskAnswered', '{{name}} answered “{{answer}}” on “{{title}}”', { name, answer: a.answer, title }) : t('liveShare.action.taskAnswer', '{{name}} answered the question on “{{title}}”', { name, title })
+    default:
+      return ''
+  }
+}
+function columnName(column) {
+  if (column === 'doing') return t('tasks.column.doing', 'Doing')
+  if (column === 'review') return t('tasks.column.review', 'Review')
+  if (column === 'done') return t('tasks.column.done', 'Done')
+  return t('tasks.column.todo', 'To do')
+}
+
 // deps: workspaces() (the array), currentWs(), currentWsId(), maximizedId()
 // / setMaximized(id), makeWorkspace(name), selectWorkspace(id),
 // removeWorkspace(id, confirmed, editorChecked), findLeaf(id), closeLeaf(id,
@@ -110,7 +187,17 @@ export const guestWsName = (project, host) => t('liveShare.wsName2', '{{project}
 // hasAgent(id), layoutReady() (optional: the window has its projects back
 // after a start), agentList() (optional: the agents this window can start,
 // [{ id, name }], offered to guests), agentName(id) (optional), activePaneId()
-// (optional: the pane with the keyboard, for a guest's focus).
+// (optional: the pane with the keyboard, for a guest's focus), taskBoard
+// (optional: this computer's board for guests, { tasks() (the cards), add({
+// title, wsId, guest }), move(id, column), rename(id, title, guest),
+// remove(id), answer(id, answer, guest), removeWithCopy(id, guestName) (a
+// card with its own copy: deleted after your yes, with that copy) }; guest:
+// the guest's name, for what agents read), paneAgents(wsId) (optional: a
+// shared project's panes as their headers show them), historyRecords()
+// (optional: taskHistory.js records), historyShown() (optional: the Task
+// history tab is on screen). Phase 2c: pageGuest(paneId) (its page's
+// webContents id, reactive), activityOf(wsId) -> { events, teams },
+// activityRev() (liveShareWindowFeeds.js).
 const OFF_HOST = () => ({ state: 'off', projectIds: [], invites: [], guests: [], offline: [], trusted: [], presence: [], progress: null, error: null })
 export function createLiveShareWindow(deps) {
   const api = () => (window.shellApi && window.shellApi.liveShare) || null
@@ -128,7 +215,19 @@ export function createLiveShareWindow(deps) {
     asks: [],
     // Counts the moments a typing mark may have gone stale (presenceOf reads
     // it, so the marks are looked at again then).
-    presenceTick: 0
+    presenceTick: 0,
+    // Guest: the host's boards that came (project -> { tasks }).
+    boards: {},
+    // Phase 2b, guest: what each of the host's panes runs and how it is, as
+    // its header shows it (this window's pane id -> { project, kind, agentId,
+    // model, state, sleeping, since, task, attention, reset, team, copy,
+    // children }); the host's usage (with the right: { providers }); each
+    // project's task history (project -> { records, usd, error, at }); the
+    // review shown ({ project, taskId }).
+    paneAgents: {},
+    hostUsage: null,
+    histories: {},
+    review: null
   })
   const guestLeaves = new Map() // local pane id -> leaf
   const attaching = new Set()
@@ -172,9 +271,16 @@ export function createLiveShareWindow(deps) {
 
   // What guests see of each shared project you have here. The fullscreen
   // pane is the window's: only for the project on screen. Its agent panes
-  // with a conversation (chats) are for main only: guests get them by name.
+  // with a conversation (chats) and its folder (root: what guests' Files,
+  // editor and Changes read, through main; none for a project on an SSH
+  // host) are for main only: guests get the panes by name, never the folder.
   function layoutsNow() {
-    return sharedWss().map((ws) => ({ id: ws.id, layout: hostLayoutFromWorkspace(ws, deps.currentWsId() === ws.id ? deps.maximizedId() : null), chats: hostChatsFromWorkspace(ws) }))
+    return sharedWss().map((ws) => ({
+      id: ws.id,
+      layout: hostLayoutFromWorkspace(ws, deps.currentWsId() === ws.id ? deps.maximizedId() : null),
+      chats: hostChatsFromWorkspace(ws),
+      root: !ws.remote && typeof ws.cwd === 'string' && ws.cwd ? ws.cwd : null
+    }))
   }
 
   // Before you start: the projects picked last time that are still there,
@@ -242,6 +348,7 @@ export function createLiveShareWindow(deps) {
     const lastShared = sharedIds()
     if (s.state === 'sharing' && state.host.state !== 'sharing') generation++
     Object.assign(state.host, OFF_HOST(), s)
+    feeds.onHost(state.host)
     noteTyping(state.host.presence)
     // Sharing ended: the projects it shared are the ones picked next time.
     if (wasOn && !hostSharing() && !hostStarting()) {
@@ -464,6 +571,7 @@ export function createLiveShareWindow(deps) {
       return
     }
     const request = typeof req.request === 'string' ? req.request : null
+    if (req.action === 'task') return applyTask(req)
     if (!hostSharing()) return requestDone(request)
     const who = (req.guest && req.guest.name) || t('liveShare.guest', 'A guest')
     const guestId = (req.guest && req.guest.id) || null
@@ -483,6 +591,152 @@ export function createLiveShareWindow(deps) {
     } else if (req.action === 'close') {
       askClose(req, who)
     }
+  }
+
+  // --- Panes and finished tasks for guests (phase 2b) ------------------------
+  // What guests' headers, sidebar and Dashboard show of each shared project's
+  // panes (deps.paneAgents: the rows the sidebar has, with each header's
+  // model; main makes the guests' copy, sharePanels.js), and each shared
+  // project's finished tasks (deps.historyRecords: taskHistory.js; main gives
+  // the costs in dollars only to guests with the usage right).
+  function paneAgentsNow() {
+    return sharedWss().map((ws) => ({ project: ws.id, panes: (deps.paneAgents && deps.paneAgents(ws.id)) || [] }))
+  }
+  function historyNow() {
+    const all = deps.historyRecords ? deps.historyRecords() : []
+    const list = Array.isArray(all) ? all : []
+    return sharedWss().map((ws) => ({ project: ws.id, records: list.filter((r) => r && r.wsId === ws.id).slice(-500) }))
+  }
+  // A guest asking to delete a card with its own copy: a notice (never a
+  // question that a key you type could answer), whose button opens your usual
+  // delete with Cancel first, never over another open question. One ask per
+  // guest at a time (DELETE_ASK_MS), none from that guest for a while after
+  // your no (DELETE_QUIET_MS); when you look, and again when you answer, the
+  // request must still hold (the guest in, with the right to manage tasks,
+  // seeing the project; the card there with its copy). -> the guest's code:
+  // 'confirm' (you were asked), 'busy' (another ask waits, or you said no
+  // lately), 'not-allowed'.
+  const DELETE_ASK_MS = 60000
+  const DELETE_QUIET_MS = 60000
+  const deleteAsks = new Map() // guest id -> { card, project, who, timer }
+  const deleteQuiet = new Map() // guest id -> until when its asks are not heard
+  function askDelete(guestId, who, card, project) {
+    const board = deps.taskBoard
+    if (!board || typeof board.removeWithCopy !== 'function' || !guestId) return 'not-allowed'
+    const pending = deleteAsks.get(guestId)
+    if (pending) return pending.card === card.id ? 'confirm' : 'busy'
+    if ((deleteQuiet.get(guestId) || 0) > Date.now()) return 'busy'
+    const ask = { card: card.id, title: card.title || '', project, who, timer: null }
+    deleteAsks.set(guestId, ask)
+    noticeDelete(guestId, ask)
+    return 'confirm'
+  }
+  function noticeDelete(guestId, ask) {
+    clearTimeout(ask.timer)
+    ask.timer = setTimeout(() => deleteAsks.get(guestId) === ask && deleteAsks.delete(guestId), DELETE_ASK_MS)
+    deps.showToast(t('liveShare.toast.deleteAsk', '{{name}} asks to delete the task “{{title}}” with its own copy of the project.', { name: ask.who, title: ask.title }), {
+      timeout: DELETE_ASK_MS,
+      action: { label: t('liveShare.deleteAsk.review', 'Review…'), run: () => reviewDeleteAsk(guestId, ask) }
+    })
+  }
+  const deleteStands = (guestId, ask) => () =>
+    hostSharing() && guestMay(guestId, 'tasks') && guestSees(guestId, ask.project) && !!localWs(ask.project) && !!(deps.taskBoard && deps.taskBoard.tasks().find((x) => x && x.id === ask.card && x.wsId === ask.project && x.worktree && !x.mergedAt))
+  async function reviewDeleteAsk(guestId, ask) {
+    if (deleteAsks.get(guestId) !== ask) return
+    clearTimeout(ask.timer)
+    const stands = deleteStands(guestId, ask)
+    if (!stands()) {
+      deleteAsks.delete(guestId)
+      deps.showToast(t('liveShare.toast.deleteAskGone', 'That request no longer stands: nothing was deleted.'), { timeout: 5000 })
+      return
+    }
+    const res = await Promise.resolve()
+      .then(() => deps.taskBoard.removeWithCopy(ask.card, ask.who, stands))
+      .catch(() => false)
+    // Another question was open: the ask waits (its notice again).
+    if (res === null) return noticeDelete(guestId, ask)
+    deleteAsks.delete(guestId)
+    if (res === false) deleteQuiet.set(guestId, Date.now() + DELETE_QUIET_MS)
+  }
+
+  // --- Task boards for guests ------------------------------------------------
+  // Each shared project's cards (main makes the guests' copy).
+  function boardsNow() {
+    const board = deps.taskBoard
+    if (!board) return []
+    const cards = board.tasks()
+    return sharedWss().map((ws) => ({ project: ws.id, tasks: cards.filter((x) => x && x.wsId === ws.id) }))
+  }
+  // A guest's change of a board, checked again here, then once more by main
+  // right before it is made (the access model's word: this window's view of
+  // the rights may be late), then made; main hears whether it was ({ request,
+  // ok, code }). A guest's text that reaches an agent (a card it added or
+  // renamed, its answer) is marked as the guest's (guest: its name).
+  async function applyTask(req) {
+    const answer = (ok, code) => api()?.taskDone?.({ request: req.request, ok, code })
+    const board = deps.taskBoard
+    const guestId = (req.guest && req.guest.id) || null
+    const project = typeof req.project === 'string' ? req.project : null
+    const stands = () => !!board && typeof req.request === 'string' && hostSharing() && guestMay(guestId, 'tasks') && guestSees(guestId, project) && !!localWs(project)
+    if (!stands()) return answer(false, 'revoked')
+    const check = await Promise.resolve(api()?.taskCheck?.(req.request)).catch(() => null)
+    if (!check || check.ok !== true || !stands()) return answer(false, 'revoked')
+    const who = (req.guest && typeof req.guest.name === 'string' && req.guest.name) || t('liveShare.guest', 'A guest')
+    const a = req.args && typeof req.args === 'object' ? req.args : {}
+    const text = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '')
+    const card = typeof a.id === 'string' ? board.tasks().find((x) => x && x.id === a.id) : null
+    if (req.op !== 'add' && (!card || card.wsId !== project)) return answer(false, 'not-found')
+    switch (req.op) {
+      case 'add': {
+        const title = text(a.title, 300)
+        if (!title) return answer(false, 'bad-args')
+        board.add({ title, wsId: project, guest: who })
+        return answer(true)
+      }
+      case 'move':
+        if (!COLUMNS.includes(a.column)) return answer(false, 'bad-args')
+        if (card.column !== a.column) board.move(card.id, a.column)
+        return answer(true)
+      case 'edit': {
+        const title = text(a.title, 300)
+        // Only a card not started yet is renamed (as on this computer).
+        if (!title || card.column !== 'todo') return answer(false, 'not-allowed')
+        board.rename(card.id, title, who)
+        return answer(true)
+      }
+      case 'remove':
+        // A card with its own copy of the project: deleting it deletes that
+        // copy and its branch with any work not merged yet. Never a question
+        // over your work: a notice says who asks, and its button opens your
+        // usual delete (askDelete). The guest hears that you were asked.
+        if (card.worktree && !card.mergedAt) {
+          const code = askDelete(guestId, who, card, project)
+          return answer(false, code)
+        }
+        board.remove(card.id)
+        return answer(true)
+      case 'answer': {
+        const reply = text(a.answer, 4096)
+        if (!reply || !card.gate || card.gate.status !== 'pending') return answer(false, 'not-allowed')
+        // Without the type right: one of the choices the agent offered only
+        // (free text would be typed to the agent).
+        const options = Array.isArray(card.gate.options) ? card.gate.options : []
+        if (!guestMay(guestId, 'type') && !options.includes(reply)) return answer(false, 'not-allowed')
+        board.answer(card.id, reply, who)
+        return answer(true)
+      }
+      default:
+        return answer(false, 'bad-args')
+    }
+  }
+  // A change a guest made: said (an agent's instructions changed: said as a
+  // warning).
+  function onGuestAction(a) {
+    if (!hostSharing()) return
+    const text = actionText(a)
+    if (!text) return
+    if (a.flagged) deps.showToast(t('liveShare.toast.actionFlagged', '{{action}} (an agent’s instructions)', { action: text }), { kind: 'error', timeout: 9000 })
+    else deps.showToast(text, { timeout: 5000 })
   }
 
   // Shared projects that are gone from this window: taken out of the share
@@ -516,6 +770,8 @@ export function createLiveShareWindow(deps) {
   // --- Guest ---------------------------------------------------------------
   // What this guest may do (a host from before rights: everything).
   const may = (right) => !state.guest.rights || !!state.guest.rights[right]
+  // Phase 2c: pages, past conversations, activity (both sides).
+  const feeds = createLiveShareFeeds(deps, { api, state, hostSharing, sharedWss, isShared, guestWs })
   // A host pane's chat: 'shared' (the host sends its conversation), 'old-host'
   // (an agent pane of a host whose Tessel does not share conversations yet:
   // the chat view says so) or null (no chat button).
@@ -536,7 +792,8 @@ export function createLiveShareWindow(deps) {
 
   function applyLayout(ws, p) {
     const f = followOf(p.id)
-    const built = buildGuestTree(p.layout, (l) => leafIn(l.id, p.id))
+    // The host's browser panes too, with "See my browser pages" (phase 2c).
+    const built = buildGuestTree(p.layout, (l) => (l.view === 'browser' ? feeds.pageLeaf(l, p.id, ws.liveShare.session) : leafIn(l.id, p.id)), { pages: feeds.showsPages() })
     // Panes of this computer that opened here (a page, a file) stay, beside
     // the host's.
     const local = localLeaves(ws.tree)
@@ -753,10 +1010,314 @@ export function createLiveShareWindow(deps) {
         } else if (p.project && leaf.liveShare.project !== p.project) leaf.liveShare.project = p.project
       } else if (!attaching.has(p.id)) attachGuestPane(p, s.session)
     }
+    // The host's browser panes and the projects' activity that are no longer
+    // there go (phase 2c).
+    const pageIds = new Set()
+    const walkPages = (n) => {
+      if (!n) return
+      if (n.type === 'leaf') n.view === 'browser' && pageIds.add(n.id)
+      else (n.children || []).forEach(walkPages)
+    }
+    for (const p of projects) walkPages(p.layout && p.layout.tree)
+    feeds.syncPages(pageIds)
+    feeds.syncProjects(new Set(projects.map((p) => p.id)))
     applyAll(s.session)
   }
 
+  // --- What the panels may do in the host's projects ---------------------------
+  // Each project the host shows you: your rights there (edit, git, tasks),
+  // or why its files are not there (a host whose Tessel does not share them).
+  // A project you no longer see: no access (its tabs stay, read-only).
+  let accessSession = null
+  const accessKnown = {} // projects told to the panels in this session
+  function syncAccess(s) {
+    if (s.session !== accessSession) {
+      forgetLshareAccess()
+      for (const k of Object.keys(state.boards)) delete state.boards[k]
+      endPanels()
+      accessSession = s.session
+    }
+    const rights = s.rights || {}
+    const files = Array.isArray(s.features) && s.features.includes('files')
+    const seen = new Set()
+    for (const p of s.projects || []) {
+      seen.add(p.id)
+      setLshareAccess(p.id, { edit: rights.edit === true, git: rights.git === true, tasks: rights.tasks === true, state: files ? 'ok' : 'outdated-host' })
+    }
+    for (const id of Object.keys(accessKnown)) if (!seen.has(id)) setLshareAccess(id, { edit: false, git: false, tasks: false, state: 'no-access' })
+    for (const id of seen) accessKnown[id] = true
+    for (const id of Object.keys(state.boards)) if (!seen.has(id)) delete state.boards[id]
+    // A project no longer seen: its panes' states and its history go.
+    for (const [id, p] of Object.entries(state.paneAgents)) if (!seen.has(p.project)) delete state.paneAgents[id]
+    for (const id of Object.keys(state.histories)) if (!seen.has(id)) delete state.histories[id]
+    for (const id of [...childSources.keys()]) if (!paneAgent(id)) childSources.delete(id)
+    if (state.review && !seen.has(state.review.project)) state.review = null
+    // The usage right taken away: its readings go at once.
+    if (!(s.rights && s.rights.usage === true)) state.hostUsage = null
+  }
+  function endAccess() {
+    endLshareSession()
+    for (const k of Object.keys(accessKnown)) delete accessKnown[k]
+    for (const k of Object.keys(state.boards)) delete state.boards[k]
+    endPanels()
+  }
+
+  // --- The host's task boards ---------------------------------------------------
+  // The Tasks tab of one of the host's projects: its board (a source,
+  // taskBoardSource.js), with the changes you may make (the host checks each
+  // again). Built anew as what it reads changes.
+  function taskSource(project) {
+    const s = state.guest
+    if (!project) return null
+    const inSession = s.state === 'joined' || s.state === 'reconnecting'
+    const b = state.boards[project]
+    const speaks = Array.isArray(s.features) && s.features.includes('tasks')
+    const st = !inSession ? 'ended' : !(s.projects || []).some((p) => p.id === project) ? 'no-access' : s.state === 'joined' && !speaks ? 'outdated-host' : 'ok'
+    const may = s.state === 'joined' && st === 'ok' && !!(s.rights && s.rights.tasks === true)
+    const run = (op, args) => changeTask(project, op, args)
+    // A card in Review with its own copy: its branch's changes, read only
+    // (a host that speaks it).
+    const reviews = s.state === 'joined' && st === 'ok' && Array.isArray(s.features) && s.features.includes('history')
+    return {
+      tasks: b ? b.tasks : [],
+      loaded: !!b || st !== 'ok',
+      state: st,
+      ...(reviews ? { review: (id) => openReview(project, id) } : {}),
+      ...(may
+        ? {
+            add: ({ title } = {}) => run('add', { title }),
+            move: (id, column) => run('move', { id, column }),
+            edit: (id, { title } = {}) => run('edit', { id, title }),
+            remove: (id) => run('remove', { id }),
+            answer: (id, reply) => run('answer', { id, answer: reply })
+          }
+        : {})
+    }
+  }
+  async function changeTask(project, op, args) {
+    const r = await Promise.resolve(api()?.task?.({ op, project, args })).catch(() => null)
+    if (r && r.ok) return true
+    // A card with its own copy of the project: the host is asked to confirm
+    // its delete (its copy and branch go with it).
+    if (r && r.code === 'confirm') {
+      deps.showToast(t('liveShare.toast.taskConfirm', '{{host}} was asked to confirm: this task has its own copy of the project, deleted with it.', { host: state.guest.host || '?' }), { timeout: 6000 })
+      return false
+    }
+    deps.showToast(t('liveShare.toast.taskFailed', '{{host}} did not make this change: {{reason}}', { host: state.guest.host || '?', reason: taskFailText(r && r.code) }), { kind: 'error', timeout: 6000 })
+    return false
+  }
+  function taskFailText(code) {
+    if (code === 'forbidden' || code === 'revoked') return t('liveShare.taskFail.rights', 'you can no longer manage its tasks.')
+    if (code === 'not-found') return t('liveShare.taskFail.missing', 'this task is no longer on its board.')
+    if (code === 'not-allowed') return t('liveShare.taskFail.notAllowed', 'this task can no longer be changed that way.')
+    if (code === 'no-project') return t('liveShare.taskFail.noProject', 'you no longer have access to this project.')
+    if (code === 'offline') return t('liveShare.taskFail.offline', 'the connection to the host is down.')
+    if (code === 'bad-op') return t('liveShare.taskFail.outdated', 'the host needs to update Tessel.')
+    if (code === 'busy') return t('liveShare.taskFail.busy', 'too many changes at once: wait a moment.')
+    return t('liveShare.taskFail.failed', 'it could not be done.')
+  }
+  // The host's board of the project on screen, followed while it is.
+  let followedBoard = null
+  function followBoard(project) {
+    const a = api()
+    if (project === followedBoard || !a || typeof a.subscribe !== 'function') return
+    if (followedBoard) Promise.resolve(a.subscribe({ topic: 'tasks', project: followedBoard, on: false })).catch(() => {})
+    followedBoard = project
+    if (!project) return
+    Promise.resolve(a.subscribe({ topic: 'tasks', project, on: true }))
+      .then((r) => {
+        if (r && r.ok && r.data && Array.isArray(r.data.tasks) && followedBoard === project) state.boards[project] = { tasks: r.data.tasks }
+      })
+      .catch(() => {})
+  }
+  function onPush(m) {
+    if (!m) return
+    // Phase 2c's news (the activity of a project followed).
+    if (feeds.onPush(m)) return
+    // The host's usage (null: the right was taken away).
+    if (m.topic === 'usage') {
+      state.hostUsage = m.data && Array.isArray(m.data.providers) ? m.data : null
+      return
+    }
+    if (typeof m.project !== 'string' || !m.data || !(state.guest.projects || []).some((p) => p.id === m.project)) return
+    if (m.topic === 'agents' && Array.isArray(m.data.panes)) return setPaneAgents(m.project, m.data.panes)
+    if (m.topic !== 'tasks' || !Array.isArray(m.data.tasks)) return
+    state.boards[m.project] = { tasks: m.data.tasks }
+  }
+
+  // --- The host's panes, sub-agents, usage, task history, review (phase 2b) ----
+  // What each of the host's panes runs and how it is, as its header shows it
+  // (main follows every project's; this window's pane ids): its header, the
+  // sidebar and the Dashboard show it (paneAgent).
+  function setPaneAgents(project, panes) {
+    const ids = new Set()
+    for (const p of panes) {
+      if (!p || typeof p.id !== 'string') continue
+      ids.add(p.id)
+      const next = { ...p, project }
+      const was = state.paneAgents[p.id]
+      if (!was || JSON.stringify(was) !== JSON.stringify(next)) state.paneAgents[p.id] = next
+    }
+    for (const [id, p] of Object.entries(state.paneAgents)) if (p.project === project && !ids.has(id)) delete state.paneAgents[id]
+  }
+  const paneAgent = (id) => (typeof id === 'string' && Object.hasOwn(state.paneAgents, id) ? state.paneAgents[id] : null)
+
+  // A host pane's sub-agents, for its header's list (AgentChildren's source):
+  // asked of the host (it reads them from the pane's conversation, which
+  // stays there), the last answer kept CHILDREN_MS so several readers never
+  // ask more often. One source per pane (a new one would empty the list).
+  const CHILDREN_MS = 8000
+  const childSources = new Map()
+  function childrenSource(id) {
+    const a = api()
+    const info = paneAgent(id)
+    if (!a || typeof a.request !== 'function' || !info || !info.children) return null
+    let src = childSources.get(id)
+    if (src) return src
+    let last = { at: 0, items: null, pending: null }
+    src = {
+      read() {
+        if (last.pending) return last.pending
+        if (last.items && Date.now() - last.at < CHILDREN_MS) return Promise.resolve(last.items)
+        const project = paneAgent(id) ? paneAgent(id).project : null
+        if (!project) return Promise.resolve([])
+        const pending = Promise.resolve(a.request({ op: 'agents.children', project, args: { pane: id } }))
+          .catch(() => null)
+          .then((r) => {
+            const items = r && r.ok && r.data && Array.isArray(r.data.items) ? r.data.items : last.items || []
+            last = { at: Date.now(), items, pending: null }
+            return items
+          })
+        last.pending = pending
+        return pending
+      }
+    }
+    childSources.set(id, src)
+    return src
+  }
+
+  // The host's usage, for a guest with the usage right (UsageMenu's "<host>'s
+  // usage"): null otherwise.
+  const hostUsage = () => ((state.guest.state === 'joined' || state.guest.state === 'reconnecting') && state.guest.rights && state.guest.rights.usage === true ? state.hostUsage : null)
+
+  // The task history of one of the host's projects (TaskHistoryPanel's
+  // source): read while its tab is shown, every HISTORY_MS. Costs in dollars
+  // only when the host says this guest may see them.
+  const HISTORY_MS = 30000
+  let historyTimer = 0
+  let historyFollowed = null
+  function followHistory(project) {
+    clearInterval(historyTimer)
+    historyTimer = 0
+    historyFollowed = project
+    if (!project) return
+    loadHistory(project)
+    historyTimer = setInterval(() => historyFollowed === project && loadHistory(project), HISTORY_MS)
+  }
+  async function loadHistory(project, again = true) {
+    const a = api()
+    if (!a || typeof a.request !== 'function') return
+    const r = await Promise.resolve(a.request({ op: 'history.list', project })).catch(() => null)
+    if (!(state.guest.projects || []).some((p) => p.id === project)) return
+    if (r && r.ok && r.data && Array.isArray(r.data.records)) {
+      state.histories[project] = { records: r.data.records, usd: r.data.usd === true, error: '', code: null, at: Date.now() }
+      return
+    }
+    // The usage right changed while it was on its way: asked again (once).
+    if (r && r.code === 'revoked' && again) return loadHistory(project, false)
+    const was = state.histories[project]
+    state.histories[project] = { records: was ? was.records : [], usd: !!(was && was.usd), error: historyFailText(r && r.code), code: (r && r.code) || 'offline', at: was ? was.at : 0 }
+  }
+  function historyFailText(code) {
+    if (code === 'offline') return t('liveShare.panels.offline', 'the connection to the host is down.')
+    if (code === 'busy') return t('liveShare.panels.busy', 'the host is busy: it is read again in a moment.')
+    return t('liveShare.panels.failed', 'the host could not read it.')
+  }
+  function historySource(project) {
+    const s = state.guest
+    if (!project) return null
+    const inSession = s.state === 'joined' || s.state === 'reconnecting'
+    const h = state.histories[project]
+    const speaks = Array.isArray(s.features) && s.features.includes('history')
+    const st = !inSession ? 'ended' : !(s.projects || []).some((p) => p.id === project) || (h && h.code === 'no-project') ? 'no-access' : (s.state === 'joined' && !speaks) || (h && h.code === 'bad-op') ? 'outdated-host' : 'ok'
+    return { records: h ? h.records : [], loaded: !!h || st !== 'ok', error: h && h.error && !h.records.length ? h.error : '', state: st, usd: !!(h && h.usd) }
+  }
+
+  // A task branch's review (ReviewPanel's source, read only): what the host
+  // reads of it, in the shape the panel shows; merging, discarding,
+  // committing, pushing and asking for changes stay the host's.
+  function openReview(project, taskId) {
+    state.review = { project, taskId }
+  }
+  function closeReview() {
+    state.review = null
+  }
+  function reviewFailText(code) {
+    if (code === 'not-found') return t('liveShare.review.notFound', 'This task’s branch could not be read on the host.')
+    if (code === 'no-project' || code === 'forbidden' || code === 'revoked') return t('liveShare.review.noAccess', 'You no longer have access to this project.')
+    if (code === 'bad-op') return t('liveShare.review.outdated', 'The host needs to update Tessel to show this.')
+    if (code === 'offline') return t('liveShare.panels.offline', 'the connection to the host is down.')
+    if (code === 'busy') return t('liveShare.panels.busy', 'the host is busy: it is read again in a moment.')
+    return t('liveShare.panels.failed', 'the host could not read it.')
+  }
+  function reviewSource() {
+    const r = state.review
+    const s = state.guest
+    if (!r || s.state !== 'joined' || !(s.projects || []).some((p) => p.id === r.project)) return null
+    const board = state.boards[r.project]
+    const task = board && board.tasks.find((x) => x.id === r.taskId)
+    if (!task) return null
+    const host = s.host || '?'
+    const ask = (op, args) => Promise.resolve(api()?.request?.({ op, project: r.project, args })).catch(() => null)
+    return {
+      task,
+      host,
+      // Its own place for the panel's viewed marks and comments (apart from
+      // this computer's tasks).
+      key: `${s.session}:${r.project}:${r.taskId}`, // i18n-ignore
+      async info() {
+        const res = await ask('review.info', { task: r.taskId })
+        if (!res || !res.ok || !res.data) return { ok: false, error: reviewFailText(res && res.code) }
+        // What only the host's own review checks (its folder, its merge) is
+        // not said here: the guest cannot merge.
+        const blocker = res.data.mergeCheck === 'failed' ? t('liveShare.review.checkFailed', '{{host}}’s Tessel could not check this branch for conflicts.', { host }) : t('liveShare.review.hostOnly', 'Only {{host}} can merge this task.', { host })
+        return { ok: true, ...res.data, dirtyOverlap: [], rootBranch: res.data.target, merging: false, blocker }
+      },
+      async diff(file) {
+        const res = await ask('review.diff', { task: r.taskId, file })
+        return res && res.ok && res.data ? { ok: true, text: res.data.text, truncated: !!res.data.truncated } : { ok: false, error: reviewFailText(res && res.code) }
+      }
+    }
+  }
+  // What main already has of the host's panes and usage (this window
+  // reloaded during a session).
+  function askGuestFeeds() {
+    const a = api()
+    if (!a || typeof a.subscribe !== 'function') return
+    for (const p of state.guest.projects || []) {
+      Promise.resolve(a.subscribe({ topic: 'agents', project: p.id, on: true }))
+        .then((r) => r && r.ok && r.data && Array.isArray(r.data.panes) && setPaneAgents(p.id, r.data.panes))
+        .catch(() => {})
+    }
+    Promise.resolve(a.subscribe({ topic: 'usage', on: true }))
+      .then((r) => {
+        if (r && r.ok && r.data && Array.isArray(r.data.providers)) state.hostUsage = r.data
+      })
+      .catch(() => {})
+  }
+  function endPanels() {
+    for (const k of Object.keys(state.paneAgents)) delete state.paneAgents[k]
+    for (const k of Object.keys(state.histories)) delete state.histories[k]
+    state.hostUsage = null
+    state.review = null
+    childSources.clear()
+    followHistory(null)
+  }
+
   function endGuest(s) {
+    endAccess()
+    feeds.endGuest()
+    followedBoard = null
     for (const id of guestLeaves.keys()) deps.dropBuffer(id)
     guestLeaves.clear()
     views.clear()
@@ -772,7 +1333,8 @@ export function createLiveShareWindow(deps) {
     const was = state.guest.state
     const wasIn = was === 'joined' || was === 'reconnecting'
     const before = JSON.stringify(state.guest.rights || null)
-    Object.assign(state.guest, { rights: null, code: null, projects: [], chat: false, chats: [], agents: null }, s)
+    Object.assign(state.guest, { rights: null, code: null, projects: [], chat: false, chats: [], agents: null, features: [] }, s)
+    if (s.state === 'joined' || s.state === 'reconnecting') syncAccess(state.guest)
     if (s.state === 'joined') {
       // The host changed what you may do (not the first word on it): said once.
       if (was === 'joined' && before !== 'null' && JSON.stringify(s.rights || null) !== before) deps.showToast(`${t('liveShare.toast.rights', '{{host}} changed what you can do.', { host: s.host || '?' })} ${rightsText(s.rights)}`, { timeout: 6000 })
@@ -929,6 +1491,9 @@ export function createLiveShareWindow(deps) {
     if (a.onNotice) offs.push(a.onNotice(onNotice))
     if (a.onPresence) offs.push(a.onPresence(onPresence))
     if (a.onInviteBlocked) offs.push(a.onInviteBlocked(onInviteBlocked))
+    if (a.onGuestAction) offs.push(a.onGuestAction(onGuestAction))
+    if (a.onPush) offs.push(a.onPush(onPush))
+    feeds.init(a)
     if (a.onChat)
       offs.push(
         a.onChat((m) => {
@@ -944,6 +1509,7 @@ export function createLiveShareWindow(deps) {
       // invitation's projects and rights ticked, as main would offer them.
       for (const g of (s.host && s.host.guests) || []) if (g.state === 'waiting') onAsk({ guestId: g.id, name: g.name, code: g.code, invite: g.invite || null, offer: offerOf(g.invite), trustable: !!g.trustable })
       onGuest(s.guest)
+      if (s.guest && (s.guest.state === 'joined' || s.guest.state === 'reconnecting')) askGuestFeeds()
     } catch {
       /* not available */
     }
@@ -974,6 +1540,53 @@ export function createLiveShareWindow(deps) {
       watch(
         () => (hostSharing() ? JSON.stringify([sharedIds().map((id) => [id, (localWs(id) || {}).name || null]), !!(deps.layoutReady && deps.layoutReady())]) : ''),
         () => checkGone(),
+        { immediate: true }
+      ),
+      // Each shared project's task board, for guests (main makes their copy),
+      // sent at once and whenever it changes.
+      watch(
+        () => (hostSharing() && deps.taskBoard ? JSON.stringify(boardsNow()) : ''),
+        (text) => {
+          if (text && a.setTasks) a.setTasks(JSON.parse(text))
+        },
+        { immediate: true }
+      ),
+      // Each shared project's panes as their headers show them, and its
+      // finished tasks, for guests: sent at once and whenever they change
+      // (main sends guests the panes at most once a second).
+      watch(
+        () => (hostSharing() && deps.paneAgents ? JSON.stringify(paneAgentsNow()) : ''),
+        (text) => {
+          if (text && a.setPaneAgents) a.setPaneAgents(JSON.parse(text))
+        },
+        { immediate: true }
+      ),
+      watch(
+        () => (hostSharing() && deps.historyRecords ? JSON.stringify(historyNow()) : ''),
+        (text) => {
+          if (text && a.setHistory) a.setHistory(JSON.parse(text))
+        },
+        { immediate: true }
+      ),
+      // As a guest: the task history of the host's project on screen, read
+      // while its tab is shown (every 30 s, and when the usage right changes:
+      // the costs in dollars come with it).
+      watch(
+        () => {
+          const ws = deps.currentWs()
+          const on = state.guest.state === 'joined' && isGuestWs(ws) && ws.liveShare.session === state.guest.session && !!(deps.historyShown && deps.historyShown())
+          return on ? `${ws.liveShare.project}\n${!!(state.guest.rights && state.guest.rights.usage)}` : ''
+        },
+        (key) => followHistory(key ? key.split('\n')[0] : null),
+        { immediate: true }
+      ),
+      // As a guest: the board of the host's project on screen, followed.
+      watch(
+        () => {
+          const ws = deps.currentWs()
+          return state.guest.state === 'joined' && isGuestWs(ws) && ws.liveShare.session === state.guest.session ? ws.liveShare.project : null
+        },
+        (project) => followBoard(project),
         { immediate: true }
       ),
       // The agents guests may ask for: the ones this window can start, sent
@@ -1021,6 +1634,9 @@ export function createLiveShareWindow(deps) {
     for (const off of offs.splice(0)) if (typeof off === 'function') off()
     for (const stop of stops.splice(0)) stop()
     clearTimeout(typingTimer)
+    clearInterval(historyTimer)
+    for (const ask of deleteAsks.values()) clearTimeout(ask.timer)
+    feeds.dispose()
   }
 
   return {
@@ -1041,12 +1657,29 @@ export function createLiveShareWindow(deps) {
     presenceOf,
     answerAsk,
     hostMenu,
+    taskSource,
+    // Phase 2b, guest: the host's panes as their headers show them, a pane's
+    // sub-agents, the host's usage, a project's task history, a review.
+    paneAgent,
+    childrenSource,
+    hostUsage,
+    historySource,
+    reviewSource,
+    closeReview,
     prepareShare,
     setShared,
     sharedIds,
     sharedWss,
     chosenIds,
-    isShared
+    isShared,
+    // Phase 2c: your page's share (its eye, its hide), and as a guest the
+    // host's pages, past conversations and activity.
+    feeds: feeds.feeds,
+    pageShare: feeds.pageShare,
+    setPageHidden: feeds.setPageHidden,
+    pageSource: feeds.pageSource,
+    sessionSource: feeds.sessionSource,
+    activitySource: feeds.activitySource
   }
 }
 

@@ -20,11 +20,11 @@ import {
 } from '../shared/diff'
 
 // Tessel's own task branches (agent/<name>, the default Branch Prefix).
-const BRANCH_RE = /^agent\/[A-Za-z0-9._-]{1,80}$/
+export const BRANCH_RE = /^agent\/[A-Za-z0-9._-]{1,80}$/
 // Any other name a task branch can have (Settings > Git, Branch Prefix):
 // only trusted as a task branch once git lists a task copy on it.
-const ANY_BRANCH_RE = /^(?!-)(?!.*\.\.)(?!.*\/\/)(?!.*\.lock(?:\/|$))(?!.*\/$)[A-Za-z0-9._/-]{1,200}$/
-const REF_RE = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,120}$/
+export const ANY_BRANCH_RE = /^(?!-)(?!.*\.\.)(?!.*\/\/)(?!.*\.lock(?:\/|$))(?!.*\/$)[A-Za-z0-9._/-]{1,200}$/
+export const REF_RE = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,120}$/
 const MAX_DIFF = 600 * 1024
 
 const git = (cwd, args, opts) => run('git', ['-C', cwd, ...args], { timeout: 30000, ...opts })

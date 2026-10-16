@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import LiveShareDialog from '../components/LiveShareDialog.vue'
 import { fakeApi, OFF_GUEST, invite, sharing } from './liveShareFakes'
+import { NO_RIGHTS } from '../../../shared/liveShareRights'
 
 const PROJECTS = [
   { id: 'ws-1', name: 'tessel' },
@@ -45,7 +46,7 @@ describe('Live Share invitations: the list', () => {
     const now = Date.now()
     const w = await openWith({
       invites: [
-        invite({ expiresAt: now + 42 * 60000, uses: 2, maxUses: 5, joined: 2, projects: ['ws-1', 'ws-2'], rights: { type: false, open: true, close: false } }),
+        invite({ expiresAt: now + 42 * 60000, uses: 2, maxUses: 5, joined: 2, projects: ['ws-1', 'ws-2'], rights: { ...NO_RIGHTS, type: false, open: true, close: false } }),
         invite({ id: 'iv-bbbbbbbbbb', label: '', root: true, lifetime: 'never', expiresAt: null, uses: 1, later: true, projects: [] }),
         invite({ id: 'iv-cccccccccc', label: '', state: 'blocked' }),
         invite({ id: 'iv-dddddddddd', state: 'used', maxUses: 1, uses: 1 })
@@ -109,7 +110,7 @@ describe('Live Share invitations: making one', () => {
     await w.find('[data-test="ls-invite-uses"]').setValue('4')
     await w.find('[data-test="ls-invite-save"]').trigger('click')
     await flushPromises()
-    expect(api.createInvite).toHaveBeenCalledWith({ label: 'Design team', lifetime: 'week', maxUses: 4, rights: { type: true, open: false, close: false }, projects: ['ws-1'], later: true })
+    expect(api.createInvite).toHaveBeenCalledWith({ label: 'Design team', lifetime: 'week', maxUses: 4, rights: { ...NO_RIGHTS, type: true, open: false, close: false }, projects: ['ws-1'], later: true })
     expect(w.find('[data-test="ls-invite-editor"]').exists()).toBe(false)
     expect(w.find('[data-test="ls-host-notice"]').text()).toContain('Invitation ready')
     w.unmount()
@@ -186,7 +187,7 @@ describe('Live Share invitations: changing one', () => {
 
   it('people joined with it: a removal applies to them by default, an addition only when ticked', async () => {
     api.updateInvite.mockResolvedValue({ ok: true, applied: 2 })
-    const w = await openWith({ invites: [invite({ joined: 2, projects: ['ws-1'], rights: { type: true, open: false, close: false } })] })
+    const w = await openWith({ invites: [invite({ joined: 2, projects: ['ws-1'], rights: { ...NO_RIGHTS, type: true, open: false, close: false } })] })
     await w.find('[data-test="ls-invite-edit-iv-aaaaaaaaaa"]').trigger('click')
     await tick(w, '[data-test="ls-right-type-invite"] input') // taken away
     await tick(w, '[data-test="ls-proj-ws-2-invite"] input') // given
@@ -205,7 +206,7 @@ describe('Live Share invitations: changing one', () => {
     await flushPromises()
     expect(api.updateInvite).toHaveBeenCalledWith({
       id: 'iv-aaaaaaaaaa',
-      patch: { projects: ['ws-1', 'ws-2'], rights: { type: false, open: false, close: false } },
+      patch: { projects: ['ws-1', 'ws-2'], rights: { ...NO_RIGHTS, type: false, open: false, close: false } },
       applyRemovals: true,
       applyAdditions: true
     })

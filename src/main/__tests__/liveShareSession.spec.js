@@ -3,6 +3,7 @@ import WebSocket, { WebSocketServer } from 'ws'
 import { createShareHost, cleanName, stripTerminalReplies, INVITE_TTL_MS, addressKey, SHARE_PROTOCOL } from '../liveShare/shareHost'
 import { createShareGuest as makeGuest } from '../liveShare/shareGuest'
 import { newSecret, newNonce, newKeyPair, commitment, newSigningKey, sharedSecret, createChannel, sessionKeys } from '../liveShare/shareCrypto'
+import { NO_RIGHTS } from '../../shared/liveShareRights'
 
 // A guest connection: its reconnect key made here unless given.
 const createShareGuest = (opts) => makeGuest({ signingKey: newSigningKey(), ...opts })
@@ -96,7 +97,7 @@ function stopAfterKeys(port) {
   })
 }
 
-const ALL = { type: true, open: true, close: true }
+const ALL = { ...NO_RIGHTS, type: true, open: true, close: true }
 // The share's one invitation (a share made with one secret: a root one).
 const firstInvite = (h) => h.invites()[0]
 const isBlocked = (h) => firstInvite(h).state === 'blocked'
@@ -128,7 +129,7 @@ describe('Live Share session', () => {
     expect(r.states).toEqual(['connecting', 'waiting', 'joined'])
     expect(r.panes.map((p) => p.id)).toEqual(['p1'])
     // It starts view only, and knows it.
-    expect(r.rights).toEqual([{ type: false, open: false, close: false }])
+    expect(r.rights).toEqual([{ ...NO_RIGHTS, type: false, open: false, close: false }])
 
     host.sendData('p1', '\r\nhello')
     await until(() => r.screens.p1.endsWith('hello'))
@@ -145,8 +146,8 @@ describe('Live Share session', () => {
     const [g] = host.guests()
     expect(host.setGrant(g.id, { rights: { type: true, open: true, extra: 'x' } })).toBe(true)
     await until(() => r.rights.length === 2)
-    expect(r.rights[1]).toEqual({ type: true, open: true, close: false })
-    expect(host.guests()[0].rights).toEqual({ type: true, open: true, close: false })
+    expect(r.rights[1]).toEqual({ ...NO_RIGHTS, type: true, open: true, close: false })
+    expect(host.guests()[0].rights).toEqual({ ...NO_RIGHTS, type: true, open: true, close: false })
 
     guest.write('p1', 'ls\r')
     guest.write('nope', 'rm -rf /\r') // not a shared pane
@@ -345,13 +346,13 @@ describe('Live Share session', () => {
   it('a guest let in comes back with its key: in at once, with its rights, no question', async () => {
     const { t, r, port, secret, key } = await joinOne()
     await until(() => r.states.includes('joined'))
-    host.setGrant(host.guests()[0].id, { rights: { type: true, open: false, close: false } })
+    host.setGrant(host.guests()[0].id, { rights: { ...NO_RIGHTS, type: true, open: false, close: false } })
     await until(() => r.rights.length === 2)
     // Its connection drops; it comes back, signing the new connection.
     const back = comeBack(port, secret, key)
     await until(() => back.states.includes('joined'))
     expect(t.asked).toHaveLength(1)
-    expect(back.rights[0]).toEqual({ type: true, open: false, close: false })
+    expect(back.rights[0]).toEqual({ ...NO_RIGHTS, type: true, open: false, close: false })
     // Its old connection is replaced.
     await until(() => r.closed)
     expect(r.closed).toBe('replaced')
@@ -389,9 +390,9 @@ describe('Live Share session', () => {
     const hostKey = newSigningKey()
     const { r, secret, key } = await joinOne({ now: () => clock, hostKey })
     await until(() => r.states.includes('joined'))
-    host.setGrant(host.guests()[0].id, { rights: { type: true, open: true, close: true } })
+    host.setGrant(host.guests()[0].id, { rights: { ...NO_RIGHTS, type: true, open: true, close: true } })
     const saved = host.accessState()
-    expect(saved.people).toEqual([expect.objectContaining({ key: key.publicRaw.toString('base64'), name: 'Alex', grant: { projects: ['ws-1'], rights: { type: true, open: true, close: true } }, opened: 0 })])
+    expect(saved.people).toEqual([expect.objectContaining({ key: key.publicRaw.toString('base64'), name: 'Alex', grant: { projects: ['ws-1'], rights: { ...NO_RIGHTS, type: true, open: true, close: true } }, opened: 0 })])
     host.stop('restarting')
     await until(() => r.closed)
     expect(r.closed).toBe('restarting')
@@ -402,7 +403,7 @@ describe('Live Share session', () => {
     const port = await host.start()
     const back = comeBack(port, secret, key)
     await until(() => back.states.includes('joined'))
-    expect(back.rights[0]).toEqual({ type: true, open: true, close: true })
+    expect(back.rights[0]).toEqual({ ...NO_RIGHTS, type: true, open: true, close: true })
     expect(t2.asked).toEqual([])
     // A new guest with the expired code: turned away.
     const late = guestRecorder()
@@ -453,7 +454,7 @@ describe('Live Share session', () => {
   it('what a guest may open or close a minute stays counted across its reconnects', async () => {
     const { t, r, port, secret, key, guest } = await joinOne()
     await until(() => r.states.includes('joined'))
-    host.setGrant(host.guests()[0].id, { rights: { type: false, open: true, close: false } })
+    host.setGrant(host.guests()[0].id, { rights: { ...NO_RIGHTS, type: false, open: true, close: false } })
     await until(() => r.rights.length === 2)
     for (let i = 0; i < 3; i++) guest.open({ kind: 'terminal', project: 'ws-1' })
     await until(() => t.opened.length === 3)
@@ -513,7 +514,7 @@ describe('Live Share session', () => {
     const hostKey = newSigningKey()
     const { r, secret, key } = await joinOne({ hostKey })
     await until(() => r.states.includes('joined'))
-    host.setGrant(host.guests()[0].id, { rights: { type: false, open: true, close: false } })
+    host.setGrant(host.guests()[0].id, { rights: { ...NO_RIGHTS, type: false, open: true, close: false } })
     const saved = host.accessState()
     saved.people[0].opened = 12
     saved.invites[0].guard = { blocked: true, unfinished: [] }
@@ -1143,7 +1144,7 @@ describe('Live Share session: round 5', () => {
     const g = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', signingKey: newSigningKey(), callbacks: r.callbacks })
     g.connect()
     await until(() => r.states.includes('joined'))
-    host.setGrant(host.guests()[0].id, { rights: { type: false, open: false, close: true } })
+    host.setGrant(host.guests()[0].id, { rights: { ...NO_RIGHTS, type: false, open: false, close: true } })
     await until(() => r.rights.length === 2)
     const before = saves
     for (let i = 0; i < 3; i++) g.close('p1')
@@ -1163,7 +1164,7 @@ describe('Live Share session: round 5', () => {
     const g = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name: 'Alex', signingKey: key, callbacks: r.callbacks })
     g.connect()
     await until(() => r.states.includes('joined'))
-    host.setGrant(host.guests()[0].id, { rights: { type: false, open: true, close: false } })
+    host.setGrant(host.guests()[0].id, { rights: { ...NO_RIGHTS, type: false, open: true, close: false } })
     await until(() => r.rights.length === 2)
     for (let i = 0; i < 3; i++) g.open({ kind: 'terminal', project: 'ws-1' })
     await until(() => t.opened.length === 3)

@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import { join } from 'node:path'
 import { mount, flushPromises } from '@vue/test-utils'
 import SkillsDialog from '../components/SkillsDialog.vue'
 import { setMessages } from '../i18n'
@@ -30,6 +32,17 @@ const pkg = {
   source: { kind: 'github', owner: 'o', repo: 'r', path: 'skills/pdf', commit: 'abcdef1234' }
 }
 
+// The rows, a row by its skill's name, and its details opened by a click.
+const names = (w) => w.findAll('.skills-row-name').map((n) => n.text())
+const rowOf = (w, name) => w.findAll('.skills-item').find((r) => r.find('.skills-row-name').text() === name)
+async function open(w, name) {
+  await rowOf(w, name).get('.skills-row').trigger('click')
+  await flushPromises()
+  return rowOf(w, name)
+}
+const copyOf = (w, dir) => w.findAll('.skills-copy').find((c) => c.attributes('data-dir') === dir)
+const button = (el, text) => el.findAll('button').find((b) => b.text() === text)
+
 describe('Skills dialog', () => {
   let previousApi
   afterEach(() => {
@@ -39,13 +52,13 @@ describe('Skills dialog', () => {
 
   function api(over = {}) {
     previousApi = window.shellApi
-    const calls = { install: [], remove: [], github: [] }
+    const calls = { install: [], remove: [], github: [], open: [], clipboard: [] }
     window.shellApi = {
       skillsList: async () => ({
         roots: [],
         skills: [
           skill({ dir: '/h/.claude/skills/pdf', source: { kind: 'github', owner: 'o', repo: 'r', path: 'skills/pdf' } }),
-          skill({ dir: '/p/.agents/skills/pdf', scope: 'project', seenBy: ['codex', 'opencode', 'copilot', 'gemini'] }),
+          skill({ dir: '/p/.agents/skills/pdf', scope: 'project', seenBy: ['codex', 'opencode', 'copilot', 'gemini'], source: { kind: 'github', owner: 'o', repo: 'r', path: 'skills/pdf' } }),
           skill({ dir: '/h/.claude/skills/synced/a/docx', name: 'docx', description: null, managed: 'synced', removable: false })
         ]
       }),
@@ -62,36 +75,183 @@ describe('Skills dialog', () => {
         return { ok: true }
       },
       skillsForUpdate: async () => pkg,
-      skillsOpen: async () => ({ ok: true }),
+      skillsOpen: async (q) => (calls.open.push(q), { ok: true }),
+      writeClipboard: async (text) => calls.clipboard.push(text),
       ...over
     }
     return calls
   }
 
-  it('lists each skill once with its copies: agents, scope, path; only the user\'s own can be removed', async () => {
+  it("one row per skill; its details list each copy: agents, scope, folder; only the user's own can be removed", async () => {
     api()
     const agents = ['claude', 'codex'].map((id) => ({ id, available: true }))
     const wrapper = mount(SkillsDialog, { props: { agents, cwd: '/p' }, attachTo: document.body })
     await flushPromises()
-    const rows = wrapper.findAll('.mcp-server')
-    expect(rows.map((r) => r.find('.mcp-name').text())).toEqual(['docx', 'pdf'])
-    const pdf = rows[1]
-    const copies = pdf.findAll('.skills-copy')
-    expect(copies).toHaveLength(2)
-    expect(copies[0].text()).toContain('Seen by Claude Code')
-    expect(copies[0].text()).toContain('All projects')
-    expect(copies[0].text()).toContain('/h/.claude/skills/pdf')
-    expect(copies[0].text()).toContain('Update') // added from GitHub
-    expect(copies[1].text()).toContain('This project')
-    expect(copies[1].text()).toContain('Codex')
-    expect(copies[1].text()).not.toContain('Update')
-    const docx = rows[0]
+    expect(names(wrapper)).toEqual(['docx', 'pdf'])
+    // Collapsed: no copy, no folder shown, the agents once.
+    expect(wrapper.find('.skills-copy').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('/h/.claude/skills/pdf')
+    const pdfRow = rowOf(wrapper, 'pdf')
+    expect(pdfRow.findAll('.skills-row-meta .brand-icon')).toHaveLength(2) // Claude Code and Codex, once each
+    expect(pdfRow.get('.skills-agents').attributes('aria-label')).toBe('Seen by Claude Code and Codex')
+    expect(pdfRow.findAll('.skills-scope').map((s) => s.text())).toEqual(['All projects', 'This project'])
+    expect(pdfRow.get('.skills-row').attributes('aria-expanded')).toBe('false')
+
+    const pdf = await open(wrapper, 'pdf')
+    expect(pdf.get('.skills-row').attributes('aria-expanded')).toBe('true')
+    expect(pdf.get('.skills-row').attributes('aria-controls')).toBe(pdf.get('.skills-details').attributes('id'))
+    const user = copyOf(wrapper, '/h/.claude/skills/pdf')
+    expect(user.find('.skills-copy-agents').text()).toBe('Claude Code')
+    expect(user.text()).toContain('All projects')
+    expect(user.get('.skills-path').attributes('title')).toBe('/h/.claude/skills/pdf')
+    expect(button(user, 'Update')).toBeTruthy() // added from GitHub
+    const proj = copyOf(wrapper, '/p/.agents/skills/pdf')
+    expect(proj.text()).toContain('This project')
+    expect(proj.find('.skills-copy-agents').text()).toBe('Codex')
+    expect(proj.get('.skills-path').text()).toBe('p/.agents/skills/pdf') // the project by its name
+    expect(button(proj, 'Update')).toBeTruthy()
+
+    const docx = await open(wrapper, 'docx')
+    expect(rowOf(wrapper, 'pdf').find('.skills-details').exists()).toBe(false) // one open at a time
     expect(docx.text()).toContain('Synced from your Claude account')
     expect(docx.find('.danger').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('removes to the Recycle Bin, or deletes after a second confirmation', async () => {
+  // This computer's skills, as listed: Claude's synced copies twice (two
+  // account folders), a skill both in Claude's and the shared .agents folder
+  // (edited apart), Codex's built-in skills, one of them named like a synced one.
+  const SYNCED = ['8fdc980f-8019-47a0-aff7-9f3632317fb9_c00fdf98-9054-427c-ae1b-73fe75f735c0', 'eb653360-5abe-4405-a68a-23f5fb88e822_63192401-a54e-4511-9335-0712b63db3d0']
+  const realList = () => [
+    ...['docs', 'pdf', 'skill-creator'].flatMap((name) =>
+      SYNCED.map((acct) =>
+        skill({ dir: `C:\\Users\\me\\.claude\\skills\\synced\\${acct}\\${name}`, name, description: `${name} help.`, managed: 'synced', removable: false, origin: 'agent', mdHash: `md-${name}` })
+      )
+    ),
+    ...['.claude', '.agents'].map((root, i) =>
+      skill({
+        dir: `C:\\Users\\me\\${root}\\skills\\reverse-engineer-anything`,
+        name: 'reverse-engineer-anything',
+        description: 'Reverse engineer anything.',
+        origin: 'own',
+        hash: `h${i}`,
+        mdHash: `m${i}`,
+        seenBy: i ? ['codex', 'opencode', 'copilot', 'gemini'] : ['claude', 'opencode', 'copilot']
+      })
+    ),
+    ...['imagegen', 'skill-creator'].map((name) =>
+      skill({ dir: `C:\\Users\\me\\.codex\\skills\\.system\\${name}`, name, description: `${name} (Codex).`, managed: 'system', removable: false, origin: 'agent', seenBy: ['codex'], mdHash: `codex-${name}` })
+    )
+  ]
+
+  it('counts agree: the tab, the All filter and the count above the list count the same rows, one per skill', async () => {
+    api({ skillsList: async () => ({ roots: [], skills: realList(), home: 'C:\\Users\\me' }) })
+    const agents = ['claude', 'codex', 'opencode', 'copilot'].map((id) => ({ id, available: true }))
+    const wrapper = mount(SkillsDialog, { props: { agents }, attachTo: document.body })
+    await flushPromises()
+    // Codex's built-in skill-creator is not Claude's synced one: two rows.
+    expect(names(wrapper)).toEqual(['docs', 'imagegen', 'pdf', 'reverse-engineer-anything', 'skill-creator', 'skill-creator'])
+    const tab = wrapper.findAll('.launch-seg-btn').find((b) => b.text().startsWith('Installed'))
+    expect(tab.get('.mcp-count').text()).toBe('6')
+    expect(wrapper.get('.skills-count').text()).toBe('6 skills')
+    const chips = wrapper.findAll('.skills-chip')
+    expect(chips.map((c) => c.text())).toEqual(['All6', 'Yours1', 'Synced3', 'Built-in2'])
+    // Each row has one origin: the filters add up to All, and each shows its count.
+    const count = (c) => Number(c.get('.skills-chip-count').text())
+    expect(chips.slice(1).reduce((n, c) => n + count(c), 0)).toBe(count(chips[0]))
+    for (const chip of chips.slice(1)) {
+      await chip.trigger('click')
+      expect(wrapper.findAll('.skills-item')).toHaveLength(count(chip))
+    }
+    await chips[0].trigger('click')
+    // A search shows part of the list; the tab and the filters still count all of it.
+    await wrapper.get('input.skills-search').setValue('pdf')
+    expect(names(wrapper)).toEqual(['pdf'])
+    expect(wrapper.get('.skills-count').text()).toBe('1 of 6 skills')
+    expect(tab.get('.mcp-count').text()).toBe('6')
+    expect(wrapper.findAll('.skills-chip')[0].text()).toBe('All6')
+    wrapper.unmount()
+  })
+
+  it("Claude's synced copies are one skill, Synced from your Claude account; the folder shortened, never the raw id", async () => {
+    api({ skillsList: async () => ({ roots: [], skills: realList(), home: 'C:\\Users\\me' }) })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }, { id: 'codex', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    const pdf = rowOf(wrapper, 'pdf')
+    expect(pdf.findAll('.skills-origin').map((b) => b.text())).toEqual(['Synced'])
+    expect(pdf.get('.skills-origin').attributes('title')).toBe('Synced from your Claude account')
+    await open(wrapper, 'pdf')
+    const copies = rowOf(wrapper, 'pdf').findAll('.skills-copy')
+    expect(copies).toHaveLength(2)
+    expect(copies[0].get('.skills-origin').text()).toBe('Synced from your Claude account')
+    const shown = copies.map((c) => c.get('.skills-path').text())
+    expect(shown).toEqual(['~\\.claude\\skills\\synced\\8fdc980f…\\pdf', '~\\.claude\\skills\\synced\\eb653360…\\pdf'])
+    expect(copies[0].get('.skills-path').attributes('title')).toBe(`C:\\Users\\me\\.claude\\skills\\synced\\${SYNCED[0]}\\pdf`)
+    expect(rowOf(wrapper, 'pdf').text()).not.toContain(SYNCED[0])
+    // The same SKILL.md in both: no word of different versions.
+    expect(rowOf(wrapper, 'pdf').find('.skills-versions-note').exists()).toBe(false)
+
+    // Named alike, not the same: Claude's synced one and Codex's built-in one.
+    const creators = () => wrapper.findAll('.skills-item').filter((r) => r.find('.skills-row-name').text() === 'skill-creator')
+    expect(creators().map((r) => r.get('.skills-origin').text())).toEqual(['Synced', 'Built-in'])
+    expect(creators()[1].get('.skills-origin').attributes('title')).toBe('Built into the agent')
+    await creators()[0].get('.skills-row').trigger('click')
+    expect(creators()[0].findAll('.skills-copy')).toHaveLength(2)
+    expect(creators()[1].find('.skills-details').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('the details: the whole description, each copy with its actions: open folder, copy the path, remove one, remove all', async () => {
+    const long = 'Reverse engineer native, managed, Electron and packaged targets. '.repeat(4).trim()
+    const list = realList().map((s) => (s.name === 'reverse-engineer-anything' ? { ...s, description: long } : s))
+    const calls = api({ skillsList: async () => ({ roots: [], skills: list, home: 'C:\\Users\\me' }) })
+    const asked = []
+    const answers = [true]
+    const wrapper = mount(SkillsDialog, {
+      props: { agents: [{ id: 'claude', available: true }, { id: 'codex', available: true }] },
+      global: { provide: { askConfirm: (o) => (asked.push(o), Promise.resolve(answers.shift())) } },
+      attachTo: document.body
+    })
+    await flushPromises()
+    const row = rowOf(wrapper, 'reverse-engineer-anything')
+    // One line in the row, the whole text in its tooltip and in the details.
+    expect(row.get('.skills-row-desc').attributes('title')).toBe(long)
+    await open(wrapper, 'reverse-engineer-anything')
+    const details = rowOf(wrapper, 'reverse-engineer-anything').get('.skills-details')
+    expect(details.get('.skills-details-desc').text()).toBe(long)
+    expect(details.get('.skills-versions-note').text()).toContain('2 different versions')
+    const claudeDir = 'C:\\Users\\me\\.claude\\skills\\reverse-engineer-anything'
+    const agentsDir = 'C:\\Users\\me\\.agents\\skills\\reverse-engineer-anything'
+    expect(details.findAll('.skills-copy').map((c) => c.attributes('data-dir'))).toEqual([agentsDir, claudeDir])
+    expect(copyOf(wrapper, claudeDir).get('.skills-path').text()).toBe('~\\.claude\\skills\\reverse-engineer-anything')
+
+    await button(copyOf(wrapper, agentsDir), 'Open folder').trigger('click')
+    expect(calls.open).toEqual([{ dir: agentsDir, cwd: null }])
+    await copyOf(wrapper, claudeDir).get('.skills-copy-btn').trigger('click')
+    await flushPromises()
+    expect(calls.clipboard).toEqual([claudeDir])
+    expect(copyOf(wrapper, claudeDir).get('.skills-copy-btn').classes()).toContain('on')
+    expect(copyOf(wrapper, claudeDir).get('.skills-copy-btn').attributes('aria-label')).toBe('Copy the path')
+    expect(wrapper.find('.mcp-notice').exists()).toBe(false) // no line pushed above the list
+
+    // Remove all: both folders, after one confirmation that lists them.
+    await details.get('.skills-remove-all').trigger('click')
+    await flushPromises()
+    expect(asked[0].title).toBe('Remove every copy of "reverse-engineer-anything"?')
+    expect(asked[0].code).toBe(`${agentsDir}\n${claudeDir}`)
+    expect(asked[0].text).toBe('Codex and Claude Code will no longer have it. Running agents notice at their next session.')
+    expect(calls.remove.map((r) => r.dir)).toEqual([agentsDir, claudeDir])
+    expect(calls.remove.every((r) => r.mode === 'trash')).toBe(true)
+    expect(wrapper.get('.mcp-notice').text()).toBe('Moved every copy of "reverse-engineer-anything" to the Recycle Bin.')
+
+    // Synced and built-in copies: nothing to remove, so no Remove all.
+    await open(wrapper, 'skill-creator')
+    expect(rowOf(wrapper, 'skill-creator').find('.skills-remove-all').exists()).toBe(false)
+    expect(rowOf(wrapper, 'skill-creator').find('.danger').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('removes one copy to the Recycle Bin, or deletes it after a second confirmation', async () => {
     const calls = api()
     const answers = [true, 'alt', true]
     const asked = []
@@ -101,7 +261,9 @@ describe('Skills dialog', () => {
       attachTo: document.body
     })
     await flushPromises()
-    const removeBtn = () => wrapper.findAll('.skills-copy')[1].find('.danger')
+    await open(wrapper, 'pdf')
+    const removeBtn = () => copyOf(wrapper, '/h/.claude/skills/pdf').get('.danger')
+    expect(removeBtn().attributes('aria-label')).toBe('Remove this copy')
     await removeBtn().trigger('click')
     await flushPromises()
     expect(calls.remove[0]).toMatchObject({ dir: '/h/.claude/skills/pdf', mode: 'trash' })
@@ -110,6 +272,86 @@ describe('Skills dialog', () => {
     await flushPromises()
     expect(calls.remove[1]).toMatchObject({ mode: 'delete' })
     expect(asked[2].title).toContain('permanently')
+    wrapper.unmount()
+  })
+
+  it('keyboard: arrows move between rows, Enter opens the details, Escape closes them (not the window)', async () => {
+    api({ skillsList: async () => ({ roots: [], skills: realList() }) })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    const rows = () => wrapper.findAll('.skills-row')
+    rows()[0].element.focus()
+    await rows()[0].trigger('keydown', { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(rows()[1].element)
+    await rows()[1].trigger('keydown', { key: 'End' })
+    expect(document.activeElement).toBe(rows()[5].element)
+    await rows()[5].trigger('keydown', { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(rows()[5].element) // the last stays
+    await rows()[5].trigger('keydown', { key: 'Home' })
+    expect(document.activeElement).toBe(rows()[0].element)
+    await rows()[0].trigger('keydown', { key: 'ArrowDown' })
+    // Enter on a button is its click.
+    await rows()[1].trigger('keydown', { key: 'Enter' })
+    await rows()[1].trigger('click')
+    expect(rows()[1].attributes('aria-expanded')).toBe('true')
+    const details = rowOf(wrapper, 'imagegen').get('.skills-details')
+    expect(details.attributes('role')).toBe('region')
+    expect(details.attributes('aria-labelledby')).toBe(rows()[1].attributes('id'))
+    // Escape from inside the details: closed, back on the row, the window stays.
+    await details.get('.skills-btn').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(rowOf(wrapper, 'imagegen').find('.skills-details').exists()).toBe(false)
+    expect(document.activeElement).toBe(rows()[1].element)
+    expect(wrapper.emitted('close')).toBeUndefined()
+    // Arrow right opens, left closes; Escape with nothing open closes the window.
+    await rows()[1].trigger('keydown', { key: 'ArrowRight' })
+    expect(rows()[1].attributes('aria-expanded')).toBe('true')
+    await rows()[1].trigger('keydown', { key: 'ArrowLeft' })
+    expect(rows()[1].attributes('aria-expanded')).toBe('false')
+    await rows()[1].trigger('keydown', { key: 'Escape' })
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('buttons never wrap: every button of the list has a class that keeps it on one line', async () => {
+    const list = [...tracked(), ...realList()]
+    api({
+      skillsList: async () => ({ roots: [], skills: list }),
+      skillsHistory: async () => ({ versions: [{ id: 'v2', changedAt: 2, stats: { plus: 1, minus: 0 }, first: false, latest: true, files: [], fileCount: 0 }, { id: 'v1', changedAt: 1, stats: { plus: 1, minus: 0 }, first: true, latest: false, files: [], fileCount: 0 }] }),
+      skillsHistoryDiff: async (q) => ({ id: q.id, files: [] })
+    })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }, { id: 'codex', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    // Text buttons on one line, icon buttons, and the rows (laid out piece by piece).
+    const KEPT = ['skills-btn', 'skills-chip', 'skills-link', 'ws-icon-btn', 'tb-icon', 'launch-seg-btn', 'skills-row', 'skills-version-pick']
+    const loose = () => wrapper.findAll('button').filter((b) => !KEPT.some((c) => b.classes().includes(c))).map((b) => b.html().slice(0, 80))
+    let seen = 0
+    const check = () => {
+      seen += wrapper.findAll('button').length
+      expect(loose()).toEqual([])
+    }
+    check()
+    await open(wrapper, 'pdf') // a copy from GitHub (Update) and synced ones
+    await rowOf(wrapper, 'pdf').get('.skills-link').trigger('click')
+    await flushPromises()
+    expect(rowOf(wrapper, 'pdf').findAll('.skills-version')).toHaveLength(2) // a Restore button
+    check()
+    await open(wrapper, 'reverse-engineer-anything') // Remove all
+    check()
+    expect(seen).toBeGreaterThan(40)
+    // Those classes keep their text on one line (or are icons only).
+    const css = fs.readFileSync(join(process.cwd(), 'src/renderer/src/components/SkillsDialog.vue'), 'utf8')
+    const rule = (sel) => {
+      const at = css.indexOf(`\n${sel} {`)
+      return at < 0 ? '' : css.slice(at, css.indexOf('}', at))
+    }
+    for (const sel of ['.skills-btn', '.skills-chip', '.skills-link', '.skills-tag', '.skills-row-name', '.skills-row-desc', '.skills-path']) expect(rule(sel), sel).toContain('white-space: nowrap')
+    for (const sel of ['.skills-btn', '.skills-chip', '.skills-actions', '.skills-tag']) expect(rule(sel), sel).toContain('flex: 0 0 auto')
+    expect(rule('.skills-actions')).toContain('flex-wrap: nowrap')
+    // The list follows its own width (a narrow page, or zoomed in).
+    expect(rule('.skills-list')).toContain('container-type: inline-size')
+    expect(css).toContain('@container (max-width: 460px)')
+    expect(css).not.toMatch(/codicon/)
     wrapper.unmount()
   })
 
@@ -158,7 +400,8 @@ describe('Skills dialog', () => {
     const calls = api()
     const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
     await flushPromises()
-    await wrapper.findAll('.skills-copy')[1].findAll('.exit-btn').find((b) => b.text() === 'Update').trigger('click')
+    await open(wrapper, 'pdf')
+    await button(copyOf(wrapper, '/h/.claude/skills/pdf'), 'Update').trigger('click')
     await flushPromises()
     expect(wrapper.find('.skills-md').exists()).toBe(true)
     expect(wrapper.find('.mcp-targets').exists()).toBe(false)
@@ -183,40 +426,86 @@ describe('Skills dialog', () => {
     skill({ dir: '/h/.claude/skills/synced/a/docx', name: 'docx', description: null, origin: 'agent', managed: 'synced', removable: false })
   ]
 
-  it('says where each copy comes from, if it was edited, and if GitHub has an update', async () => {
+  it('badges: where each skill comes from, if it was edited, if GitHub has an update; the same on each copy', async () => {
     api({ skillsList: async () => ({ roots: [], skills: tracked() }) })
     const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }, { id: 'codex', available: true }] }, attachTo: document.body })
     await flushPromises()
-    const row = (name) => wrapper.findAll('.mcp-server').find((r) => r.find('.mcp-name').text() === name)
-    expect(row('mine').find('.skills-origin').text()).toBe('Your skill')
-    expect(row('mine').find('.skills-origin').classes()).toContain('origin-own')
-    expect(row('pdf').find('.skills-origin').text()).toBe('From GitHub — o/r')
-    expect(row('pdf').find('.skills-origin').attributes('title')).toContain('o/r/skills/pdf @ aaaaaaa')
-    expect(row('copied').find('.skills-origin').text()).toBe('Copied from a folder')
-    expect(row('docx').find('.skills-origin').exists()).toBe(false) // the agent's own
-    expect(row('pdf').find('.skills-modified').text()).toBe('Modified locally')
-    expect(row('mine').find('.skills-modified').exists()).toBe(false)
-    expect(row('pdf').find('.skills-update').text()).toBe('Update available')
-    expect(row('pdf').find('.skills-update').attributes('title')).toContain('Fix tables')
-    expect(row('pdf').findAll('.exit-btn').find((b) => b.text() === 'Update').classes()).toContain('primary')
-    expect(row('pdf').find('.skills-history-line').text()).toContain('Changed 3 days ago · 3 versions')
-    expect(row('mine').find('.skills-history-line').text()).toContain('Changed 1 hour ago · 1 version')
-    expect(row('copied').find('.skills-history-line').exists()).toBe(false)
-    expect(wrapper.find('.skills-filter').exists()).toBe(false) // a short list
+    const badges = (name) => rowOf(wrapper, name).findAll('.skills-row-top .skills-tag').map((b) => b.text())
+    expect(badges('mine')).toEqual(['Yours'])
+    expect(rowOf(wrapper, 'mine').get('.skills-origin').classes()).toContain('origin-own')
+    expect(rowOf(wrapper, 'mine').get('.skills-origin').attributes('title')).toContain('no record of adding it')
+    expect(badges('pdf')).toEqual(['GitHub', 'Modified locally', 'Update available'])
+    expect(rowOf(wrapper, 'pdf').get('.skills-origin').attributes('title')).toContain('o/r/skills/pdf @ aaaaaaa')
+    expect(rowOf(wrapper, 'pdf').get('.skills-update').attributes('title')).toContain('Fix tables')
+    expect(badges('copied')).toEqual(['Folder'])
+    expect(badges('docx')).toEqual(['Synced'])
+    expect(rowOf(wrapper, 'docx').get('.skills-row-desc').text()).toBe('No description.')
+    // Partly kept only when relevant.
+    expect(wrapper.find('.skills-partial').exists()).toBe(false)
+
+    await open(wrapper, 'pdf')
+    const copy = copyOf(wrapper, '/h/.claude/skills/pdf')
+    expect(copy.get('.skills-origin').text()).toBe('From GitHub — o/r')
+    expect(copy.get('.skills-modified').text()).toBe('Modified locally')
+    expect(copy.get('.skills-update').text()).toBe('Update available')
+    expect(copy.get('.skills-update-line').text()).toContain('Newest change: Fix tables')
+    expect(button(copy, 'Update').classes()).toContain('primary')
+    expect(copy.get('.skills-history-line').text()).toContain('Changed 3 days ago · 3 versions')
+    await open(wrapper, 'mine')
+    expect(copyOf(wrapper, '/h/.claude/skills/mine').get('.skills-origin').text()).toBe('Your skill')
+    expect(copyOf(wrapper, '/h/.claude/skills/mine').get('.skills-history-line').text()).toContain('Changed 1 hour ago · 1 version')
+    expect(button(copyOf(wrapper, '/h/.claude/skills/mine'), 'Update')).toBeUndefined() // only one added from GitHub
+    await open(wrapper, 'copied')
+    expect(copyOf(wrapper, '/h/.agents/skills/copied').get('.skills-origin').text()).toBe('Copied from a folder')
+    expect(copyOf(wrapper, '/h/.agents/skills/copied').find('.skills-history-line').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('a long list can be filtered by origin', async () => {
+  it('filters: compact chips with their counts, only for the origins in the list', async () => {
     const many = [...tracked(), ...['a', 'b', 'c', 'd'].map((n) => skill({ dir: `/h/.claude/skills/${n}`, name: n, origin: 'own' }))]
     api({ skillsList: async () => ({ roots: [], skills: many }) })
     const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
     await flushPromises()
-    const filter = wrapper.find('.skills-filter')
-    expect(filter.findAll('button').map((b) => b.text())).toEqual(['All8', 'Yours5', 'GitHub1', 'Folders1'])
+    const filter = wrapper.get('.skills-filter')
+    expect(filter.attributes('role')).toBe('group')
+    expect(filter.findAll('button').map((b) => b.text())).toEqual(['All8', 'Yours5', 'GitHub1', 'Folders1', 'Synced1'])
+    expect(filter.findAll('button')[0].attributes('aria-pressed')).toBe('true')
     await filter.findAll('button')[1].trigger('click')
-    expect(wrapper.findAll('.mcp-server .mcp-name').map((n) => n.text())).toEqual(['a', 'b', 'c', 'd', 'mine'])
+    expect(filter.findAll('button')[1].attributes('aria-pressed')).toBe('true')
+    expect(names(wrapper)).toEqual(['a', 'b', 'c', 'd', 'mine'])
+    expect(wrapper.get('.skills-count').text()).toBe('5 of 8 skills')
     await filter.findAll('button')[2].trigger('click')
-    expect(wrapper.findAll('.mcp-server .mcp-name').map((n) => n.text())).toEqual(['pdf'])
+    expect(names(wrapper)).toEqual(['pdf'])
+    // Nothing found: says so, and shows everything again on a click.
+    await wrapper.get('input.skills-search').setValue('zzz')
+    expect(wrapper.get('.skills-nomatch').text()).toContain('No skill matches this search or filter.')
+    await button(wrapper.get('.skills-nomatch'), 'Show every skill').trigger('click')
+    expect(names(wrapper)).toHaveLength(8)
+    expect(wrapper.get('input.skills-search').element.value).toBe('')
+    wrapper.unmount()
+
+    // Skills from one place only: no filters.
+    api({ skillsList: async () => ({ roots: [], skills: many.filter((s) => s.origin === 'own') }) })
+    const plain = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    expect(plain.find('.skills-filter').exists()).toBe(false)
+    plain.unmount()
+  })
+
+  it('loading, then empty: placeholder rows the first time, then a way to add one', async () => {
+    let answer
+    api({ skillsList: () => new Promise((resolve) => (answer = resolve)) })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    expect(wrapper.findAll('.skills-skeleton')).toHaveLength(3)
+    expect(wrapper.get('.skills-list').attributes('aria-busy')).toBe('true')
+    expect(wrapper.get('.skills-count').text()).toBe('Loading…')
+    answer({ roots: [], skills: [] })
+    await flushPromises()
+    expect(wrapper.find('.skills-skeleton').exists()).toBe(false)
+    expect(wrapper.get('.mcp-empty').text()).toContain('No skills yet.')
+    await button(wrapper.get('.mcp-empty'), 'Add a skill').trigger('click')
+    expect(wrapper.find('.skills-preview, input.mcp-input').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -258,7 +547,8 @@ describe('Skills dialog', () => {
       attachTo: document.body
     })
     await flushPromises()
-    const pdf = () => wrapper.findAll('.mcp-server').find((r) => r.find('.mcp-name').text() === 'pdf')
+    await open(wrapper, 'pdf')
+    const pdf = () => rowOf(wrapper, 'pdf')
     await pdf().find('.skills-link').trigger('click')
     await flushPromises()
     expect(got.history[0]).toEqual({ dir: '/h/.claude/skills/pdf', cwd: '/p' })
@@ -291,6 +581,7 @@ describe('Skills dialog', () => {
     expect(got.restore[0]).toEqual({ dir: '/h/.claude/skills/pdf', id: 'v2', cwd: '/p' })
     expect(wrapper.find('.mcp-notice').text()).toContain('Restored "pdf"')
     expect(got.history).toHaveLength(2) // shown again, with the new version
+    expect(pdf().find('.skills-details').exists()).toBe(true) // still open
 
     await pdf().find('.skills-link').trigger('click')
     expect(pdf().find('.skills-history').exists()).toBe(false)
@@ -315,8 +606,8 @@ describe('Skills dialog', () => {
       attachTo: document.body
     })
     await flushPromises()
-    const pdf = wrapper.findAll('.mcp-server').find((r) => r.find('.mcp-name').text() === 'pdf')
-    await pdf.findAll('.exit-btn').find((b) => b.text() === 'Update').trigger('click')
+    await open(wrapper, 'pdf')
+    await button(copyOf(wrapper, '/h/.claude/skills/pdf'), 'Update').trigger('click')
     await flushPromises()
     expect(wrapper.find('.skills-warn').text()).toContain('You changed this copy')
     const box = wrapper.find('.skills-changes')
@@ -377,9 +668,11 @@ describe('Skills dialog', () => {
     })
     const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
     await flushPromises()
-    const mine = () => wrapper.findAll('.mcp-server').find((r) => r.find('.mcp-name').text() === 'mine')
-    expect(mine().find('.skills-partial').text()).toBe('Partly kept')
-    expect(mine().find('.skills-partial').attributes('title')).toContain('cannot be restored')
+    const mine = () => rowOf(wrapper, 'mine')
+    expect(mine().get('.skills-row-top .skills-partial').text()).toBe('Partly kept')
+    expect(mine().get('.skills-partial').attributes('title')).toContain('cannot be restored')
+    await open(wrapper, 'mine')
+    expect(copyOf(wrapper, '/h/.claude/skills/mine').get('.skills-partial').text()).toBe('Partly kept')
     await mine().find('.skills-link').trigger('click')
     await flushPromises()
     expect(mine().find('.skills-history').text()).toContain('Too many files')
@@ -393,7 +686,8 @@ describe('Skills dialog', () => {
     })
     const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
     await flushPromises()
-    await wrapper.findAll('.skills-copy')[1].findAll('.exit-btn').find((b) => b.text() === 'Update').trigger('click')
+    await open(wrapper, 'pdf')
+    await button(copyOf(wrapper, '/h/.claude/skills/pdf'), 'Update').trigger('click')
     await flushPromises()
     await wrapper.find('.skills-preview form').trigger('submit')
     await flushPromises()
@@ -401,19 +695,34 @@ describe('Skills dialog', () => {
     wrapper.unmount()
   })
 
-  it('speaks French: origins, badges, history', async () => {
-    api({ skillsList: async () => ({ roots: [], skills: tracked() }) })
+  it('speaks French: origins, badges, filters, details, history', async () => {
+    api({ skillsList: async () => ({ roots: [], skills: [...tracked(), ...realList()] }) })
     setMessages('fr', fr)
-    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    const wrapper = mount(SkillsDialog, { props: { agents: [{ id: 'claude', available: true }, { id: 'codex', available: true }] }, attachTo: document.body })
     await flushPromises()
-    const text = wrapper.text()
-    expect(text).toContain('Votre compétence')
+    expect(wrapper.findAll('.skills-chip').map((c) => c.text())).toEqual(['Toutes10', 'Les vôtres2', 'GitHub1', 'Dossiers1', 'Synchronisées4', 'Intégrées2'])
+    expect(wrapper.get('.skills-count').text()).toBe('10 compétences')
+    expect(rowOf(wrapper, 'mine').get('.skills-origin').text()).toBe('À vous')
+    expect(rowOf(wrapper, 'docx').get('.skills-origin').text()).toBe('Synchronisée')
+    expect(rowOf(wrapper, 'imagegen').get('.skills-origin').text()).toBe('Intégrée')
+    expect(rowOf(wrapper, 'pdf').text()).toContain('Modifiée localement')
+    expect(rowOf(wrapper, 'pdf').text()).toContain('Mise à jour disponible')
+    expect(rowOf(wrapper, 'pdf').text()).toContain('Tous les projets')
+    await open(wrapper, 'pdf')
+    const text = rowOf(wrapper, 'pdf').text()
+    expect(text).toContain('Où elle est installée')
     expect(text).toContain('Depuis GitHub — o/r')
-    expect(text).toContain('Copiée depuis un dossier')
-    expect(text).toContain('Modifiée localement')
-    expect(text).toContain('Mise à jour disponible')
     expect(text).toContain('Modifiée il y a 3 jours · 3 versions')
     expect(text).toContain('Historique')
+    expect(text).toContain('Ouvrir le dossier')
+    expect(rowOf(wrapper, 'pdf').get('.skills-copy-btn').attributes('aria-label')).toBe('Copier le chemin')
+    await open(wrapper, 'docx')
+    expect(rowOf(wrapper, 'docx').get('.skills-copy .skills-origin').text()).toBe('Synchronisée depuis votre compte Claude')
+    await open(wrapper, 'reverse-engineer-anything')
+    expect(rowOf(wrapper, 'reverse-engineer-anything').text()).toContain('Tout retirer')
+    expect(rowOf(wrapper, 'reverse-engineer-anything').text()).toContain('Ces copies ne sont pas toutes identiques : 2 versions différentes.')
+    await wrapper.get('input.skills-search').setValue('imagegen')
+    expect(wrapper.get('.skills-count').text()).toBe('1 sur 10 compétences')
     wrapper.unmount()
   })
 
@@ -424,7 +733,7 @@ describe('Skills dialog', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Les compétences sont des dossiers')
     expect(wrapper.text()).toContain('Tous les projets')
-    expect(wrapper.text()).toContain('Synchronisée depuis votre compte Claude')
+    expect(rowOf(wrapper, 'docx').get('.skills-origin').attributes('title')).toBe('Synchronisée depuis votre compte Claude')
     wrapper.unmount()
   })
 
@@ -450,7 +759,7 @@ describe('Skills dialog', () => {
     expect(wrapper.find('.help-head').exists()).toBe(false)
     expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
     expect(wrapper.find('.mcp-intro').exists()).toBe(true)
-    expect(wrapper.findAll('.mcp-server').map((r) => r.find('.mcp-name').text())).toEqual(['docx', 'pdf'])
+    expect(names(wrapper)).toEqual(['docx', 'pdf'])
     expect(document.activeElement).toBe(document.body)
     await wrapper.get('input.skills-search').trigger('keydown', { key: 'Escape' })
     await wrapper.trigger('pointerdown')

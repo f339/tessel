@@ -95,20 +95,46 @@ const FOCUS_WORLD = 1997
 const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]/g
 /* eslint-enable no-control-regex */
 // A path segment that reads as a token (a share link's id, a reset code): a
-// UUID, a long hex run, an address (an email), or a run of 20 letters and
-// digits mixing both. A slug ("2024-05-01-my-post") is not one.
+// UUID, a long hex run, an address (an email), or a part of it (between -
+// _ . ~) that reads as random (randomPart), or three short parts that each
+// mix letters and digits or both cases ("x7Kq-9pLm-Zr2T"). A slug
+// ("2024-05-01-my-post") or a word in CamelCase is not one.
 const TOKEN_SEGMENT = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{16,}|@/i
-const tokenLike = (text) => TOKEN_SEGMENT.test(text) || (text.match(/[A-Za-z0-9_]{20,}/g) || []).some((run) => /\d/.test(run) && /[A-Za-z]/.test(run))
-
-function maskSegment(segment) {
-  if (!segment) return segment
-  let text
-  try {
-    text = decodeURIComponent(segment)
-  } catch {
-    text = segment
+// 12 characters or more that mix letters and digits, or letters in both
+// cases throughout (base64: a quarter to three quarters capitals), or 16
+// lower-case letters with few vowels (base32).
+function randomPart(p) {
+  if (p.length < 12) return false
+  const letters = p.replace(/[^A-Za-z]/g, '').length
+  const digits = p.replace(/[^0-9]/g, '').length
+  if (letters && digits && letters / p.length >= 0.15 && digits / p.length >= 0.15) return true
+  if (/^[A-Za-z0-9+/=]+$/.test(p) && letters >= 12) {
+    const upper = p.replace(/[^A-Z]/g, '').length / letters
+    if (upper >= 0.25 && upper <= 0.75) return true
   }
-  return maskSecrets(text) !== text || tokenLike(text) ? MASK : segment
+  return /^[a-z]{16,}$/.test(p) && (p.match(/[aeiouy]/g) || []).length / p.length < 0.2
+}
+const mixedPart = (p) => p.length >= 3 && ((/\d/.test(p) && /[A-Za-z]/.test(p)) || (/[A-Z].*[A-Z]/.test(p) && /[a-z].*[a-z]/.test(p)))
+function tokenLike(text) {
+  if (TOKEN_SEGMENT.test(text)) return true
+  const parts = text.split(/[-_.~+]+/)
+  return parts.some(randomPart) || parts.filter(mixedPart).length >= 3
+}
+// The segment after one of these words is a code or an id (/reset/<code>,
+// /invite/<id>, /auth/callback...): masked whatever it looks like.
+const SECRET_BEFORE = /^(reset|verify|verification|invite|invitation|token|magic|share|shared|auth|oauth|login|signin|sign-in|callback|confirm|activate|unsubscribe)s?([-_].*)?$/i
+
+const decoded = (segment) => {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return segment
+  }
+}
+function maskSegment(segment, before) {
+  if (!segment) return segment
+  const text = decoded(segment)
+  return maskSecrets(text) !== text || tokenLike(text) || (before && SECRET_BEFORE.test(decoded(before))) ? MASK : segment
 }
 
 // A page's address as guests see it: scheme, host and path (secrets masked),
@@ -125,7 +151,8 @@ export function shownPageUrl(raw) {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return ''
   // url.host never has the user or the password.
-  let out = `${url.protocol}//${url.host}${url.pathname.split('/').map(maskSegment).join('/')}`
+  const segments = url.pathname.split('/')
+  let out = `${url.protocol}//${url.host}${segments.map((x, i) => maskSegment(x, i > 0 ? segments[i - 1] : '')).join('/')}`
   if (out.length > PAGE_LIMITS.url) out = `${out.slice(0, PAGE_LIMITS.url - 1)}…`
   return `${out}${url.search ? '?…' : ''}${url.hash ? '#…' : ''}`
 }
@@ -837,7 +864,11 @@ export const INPUT_LIMITS = Object.freeze({
 })
 // Keys no guest presses, beyond the browser's and Tessel's own (reservedKey:
 // paste, Ctrl+W/M/Q, Alt+F4, F11, the browser's shortcuts): devtools, view
-// source, save, print, open.
+// source, save, print, open; and every key that reaches the host window's
+// menu or the system's (a key the page leaves unhandled goes to the window):
+// Alt with anything (a menu's letter, Alt+Space), Alt alone and F10 (the
+// menu bar: File > Exit is an Enter away), the context menu key.
+const MENU_KEYS = new Set(['alt', 'altgraph', 'f10', 'contextmenu', 'meta', 'os'])
 export function refusedGuestKey(combo) {
   let parsed
   try {
@@ -848,6 +879,7 @@ export function refusedGuestKey(combo) {
   if (reservedKey(combo)) return true
   const k = String(parsed.def.key).toLowerCase()
   const ctrl = (parsed.modifiers & 6) !== 0
+  if ((parsed.modifiers & 1) !== 0 || MENU_KEYS.has(k)) return true
   if (k === 'f12') return true
   if (ctrl && (parsed.modifiers & 8) && ['i', 'j', 'c'].includes(k)) return true
   // Copy and cut write to the host's clipboard: what a guest typed could be

@@ -48,7 +48,7 @@
 // pauses its own invitation only, so no code can pause the others.
 // Nothing here touches the network: shareHost.js does.
 import crypto from 'crypto'
-import { cleanRights, isRightId, sameRights, RIGHT_IDS } from '../../shared/liveShareRights'
+import { cleanRights, isRightId, sameRights, setRight, RIGHT_IDS } from '../../shared/liveShareRights'
 import { cleanGrant, cleanName, cleanProjectIds, copyGrant, isProjectId } from './shareGrant.js'
 import { KX_BYTES, identityFingerprint } from './shareCrypto.js'
 
@@ -568,7 +568,7 @@ export function createAccess({ now = Date.now, trust = null, isOnline = () => fa
       const inv = invites.get(subject.invite)
       if (!inv || (byProject && on && !shared.has(project))) return false
       if (byProject) inv.grant.projects = on ? cleanProjectIds([...inv.grant.projects, project]) : inv.grant.projects.filter((x) => x !== project)
-      else inv.grant.rights = cleanRights({ ...inv.grant.rights, [right]: !!on })
+      else inv.grant.rights = setRight(inv.grant.rights, right, on)
       changed('invites')
       return true
     }
@@ -584,7 +584,7 @@ export function createAccess({ now = Date.now, trust = null, isOnline = () => fa
     const p = subject.person ? people.get(subject.person) : null
     if (!p || (byProject && on && !shared.has(project))) return false
     if (byProject) p.grant.projects = on ? cleanProjectIds([...p.grant.projects, project]) : p.grant.projects.filter((x) => x !== project)
-    else p.grant.rights = cleanRights({ ...p.grant.rights, [right]: !!on })
+    else p.grant.rights = setRight(p.grant.rights, right, on)
     changed('grants')
     return true
   }

@@ -38,7 +38,7 @@ const MESSAGES = {
   forbidden: () => t('main.liveShareFs.forbidden', 'The host has not given you the right to do this.'),
   revoked: () => t('main.liveShareFs.revoked', 'Your access changed before this was done: nothing was changed.'),
   'not-found': () => t('main.liveShareFs.notFound', 'Not found on the host.'),
-  'not-allowed': () => t('main.liveShareFs.notAllowed', 'Guests cannot change this file or folder.'),
+  'not-allowed': () => t('main.liveShareFs.notAllowed', 'Guests cannot change this file or folder (or something hidden or protected in it).'),
   exists: () => t('main.liveShareFs.exists', 'This name is already taken here.'),
   'not-file': () => t('main.liveShareFs.notFile', 'This is not a file.'),
   'is-folder': () => t('main.liveShareFs.isFolder', 'This is a folder.'),
@@ -48,6 +48,8 @@ const MESSAGES = {
   conflict: () => t('main.liveShareFs.conflict', 'The file was changed on the host: reload it, then save again.'),
   'not-repo': () => t('main.liveShareFs.notRepo', 'This folder is not in a git repository.'),
   'nothing-staged': () => t('main.liveShareFs.nothingStaged', 'Stage at least one file to commit.'),
+  'staged-outside': () => t('main.liveShareFs.stagedOutside', 'Files outside this project are staged on the host: the host must commit or unstage them first.'),
+  'staged-hidden': () => t('main.liveShareFs.stagedHidden', 'Files the host keeps hidden from guests are staged: the host must commit or unstage them first.'),
   'no-message': () => t('main.liveShareFs.noMessage', 'Enter a commit message to commit.'),
   'no-identity': () => t('main.liveShareFs.noIdentity', 'Git on the host does not know a name and email yet.'),
   'bad-commit': () => t('main.liveShareFs.badCommit', 'Unknown commit.'),
@@ -423,6 +425,31 @@ export function createGuestFs({ request } = {}) {
     return call('notes.save', loc.project, { text: body, baseMtime: Number.isFinite(baseMtime) ? baseMtime : null }, (d) => ({ path: pathOf(loc.project, NOTES), mtime: numOr(d.mtime) }))
   }
 
+  // --- Local History (phase 2b: the host's saves of a file, its Timeline) -----
+  // The localHistory:list / read calls for a host's file: { path } -> { ok,
+  // entries: [{ id, source, timestamp }] } (newest first) and { path, id } ->
+  // { ok, text }, as this computer's Local History answers.
+  const LOCAL_ID = /^[a-z0-9]{6,32}$/
+  function localHistoryList({ path } = {}) {
+    const loc = parseLsharePath(path)
+    if (!loc || !loc.rel) return Promise.resolve(outside())
+    return call('history.local', loc.project, { path: loc.rel }, (d) => {
+      if (!Array.isArray(d.entries) || d.entries.length > L.localEntries) return null
+      const entries = []
+      for (const e of d.entries) {
+        if (!isObj(e) || !LOCAL_ID.test(String(e.id)) || !Number.isFinite(e.timestamp)) return null
+        entries.push({ id: e.id, source: e.source === 'save' ? 'save' : 'other', timestamp: e.timestamp })
+      }
+      return { entries }
+    })
+  }
+  function localHistoryRead({ path, id } = {}) {
+    const loc = parseLsharePath(path)
+    if (!loc || !loc.rel) return Promise.resolve(outside())
+    if (typeof id !== 'string' || !LOCAL_ID.test(id)) return Promise.resolve(failure('not-found'))
+    return call('history.localRead', loc.project, { path: loc.rel, id }, (d) => (typeof d.text === 'string' && textWithin(d.text, L.textBytes) ? { text: d.text } : null))
+  }
+
   // --- Changes -----------------------------------------------------------------------
   // Paths the Changes view gives (from the project, or virtual) -> wire
   // paths of `project`, or null when one is not.
@@ -641,6 +668,9 @@ export function createGuestFs({ request } = {}) {
     // notes
     loadNotes,
     saveNotes,
+    // Local History (the Timeline)
+    localHistoryList,
+    localHistoryRead,
     scm,
     localOnly
   }

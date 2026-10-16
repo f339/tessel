@@ -720,6 +720,10 @@ const api = {
   // the host (in one of its projects), say which of the host's panes is on
   // screen (focus); the host's projects, panes, agents and the guest's rights
   // come with onGuest, the host's notices (too many asks) with onNotice.
+  // Phase 2: the host's settings for guests (setSettings), its task boards
+  // as they change (setTasks), its answer to a guest's change of one
+  // (taskDone), each change guests made (onGuestAction); a guest follows a
+  // host's board (subscribe, its news with onPush) and changes it (task).
   liveShare: {
     state: () => ipcRenderer.invoke('liveShare:state'),
     start: ({ name, projects, invite } = {}) => ipcRenderer.invoke('liveShare:start', { name, projects, invite }),
@@ -743,6 +747,35 @@ const api = {
     open: ({ kind, agent, project } = {}) => ipcRenderer.invoke('liveShare:open', { kind, agent, project }),
     focus: (id) => ipcRenderer.send('liveShare:focus', typeof id === 'string' ? id : null),
     requestDone: (request) => ipcRenderer.send('liveShare:requestDone', typeof request === 'string' ? request : ''),
+    setSettings: (patch = {}) => ipcRenderer.invoke('liveShare:setSettings', patch),
+    setTasks: (list) => ipcRenderer.send('liveShare:tasks', list),
+    taskDone: ({ request, ok, code } = {}) => ipcRenderer.send('liveShare:taskDone', { request, ok: ok === true, code }),
+    taskCheck: (request) => ipcRenderer.invoke('liveShare:taskCheck', typeof request === 'string' ? request : ''),
+    subscribe: ({ topic, project, on } = {}) => ipcRenderer.invoke('liveShare:subscribe', { topic, project, on: !!on }),
+    task: ({ op, project, args } = {}) => ipcRenderer.invoke('liveShare:task', { op, project, args }),
+    // Phase 2b. Host: the shared projects' panes as their headers show them,
+    // and their finished tasks. Guest: a panel's request to the host (a
+    // pane's sub-agents, the task history, a task branch's review).
+    setPaneAgents: (list) => ipcRenderer.send('liveShare:paneAgents', list),
+    setHistory: (list) => ipcRenderer.send('liveShare:history', list),
+    request: ({ op, project, args } = {}) => ipcRenderer.invoke('liveShare:request', { op, project, args }),
+    onPush: (cb) => subscribe('liveShare:push', cb),
+    onGuestAction: (cb) => subscribe('liveShare:guestAction', cb),
+    // Phase 2c, host: the browser panes of the shared projects (their
+    // webContents ids, the host's "hide"), the activity guests follow, and
+    // which pages guests watch.
+    setPages: (list) => ipcRenderer.send('liveShare:pages', list),
+    setActivity: (list) => ipcRenderer.send('liveShare:activity', list),
+    onFeeds: (cb) => subscribe('liveShare:feeds', cb),
+    onPagesWatched: (cb) => subscribe('liveShare:pagesWatched', cb),
+    // Guest: the host's past conversations ({ op: list | details | terminal,
+    // project, args }), a host's page watched while its view is on screen,
+    // input on it, and its frames and news.
+    sessions: ({ op, project, args } = {}) => ipcRenderer.invoke('liveShare:sessions', { op, project, args }),
+    pageWatch: ({ id, on } = {}) => ipcRenderer.invoke('liveShare:pageWatch', { id, on: !!on }),
+    pageInput: ({ id, events } = {}) => ipcRenderer.send('liveShare:pageInput', { id, events }),
+    onPageFrame: (cb) => subscribe('liveShare:pageFrame', cb),
+    onPageEvent: (cb) => subscribe('liveShare:pageEvent', cb),
     // Guest: a host's agent pane's conversation watched here (read only),
     // which comes with onChat.
     chatWatch: ({ id, on } = {}) => ipcRenderer.invoke('liveShare:chatWatch', { id, on: !!on }),

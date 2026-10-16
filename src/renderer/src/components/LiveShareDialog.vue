@@ -9,7 +9,9 @@
 // - Overview: before sharing, the projects to share, your name and the first
 //   invitation's settings (Start sharing makes it: start, copy, send); while
 //   sharing, the invitations' codes to copy, the projects shared (tick or
-//   untick at any time) and who is there;
+//   untick at any time), who is there, and what guests changed lately
+//   (Recent guest actions); always, the share's setting "Hide ignored and
+//   secret files from guests" (main's, kept across shares);
 // - Invitations (liveshare/LsInvitations.vue), People (LsPeople.vue), Access
 //   (LsAccess.vue: the people x projects grid, or one project's people) and
 //   Trusted (LsTrusted.vue, also while not sharing).
@@ -19,7 +21,7 @@
 import { ref, computed, watch, nextTick, onMounted, onUnmounted, provide } from 'vue'
 import { ScreenShare, Copy, Check, Loader2, AlertTriangle, LogIn, LogOut, ChevronDown } from 'lucide-vue-next'
 import { t } from '../i18n'
-import { endReason, rightsText } from '../liveShareWindow'
+import { endReason, rightsText, actionText } from '../liveShareWindow'
 import { accessError, invitesOf, inviteName, inviteExpiry, joinedGuests, waitingGuests, offlinePeople, trustedPeople } from '../liveShareAccess'
 import { rightsShort } from '../liveShareRights'
 import LsInviteEditor from './liveshare/LsInviteEditor.vue'
@@ -46,7 +48,7 @@ const props = defineProps({
 const emit = defineEmits(['close', 'toggle-project'])
 
 const api = window.shellApi && window.shellApi.liveShare
-const OFF_HOST = { state: 'off', projectIds: [], invites: [], guests: [], offline: [], trusted: [], presence: [], progress: null, error: null }
+const OFF_HOST = { state: 'off', projectIds: [], invites: [], guests: [], offline: [], trusted: [], presence: [], progress: null, error: null, settings: { hideIgnored: true }, actions: [] }
 const OFF_GUEST = { state: 'off', host: null, panes: [], projects: [], reason: null, rights: null, code: null, agents: null }
 const SECTIONS = ['overview', 'invites', 'people', 'access', 'trusted']
 
@@ -275,6 +277,24 @@ const peopleSummary = computed(() => {
   return parts.join(' · ')
 })
 
+// The share's setting for guests (main's): hide what git ignores and what
+// looks like a secret. A change counts for every request from now on.
+const hideIgnored = computed(() => !(host.value.settings && host.value.settings.hideIgnored === false))
+function setHideIgnored(event) {
+  const box = event && event.target
+  const want = box ? !!box.checked : !hideIgnored.value
+  if (box) box.checked = hideIgnored.value
+  run('setting:hideIgnored', async () => {
+    const r = await api.setSettings({ hideIgnored: want })
+    if (r && r.ok && r.settings) host.value = { ...host.value, settings: { ...r.settings } }
+    return r
+  })
+}
+// What guests changed lately (main's, newest first): the last few here.
+const RECENT_SHOWN = 8
+const recentActions = computed(() => (Array.isArray(host.value.actions) ? host.value.actions : []).slice(0, RECENT_SHOWN))
+const actionTime = (a) => (Number.isFinite(a.at) ? new Date(a.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '')
+
 const sections = computed(() => [
   { id: 'overview', label: t('liveShare.section.overview', 'Overview') },
   { id: 'invites', label: t('liveShare.section.invites', 'Invitations'), count: sharing.value ? invites.value.length : null },
@@ -425,6 +445,16 @@ function tabKeys(event, list, current, set) {
             <p v-if="sharing && ticked.size === 1" class="ls-hint" data-test="ls-last-project">{{ t('liveShare.share.lastProject', 'To stop sharing your last project, use Stop sharing.') }}</p>
           </fieldset>
 
+          <div class="ls-field" data-test="ls-settings">
+            <label class="ls-setting">
+              <input type="checkbox" :checked="hideIgnored" :disabled="pending.has('setting:hideIgnored')" data-test="ls-hide-ignored" @change="setHideIgnored" />
+              <span class="ls-setting-text">
+                <span>{{ t('liveShare.setting.hideIgnored', 'Hide ignored and secret files from guests') }}</span>
+                <span class="ls-hint">{{ t('liveShare.setting.hideIgnoredHint', 'Files git ignores and files that look like secrets (.env, keys, credentials) stay out of guests’ Files, search and Changes. .git and .tessel are always hidden.') }}</span>
+              </span>
+            </label>
+          </div>
+
           <template v-if="!sharing && !preparing">
             <label class="ls-field">
               <span class="ls-label">{{ t('liveShare.share.name', 'Your name (guests see it)') }}</span>
@@ -482,6 +512,18 @@ function tabKeys(event, list, current, set) {
                 {{ joined.length || waiting.length || offline.length ? peopleSummary : t('liveShare.share.noGuests', 'No one has joined yet.') }}
                 <button v-if="joined.length || waiting.length || offline.length" type="button" class="ls-link" @click="section = 'people'">{{ t('liveShare.share.seePeople', 'See people…') }}</button>
               </p>
+            </div>
+            <div class="ls-field" data-test="ls-recent">
+              <div class="ls-label">{{ t('liveShare.recent.title', 'Recent guest actions') }}</div>
+              <p v-if="!recentActions.length" class="ls-empty" data-test="ls-recent-none">{{ t('liveShare.recent.none', 'Nothing changed by a guest yet.') }}</p>
+              <ul v-else class="ls-recent-list">
+                <li v-for="a in recentActions" :key="a.id" class="ls-recent-item" :class="{ flagged: a.flagged }" :data-test="'ls-recent-' + a.id">
+                  <span class="ls-recent-time">{{ actionTime(a) }}</span>
+                  <span class="ls-recent-text">{{ actionText(a) }}</span>
+                  <span v-if="projectName(a.project) && sharedList.length > 1" class="ls-recent-project">{{ projectName(a.project) }}</span>
+                  <span v-if="a.flagged" class="ls-recent-flag" :title="t('liveShare.recent.flaggedHint', 'This file tells agents what to do: check the change.')">{{ t('liveShare.recent.flagged', 'Agent instructions') }}</span>
+                </li>
+              </ul>
             </div>
           </template>
         </div>
@@ -882,5 +924,62 @@ function tabKeys(event, list, current, set) {
   margin-top: 12px;
   color: var(--danger);
   font-size: 12.5px;
+}
+.ls-setting {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.ls-setting input {
+  flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.ls-setting-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ls-recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ls-recent-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+.ls-recent-time {
+  flex: none;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.ls-recent-text {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ls-recent-project {
+  flex: none;
+  color: var(--text-dim);
+}
+.ls-recent-flag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--warn);
+  border: 1px solid currentColor;
 }
 </style>

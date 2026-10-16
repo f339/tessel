@@ -297,6 +297,10 @@ export function paneRow(pane, now = Date.now()) {
     isActive: !!pane.isActive,
     unvisited: !!pane.attention,
     team: pane.team || null,
+    // A Live Share host's pane: its team by the host's name for it (its id
+    // means nothing here), and nothing here acts on it (sleep...).
+    teamName: pane.teamName || null,
+    liveShare: !!pane.liveShare,
     lead: !!pane.lead,
     // A worker started by a coordinator (orchestration): { id, label, num,
     // status } of that coordinator, for the row's link to it.

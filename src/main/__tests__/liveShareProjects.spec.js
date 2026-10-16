@@ -9,6 +9,7 @@ import WebSocket, { WebSocketServer } from 'ws'
 import { createShareHost, SHARE_PROTOCOL, cleanProjectIds, MAX_PROJECTS } from '../liveShare/shareHost'
 import { createShareGuest } from '../liveShare/shareGuest'
 import { newSecret, newSigningKey } from '../liveShare/shareCrypto'
+import { NO_RIGHTS } from '../../shared/liveShareRights'
 
 const until = async (fn, ms = 3000) => {
   const end = Date.now() + ms
@@ -21,7 +22,7 @@ const until = async (fn, ms = 3000) => {
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
 
-const ALL = { type: true, open: true, close: true }
+const ALL = { ...NO_RIGHTS, type: true, open: true, close: true }
 const pane = (id) => ({ id, title: id, kind: 'shell', cols: 80, rows: 24 })
 const layoutOf = (name, ids) => ({ project: name, tree: ids.length ? { type: 'split', dir: 'row', sizes: ids.map(() => 100 / ids.length), children: ids.map((id) => ({ type: 'leaf', id, view: 'terminal', title: id, kind: 'shell' })) } : null, activeId: ids[0] || null, maximizedId: null })
 
@@ -353,15 +354,15 @@ describe('Live Share: several projects, each guest its own', () => {
     expect(host.change(id, { right: 'type', on: true })).toBe(true)
     expect(host.change(id, { right: 'close', on: true })).toBe(true)
     await until(() => alex.rights.length === 3)
-    expect(alex.rights.at(-1)).toEqual({ type: true, open: false, close: true })
-    expect(guestOf('Alex').rights).toEqual({ type: true, open: false, close: true })
+    expect(alex.rights.at(-1)).toEqual({ ...NO_RIGHTS, type: true, open: false, close: true })
+    expect(guestOf('Alex').rights).toEqual({ ...NO_RIGHTS, type: true, open: false, close: true })
     // Only real rights, shared projects and guests.
     for (const right of ['__proto__', 'constructor', 'toString', 'hasOwnProperty', ['type']]) expect(host.change(id, { right: right, on: true })).toBe(false)
     expect(host.change(id, { project: 'ws-gone', on: true })).toBe(false)
     expect(host.change(id, { project: '../x', on: true })).toBe(false)
     expect(host.change('g-unknown', { project: 'ws-a', on: true })).toBe(false)
     expect(host.change('k-unknown', { right: 'type', on: true })).toBe(false)
-    expect(guestOf('Alex').rights).toEqual({ type: true, open: false, close: true })
+    expect(guestOf('Alex').rights).toEqual({ ...NO_RIGHTS, type: true, open: false, close: true })
   })
 
   it('a guest offline: what it sees and may do still changes, and it comes back with that', async () => {
@@ -373,18 +374,18 @@ describe('Live Share: several projects, each guest its own', () => {
     const [offline] = host.offlineGuests()
     expect(host.change(offline.id, { project: 'ws-a', on: false })).toBe(true)
     expect(host.change(offline.id, { right: 'type', on: true })).toBe(true)
-    expect(host.offlineGuests()[0]).toMatchObject({ id: offline.id, projects: ['ws-b'], rights: { type: true, open: false, close: false } })
-    expect(host.accessState().people[0]).toMatchObject({ grant: { projects: ['ws-b'], rights: { type: true, open: false, close: false } } })
+    expect(host.offlineGuests()[0]).toMatchObject({ id: offline.id, projects: ['ws-b'], rights: { ...NO_RIGHTS, type: true, open: false, close: false } })
+    expect(host.accessState().people[0]).toMatchObject({ grant: { projects: ['ws-b'], rights: { ...NO_RIGHTS, type: true, open: false, close: false } } })
     expect(host.setGrant(offline.id, { projects: [] })).toBe(true)
     expect(host.setGrant(offline.id, { rights: { open: true } })).toBe(true)
-    expect(host.offlineGuests()[0]).toMatchObject({ projects: [], rights: { type: false, open: true, close: false } })
+    expect(host.offlineGuests()[0]).toMatchObject({ projects: [], rights: { ...NO_RIGHTS, type: false, open: true, close: false } })
     expect(host.change(offline.id, { project: 'ws-b', on: true })).toBe(true)
     // Back: with ws-b only, and what it may do now.
     const back = recorder()
     createShareGuest({ url: `ws://127.0.0.1:${conn.port}/`, secret: conn.secret, name: 'Alex', signingKey: alex.key, back: true, hostKey: alex.hostKey, callbacks: back.callbacks }).connect()
     await until(() => back.states.includes('joined') && back.projects)
     expect(ids(back)).toEqual(['ws-b'])
-    expect(back.rights[0]).toEqual({ type: false, open: true, close: false })
+    expect(back.rights[0]).toEqual({ ...NO_RIGHTS, type: false, open: true, close: false })
     await until(() => back.screens.b1)
     expect(back.snapshots).toEqual(['b1'])
     // Its k- id names it while it is in, too: the change goes to its connection.

@@ -261,10 +261,20 @@ async function readHead(file, bytes) {
   }
 }
 
-// -> { roots: [{ path, scope, seenBy, installFor, exists }], skills: [...] }
+// A folder never looked into for skills: a hidden one (an agent's trash,
+// where Claude Code moves a deleted skill as .trash/<id>/<name>; a copy being
+// installed or set aside, .<name>.tessel-…; a tool's cache), except Codex's
+// built-in skills at the top of its folder (.system).
+export function isListedFolder(name, depth) {
+  if (name.startsWith('.')) return depth === 0 && name === '.system'
+  return true
+}
+
+// -> { roots: [{ path, scope, seenBy, installFor, exists }], skills: [...], home }
 // A skill directly in a root can be removed; the ones further down belong to
 // the agent (Claude's synced skills, Codex's built-in .system ones, plugin
-// stores) and are only shown.
+// stores) and are only shown. mdHash: the SKILL.md's hash, so that the
+// Skills list can tell copies of the same skill that differ.
 export async function listSkills({ home = os.homedir(), env = process.env, cwd = null, sources = null, caps = SKILL_CAPS } = {}) {
   const roots = skillRoots({ home, env, cwd })
   const skills = []
@@ -278,7 +288,7 @@ export async function listSkills({ home = os.homedir(), env = process.env, cwd =
     }
     for (const entry of entries) {
       if (skills.length >= caps.listed) return
-      if (/^\..*\.tessel-/.test(entry.name)) continue // a copy being installed
+      if (!isListedFolder(entry.name, depth)) continue
       const child = path.join(dir, entry.name)
       const link = entry.isSymbolicLink()
       let isDir = entry.isDirectory()
@@ -300,8 +310,11 @@ export async function listSkills({ home = os.homedir(), env = process.env, cwd =
       }
       if (stat && stat.isFile()) {
         let meta = null
+        let mdHash = null
         try {
-          meta = skillFrontmatter(await readHead(skillFile, 64 * 1024), entry.name)
+          const head = await readHead(skillFile, 64 * 1024)
+          mdHash = sha256(head)
+          meta = skillFrontmatter(head, entry.name)
         } catch {
           // unreadable: listed by its folder name
         }
@@ -320,10 +333,12 @@ export async function listSkills({ home = os.homedir(), env = process.env, cwd =
           link,
           removable: depth === 0 && !link,
           source: source && typeof source === 'object' ? source : null,
-          updatedAt: stat.mtimeMs
+          updatedAt: stat.mtimeMs,
+          mdHash
         })
         skills[skills.length - 1].origin = skillOrigin(skills[skills.length - 1])
-      } else if (!link && depth < caps.listDepth) {
+      } else if (!link && depth < caps.listDepth && !SKIPPED_DIR.test(entry.name)) {
+        // Not a skill: looked into, unless a tool filled it (node_modules, a build).
         await visit(root, child, depth + 1, reason)
       }
     }
@@ -339,7 +354,7 @@ export async function listSkills({ home = os.homedir(), env = process.env, cwd =
     out.push({ ...root, exists })
     if (exists) await visit(root, root.path, 0, null)
   }
-  return { roots: out, skills }
+  return { roots: out, skills, home: path.resolve(home) }
 }
 
 // ---------------------------------------------------------------- Packages

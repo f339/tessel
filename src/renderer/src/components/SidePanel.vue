@@ -29,6 +29,7 @@ import { displayUrl } from '../../../shared/browserUrl'
 import TaskHistoryPanel from './TaskHistoryPanel.vue'
 import { SIDE_TABS } from '../sideTabs'
 import { statusMatters } from '../explorerChanges'
+import { isLsharePath } from '../../../shared/liveSharePath'
 import { Files, GitBranch, ListChecks, LayoutDashboard, Maximize2, Minimize2, Plus, Globe, X, ReceiptText, MessagesSquare } from 'lucide-vue-next'
 
 const props = defineProps({
@@ -41,6 +42,16 @@ const props = defineProps({
   openSessionIds: { type: Object, default: () => ({}) },
   // The Files tab's "Open Editors" (App: explorer/openEditors.js).
   openEditors: { type: Array, default: () => [] },
+  // The Tasks tab's board when it is not this computer's (a Live Share
+  // host's: taskBoardSource.js), else null.
+  taskSource: { type: Object, default: null },
+  // The Task history tab's records when they are not this computer's (a
+  // Live Share host's: TaskHistoryPanel.vue's source), else null.
+  historySource: { type: Object, default: null },
+  // A Live Share host's project: its past conversations for the Agents tab,
+  // its activity for the Conversations tab (liveShareWindowFeeds.js), else null.
+  sessionSource: { type: Object, default: null },
+  activitySource: { type: Object, default: null },
   // A project on a remote host: { hostId, host, path }. Its root is then an
   // ssh://… path: Files and Changes read it over SSH (src/main/remoteFs.js),
   // under a small badge naming the host.
@@ -389,6 +400,7 @@ onBeforeUnmount(() => {
         v-show="current() === 'tasks'"
         :agent-panes="agentPanes"
         :workspace-id="workspaceId"
+        :source="taskSource"
         @new-task="emit('new-task')"
         @focus-pane="focusPane"
         @review="(id) => emit('review', id)"
@@ -400,14 +412,16 @@ onBeforeUnmount(() => {
         :now="now"
         :active="current() === 'taskHistory'"
         :workspace-id="workspaceId"
+        :source="historySource"
         @focus-pane="focusPane"
       />
       <SessionHistoryPanel
         v-if="shown.history"
         v-show="current() === 'history'"
-        :cwd="remote ? null : root"
+        :cwd="remote || isLsharePath(root) ? null : root"
         :remote="remote"
         :open-ids="openSessionIds"
+        :source="sessionSource"
         :active="current() === 'history'"
         @resume="(s) => emit('resume-session', s)"
         @focus-pane="focusPane"
@@ -419,6 +433,7 @@ onBeforeUnmount(() => {
         v-show="current() === 'conversations'"
         :events="activity"
         :teams="teams"
+        :source="activitySource"
         :projects="projects"
         :workspace-id="workspaceId"
         :now="now"

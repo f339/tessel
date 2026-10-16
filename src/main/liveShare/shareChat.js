@@ -28,11 +28,19 @@
 // (only without the conversation). Besides 'chat' (this file): 'agents' (the
 // host lists the agents a guest may ask for, and a guest without the right
 // to open asks the host instead) and 'presence' (the guest says which of the
-// host's panes it has on screen, for the host's eyes only), shareHost.js.
+// host's panes it has on screen, for the host's eyes only), shareHost.js;
+// and phase 2's 'files' (a shared project's files, editor and notes), 'scm'
+// (its git changes) and 'tasks' (its task board), through the requests and
+// subscriptions of shareChannel.js; phase 2b's 'panes2' (what each shared
+// pane runs and how it is, its sub-agents), 'usage' (the host's usage, with
+// the right) and 'history' (the task history, a file's Local History, a task
+// branch's changes; with phase 2c, its past agent conversations, its terminal
+// agents' and its activity: shareHistory.js, shareActivity.js); phase 2c's
+// 'pages' (its browser pages: sharePageFeed.js).
 
 import { KNOWN_HARNESS_TAG_NAMES } from '../../shared/harnessInjectedTurns.js'
 
-export const SHARE_FEATURES = Object.freeze(['chat', 'agents', 'presence'])
+export const SHARE_FEATURES = Object.freeze(['chat', 'agents', 'presence', 'files', 'scm', 'tasks', 'panes2', 'usage', 'history', 'pages'])
 export const cleanFeatures = (list) => (Array.isArray(list) ? [...new Set(list.filter((f) => typeof f === 'string' && SHARE_FEATURES.includes(f)))] : [])
 
 export const CHAT_LIMITS = Object.freeze({

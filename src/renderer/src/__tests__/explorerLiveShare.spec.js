@@ -210,10 +210,10 @@ describe("the Timeline of a Live Share host's file", () => {
     clearActiveEditor()
     settings.explorerTimelineShown = false
   })
-  it('reads its git history through the session, and no Local History (none is kept here)', async () => {
+  it('reads its git history and the host’s Local History through the session (none is kept here)', async () => {
     window.shellApi = {
       scm: { fileHistory: vi.fn(async () => ({ ok: true, items: [], hasMore: false, uncommitted: false, rel: 'a.js' })) },
-      localHistory: { list: vi.fn(async () => ({ ok: true, entries: [] })), add: vi.fn() }
+      localHistory: { list: vi.fn(async () => ({ ok: true, entries: [{ id: 'abc123def', source: 'save', timestamp: Date.now() - 60000 }] })), add: vi.fn() }
     }
     settings.explorerTimelineShown = true
     setActiveEditor({ paneId: 'e1', editor: { getModel: () => ({}), getPosition: () => null }, path: 'lshare://p1\\a.js' })
@@ -221,6 +221,8 @@ describe("the Timeline of a Live Share host's file", () => {
     await new Promise((r) => setTimeout(r, 5))
     await flushPromises()
     expect(window.shellApi.scm.fileHistory).toHaveBeenCalled()
-    expect(window.shellApi.localHistory.list).not.toHaveBeenCalled()
+    // Main sends it to the host (index.js: guestFs.localHistoryList).
+    expect(window.shellApi.localHistory.list).toHaveBeenCalledWith({ path: 'lshare://p1\\a.js' })
+    expect(window.shellApi.localHistory.add).not.toHaveBeenCalled()
   })
 })

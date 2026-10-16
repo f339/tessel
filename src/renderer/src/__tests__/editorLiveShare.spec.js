@@ -189,6 +189,23 @@ describe("a Live Share host's document", () => {
     expect(writes).toEqual([])
   })
 
+  it('read again once the host gives Edit files: editable unless the host still says read-only', async () => {
+    const F = 'lshare://p1/b1.js'
+    const G = 'lshare://p1/.claude/b2.json'
+    await openDoc(F, 'x\n', { readOnly: true })
+    await openDoc(G, '{}', { readOnly: true })
+    expect(docsMod.getDoc(F).readOnly).toBe(true)
+    // The host's answers with the right: b1 may be saved, b2 (runs things) not.
+    disk.set(F, { ...disk.get(F), readOnly: false })
+    setLshareAccess('p1', { edit: true })
+    docsMod.recheckSharedDocs('p1')
+    await flush()
+    await flush()
+    expect(docsMod.getDoc(F).readOnly).toBe(false)
+    expect(docsMod.isReadOnlyDoc(docsMod.getDoc(F))).toBe(false)
+    expect(docsMod.getDoc(G).readOnly).toBe(true)
+  })
+
   it('auto-save never writes it while read-only', async () => {
     const F = 'lshare://p1/a3.js'
     settings.editorAutoSave = true

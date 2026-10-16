@@ -8,6 +8,7 @@ import { createShareHost } from '../liveShare/shareHost'
 import { createShareGuest } from '../liveShare/shareGuest'
 import { createTrustStore, trustId } from '../liveShare/shareTrust'
 import { newSecret, newSigningKey, newNonce, newKeyPair, commitment, sharedSecret, sessionKeys, createChannel, signBinding, signIdentity, identityFingerprint } from '../liveShare/shareCrypto'
+import { NO_RIGHTS } from '../../shared/liveShareRights'
 
 const until = async (fn, ms = 3000) => {
   const end = Date.now() + ms
@@ -19,7 +20,7 @@ const until = async (fn, ms = 3000) => {
   throw new Error('timed out')
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms))
-const NONE = { type: false, open: false, close: false }
+const NONE = { ...NO_RIGHTS, type: false, open: false, close: false }
 const pane = (id) => ({ id, title: id, kind: 'shell', cols: 80, rows: 24 })
 
 // The host's Tessel: projects (id -> pane ids) shared now. A guest's answer:
@@ -133,12 +134,12 @@ describe('Live Share invitations over the wire', () => {
     const a = await joined(s, simpa.id, 'Simpa')
     const b = await joined(s, team.id, 'Bob')
     expect(s.t.asked.map((g) => [g.name, g.invite, g.offer])).toEqual([
-      ['Simpa', { id: simpa.id, label: 'Simpa' }, { projects: ['ws-a'], rights: { type: true, open: false, close: false } }],
+      ['Simpa', { id: simpa.id, label: 'Simpa' }, { projects: ['ws-a'], rights: { ...NO_RIGHTS, type: true, open: false, close: false } }],
       ['Bob', { id: team.id, label: 'Dev team' }, { projects: ['ws-b'], rights: NONE }]
     ])
     expect(ids(a)).toEqual(['ws-a'])
     expect(ids(b)).toEqual(['ws-b'])
-    expect(a.rights[0]).toEqual({ type: true, open: false, close: false })
+    expect(a.rights[0]).toEqual({ ...NO_RIGHTS, type: true, open: false, close: false })
     expect(guestOf(s, 'Simpa')).toMatchObject({ invite: { id: simpa.id, label: 'Simpa' }, projects: ['ws-a'] })
     s.host.sendData('a1', 'FOR-SIMPA')
     s.host.sendData('b1', 'FOR-BOB')
@@ -328,7 +329,7 @@ describe('Live Share trusted people over the wire', () => {
     }
     const first = await settled(guest(s, simpa.id, 'Simpa', { identityKey }))
     expect(first.closed).toBe(null)
-    expect(file).toEqual([expect.objectContaining({ name: 'Simpa', grant: { projects: ['ws-a'], rights: { type: false, open: false, close: true } } })])
+    expect(file).toEqual([expect.objectContaining({ name: 'Simpa', grant: { projects: ['ws-a'], rights: { ...NO_RIGHTS, type: false, open: false, close: true } } })])
     expect(s.host.guests()[0]).toMatchObject({ trusted: true, trustable: true })
     // Leaves on purpose, comes back with another invitation (and a new
     // reconnect key): no question, its trusted grant (not that invitation's).
@@ -337,7 +338,7 @@ describe('Live Share trusted people over the wire', () => {
     const again = await settled(guest(s, other.id, 'Simpa', { identityKey }))
     expect(again.closed).toBe(null)
     expect(ids(again)).toEqual(['ws-a'])
-    expect(again.rights[0]).toEqual({ type: false, open: false, close: true })
+    expect(again.rights[0]).toEqual({ ...NO_RIGHTS, type: false, open: false, close: true })
     expect(s.t.asked).toHaveLength(1)
     // This Tessel restarts and shares anew (a new access model, a new code):
     // the trust file brings it back.
@@ -444,10 +445,10 @@ describe('Live Share trusted people over the wire', () => {
     expect(s.host.change(tid, { project: 'ws-b', on: true })).toBe(true)
     expect(s.host.change(tid, { project: 'ws-a', on: false })).toBe(true)
     expect(s.host.change(tid, { right: 'type', on: true })).toBe(true)
-    expect(s.host.offlineGuests()[0]).toMatchObject({ trusted: true, projects: ['ws-b'], rights: { type: true, open: false, close: false } })
+    expect(s.host.offlineGuests()[0]).toMatchObject({ trusted: true, projects: ['ws-b'], rights: { ...NO_RIGHTS, type: true, open: false, close: false } })
     const back = await settled(guest(s, inv.id, 'Simpa', { signingKey: a.key, back: true, hostKey: a.hostKey }))
     expect(ids(back)).toEqual(['ws-b'])
-    expect(back.rights[0]).toEqual({ type: true, open: false, close: false })
+    expect(back.rights[0]).toEqual({ ...NO_RIGHTS, type: true, open: false, close: false })
   })
 })
 
@@ -889,7 +890,7 @@ describe('Live Share: a trusted identity keeps its caps and its one place', () =
     await until(() => r.projects || r.closed)
     expect(r.closed).toBe(null)
     // What is saved for it: no grant of its own (its trusted entry's).
-    expect(s.host.accessState().people[0].grant).toEqual({ projects: [], rights: { type: false, open: false, close: false } })
+    expect(s.host.accessState().people[0].grant).toEqual({ projects: [], rights: { ...NO_RIGHTS, type: false, open: false, close: false } })
     r.client.disconnect()
     await until(() => s.host.offlineGuests().length === 1)
     // The trusted entry goes by itself (not through the share).

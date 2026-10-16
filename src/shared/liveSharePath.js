@@ -137,7 +137,9 @@ export const LSHARE_LIMITS = Object.freeze({
   pathsPerCall: 1000, // files staged, unstaged or discarded at once
   historyLimit: 200, // commits asked for at once (pages of 50)
   message: 20000, // a commit message
-  detail: 300 // git's own words in an error
+  detail: 300, // git's own words in an error
+  localEntries: 50, // a file's Local History versions (the host keeps 50)
+  diffBytes: 2 * 1024 * 1024 // a task branch's diff of one file
 })
 
 // The fixed codes a host answers a refused or failed request with (never its
@@ -160,6 +162,8 @@ export const LSHARE_CODES = Object.freeze([
   'conflict',
   'not-repo',
   'nothing-staged',
+  'staged-outside',
+  'staged-hidden',
   'no-message',
   'no-identity',
   'bad-commit',
