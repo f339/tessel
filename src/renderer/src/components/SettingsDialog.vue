@@ -380,6 +380,15 @@ function scrollToAnchor() {
 }
 watch(() => [props.section, props.anchor], scrollToAnchor)
 onMounted(scrollToAnchor)
+// Settings > Context's Open: a rules file in Tessel's own editor (text, never
+// run), Settings closed to show it; without the editor, its folder.
+const panelCtx = inject('panelCtx', null)
+function openContextFile(file) {
+  if (panelCtx && typeof panelCtx.openInEditor === 'function') {
+    panelCtx.openInEditor({ file, preview: false })
+    emit('close')
+  } else window.shellApi.chatFiles?.reveal?.(file)
+}
 function openMcpTab(tab) {
   go('mcp')
   mcpTab.value = tab
@@ -1922,7 +1931,7 @@ function previewSound() {
             <h2 id="set-context-title">{{ PAGES.context.title }}</h2>
             <p class="set-page-desc">{{ PAGES.context.desc }}</p>
           </header>
-          <SettingsContext v-if="page === 'context' && !searching" :cwd="projectCwd" :agents="agents" @go="go" />
+          <SettingsContext v-if="page === 'context' && !searching" :cwd="projectCwd" :agents="agents" @go="go" @open-file="openContextFile" />
           <div v-else class="set-group">
             <div class="set-row">
               <div class="set-label">{{ t('settings.context.summary', 'Context cost') }}

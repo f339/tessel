@@ -10,20 +10,36 @@
 //             its task board rule in the memory file.
 // Not counted: the agent's own system prompt and built-in tools.
 // Counting (counts.js) runs in its own process or, for models with no public
-// tokenizer, through the provider's count API, only on view or click.
+// tokenizer, through the provider's count API, only on view or click, and
+// only the agent's own provider's API (a model named in a repository's
+// settings never sends that repository's rules to another provider).
+// A pane card's hover (kept: true) starts no process: it uses the server
+// lists the last page view read, and counts only what is kept or local.
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { createHash } from 'node:crypto'
 import { tokenCounterFor, TOKENIZERS } from '../../shared/tokenCounters'
-import { readRules, createFileReader, findGitRoot, RULE_AGENTS } from './rulesFiles'
+import { readRules, createFileReader, findGitRoot, readBudget, RULE_AGENTS } from './rulesFiles'
 import { TOKENIZER_FILES } from './catalog'
 import { ollamaName, ollamaCounter } from './ollama'
+import { approvalsFrom, approvalSources, mcpApprovalState } from './mcpApproval'
 
 export const CONTEXT_AGENTS = RULE_AGENTS
 export const TEAM_SERVER = 'tessel-team'
 const MCP_RECORD_LIMIT = 2 * 1024 * 1024
 const LIST_TTL_MS = 60 * 1000
+// A kept MCP measurement older than this is deleted (a server or config gone).
+export const MCP_RECORD_MAX_AGE_MS = 30 * 24 * 3600 * 1000
+const MCP_SWEEP_EVERY_MS = 3600 * 1000
+
+// The provider each agent signs in with: the only count API its text may go
+// to. The others count locally or are estimated.
+export const AGENT_PROVIDERS = Object.freeze({ claude: 'anthropic', codex: 'openai', gemini: 'google', antigravity: 'google' })
+export function ownProviderOnly(agent, counter) {
+  if (!counter || counter.kind !== 'api' || counter.api === 'ollama' || AGENT_PROVIDERS[agent] === counter.api) return counter
+  return { ...counter, noRemote: 'otherProvider' }
+}
 
 const sha = (text) => createHash('sha256').update(text).digest('hex')
 // A tool name an API takes: letters, digits, _ and -, 64 at most.
@@ -88,30 +104,36 @@ export function createContextCost({
   testMcp,
   agentModel = () => null,
   claudeDir = async () => null,
+  // (cwd, claudeDir) -> settings objects that may approve project servers
+  // (mcpApproval.js approvalSources).
+  mcpApprovals = (cwd, dir) => approvalSources({ cwd, home, claudeDir: dir }),
   home = os.homedir(),
   env = () => process.env,
   request = globalThis.fetch,
+  clock = Date.now,
   log = null
 }) {
   const reader = createFileReader()
   // The skill and server lists, read again after LIST_TTL_MS or when counting
-  // over the network (a page opened, a click): a pane card's hover reuses
-  // them rather than walking the folders and running codex mcp list again.
+  // over the network (a page opened, a click). kept: only a list already
+  // read (any age), never a new read of the servers (it starts processes).
   const lists = new Map() // `${kind}|${cwd}` -> { at, promise }
-  function listed(kind, cwd, fresh, read) {
+  function listed(kind, cwd, mode, read) {
     const key = `${kind}|${cwd || ''}`
     const seen = lists.get(key)
-    if (!fresh && seen && Date.now() - seen.at < LIST_TTL_MS) return seen.promise
+    if (mode === 'kept') return seen ? seen.promise : Promise.resolve(null)
+    if (mode !== 'fresh' && seen && clock() - seen.at < LIST_TTL_MS) return seen.promise
     const promise = Promise.resolve()
       .then(read)
       .catch(() => null)
-    lists.set(key, { at: Date.now(), promise })
+    lists.set(key, { at: clock(), promise })
     return promise
   }
-  const skillsOf = (cwd, fresh) => listed('skills', cwd, fresh, () => listSkills({ cwd })).then((r) => (r && r.skills) || [])
-  const mcpOf = (cwd, fresh) => listed('mcp', cwd, fresh, () => listMcp(cwd))
+  const skillsOf = (cwd, mode) => listed('skills', cwd, mode === 'kept' ? 'cached' : mode, () => listSkills({ cwd })).then((r) => (r && r.skills) || [])
+  const mcpOf = (cwd, mode) => listed('mcp', cwd, mode, () => listMcp(cwd))
   const mcpDir = path.join(userData, 'context-cost', 'mcp')
   let tessel = null // { instructions, tools } from the counting process
+  let swept = 0
 
   async function tesselContext() {
     if (tessel) return tessel
@@ -123,9 +145,31 @@ export function createContextCost({
   const mcpKey = (agent, s, cwd) => sha(JSON.stringify([agent, s.scope || 'user', s.name, s.scope === 'user' ? '' : String(cwd || '').toLowerCase(), s.target || '']))
   async function mcpRecord(agent, s, cwd) {
     try {
-      return JSON.parse(await fs.readFile(path.join(mcpDir, `${mcpKey(agent, s, cwd)}.json`), 'utf8'))
+      const record = JSON.parse(await fs.readFile(path.join(mcpDir, `${mcpKey(agent, s, cwd)}.json`), 'utf8'))
+      return record && Number.isFinite(record.at) && clock() - record.at < MCP_RECORD_MAX_AGE_MS ? record : null
     } catch {
       return null
+    }
+  }
+  // Old measurements go (at most once an hour, on a page view).
+  async function sweepRecords() {
+    if (clock() - swept < MCP_SWEEP_EVERY_MS) return
+    swept = clock()
+    let names
+    try {
+      names = (await fs.readdir(mcpDir)).filter((n) => /^[0-9a-f]{64}\.json$/.test(n))
+    } catch {
+      return
+    }
+    for (const name of names) {
+      const file = path.join(mcpDir, name)
+      try {
+        const record = JSON.parse(await fs.readFile(file, 'utf8'))
+        if (record && Number.isFinite(record.at) && clock() - record.at < MCP_RECORD_MAX_AGE_MS) continue
+      } catch {
+        // unreadable: dropped too
+      }
+      await fs.rm(file, { force: true }).catch(() => {})
     }
   }
 
@@ -139,24 +183,26 @@ export function createContextCost({
     }
   }
 
-  // The counter for an agent's model; an Ollama model tokenCounters.js does
-  // not place is asked about (ollama.js), else Ollama counts it itself.
-  async function resolveCounter(agent, model) {
-    const base = tokenCounterFor(model, agent)
+  // The counter for an agent's model, its own provider's API only; an Ollama
+  // model tokenCounters.js does not place is asked about (ollama.js, not when
+  // kept), else Ollama counts it itself.
+  async function resolveCounter(agent, model, { kept = false } = {}) {
+    const base = ownProviderOnly(agent, tokenCounterFor(model, agent))
     const name = ollamaName(agent, model)
     if (!name || base.kind !== 'estimate') return base
-    const viaShow = await ollamaCounter(name, { request }).catch(() => null)
+    const viaShow = kept ? null : await ollamaCounter(name, { request }).catch(() => null)
     if (viaShow) return { ...viaShow, defaulted: base.defaulted }
     return { kind: 'api', api: 'ollama', id: `ollama:${name}`, model: name, factor: base.factor, factorKey: 'other', defaulted: base.defaulted }
   }
 
   // One agent's items, before counting.
-  async function itemsFor(agent, { cwd, skills, mcp }) {
+  async function itemsFor(agent, { cwd, skills, mcp, budget }) {
     const items = []
     const dir = agent === 'claude' ? await claudeDir().catch(() => null) : null
-    const rules = await readRules(agent, { cwd, home, env: env(), claudeDir: dir, gitRoot: cwd ? await findGitRoot(cwd) : null }, reader)
+    const rules = await readRules(agent, { cwd, home, env: env(), claudeDir: dir, gitRoot: cwd ? await findGitRoot(cwd) : null, budget }, reader)
     for (const r of rules) {
-      if (!r.text || !r.text.trim()) continue
+      const notRead = ['outside', 'skipped', 'limit'].includes(r.note)
+      if (!notRead && (!r.text || !r.text.trim())) continue
       items.push({
         key: r.id,
         group: r.tessel ? 'tessel' : 'rules',
@@ -165,10 +211,9 @@ export function createContextCost({
         path: r.path,
         scope: r.scope,
         note: r.note,
-        loaded: r.loaded,
+        loaded: notRead ? false : r.loaded,
         optional: true,
-        kind: 'text',
-        text: r.text
+        ...(notRead ? {} : { kind: 'text', text: r.text })
       })
     }
     for (const s of skills) {
@@ -176,12 +221,14 @@ export function createContextCost({
       items.push({ key: `skill:${s.skillFile}`, group: 'skills', type: 'skill', label: s.name, path: s.skillFile, scope: s.scope, loaded: true, optional: true, kind: 'text', text: skillLine(s) })
     }
     const servers = agentServers(mcp, agent)
+    const approvals = agent === 'claude' && servers.some((s) => s.scope === 'project') ? approvalsFrom(await Promise.resolve(mcpApprovals(cwd, dir)).catch(() => [])) : approvalsFrom([])
     for (const s of servers) {
       if (s.name === TEAM_SERVER) continue
-      const off = s.enabled === false
-      const record = off ? null : await mcpRecord(agent, s, cwd)
+      const state = s.enabled === false ? 'disabled' : mcpApprovalState(agent, s, approvals)
+      const record = state === 'approved' ? await mcpRecord(agent, s, cwd) : null
       const base = { key: `mcp:${agent}:${s.scope || 'user'}:${s.name}`, group: 'mcp', type: 'mcp', label: s.name, scope: s.scope || 'user', optional: true, ref: { agent, name: s.name, scope: s.scope || 'user' } }
-      if (off) items.push({ ...base, loaded: false, note: 'off' })
+      if (state === 'disabled') items.push({ ...base, loaded: false, note: 'off' })
+      else if (state === 'unapproved') items.push({ ...base, loaded: false, note: 'notApproved' })
       else if (record && Array.isArray(record.defs)) items.push({ ...base, loaded: true, kind: 'tools', tools: shapeTools(s.name, record.defs, agent), toolCount: record.defs.length, measuredAt: record.at })
       else items.push({ ...base, loaded: true, note: 'notMeasured' })
     }
@@ -203,22 +250,30 @@ export function createContextCost({
     return rest
   }
 
-  async function countItems(items, counterInfo, remote) {
+  // auth: the call's own sign-in choices (index.js), down to the count APIs.
+  async function countItems(items, counterInfo, remote, auth) {
     const countable = items.filter((i) => i.kind && (i.kind === 'text' ? !!i.text : true))
-    const results = countable.length ? await counter.count(countable, counterInfo, { remote }) : {}
+    const results = countable.length ? await counter.count(countable, counterInfo, { remote, auth }) : {}
     return items.map((item) => ({ ...item, result: results[item.key] || null }))
   }
 
   return {
     // agents: [{ id, model? }]. -> { agents: [{ id, model, counter, items, summary }] }
-    async summary({ cwd = null, agents = [], remote = false } = {}) {
+    // remote: the page is looked at (count APIs asked, lists read again);
+    // kept: a pane card's hover (no process started, no count API asked;
+    // nothing when the servers were never listed).
+    async summary({ cwd = null, agents = [], remote = false, kept = false, auth = null } = {}) {
       const wanted = agents.filter((a) => a && CONTEXT_AGENTS.includes(a.id))
-      const [skillList, mcp] = await Promise.all([skillsOf(cwd, remote), wanted.length ? mcpOf(cwd, remote) : null])
+      const mode = kept ? 'kept' : remote ? 'fresh' : 'cached'
+      const [skillList, mcp] = await Promise.all([skillsOf(cwd, mode), wanted.length ? mcpOf(cwd, mode) : null])
+      if (kept && wanted.length && !mcp) return { agents: [], notListed: true }
+      if (remote) sweepRecords().catch(() => {})
+      const budget = readBudget()
       const out = []
       for (const a of wanted) {
         const model = modelOf(a.id, cwd, a.model)
-        const counterInfo = await resolveCounter(a.id, model)
-        const items = await countItems(await itemsFor(a.id, { cwd, skills: skillList, mcp }), counterInfo, remote)
+        const counterInfo = await resolveCounter(a.id, model, { kept })
+        const items = await countItems(await itemsFor(a.id, { cwd, skills: skillList, mcp, budget }), counterInfo, remote && !kept, auth)
         out.push({ id: a.id, model: counterInfo.model, defaulted: counterInfo.defaulted, counter: counterInfo, items: items.map(publicItem), summary: summarize(items) })
       }
       return { agents: out }
@@ -226,8 +281,8 @@ export function createContextCost({
 
     // The Skills page's tags: each skill's up-front cost for the first agent
     // that reads it. -> { [skillFile]: { agent, counter, result } }
-    async skills({ cwd = null, agents = null, remote = false } = {}) {
-      const list = await skillsOf(cwd, remote)
+    async skills({ cwd = null, agents = null, remote = false, auth = null } = {}) {
+      const list = await skillsOf(cwd, remote ? 'fresh' : 'cached')
       const order = CONTEXT_AGENTS
       const byAgent = new Map()
       for (const s of list) {
@@ -239,7 +294,7 @@ export function createContextCost({
       const out = {}
       for (const [agent, skills] of byAgent) {
         const counterInfo = await resolveCounter(agent, modelOf(agent, cwd))
-        const results = await counter.count(skills.map((s) => ({ key: s.skillFile, kind: 'text', text: skillLine(s) })), counterInfo, { remote })
+        const results = await counter.count(skills.map((s) => ({ key: s.skillFile, kind: 'text', text: skillLine(s) })), counterInfo, { remote, auth })
         for (const s of skills) out[s.skillFile] = { agent, model: counterInfo.model, counter: counterInfo, result: results[s.skillFile] || null }
       }
       return out
@@ -247,8 +302,8 @@ export function createContextCost({
 
     // One skill's details: for each agent that reads it, the up-front cost
     // and its whole SKILL.md (read when the skill is used).
-    async skillDetail({ cwd = null, skillFile, agents = null, remote = false } = {}) {
-      const list = await skillsOf(cwd, false)
+    async skillDetail({ cwd = null, skillFile, agents = null, remote = false, auth = null } = {}) {
+      const list = await skillsOf(cwd, 'cached')
       const skill = list.find((s) => s.skillFile === skillFile)
       if (!skill) return { rows: [] }
       const md = await reader.read(skill.skillFile)
@@ -257,7 +312,7 @@ export function createContextCost({
         const counterInfo = await resolveCounter(agent, modelOf(agent, cwd))
         const items = [{ key: 'upfront', kind: 'text', text: skillLine(skill) }]
         if (md && md.text) items.push({ key: 'full', kind: 'text', text: md.text })
-        const results = await counter.count(items, counterInfo, { remote })
+        const results = await counter.count(items, counterInfo, { remote, auth })
         rows.push({ agent, model: counterInfo.model, counter: counterInfo, upfront: results.upfront || null, full: results.full || null })
       }
       return { rows }
@@ -265,29 +320,37 @@ export function createContextCost({
 
     // Settings > MCP servers' and Context's Measure: starts the server (or
     // connects to it) the way Test does, keeps its tool definitions, counts
-    // them for the agent's model.
-    async measureMcp({ agent, name, scope = 'user', cwd = null, model = null } = {}) {
+    // them for the agent's model. A project server Claude Code has not been
+    // allowed to start is started only once the user confirmed (confirmed),
+    // after seeing its command (code 'needsConfirm', target); one the user
+    // turned off never.
+    async measureMcp({ agent, name, scope = 'user', cwd = null, model = null, confirmed = false, auth = null } = {}) {
       if (!CONTEXT_AGENTS.includes(agent) || typeof name !== 'string') return { ok: false, error: 'unknown server' } // i18n-ignore internal
-      const servers = await mcpOf(cwd, true)
+      const servers = await mcpOf(cwd, 'fresh')
       const s = agentServers(servers, agent).find((x) => x.name === name && (x.scope || 'user') === scope)
       if (!s) return { ok: false, error: 'unknown server' } // i18n-ignore internal
+      const dir = agent === 'claude' ? await claudeDir().catch(() => null) : null
+      const approvals = s.scope === 'project' ? approvalsFrom(await Promise.resolve(mcpApprovals(cwd, dir)).catch(() => [])) : approvalsFrom([])
+      const state = s.enabled === false ? 'disabled' : mcpApprovalState(agent, s, approvals)
+      if (state === 'disabled') return { ok: false, code: 'disabled' }
+      if (state === 'unapproved' && confirmed !== true) return { ok: false, code: 'needsConfirm', target: String(s.target || '').slice(0, 500) }
       const res = await testMcp({ agent, name, scope, cwd }, { defs: true })
       if (!res || !res.ok || !Array.isArray(res.defs)) return { ok: false, status: res && res.status, error: (res && res.error) || null }
-      const record = { at: Date.now(), defs: res.defs }
+      const record = { at: clock(), defs: res.defs }
       const text = JSON.stringify(record)
       if (text.length <= MCP_RECORD_LIMIT) {
         await fs.mkdir(mcpDir, { recursive: true })
         await fs.writeFile(path.join(mcpDir, `${mcpKey(agent, s, cwd)}.json`), text)
       }
       const counterInfo = await resolveCounter(agent, modelOf(agent, cwd, model))
-      const results = await counter.count([{ key: 'tools', kind: 'tools', tools: shapeTools(name, res.defs, agent) }], counterInfo, { remote: true })
+      const results = await counter.count([{ key: 'tools', kind: 'tools', tools: shapeTools(name, res.defs, agent) }], counterInfo, { remote: true, auth })
       log?.info?.('context', `measured ${agent} MCP server ${name}: ${res.defs.length} tool(s)`) // i18n-ignore
       return { ok: true, tools: res.defs.length, counter: counterInfo, result: results.tools || null, at: record.at }
     },
 
-    // The cached measurements of the MCP page's rows (no server started).
-    async mcpMeasures({ cwd = null } = {}) {
-      const all = await mcpOf(cwd, false)
+    // The kept measurements of the MCP page's rows (no server started).
+    async mcpMeasures({ cwd = null, auth = null } = {}) {
+      const all = await mcpOf(cwd, 'cached')
       const out = {}
       for (const agent of CONTEXT_AGENTS) {
         const servers = agentServers(all, agent).filter((s) => s.name !== TEAM_SERVER)
@@ -296,7 +359,7 @@ export function createContextCost({
         for (const s of servers) {
           const record = await mcpRecord(agent, s, cwd)
           if (!record || !Array.isArray(record.defs)) continue
-          const results = await counter.count([{ key: 'tools', kind: 'tools', tools: shapeTools(s.name, record.defs, agent) }], counterInfo, { remote: false })
+          const results = await counter.count([{ key: 'tools', kind: 'tools', tools: shapeTools(s.name, record.defs, agent) }], counterInfo, { remote: false, auth })
           out[`${agent}:${s.scope || 'user'}:${s.name}`] = { tools: record.defs.length, at: record.at, counter: counterInfo, result: results.tools || null }
         }
       }

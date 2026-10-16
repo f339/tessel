@@ -1057,7 +1057,9 @@
       "downloadTooBig": "Le fichier est plus gros que prévu.",
       "downloadHash": "Le fichier téléchargé ne correspond pas à son empreinte attendue.",
       "unknownTokenizer": "Tokenizer inconnu.",
-      "downloadTimeout": "Le téléchargement a pris trop de temps."
+      "downloadTimeout": "Le téléchargement a pris trop de temps.",
+      "downloadHost": "Le téléchargement a été redirigé hors de Hugging Face ; il a été arrêté.",
+      "removeFailed": "Le dossier du tokenizer n’a pas pu être supprimé."
     }
   },
   "main.chat.image.tooLarge": "Cette image dépasse {{mb}} Mo.",

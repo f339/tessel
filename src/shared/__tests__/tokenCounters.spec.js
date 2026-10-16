@@ -56,7 +56,7 @@ describe('the counter each model gets', () => {
     expect(tok('gemini-3-flash-preview')).toBe('gemma3')
     expect(tok('gemini-3.5-flash')).toBe('gemma4')
     expect(tokenCounterFor('gemini-4-argon')).toMatchObject({ kind: 'api', api: 'google' })
-    expect(tokenCounterFor('muse-spark-1.3')).toMatchObject({ kind: 'api', api: 'meta' })
+    expect(tokenCounterFor('muse-spark-1.3')).toMatchObject({ kind: 'estimate', family: 'muse' })
     expect(tok('muse-glimmer-30b')).toBe('glimmer')
     expect(tokenCounterFor('llama-4-scout')).toMatchObject({ kind: 'estimate', family: 'llama4' })
     expect(tok('llama3.1')).toBe('llama3')

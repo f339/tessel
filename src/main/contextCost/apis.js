@@ -4,19 +4,18 @@
 // logged or kept; the text counted is never logged):
 //   xAI (Grok)          POST https://api.x.ai/v1/tokenize-text {model, text}
 //                       -> token_ids (XAI_API_KEY)
-//   Meta (Muse Spark)   POST https://api.meta.ai/v1/responses/input_tokens
-//                       -> input_tokens (MODEL_API_KEY)
 //   OpenAI (GPT-6)      POST https://api.openai.com/v1/responses/input_tokens
 //                       -> input_tokens (OPENAI_API_KEY; tiktoken has no
 //                       GPT-6 encoding yet)
-// A responses count is the request with the item minus the same request
-// without it (instructions for text, a tool list for tools), like
-// anthropic.js. xAI tokenizes plain text: tools are counted as their JSON.
+// A key is not used when its provider's base URL is set (a gateway's key
+// never goes to the official host; index.js). A responses count is the
+// request with the item minus the same request without it (instructions for
+// text, a tool list for tools), like anthropic.js. xAI tokenizes plain text:
+// tools are counted as their JSON.
 // Asked on view or click only; counts are kept by hash (counts.js).
 import { CountError } from './anthropic'
 
 export const XAI_TOKENIZE_URL = 'https://api.x.ai/v1/tokenize-text'
-export const META_INPUT_TOKENS_URL = 'https://api.meta.ai/v1/responses/input_tokens'
 export const OPENAI_INPUT_TOKENS_URL = 'https://api.openai.com/v1/responses/input_tokens'
 const RESPONSE_LIMIT = 1024 * 1024
 const MIN_BLOCK_MS = 60 * 1000
@@ -113,7 +112,7 @@ export function createXaiCounter({ key, request = globalThis.fetch, url = XAI_TO
   })
 }
 
-// Meta's and OpenAI's responses/input_tokens.
+// OpenAI's responses/input_tokens.
 export function createResponsesCounter({ name, key, url, request = globalThis.fetch, timeoutMs = 20000, log = null, clock } = {}) {
   const baselines = new Map()
   async function tokens(secret, body) {

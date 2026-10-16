@@ -14,7 +14,7 @@
       "claudeRefused": "Anthropic n’a pas accepté la clé ou la connexion",
       "signedOut": "{{api}} n’a pas accepté la clé ou la connexion",
       "claudeNoKey": "activez « Compter avec ma connexion Claude », ou définissez ANTHROPIC_API_KEY",
-      "googleNoKey": "connectez-vous à Gemini CLI, ou définissez GEMINI_API_KEY",
+      "googleNoKey": "activez « Compter avec ma connexion Gemini CLI », ou définissez GEMINI_API_KEY",
       "noKey": "il faut une clé d’API ({{key}})",
       "rateLimited": "{{api}} limite les requêtes, réessayez plus tard",
       "refused": "{{api}} a refusé cette requête",
@@ -22,7 +22,8 @@
       "notCounted": "pas encore compté",
       "noTokenizer": "téléchargez le tokenizer {{tokenizer}} pour un compte exact",
       "noCounter": "ce modèle n’a pas de tokenizer public",
-      "worker": "le processus de comptage n’a pas répondu"
+      "worker": "le processus de comptage n’a pas répondu",
+      "otherProvider": "seul le fournisseur propre à l’agent compte, et {{api}} ne l’est pas"
     },
     "title": {
       "api": "{{n}} jetons, exact : {{api}} pour {{model}}.",
@@ -56,7 +57,11 @@
       "measureHint": "Démarre le serveur (ou s’y connecte) pour lire ses définitions d’outils et les compter.",
       "measuring": "Mesure…",
       "measureAgain": "Mesurer à nouveau",
-      "measure": "Mesurer"
+      "measure": "Mesurer",
+      "confirmTitle": "Démarrer {{name}} ?",
+      "confirmBody": "Ce serveur vient avec le projet, et Claude Code n’a pas été autorisé à le démarrer. La mesure le lance :",
+      "confirmRun": "Démarrer et mesurer",
+      "disabled": "Ce serveur est désactivé pour le projet."
     },
     "group": {
       "rules": "Fichiers de règles et de mémoire",
@@ -98,7 +103,11 @@
       "onDemand": "chargé seulement au besoin, non compté",
       "import": "importé",
       "off": "désactivé, non compté",
-      "notMeasured": "pas encore mesuré"
+      "notMeasured": "pas encore mesuré",
+      "notApproved": "pas encore autorisé dans Claude Code, non compté",
+      "outside": "non suivi (hors du projet)",
+      "skipped": "non suivi (pas un fichier texte, ou un fichier d’identifiants)",
+      "limit": "non lu (limite de lecture atteinte)"
     },
     "agents": {
       "title": "Par agent",
@@ -115,9 +124,9 @@
       "none": "estimation"
     },
     "needTokenizer": "Les comptes exacts pour {{model}} demandent le tokenizer {{tokenizer}} ({{size}}), téléchargé une fois depuis Hugging Face.",
-    "claudeSignInCallout": "Le tokenizer de Claude n’est pas public : les comptes exacts viennent de count_tokens d’Anthropic, avec une clé d’API (ANTHROPIC_API_KEY) ou votre connexion Claude.",
+    "claudeSignInCallout": "Le tokenizer de Claude n’est pas public : les comptes exacts viennent de count_tokens d’Anthropic, avec une clé d’API (ANTHROPIC_API_KEY) ou, si vous l’activez, votre connexion Claude Code (Anthropic peut la refuser).",
     "claudeSignIn": "Compter avec ma connexion Claude",
-    "claudeSignInHint": "Comptes Claude exacts avec count_tokens d’Anthropic quand aucune ANTHROPIC_API_KEY n’est définie. Anthropic peut refuser une connexion d’abonnement ; une estimation s’affiche alors.",
+    "claudeSignInHint": "Utilise votre connexion Claude Code pour interroger count_tokens d’Anthropic, comme Claude Code le fait lui-même. Anthropic peut la refuser ; une estimation s’affiche alors. Une ANTHROPIC_API_KEY est utilisée à la place si elle est définie.",
     "someEstimates": "Certains comptes sont des estimations : {{why}}.",
     "retry": "Réessayer",
     "open": "Ouvrir",
@@ -131,6 +140,9 @@
       "start": "Au départ : {{tokens}}",
       "title": "Contexte",
       "hint": "Fichiers de règles, skills, outils MCP et outils d’équipe de Tessel qu’il charge avant votre premier message. Détails dans Réglages > Contexte."
-    }
+    },
+    "openHint": "Ouvrir dans l’éditeur de Tessel",
+    "geminiSignIn": "Compter avec ma connexion Gemini CLI",
+    "geminiSignInHint": "Utilise votre connexion Gemini CLI pour interroger countTokens de Google, pour les modèles Gemini sans tokenizer local. Une GEMINI_API_KEY est utilisée à la place si elle est définie."
   }
 }

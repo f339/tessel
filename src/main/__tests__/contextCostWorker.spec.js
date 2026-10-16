@@ -7,7 +7,7 @@ import { EventEmitter } from 'events'
 import { createHash } from 'crypto'
 import { answer, tesselContext } from '../contextCost/worker'
 import { createCountWorker } from '../contextCost/workerClient'
-import { createHfTokenizers, matchesHash, fileUrl } from '../contextCost/hfTokenizers'
+import { createHfTokenizers, matchesHash, fileUrl, allowedDownloadUrl } from '../contextCost/hfTokenizers'
 import { TOKENIZER_FILES } from '../contextCost/catalog'
 import { toolDefs, testMcp } from '../agentTools'
 import teamServer from '../teamMcp/server.cjs'
@@ -177,5 +177,108 @@ describe('MCP tool definitions for Measure', () => {
       process.env.HOME = prevHome
       fs.rmSync(home, { recursive: true, force: true })
     }
+  })
+})
+
+describe('a hung counting process', () => {
+  it('is killed at its timeout and not started again before a backoff', async () => {
+    vi.useFakeTimers()
+    try {
+      let now = 0
+      let forks = 0
+      const children = []
+      const client = createCountWorker({
+        fork: () => {
+          forks++
+          const child = new EventEmitter()
+          child.postMessage = () => {} // never answers
+          child.kill = vi.fn()
+          children.push(child)
+          return child
+        },
+        replyMs: 1000,
+        backoffMs: 5000,
+        clock: () => now
+      })
+      const p = client.request({ op: 'x' })
+      await vi.advanceTimersByTimeAsync(1100)
+      expect(await p).toBe(null)
+      expect(children[0].kill).toHaveBeenCalled()
+      now += 1000
+      expect(await client.request({ op: 'x' })).toBe(null) // still in its backoff
+      expect(forks).toBe(1)
+      now += 5000
+      const p2 = client.request({ op: 'x' })
+      expect(forks).toBe(2)
+      await vi.advanceTimersByTimeAsync(1100)
+      await p2
+      client.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('tokenizer downloads: catalogue ids, Hugging Face hosts, clean files', () => {
+  let dir
+  beforeEach(() => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-tokdl2-'))
+  })
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('knows only the catalogue’s own ids (no inherited names, no paths)', async () => {
+    const asked = []
+    const files = createHfTokenizers({ dir, request: async (url) => (asked.push(url), new Response('x')) })
+    for (const id of ['constructor', '__proto__', 'toString', '..', '../outside']) {
+      expect((await files.download(id)).ok).toBe(false)
+      expect((await files.remove(id)).ok).toBe(false)
+      expect(await files.loaderFor(id)).toBe(null)
+    }
+    expect(asked).toEqual([])
+  })
+
+  it('follows redirects only over https to Hugging Face hosts', async () => {
+    expect(allowedDownloadUrl('https://huggingface.co/x')).toBe(true)
+    expect(allowedDownloadUrl('https://cdn-lfs.huggingface.co/x')).toBe(true)
+    expect(allowedDownloadUrl('https://cas-bridge.xethub.hf.co/x')).toBe(true)
+    expect(allowedDownloadUrl('http://huggingface.co/x')).toBe(false)
+    expect(allowedDownloadUrl('https://huggingface.co.evil.com/x')).toBe(false)
+    expect(allowedDownloadUrl('https://user:pw@huggingface.co/x')).toBe(false)
+    expect(allowedDownloadUrl('https://huggingface.co:8443/x')).toBe(false)
+    const seen = []
+    const redirectTo = (location) => async (url) => {
+      seen.push(url)
+      return seen.length === 1 ? new Response(null, { status: 302, headers: { location } }) : new Response('body')
+    }
+    const off = await createHfTokenizers({ dir, request: redirectTo('https://evil.example.com/t.json') }).download('qwen3')
+    expect(off.ok).toBe(false)
+    expect(seen).toHaveLength(1)
+    seen.length = 0
+    const down = await createHfTokenizers({ dir, request: redirectTo('http://cdn-lfs.huggingface.co/t.json') }).download('qwen3')
+    expect(down.ok).toBe(false)
+    expect(seen).toHaveLength(1)
+    seen.length = 0
+    // To the CDN over https: followed (then refused here by the hash).
+    await createHfTokenizers({ dir, request: redirectTo('https://cas-bridge.xethub.hf.co/t.json') }).download('qwen3')
+    expect(seen[1]).toBe('https://cas-bridge.xethub.hf.co/t.json')
+  })
+
+  it('removes the whole folder, leftovers included, without following links', async () => {
+    const target = join(dir, 'qwen3')
+    fs.mkdirSync(target, { recursive: true })
+    for (const n of ['tokenizer.json', 'ready.json', 'tokenizer.json.123.tmp', 'stray.txt']) fs.writeFileSync(join(target, n), 'x')
+    const outside = join(dir, 'outside')
+    fs.mkdirSync(outside)
+    fs.writeFileSync(join(outside, 'keep.txt'), 'keep')
+    try {
+      fs.symlinkSync(outside, join(target, 'link'), 'junction')
+    } catch {
+      // no links here: the rest still holds
+    }
+    expect(await createHfTokenizers({ dir }).remove('qwen3')).toEqual({ ok: true })
+    expect(fs.existsSync(target)).toBe(false)
+    expect(fs.readFileSync(join(outside, 'keep.txt'), 'utf8')).toBe('keep')
   })
 })

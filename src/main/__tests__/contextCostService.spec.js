@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
-import { createContextCost, summarize, shapeTools, skillLine, agentServers } from '../contextCost'
+import { createContextCost, summarize, shapeTools, skillLine, agentServers, MCP_RECORD_MAX_AGE_MS } from '../contextCost'
 import { createContextCounter, createCountCache } from '../contextCost/counts'
 
 let root, home, project, userData
@@ -147,5 +147,80 @@ describe('helpers', () => {
     expect(shapeTools('x'.repeat(80), [{ name: 't' }], 'claude')[0].name).toHaveLength(64)
     expect(skillLine({ name: 'pdf', description: 'Read PDFs' })).toBe('- pdf: Read PDFs')
     expect(agentServers({ others: { gemini: { servers: [{ name: 'a' }] } } }, 'gemini')).toEqual([{ name: 'a' }])
+  })
+})
+
+describe('project MCP servers: started only once approved, or after a confirmation', () => {
+  const withProject = (extra = {}) => {
+    const listed = { claude: [{ name: 'evil', scope: 'project', target: 'npx evil-mcp' }], codex: [], others: {} }
+    return service({ listMcp: vi.fn(async () => listed), ...extra })
+  }
+
+  it('lists an unapproved one as not counted; Measure asks first, showing its command', async () => {
+    const { svc, testMcp } = withProject()
+    const res = await svc.summary({ cwd: project, agents: [{ id: 'claude' }] })
+    expect(res.agents[0].items.find((i) => i.label === 'evil')).toMatchObject({ loaded: false, note: 'notApproved' })
+    expect(await svc.measureMcp({ agent: 'claude', name: 'evil', scope: 'project', cwd: project })).toEqual({ ok: false, code: 'needsConfirm', target: 'npx evil-mcp' })
+    expect(testMcp).not.toHaveBeenCalled()
+    expect((await svc.measureMcp({ agent: 'claude', name: 'evil', scope: 'project', cwd: project, confirmed: true })).ok).toBe(true)
+    expect(testMcp).toHaveBeenCalledTimes(1)
+  })
+
+  it('follows the user’s own approvals, never the repository’s shared settings', async () => {
+    fs.mkdirSync(join(project, '.claude'), { recursive: true })
+    fs.writeFileSync(join(project, '.claude', 'settings.json'), JSON.stringify({ enableAllProjectMcpServers: true }))
+    let svc = withProject().svc
+    expect((await svc.summary({ cwd: project, agents: [{ id: 'claude' }] })).agents[0].items.find((i) => i.label === 'evil').note).toBe('notApproved')
+    fs.writeFileSync(join(home, '.claude.json'), JSON.stringify({ projects: { [project]: { enabledMcpjsonServers: ['evil'] } } }))
+    svc = withProject().svc
+    expect((await svc.summary({ cwd: project, agents: [{ id: 'claude' }] })).agents[0].items.find((i) => i.label === 'evil')).toMatchObject({ loaded: true, note: 'notMeasured' })
+    fs.writeFileSync(join(project, '.claude', 'settings.local.json'), JSON.stringify({ disabledMcpjsonServers: ['evil'] }))
+    const off = withProject()
+    expect((await off.svc.summary({ cwd: project, agents: [{ id: 'claude' }] })).agents[0].items.find((i) => i.label === 'evil').note).toBe('off')
+    expect(await off.svc.measureMcp({ agent: 'claude', name: 'evil', scope: 'project', cwd: project, confirmed: true })).toEqual({ ok: false, code: 'disabled' })
+    expect(off.testMcp).not.toHaveBeenCalled()
+  })
+})
+
+describe('a pane card’s hover: kept results only', () => {
+  it('starts nothing before the page listed the servers, then reuses that list', async () => {
+    const { svc, listMcp, anthropic } = service()
+    expect(await svc.summary({ cwd: project, agents: [{ id: 'claude' }], kept: true })).toEqual({ agents: [], notListed: true })
+    expect(listMcp).not.toHaveBeenCalled()
+    await svc.summary({ cwd: project, agents: [{ id: 'claude' }], remote: true })
+    expect(listMcp).toHaveBeenCalledTimes(1)
+    const calls = anthropic.count.mock.calls.length
+    const kept = await svc.summary({ cwd: project, agents: [{ id: 'claude' }], kept: true, remote: true })
+    expect(kept.agents[0].summary.total).toBeGreaterThan(0)
+    expect(listMcp).toHaveBeenCalledTimes(1)
+    expect(anthropic.count.mock.calls.length).toBe(calls) // no count API from a hover
+  })
+})
+
+describe('only the agent’s own provider counts', () => {
+  it('estimates a Copilot agent on a Claude model rather than using the Claude sign-in', async () => {
+    fs.mkdirSync(join(home, '.copilot'), { recursive: true })
+    fs.writeFileSync(join(home, '.copilot', 'copilot-instructions.md'), 'copilot rules')
+    const { svc, anthropic } = service({ agentModel: ({ agentId }) => (agentId === 'copilot' ? { model: 'claude-sonnet-5' } : null) })
+    const res = await svc.summary({ cwd: project, agents: [{ id: 'copilot' }], remote: true })
+    expect(res.agents[0].counter).toMatchObject({ api: 'anthropic', noRemote: 'otherProvider' })
+    expect(anthropic.count).not.toHaveBeenCalled()
+    expect(res.agents[0].items.find((i) => i.label === 'copilot-instructions.md').result).toMatchObject({ exact: false, reason: 'otherProvider' })
+  })
+})
+
+describe('kept MCP measurements age out', () => {
+  it('ignores and deletes a measurement older than 30 days', async () => {
+    let now = Date.now()
+    const { svc, testMcp } = service({ clock: () => now })
+    await svc.measureMcp({ agent: 'claude', name: 'fs', scope: 'user', cwd: project })
+    expect(testMcp).toHaveBeenCalledTimes(1)
+    const dir = join(userData, 'context-cost', 'mcp')
+    expect(fs.readdirSync(dir)).toHaveLength(1)
+    now += MCP_RECORD_MAX_AGE_MS + 1000
+    expect(await svc.mcpMeasures({ cwd: project })).toEqual({})
+    await svc.summary({ cwd: project, agents: [{ id: 'claude' }], remote: true })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(fs.readdirSync(dir)).toHaveLength(0)
   })
 })

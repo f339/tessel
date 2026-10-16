@@ -9,8 +9,7 @@
 // Each number says whether it is exact (and from where) or an estimate.
 import { ref, computed, onMounted, watch } from 'vue'
 import { t } from '../../i18n'
-import { settings } from '../../settings'
-import { contextCounts, loadSkillCounts, tokensText, sourceLabel, sourceTitle, agentLabel } from '../../contextCost'
+import { contextCounts, loadSkillCounts, tokensText, sourceLabel, sourceTitle, agentLabel, signIns } from '../../contextCost'
 
 const props = defineProps({
   // A skill from skills:list (its skillFile), or the Skills page's group of
@@ -47,7 +46,7 @@ async function loadDetail() {
       skillFile: skillFile.value,
       agents: props.agent ? [props.agent] : null,
       remote: true,
-      claudeSignIn: settings.contextClaudeSignIn === true
+      ...signIns()
     })
     rows.value = (res && Array.isArray(res.rows) && res.rows) || []
   } catch {

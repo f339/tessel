@@ -103,6 +103,28 @@ describe('McpTokenTag', () => {
   })
 })
 
+describe('McpTokenTag: a project server Claude Code was not allowed to start', () => {
+  it('asks first, showing its command, and measures only on yes', async () => {
+    const mcpMeasure = vi.fn(async (q) => (q.confirmed ? { ok: true, tools: 2, at: 1, result: { tokens: 300, exact: true, source: 'local', tokenizer: 'o200k_base' } } : { ok: false, code: 'needsConfirm', target: 'npx evil-mcp' }))
+    window.shellApi = { mcpMeasure, context: { mcpMeasures: async () => ({}) } }
+    const answers = [false, true]
+    const asked = []
+    const askConfirm = (o) => (asked.push(o), Promise.resolve(answers.shift()))
+    const w = mount(McpTokenTag, { props: { server: { name: 'evil', scope: 'project' }, agent: 'claude' }, global: { provide: { askConfirm } } })
+    await flushPromises()
+    await w.find('button').trigger('click')
+    await flushPromises()
+    expect(asked[0].message).toContain('npx evil-mcp')
+    expect(mcpMeasure).toHaveBeenCalledTimes(1) // no
+    await w.find('button').trigger('click')
+    await flushPromises()
+    expect(mcpMeasure).toHaveBeenCalledTimes(3)
+    expect(mcpMeasure.mock.calls[2][0]).toMatchObject({ name: 'evil', confirmed: true })
+    expect(w.text()).toContain('300 tokens · 2 tools')
+    w.unmount()
+  })
+})
+
 describe('Settings > Context', () => {
   const agentRow = (over = {}) => ({
     id: 'claude',
@@ -158,6 +180,7 @@ describe('Settings > Context', () => {
     })
     const retry = vi.fn(async () => ({ ok: true }))
     window.shellApi = { openFile: vi.fn(), context: { summary: async () => ({ agents: [row] }), tokenizers: async () => ({}), retry } }
+    settings.contextGeminiSignIn = false
     const w = mount(SettingsContext, { props: { agents: [{ id: 'claude', available: true }] } })
     await flushPromises()
     expect(w.find('[data-test="agent-total"]').text()).toBe('≈ 3.1k tokens')
@@ -167,6 +190,33 @@ describe('Settings > Context', () => {
     await w.findAll('button').find((b) => b.text() === 'Retry').trigger('click')
     await flushPromises()
     expect(retry).toHaveBeenCalled()
+    w.unmount()
+  })
+
+  it('opens a rules file in Tessel’s editor (an event), never a not-followed import; sends both sign-in switches', async () => {
+    const row = agentRow({
+      items: [
+        { key: 'r', group: 'rules', type: 'file', label: 'CLAUDE.md', path: String.raw`C:\p\CLAUDE.md`, loaded: true, result: { tokens: 10, exact: true, source: 'local', tokenizer: 'o200k_base' } },
+        { key: 'o', group: 'rules', type: 'file', label: 'rules.md', path: String.raw`\\evil\share\rules.md`, loaded: false, note: 'outside' }
+      ],
+      summary: { total: 10, groups: { rules: 10, skills: 0, mcp: 0, tessel: 0 }, optional: 10, pending: 0, exact: 'all' }
+    })
+    settings.contextGeminiSignIn = true
+    const summary = vi.fn(async () => ({ agents: [row] }))
+    const openFile = vi.fn()
+    window.shellApi = { openFile, context: { summary, tokenizers: async () => ({}) } }
+    const w = mount(SettingsContext, { props: { agents: [{ id: 'claude', available: true }] } })
+    await flushPromises()
+    expect(summary.mock.calls[0][0]).toMatchObject({ claudeSignIn: false, geminiSignIn: true })
+    expect(w.text()).toContain('not followed (outside the project)')
+    const opens = w.findAll('button').filter((b) => b.text() === 'Open')
+    expect(opens).toHaveLength(1)
+    await opens[0].trigger('click')
+    expect(w.emitted('open-file')[0]).toEqual([String.raw`C:\p\CLAUDE.md`])
+    expect(openFile).not.toHaveBeenCalled()
+    expect(w.text()).toContain('Count with my Gemini CLI sign-in')
+    expect(w.text()).toContain('Uses your Claude Code sign-in')
+    settings.contextGeminiSignIn = false
     w.unmount()
   })
 })

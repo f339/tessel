@@ -14,7 +14,7 @@ import McpTokenTag from '../context/McpTokenTag.vue'
 import { t, intlLocale } from '../../i18n'
 import { settings } from '../../settings'
 import { TOKENIZERS } from '../../../../shared/tokenCounters'
-import { AGENT_LABELS, agentLabel, tokensText, compactTokens, sourceTitle, reasonText, retryable, counterText } from '../../contextCost'
+import { AGENT_LABELS, agentLabel, tokensText, compactTokens, sourceTitle, signIns, reasonText, retryable, counterText } from '../../contextCost'
 
 const props = defineProps({
   // The current workspace's project folder (its project files and servers).
@@ -22,7 +22,9 @@ const props = defineProps({
   // Built-in and custom agents, with `available` (found on the PATH).
   agents: { type: Array, default: () => [] }
 })
-const emit = defineEmits(['go'])
+// go: a Settings page to show; open-file: a rules file to open in Tessel's
+// own editor (text only, never run).
+const emit = defineEmits(['go', 'open-file'])
 
 const GROUPS = ['rules', 'skills', 'mcp', 'tessel']
 const groupTitle = (g) =>
@@ -56,7 +58,7 @@ const query = (remote) => ({
   cwd: props.cwd,
   agents: shown.value.map((a) => ({ id: a.id })),
   remote,
-  claudeSignIn: settings.contextClaudeSignIn === true
+  ...signIns()
 })
 
 let seq = 0
@@ -174,8 +176,14 @@ const noteText = (note) =>
     onDemand: t('context.note.onDemand', 'loaded only when relevant, not counted'),
     import: t('context.note.import', 'imported'),
     off: t('context.note.off', 'turned off, not counted'),
-    notMeasured: t('context.note.notMeasured', 'not measured yet')
+    notMeasured: t('context.note.notMeasured', 'not measured yet'),
+    notApproved: t('context.note.notApproved', 'not allowed in Claude Code yet, not counted'),
+    outside: t('context.note.outside', 'not followed (outside the project)'),
+    skipped: t('context.note.skipped', 'not followed (not a text file, or a credentials file)'),
+    limit: t('context.note.limit', 'not read (the reading limit was reached)')
   })[note] || ''
+// A rules file that was read: it may be opened in Tessel's editor.
+const canOpen = (item) => item.type === 'file' && !!item.path && !['outside', 'skipped', 'limit'].includes(item.note)
 // The tokenizer an agent's exact count waits for (downloadable, not there).
 const missingTokenizer = (a) => (a.counter && a.counter.kind === 'local' && TOKENIZERS[a.counter.tokenizer] && !TOKENIZERS[a.counter.tokenizer].shipped && !(tokenizers.value[a.counter.tokenizer] || {}).ready ? a.counter.tokenizer : null)
 // The estimates a Retry may turn exact, and why.
@@ -208,7 +216,7 @@ const shortPath = (p) => {
   const parts = String(p || '').split(/[\\/]/).filter(Boolean)
   return parts.length > 3 ? `…${p.includes('\\') ? '\\' : '/'}${parts.slice(-3).join(p.includes('\\') ? '\\' : '/')}` : p // i18n-ignore
 }
-const openFile = (file) => window.shellApi.openFile({ file })
+const openFile = (file) => emit('open-file', file)
 </script>
 
 <template>
@@ -258,7 +266,7 @@ const openFile = (file) => window.shellApi.openFile({ file })
                 </button>
               </p>
               <p v-if="needsSignIn(a)" class="ctx-callout info">
-                {{ t('context.claudeSignInCallout', "Claude's tokenizer is not public: exact counts come from Anthropic's count_tokens, with an API key (ANTHROPIC_API_KEY) or your Claude sign-in.") }}
+                {{ t('context.claudeSignInCallout', "Claude's tokenizer is not public: exact counts come from Anthropic's count_tokens, with an API key (ANTHROPIC_API_KEY) or, if you turn it on, your Claude Code sign-in (Anthropic may refuse it).") }}
                 <label class="ctx-inline-switch">
                   <input v-model="settings.contextClaudeSignIn" type="checkbox" class="set-switch" @change="refresh(true)" />
                   {{ t('context.claudeSignIn', 'Count with my Claude sign-in') }}
@@ -289,14 +297,14 @@ const openFile = (file) => window.shellApi.openFile({ file })
                       </span>
                       <span class="ctx-line-cost">
                         <McpTokenTag
-                          v-if="item.type === 'mcp' && item.loaded && item.ref"
+                          v-if="item.type === 'mcp' && item.ref && item.note !== 'off'"
                           :server="{ name: item.ref.name, scope: item.ref.scope }"
                           :agent="item.ref.agent"
                           :cwd="cwd"
                           @measured="refresh(true)"
                         />
                         <span v-else-if="item.result" class="ctx-num" :class="{ estimate: !item.result.exact }" :title="sourceTitle(item.result)">{{ tokensText(item.result) }}</span>
-                        <button v-if="item.type === 'file' && item.path" type="button" class="ctx-link" @click="openFile(item.path)">{{ t('context.open', 'Open') }}</button>
+                        <button v-if="canOpen(item)" type="button" class="ctx-link" :title="t('context.openHint', 'Open in Tessel’s editor')" @click="openFile(item.path)">{{ t('context.open', 'Open') }}</button>
                       </span>
                     </li>
                   </ul>
@@ -317,9 +325,16 @@ const openFile = (file) => window.shellApi.openFile({ file })
         <div class="set-row">
           <div class="set-label">
             {{ t('context.claudeSignIn', 'Count with my Claude sign-in') }}
-            <span class="set-hint">{{ t('context.claudeSignInHint', "Exact Claude counts from Anthropic's count_tokens when no ANTHROPIC_API_KEY is set. Anthropic may refuse a subscription sign-in; an estimate is shown then.") }}</span>
+            <span class="set-hint">{{ t('context.claudeSignInHint', "Uses your Claude Code sign-in to ask Anthropic's count_tokens, the way Claude Code itself does. Anthropic may refuse it; an estimate is shown then. An ANTHROPIC_API_KEY is used instead when one is set.") }}</span>
           </div>
           <input v-model="settings.contextClaudeSignIn" type="checkbox" class="set-switch" data-setting="contextClaudeSignIn" @change="refresh(true)" />
+        </div>
+        <div class="set-row">
+          <div class="set-label">
+            {{ t('context.geminiSignIn', 'Count with my Gemini CLI sign-in') }}
+            <span class="set-hint">{{ t('context.geminiSignInHint', "Uses your Gemini CLI sign-in to ask Google's countTokens, for the Gemini models that have no local tokenizer. A GEMINI_API_KEY is used instead when one is set.") }}</span>
+          </div>
+          <input v-model="settings.contextGeminiSignIn" type="checkbox" class="set-switch" data-setting="contextGeminiSignIn" @change="refresh(true)" />
         </div>
         <div class="set-row ctx-tokenizers-row">
           <div class="set-label">

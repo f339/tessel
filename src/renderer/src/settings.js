@@ -299,7 +299,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // Settings > Context: exact Claude token counts with the Claude Code
   // sign-in (Anthropic's count_tokens) when no API key is set. Off until the
   // user turns it on: Anthropic may refuse a subscription sign-in there.
-  contextClaudeSignIn: false
+  contextClaudeSignIn: false,
+  // The same for Gemini models with no local tokenizer: Google's countTokens
+  // with the Gemini CLI sign-in, off until the user turns it on.
+  contextGeminiSignIn: false
 })
 
 export const SIDEBAR_SORTS = ['name', 'smart', 'recent', 'repo', 'manual']

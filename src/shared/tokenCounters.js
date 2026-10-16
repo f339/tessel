@@ -11,11 +11,16 @@
 //                      Muse Glimmer, Llama 3, and Gemma 3 / 4, which Google's
 //                      own SDK uses as Gemini 2.x-3.5's local tokenizer.
 //   api                Claude (count_tokens), later Gemini (countTokens),
-//                      Grok (tokenize-text), Muse Spark / Wonder and GPT-6
-//                      (responses input_tokens): no public tokenizer.
+//                      Grok (tokenize-text) and GPT-6 (responses
+//                      input_tokens): no public tokenizer. Asked only for an
+//                      agent of that provider (contextCost/index.js).
 //   estimate           o200k_base times the family's factor, recalibrated
 //                      from this user's own exact counts once there are
-//                      enough (main/contextCost/counts.js).
+//                      enough (main/contextCost/counts.js): whenever the exact
+//                      count is out of reach, and always for Muse Spark /
+//                      Wonder (Meta publishes no tokenizer, and no key
+//                      variable Tessel could read) and Llama 4 (its tokenizer
+//                      is gated).
 // The mapping follows the research of 2026-10-16 (Tessel's token-counters
 // notes); its worked examples are tokenCounters.spec.js.
 
@@ -51,7 +56,6 @@ export const ESTIMATE_FACTORS = Object.freeze({
   'anthropic-old': 1.2,
   google: 1.1,
   xai: 1.05,
-  meta: 1.1,
   openai: 1,
   other: 1.1
 })
@@ -82,7 +86,6 @@ export const COUNT_APIS = Object.freeze({
   anthropic: { name: 'Anthropic count_tokens', key: 'ANTHROPIC_API_KEY' }, // i18n-ignore
   google: { name: 'Google countTokens', key: 'GEMINI_API_KEY' }, // i18n-ignore
   xai: { name: 'xAI tokenize-text', key: 'XAI_API_KEY' }, // i18n-ignore
-  meta: { name: 'Meta input_tokens', key: 'MODEL_API_KEY' }, // i18n-ignore
   openai: { name: 'OpenAI input_tokens', key: 'OPENAI_API_KEY' } // i18n-ignore
 })
 
@@ -143,7 +146,7 @@ export function tokenCounterFor(model, agent = null) {
   if (/^gemini-(3\.1-pro|3\.1-flash-lite|3\.5-flash)/.test(m)) return out(local('gemma4', m))
   if (/^gemini-/.test(m)) return out(api('google', m, 'google'))
   if (/^grok-/.test(m)) return out(api('xai', m, 'xai'))
-  if (/^(muse-spark|muse-wonder)/.test(m)) return out(api('meta', m, 'meta'))
+  if (/^(muse-spark|muse-wonder)/.test(m)) return out(estimate('muse', m))
   if (/^muse-glimmer/.test(m)) return out(local('glimmer', m))
   if (/^llama-?4/.test(m)) return out(estimate('llama4', m))
   if (/^llama-?3/.test(m)) return out(local('llama3', m))

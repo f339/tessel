@@ -3,9 +3,10 @@
 // tool definitions, which the agent loads in every conversation. Known once
 // measured: Measure starts the server (or connects to it) the way Test does,
 // on that click only, and keeps its definitions; the count then follows the
-// agent's model. Each number says whether it is exact (and from where) or an
-// estimate.
-import { ref, computed, onMounted, watch } from 'vue'
+// agent's model. A project server (.mcp.json) Claude Code was not allowed to
+// start is started only after the user saw its command and said yes. Each
+// number says whether it is exact (and from where) or an estimate.
+import { ref, computed, onMounted, watch, inject } from 'vue'
 import { t } from '../../i18n'
 import { contextCounts, loadMcpCounts, measureMcp, mcpKey, tokensText, sourceLabel, sourceTitle } from '../../contextCost'
 
@@ -22,6 +23,7 @@ const props = defineProps({
   readonly: { type: Boolean, default: false }
 })
 const emit = defineEmits(['measured'])
+const askConfirm = inject('askConfirm', (o) => Promise.resolve(window.confirm(`${o.title}\n\n${o.message}`))) // i18n-ignore
 
 const key = computed(() => mcpKey(props.agent, props.server.scope, props.server.name))
 const entry = computed(() => contextCounts.mcp[key.value] || null)
@@ -34,10 +36,22 @@ watch(() => props.cwd, (cwd) => loadMcpCounts(cwd))
 const toolsText = (n) => (n === 1 ? t('context.mcp.tool', '{{count}} tool', { count: n }) : t('context.mcp.tools', '{{count}} tools', { count: n }))
 const title = computed(() => (entry.value && entry.value.result ? `${sourceTitle(entry.value.result)}\n${t('context.mcp.hint', 'Its tool definitions, loaded in every conversation.')}` : ''))
 
+const confirmTitle = (name) => t('context.mcp.confirmTitle', 'Start {{name}}?', { name })
 async function measure() {
   error.value = ''
-  const res = await measureMcp({ agent: props.agent, name: props.server.name, scope: props.server.scope || 'user', cwd: props.cwd, model: props.model })
-  if (!res || !res.ok) error.value = (res && res.error) || t('context.mcp.failed', 'The server did not list its tools.')
+  const ref = { agent: props.agent, name: props.server.name, scope: props.server.scope || 'user', cwd: props.cwd, model: props.model }
+  let res = await measureMcp(ref)
+  if (res && res.code === 'needsConfirm') {
+    const yes = await askConfirm({
+      title: confirmTitle(props.server.name),
+      message: `${t('context.mcp.confirmBody', 'This server comes with the project, and Claude Code has not been allowed to start it. Measuring runs it:')}\n\n${res.target}`, // i18n-ignore
+      confirmLabel: t('context.mcp.confirmRun', 'Start and measure')
+    })
+    if (!yes) return
+    res = await measureMcp({ ...ref, confirmed: true })
+  }
+  if (res && res.code === 'disabled') error.value = t('context.mcp.disabled', 'This server is turned off for the project.')
+  else if (!res || !res.ok) error.value = (res && res.error) || t('context.mcp.failed', 'The server did not list its tools.')
   emit('measured', res)
 }
 </script>

@@ -145,7 +145,8 @@ export function createContextCounter({ cache, worker, apis = {}, files = null })
   // items: [{ key, kind: 'text' | 'tools', text?, tools? }]
   // counter: tokenCounters.js tokenCounterFor(...)
   // -> { [key]: { tokens, exact, source: 'local' | 'api' | 'estimate', ... } }
-  async function count(items, counter, { remote = false } = {}) {
+  // auth: the call's sign-in choices, passed to the count API (index.js).
+  async function count(items, counter, { remote = false, auth = null } = {}) {
     const list = items.map((item) => ({ ...item, hash: payloadHash(item) }))
     const results = {}
     if (counter.kind === 'local') {
@@ -179,6 +180,11 @@ export function createContextCounter({ cache, worker, apis = {}, files = null })
         else missing.push(item)
       }
       if (!missing.length) return results
+      // Not the agent's own provider (index.js ownProviderOnly): never asked.
+      if (counter.noRemote) {
+        await estimates(missing, counter, counter.noRemote, results)
+        return results
+      }
       if (!remote || !service) {
         await estimates(missing, counter, service ? 'notCounted' : 'noKey', results)
         return results
@@ -187,7 +193,8 @@ export function createContextCounter({ cache, worker, apis = {}, files = null })
       try {
         answers = await service.count(
           counter.model,
-          missing.map(({ key, kind, text, tools }) => ({ key, kind, text, tools }))
+          missing.map(({ key, kind, text, tools }) => ({ key, kind, text, tools })),
+          auth || {}
         )
       } catch {
         answers = {}

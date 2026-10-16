@@ -94,7 +94,7 @@ describe('count APIs: only on view or click, kept, estimates otherwise', () => {
     const anthropic = { count: vi.fn(async (model, items) => Object.fromEntries(items.map((i) => [i.key, { tokens: 42 }]))) }
     const counter = createContextCounter({ cache: cacheIn(), worker: fakeWorker(), apis: { anthropic } })
     const res = await counter.count([item('a', 'one two')], claude, { remote: true })
-    expect(anthropic.count).toHaveBeenCalledWith('claude-opus-5-5', [{ key: 'a', kind: 'text', text: 'one two', tools: undefined }])
+    expect(anthropic.count).toHaveBeenCalledWith('claude-opus-5-5', [{ key: 'a', kind: 'text', text: 'one two', tools: undefined }], {})
     expect(res.a).toMatchObject({ tokens: 42, exact: true, source: 'api', api: 'anthropic', model: 'claude-opus-5-5' })
     const again = await counter.count([item('b', 'one two')], claude, { remote: true })
     expect(again.b.tokens).toBe(42)
@@ -102,6 +102,17 @@ describe('count APIs: only on view or click, kept, estimates otherwise', () => {
     // Another model is another count.
     await counter.count([item('a', 'one two')], tokenCounterFor('claude-sonnet-4-5'), { remote: true })
     expect(anthropic.count).toHaveBeenCalledTimes(2)
+  })
+
+  it('never asks another provider than the agent’s own, and passes the call’s sign-in choices', async () => {
+    const anthropic = { count: vi.fn(async (model, items) => Object.fromEntries(items.map((i) => [i.key, { tokens: 7 }]))) }
+    const counter = createContextCounter({ cache: cacheIn(), worker: fakeWorker(), apis: { anthropic } })
+    const blocked = await counter.count([item('a', 'x y z')], { ...claude, noRemote: 'otherProvider' }, { remote: true })
+    expect(anthropic.count).not.toHaveBeenCalled()
+    expect(blocked.a).toMatchObject({ exact: false, reason: 'otherProvider' })
+    const auth = { claudeSignIn: true, allowed: () => true }
+    await counter.count([item('b', 'p q')], claude, { remote: true, auth })
+    expect(anthropic.count.mock.calls[0][2]).toBe(auth)
   })
 
   it('labels a failed count as an estimate with its reason', async () => {

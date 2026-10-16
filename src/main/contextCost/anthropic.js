@@ -1,19 +1,22 @@
 // Exact Claude token counts for Settings > Context: Anthropic's count_tokens
 // endpoint (POST /v1/messages/count_tokens), for the model the agent runs,
-// with the Claude sign-in Tessel already reads for usage (an API key when one
-// is set, else the selected account's Claude Code login: providerUsage.js
-// apiAuth). The user allowed it. Asked only when Settings > Context, the
-// Skills page or a Measure is opened or clicked (never from a timer); each
-// count is kept by content hash and model (counts.js), so the same text is
-// never sent twice. The token is read for the request and dropped; neither it
-// nor the text counted is ever logged.
+// with an API key (ANTHROPIC_API_KEY, unless ANTHROPIC_BASE_URL sends it to
+// a gateway) or, only when the user turned on "Count with my Claude sign-in",
+// the selected account's Claude Code login (providerUsage.js apiAuth). With
+// that login the request is made the way Claude Code makes its own (its
+// headers and identity line); Anthropic may refuse it, and the page then
+// shows an estimate. Turning the switch off drops the sign-in counts still
+// running (opts.allowed). Asked only when Settings > Context, the Skills page
+// or a Measure is opened or clicked (never from a timer); each count is kept
+// by content hash and model (counts.js), so the same text is never sent
+// twice. The token is read for the request and dropped; neither it nor the
+// text counted is ever logged.
 //
 // Each item is counted as the agent loads it, and only its own share: a
 // rules file or instructions as system text, MCP tools as `tools`. The count
 // of a request holding the item, minus the same request without it: the
 // framing every request has (and the tool-use instructions any request with
-// tools has) is not the item's. Claude Code's identity line is in both, as in
-// its own requests (a Claude Code login is meant for those).
+// tools has) is not the item's.
 export const COUNT_TOKENS_URL = 'https://api.anthropic.com/v1/messages/count_tokens'
 export const ANTHROPIC_VERSION = '2023-06-01'
 const IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
@@ -47,15 +50,19 @@ function retryAfter(headers, now) {
   return Number.isFinite(at) ? Math.max(0, Math.min(at - now, 3600 * 1000)) : null
 }
 
-export function requestBody(model, item) {
+// item: an item, or 'text' / 'tools' for the request without it. identity:
+// Claude Code's identity line first (with its login only).
+export function requestBody(model, item, identity = false) {
   const base = { model, messages: [{ role: 'user', content: '.' }] }
-  const system = [{ type: 'text', text: IDENTITY }]
-  if (item && item.kind === 'tools') return { ...base, system, tools: [PROBE_TOOL, ...(item.tools || [])] }
+  const system = identity ? [{ type: 'text', text: IDENTITY }] : []
+  const withSystem = (blocks) => (blocks.length ? { system: blocks } : {})
+  if (item && item.kind === 'tools') return { ...base, ...withSystem(system), tools: [PROBE_TOOL, ...(item.tools || [])] }
   if (item && item.kind === 'text') return { ...base, system: [...system, { type: 'text', text: String(item.text || '') }] }
-  return { ...base, system, ...(item === 'tools' ? { tools: [PROBE_TOOL] } : {}) }
+  return { ...base, ...withSystem(system), ...(item === 'tools' ? { tools: [PROBE_TOOL] } : {}) }
 }
 
-// auth(): -> { ok: true, kind: 'apiKey' | 'oauth', headers } or { ok: false, code? }
+// auth(opts): -> { ok: true, kind: 'apiKey' | 'oauth', headers } or
+// { ok: false, code? }; opts: the call's choices ({ claudeSignIn, allowed }).
 export function createAnthropicCounter({
   auth,
   request = globalThis.fetch,
@@ -66,7 +73,7 @@ export function createAnthropicCounter({
   log = null
 }) {
   let blocked = null // { until, code } after a 429 or a refused sign-in
-  const baselines = new Map() // `${model}|${kind}` -> Promise<number>
+  const baselines = new Map() // `${model}|${kind}|${identity}` -> Promise<number>
 
   async function post(body, headers) {
     const controller = new AbortController()
@@ -99,10 +106,10 @@ export function createAnthropicCounter({
     return tokens
   }
 
-  function baseline(model, kind, headers) {
-    const key = `${model}|${kind}`
+  function baseline(model, kind, headers, identity) {
+    const key = `${model}|${kind}|${identity}`
     if (!baselines.has(key)) {
-      const p = post(requestBody(model, kind === 'tools' ? 'tools' : 'text'), headers)
+      const p = post(requestBody(model, kind === 'tools' ? 'tools' : 'text', identity), headers)
       p.catch(() => baselines.delete(key))
       baselines.set(key, p)
     }
@@ -115,8 +122,9 @@ export function createAnthropicCounter({
   }
 
   // items: [{ key, kind: 'text' | 'tools', text?, tools? }]
+  // opts: { claudeSignIn, allowed(provider) } for this call.
   // -> { [key]: { tokens } | { error: code } }
-  async function count(model, items) {
+  async function count(model, items, opts = {}) {
     const out = {}
     const fail = (code, list) => list.forEach((item) => (out[item.key] = { error: code }))
     if (blocked && clock() < blocked.until) {
@@ -126,7 +134,7 @@ export function createAnthropicCounter({
     blocked = null
     let login
     try {
-      login = await auth()
+      login = await auth(opts)
     } catch {
       login = null
     }
@@ -135,20 +143,27 @@ export function createAnthropicCounter({
       fail(login && login.code === 'noKey' ? 'noKey' : 'signedOut', items)
       return out
     }
+    const oauth = login.kind === 'oauth'
     const headers = {
       ...login.headers,
-      ...(login.kind === 'oauth' ? OAUTH_HEADERS : {}),
+      ...(oauth ? OAUTH_HEADERS : {}),
       'anthropic-version': ANTHROPIC_VERSION,
       'content-type': 'application/json'
     }
+    // The sign-in may be turned off while counting: what is left is dropped.
+    const stillAllowed = () => !oauth || typeof opts.allowed !== 'function' || opts.allowed('claude')
     const queue = [...items]
     let stopped = null
     async function next() {
       while (queue.length && !stopped) {
+        if (!stillAllowed()) {
+          stopped = new CountError('noKey')
+          break
+        }
         const item = queue.shift()
         try {
-          const [full, base] = await Promise.all([post(requestBody(model, item), headers), baseline(model, item.kind, headers)])
-          out[item.key] = { tokens: Math.max(0, full - base) }
+          const [full, base] = await Promise.all([post(requestBody(model, item, oauth), headers), baseline(model, item.kind, headers, oauth)])
+          out[item.key] = stillAllowed() ? { tokens: Math.max(0, full - base) } : { error: 'noKey' }
         } catch (err) {
           const code = err instanceof CountError ? err.code : 'unavailable'
           out[item.key] = { error: code }

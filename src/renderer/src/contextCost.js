@@ -74,7 +74,7 @@ export function reasonText(result) {
         : t('context.reason.signedOut', '{{api}} did not accept the key or sign-in', { api })
     case 'noKey':
       if (result.api === 'anthropic') return t('context.reason.claudeNoKey', 'turn on "Count with my Claude sign-in", or set ANTHROPIC_API_KEY')
-      if (result.api === 'google') return t('context.reason.googleNoKey', 'sign in to Gemini CLI, or set GEMINI_API_KEY')
+      if (result.api === 'google') return t('context.reason.googleNoKey', 'turn on "Count with my Gemini CLI sign-in", or set GEMINI_API_KEY')
       return t('context.reason.noKey', 'needs an API key ({{key}})', { key: (COUNT_APIS[result.api] && COUNT_APIS[result.api].key) || 'API key' }) // i18n-ignore
     case 'rateLimited':
       return t('context.reason.rateLimited', '{{api}} is limiting requests, try again later', { api })
@@ -88,12 +88,19 @@ export function reasonText(result) {
       return t('context.reason.noTokenizer', 'download the {{tokenizer}} tokenizer for an exact count', { tokenizer: tokenizerName(result.tokenizer) })
     case 'noCounter':
       return t('context.reason.noCounter', 'this model has no public tokenizer')
+    case 'otherProvider':
+      return t('context.reason.otherProvider', "only the agent's own provider is asked to count, and {{api}} is not", { api })
     case 'worker':
       return t('context.reason.worker', 'the counting process did not answer')
     default:
       return ''
   }
 }
+// The sign-in switches of Settings > Context, sent with every request: the
+// main process uses a sign-in only when its switch is on, and drops the
+// counts still running with it once it is turned off.
+export const signIns = () => ({ claudeSignIn: settings.contextClaudeSignIn === true, geminiSignIn: settings.contextGeminiSignIn === true })
+
 // Reasons a click can fix: try the count API again.
 export const retryable = (result) => !!result && !result.exact && ['offline', 'rateLimited', 'unavailable', 'signedOut', 'notCounted'].includes(result.reason)
 
@@ -143,7 +150,7 @@ export function loadSkillCounts(cwd = null, { force = false } = {}) {
   if (pending.skills && !force) return pending.skills
   contextCounts.skillsLoading = true
   pending.skills = ctx
-    .skills({ cwd, remote: true, claudeSignIn: settings.contextClaudeSignIn === true })
+    .skills({ cwd, remote: true, ...signIns() })
     .then((res) => {
       if (res && res.ok !== false) {
         contextCounts.skills = res
@@ -167,7 +174,7 @@ export function loadMcpCounts(cwd = null, { force = false } = {}) {
   if (pending.mcp && !force) return pending.mcp
   contextCounts.mcpLoading = true
   pending.mcp = ctx
-    .mcpMeasures({ cwd, claudeSignIn: settings.contextClaudeSignIn === true })
+    .mcpMeasures({ cwd, ...signIns() })
     .then((res) => {
       if (res && res.ok !== false) {
         contextCounts.mcp = res
@@ -184,11 +191,13 @@ export function loadMcpCounts(cwd = null, { force = false } = {}) {
 }
 
 // Measure: starts the server (or connects to it), on this click only.
-export async function measureMcp({ agent, name, scope = 'user', cwd = null, model = null }) {
+// confirmed: the user saw the command of a project server Claude Code was
+// not allowed to start, and said yes (else code 'needsConfirm', target).
+export async function measureMcp({ agent, name, scope = 'user', cwd = null, model = null, confirmed = false }) {
   const key = mcpKey(agent, scope, name)
   contextCounts.measuring[key] = true
   try {
-    const res = await window.shellApi.mcpMeasure({ agent, name, scope, cwd, model, claudeSignIn: settings.contextClaudeSignIn === true })
+    const res = await window.shellApi.mcpMeasure({ agent, name, scope, cwd, model, confirmed, ...signIns() })
     if (res && res.ok) contextCounts.mcp = { ...contextCounts.mcp, [key]: { tools: res.tools, at: res.at, counter: res.counter, result: res.result } }
     return res
   } catch (err) {
@@ -200,8 +209,9 @@ export async function measureMcp({ agent, name, scope = 'user', cwd = null, mode
 
 // ---------------------------------------------------------------- Pane card
 // A pane header's hover card: what its agent loaded at start, read while the
-// card is open (kept and local counts only: hovering never asks a count API),
-// at most once a minute per agent, model and folder.
+// card is open, from what is kept (kept: no process started, no count API
+// asked; nothing until Settings > Context listed the servers once), at most
+// once a minute per agent, model and folder.
 const startCache = new Map() // key -> { at, value, promise }
 const START_TTL_MS = 60 * 1000
 export const contextStart = reactive({}) // key -> { total, exact, groups } | null
@@ -217,7 +227,7 @@ export function loadContextStart(info) {
   const entry = { at: Date.now(), promise: null }
   startCache.set(key, entry)
   entry.promise = ctx
-    .summary({ cwd: info.contextCwd || null, agents: [{ id: info.contextAgent, model: info.contextModel || null }], remote: false, claudeSignIn: settings.contextClaudeSignIn === true })
+    .summary({ cwd: info.contextCwd || null, agents: [{ id: info.contextAgent, model: info.contextModel || null }], remote: false, kept: true, ...signIns() })
     .then((res) => {
       const a = res && Array.isArray(res.agents) ? res.agents[0] : null
       contextStart[key] = a ? { total: a.summary.total, exact: a.summary.exact === 'all', groups: a.summary.groups } : null

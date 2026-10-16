@@ -1,10 +1,12 @@
 // Exact Gemini token counts for Settings > Context: Google's countTokens for
-// the model the agent runs, with the Gemini sign-in Tessel already reads: a
-// Gemini API key in the environment (GEMINI_API_KEY / GOOGLE_API_KEY, as
-// Gemini CLI reads it), else the Gemini CLI login (the Code Assist service's
+// the model a Gemini CLI or Antigravity agent runs, with a Gemini API key in
+// the environment (GEMINI_API_KEY / GOOGLE_API_KEY, as Gemini CLI reads it,
+// unless a base URL sends it elsewhere), or, only when the user turned on
+// "Count with my Gemini CLI sign-in", that login (the Code Assist service's
 // countTokens, as Gemini CLI itself calls it; usageProviderSources.js reads
-// that login). Asked on view or click only, each count kept by content hash
-// and model (counts.js); the key or token is never logged, nor the text.
+// it). Turning the switch off drops the sign-in counts still running. Asked
+// on view or click only, each count kept by content hash and model
+// (counts.js); the key or token is never logged, nor the text.
 // Tool definitions are counted as their JSON text (countTokens takes no
 // tools): close to, not exactly, what the model gets.
 import { CountError } from './anthropic'
@@ -20,7 +22,7 @@ export function itemText(item) {
   return JSON.stringify(decl)
 }
 
-// auth(): -> { ok: true, kind: 'apiKey', key } | { ok: true, kind: 'oauth', headers } | { ok: false }
+// auth(opts): -> { ok: true, kind: 'apiKey', key } | { ok: true, kind: 'oauth', headers } | { ok: false, code? }
 export function createGeminiCounter({ auth, request = globalThis.fetch, apiUrl = GEMINI_API_URL, codeAssistUrl = CODE_ASSIST_URL, timeoutMs = 20000, concurrency = 2, clock = Date.now, log = null }) {
   let blocked = null
 
@@ -60,7 +62,8 @@ export function createGeminiCounter({ auth, request = globalThis.fetch, apiUrl =
     return tokens
   }
 
-  async function count(model, items) {
+  // opts: { geminiSignIn, allowed(provider) } for this call.
+  async function count(model, items, opts = {}) {
     const out = {}
     const fail = (code, list) => list.forEach((item) => (out[item.key] = { error: code }))
     if (blocked && clock() < blocked.until) {
@@ -70,7 +73,7 @@ export function createGeminiCounter({ auth, request = globalThis.fetch, apiUrl =
     blocked = null
     let login
     try {
-      login = await auth()
+      login = await auth(opts)
     } catch {
       login = null
     }
@@ -78,13 +81,19 @@ export function createGeminiCounter({ auth, request = globalThis.fetch, apiUrl =
       fail(login && login.code === 'noKey' ? 'noKey' : 'signedOut', items)
       return out
     }
+    const stillAllowed = () => login.kind !== 'oauth' || typeof opts.allowed !== 'function' || opts.allowed('gemini')
     const queue = [...items]
     let stopped = null
     async function next() {
       while (queue.length && !stopped) {
+        if (!stillAllowed()) {
+          stopped = new CountError('noKey')
+          break
+        }
         const item = queue.shift()
         try {
-          out[item.key] = { tokens: await post(login, model, itemText(item)) }
+          const tokens = await post(login, model, itemText(item))
+          out[item.key] = stillAllowed() ? { tokens } : { error: 'noKey' }
         } catch (err) {
           const code = err instanceof CountError ? err.code : 'unavailable'
           out[item.key] = { error: code }
