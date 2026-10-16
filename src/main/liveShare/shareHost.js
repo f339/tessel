@@ -64,7 +64,10 @@
 // second per pane, bounded; each guest only what changed since what it has,
 // and nothing more while its connection is behind), until it stops ('chat',
 // off), loses the pane or the project, or leaves. Every ask counts against
-// its limit, answered or not. Nothing about it reaches the pane: no typing, no
+// its limit, answered or not (past it, "busy" once a minute per pane); a
+// guest whose copy no longer lines up asks for all of it again ('chat',
+// resync), within a small limit of its own; a stop for a conversation it
+// does not watch is ignored. Nothing about it reaches the pane: no typing, no
 // mode, no restart. A guest whose Tessel does not say so gets none of it.
 //
 // Tessel itself is reached only through the callbacks below, so this file
@@ -117,6 +120,9 @@ const RESYNCS_PER_MINUTE = 30 // pane screens asked again (a window reloaded)
 // comes); one bigger than this is not sent.
 const MAX_CHATS = 8
 const CHATS_PER_MINUTE = 30
+// A guest whose copy no longer lines up asks for all of it again: a few a
+// minute, apart from its asks.
+const CHAT_RESYNCS_PER_MINUTE = 6
 const CHAT_EVERY_MS = 1000
 const MAX_CHAT_BYTES = CHAT_LIMITS.bytes + 64 * 1024
 // A guest's connection this far behind gets no conversation update (its
@@ -473,8 +479,8 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     g.chatSent.delete(id)
     g.chatHeld.delete(id)
     const watchers = chatWatchers.get(id)
-    if (!watchers) return
-    watchers.delete(g.id)
+    // Only a guest that watched it changes anything.
+    if (!watchers || !watchers.delete(g.id)) return
     if (watchers.size) return watchedChanged()
     chatWatchers.delete(id)
     chatLast.delete(id)
@@ -509,9 +515,22 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
     }
     return size > MAX_CHAT_BYTES ? { ok: false, code: 'unavailable' } : { ok: true, events, truncated: !!payload.truncated, marks }
   }
-  // A conversation to one guest: what changed since what it has (from: how
-  // many of its events stay; 0 when the start changed too), nothing when
-  // nothing did; held while its connection is far behind.
+  // How a guest's copy (had: the fingerprints of the events it has) becomes
+  // the new one: its `dropped` oldest go (the window moved on), the first
+  // `from` of the rest stay, then the new ones; `total` in the end.
+  function chatDelta(had, marks) {
+    let dropped = had.length
+    let from = 0
+    const start = marks.length ? had.indexOf(marks[0]) : -1
+    if (start >= 0) {
+      dropped = start
+      const n = Math.min(had.length - start, marks.length)
+      while (from < n && had[start + from] === marks[from]) from++
+    }
+    return { dropped, from, total: marks.length }
+  }
+  // A conversation to one guest: what changed since what it has (chatDelta),
+  // nothing when nothing did; held while its connection is far behind.
   function sendChatTo(g, id, message) {
     if (g.socket.bufferedAmount > CHAT_BUFFERED) {
       g.chatHeld.add(id)
@@ -525,14 +544,10 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       return
     }
     const had = g.chatSent.get(id)
-    let from = 0
-    if (had) {
-      const n = Math.min(had.marks.length, message.marks.length)
-      while (from < n && had.marks[from] === message.marks[from]) from++
-      if (from === had.marks.length && from === message.marks.length && had.truncated === message.truncated) return
-    }
+    const delta = had ? chatDelta(had.marks, message.marks) : { dropped: 0, from: 0, total: message.marks.length }
+    if (had && delta.dropped === 0 && delta.from === had.marks.length && delta.from === delta.total && had.truncated === message.truncated) return
     g.chatSent.set(id, { marks: message.marks, truncated: message.truncated })
-    send(g, { t: 'chat', id, ok: true, from, events: message.events.slice(from), truncated: message.truncated })
+    send(g, { t: 'chat', id, ok: true, dropped: delta.dropped, from: delta.from, events: message.events.slice(delta.from), total: delta.total, truncated: message.truncated })
   }
   // Held conversations, once the guest's connection caught up: the latest.
   function sendHeld(g) {
@@ -931,10 +946,31 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       // right needed, nothing reaches the pane).
       case 'chat': {
         if (!speaksChat(g) || typeof msg.id !== 'string' || !/^[\w-]{1,80}$/.test(msg.id)) return
-        if (msg.on !== true) return unwatchChat(g, msg.id)
-        // Every ask counts (answered or not); past the limit, no answer.
         const known = keys.get(g.keyHash)
-        if (!known || !within(known, 'chatAsks', CHATS_PER_MINUTE)) return
+        if (!known) return
+        // A stop: only for a conversation it watches (of a project it sees:
+        // one it lost is let go already).
+        if (msg.on !== true) {
+          if (g.chats.has(msg.id)) unwatchChat(g, msg.id)
+          return
+        }
+        // All of it again (its copy no longer lines up): its own small limit.
+        if (msg.resync === true) {
+          if (!g.chats.has(msg.id) || !chatLive(g, msg.id) || !within(known, 'chatResyncs', CHAT_RESYNCS_PER_MINUTE)) return
+          g.chatSent.delete(msg.id)
+          const last = chatLast.get(msg.id)
+          if (last) sendChatTo(g, msg.id, last)
+          return
+        }
+        // Every ask counts (answered or not); past the limit, "busy" once a
+        // minute for that pane (its view then waits and asks again later).
+        if (!within(known, 'chatAsks', CHATS_PER_MINUTE)) {
+          const said = g.chatBusySaid.get(msg.id)
+          if (said && now() - said < 60000) return
+          if (g.chatBusySaid.size >= 64) g.chatBusySaid.clear()
+          g.chatBusySaid.set(msg.id, now())
+          return send(g, { t: 'chat', id: msg.id, ok: false, code: 'busy' })
+        }
         if (g.chats.has(msg.id)) return
         const project = chatProject(msg.id)
         if (!project || !g.projects.has(project)) return send(g, { t: 'chat', id: msg.id, ok: false, code: 'unavailable' })
@@ -1002,6 +1038,7 @@ export function createShareHost({ secret, hostName, callbacks, log = () => {}, n
       chats: new Map(), // pane id -> the project it was asked in: the conversations it watches
       chatSent: new Map(), // pane id -> { marks, truncated }: what it has of each
       chatHeld: new Set(), // conversations held while its connection is behind
+      chatBusySaid: new Map(), // pane id -> when it was last told "busy" (past its limit)
       chatHeldTimer: null,
       subscribed: new Map(), // pane id -> { state: 'loading' | 'live', held, exit, project }
       pending: new Map(),

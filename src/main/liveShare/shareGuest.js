@@ -234,6 +234,11 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
     chat(id, on) {
       send({ t: 'chat', id, on: !!on })
     },
+    // All of a watched conversation again (this guest's copy no longer lines
+    // up with the host's updates).
+    resyncChat(id) {
+      send({ t: 'chat', id, on: true, resync: true })
+    },
     leave() {
       send({ t: 'leave' })
       finish('left')

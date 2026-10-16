@@ -62,8 +62,10 @@ const LAYOUT_PANES = 64
 // A host's terminals shown in a guest's window at most, all its projects
 // together (each one a terminal here, waiting for its screen).
 const GUEST_PANES = 128
-// Conversations a guest's window watches at once.
+// Conversations a guest's window watches at once, and how often one asks
+// for all of a conversation again (its copy no longer lined up) in a minute.
 const GUEST_CHATS = 8
+const GUEST_RESYNCS_PER_MINUTE = 4
 // A conversation file not there (yet), or its reader given to another: read
 // again after this long (doubled each time, up to a minute), while guests
 // watch it, a dozen times at most (then once the pane's conversation changes,
@@ -291,6 +293,24 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         }
       : { state: 'off', invite: null, expiresAt: null, inviteBlocked: false, projectIds: [], guests: [], reading: [], offline: [], progress: null, error: null }
   const pushHost = () => send('liveShare:host', hostStatus())
+  // Who reads which conversation changed (guests start and stop watching
+  // as they like): said at most every 250 ms, the latest at the end.
+  const READERS_PUSH_MS = 250
+  let readersTimer = null
+  let readersAt = 0
+  function pushReaders() {
+    if (readersTimer) return
+    const wait = readersAt + READERS_PUSH_MS - Date.now()
+    readersTimer = setTimeout(
+      () => {
+        readersTimer = null
+        readersAt = Date.now()
+        if (sharing) pushHost()
+      },
+      Math.max(0, wait)
+    )
+    readersTimer.unref?.()
+  }
 
   // Which project of a share each of its terminals is in, from the layouts (a
   // pane listed in two is the first one's): only these panes are shared.
@@ -507,7 +527,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         projects: () => sharedProjects(s),
         paneProject: (id) => homes(s).get(id) || null,
         chatProject: (id) => chatHomes(s).get(id) || null,
-        onChatsWatched: () => sharing === s && pushHost(),
+        onChatsWatched: () => sharing === s && pushReaders(),
         ...(chatReader ? { chatWatch: (id, on) => (on ? openFeed(s, id) : closeFeed(id)) } : {}),
         snapshot,
         write: (id, data) => host.send('write', { id, data }),
@@ -1030,14 +1050,21 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
           if (payload.ok) {
             const events = mergeChatEvents(entry.events, payload)
             if (!events) {
-              // Out of step with the host: all of it again.
+              // Out of step with the host: all of it again (a few times a
+              // minute at most; the view keeps what it shows meanwhile).
               entry.events = null
-              client.chat(remoteId, false)
-              client.chat(remoteId, true)
+              const t0 = Date.now()
+              entry.resyncs = (entry.resyncs || []).filter((x) => t0 - x < 60000)
+              if (entry.resyncs.length < GUEST_RESYNCS_PER_MINUTE) {
+                entry.resyncs.push(t0)
+                client.resyncChat(remoteId)
+              }
               return
             }
             entry.events = events
-            entry.last = { ok: true, events, truncated: payload.truncated }
+            // What the chat ignores (an event the host's Tessel knows and
+            // this one does not) is kept for the next update, not shown.
+            entry.last = { ok: true, events: events.filter((e) => e.type !== 'skip'), truncated: payload.truncated }
           } else {
             entry.events = null
             entry.last = payload

@@ -102,7 +102,8 @@ describe('shareChat: what a guest gets of a conversation', () => {
 
   it('the guest checks what comes again: unknown kinds and fields dropped, codes kept to known ones', () => {
     const msg = cleanChatMessage({ ok: true, events: [{ type: 'assistant', messageId: 'm1', text: 'hi', extra: 'x' }, { type: 'approval', requestId: 'r1' }, { type: 'user', id: '../bad id', text: 'x' }], truncated: false })
-    expect(msg).toEqual({ ok: true, from: 0, events: [{ type: 'assistant', messageId: 'm1', text: 'hi', imported: true }], truncated: false })
+    // One for one with the host's (what is not known: kept, ignored by the chat).
+    expect(msg).toEqual({ ok: true, dropped: 0, from: 0, events: [{ type: 'assistant', messageId: 'm1', text: 'hi', imported: true }, { type: 'skip' }, { type: 'skip' }], total: 3, truncated: false })
     expect(cleanChatMessage({ ok: false, code: 'constructor' })).toEqual({ ok: false, code: 'error' })
     expect(cleanChatMessage({ ok: false, code: 'missing' })).toEqual({ ok: false, code: 'missing' })
     expect(cleanChatMessage(null)).toBe(null)
@@ -452,6 +453,20 @@ describe('registerLiveShare: a guest looks at a host’s agent pane as a chat', 
     await until(() => host.last('liveShare:host').reading.length === 0)
   })
 
+  it('guests starting and stopping a watch over and over: the host’s window is told at most every 250 ms', async () => {
+    const { host, guest } = await sharedAndJoined()
+    const before = host.events('liveShare:host').length
+    for (let i = 0; i < 10; i++) {
+      await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: true })
+      await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: false })
+    }
+    await wait(700)
+    const told = host.events('liveShare:host').length - before
+    expect(told).toBeGreaterThan(0)
+    expect(told).toBeLessThanOrEqual(4)
+    expect(host.last('liveShare:host').reading).toEqual([])
+  })
+
   it('a conversation file not there: read again a few times, less and less often, then left alone', async () => {
     const reader = fakeReader()
     reader.missing = true
@@ -491,7 +506,7 @@ describe('review fixes: what never reaches a guest', () => {
       '<teammate-message from="Bob">TEAM SECRET</teammate-message>',
       '<cross-session-message>OTHER SESSION</cross-session-message>',
       'This session is being continued from a previous conversation that ran out of context. SUMMARY',
-      'Another Claude session sent a message: X',
+      'Another Claude session sent a message:\n<cross-session-message from="s2">OTHER</cross-session-message>',
       '[Tessel] Ada finished the task "x": REPORT',
       '(message m-1, reply to m-0) WORKER WORDS'
     ]
@@ -600,13 +615,152 @@ describe('review fixes: conversation updates over the wire', () => {
     const t = fakeTessel()
     t.answers = { Alex: { yes: true, projects: ['ws-a'] } }
     const alex = await joined(await share(t), 'Alex')
-    // Not its project: each answered "unavailable", up to the limit.
+    // Not its project: each answered "unavailable", up to the limit; then
+    // "busy" once for that pane, and nothing more.
     for (let i = 0; i < 40; i++) alex.client.chat('b1', true)
     await wait(300)
-    expect(alex.chats).toHaveLength(30)
+    expect(alex.chats).toHaveLength(31)
+    expect(alex.chats.slice(0, 30).every(([, m]) => m.code === 'unavailable')).toBe(true)
+    expect(alex.chats[30][1]).toMatchObject({ ok: false, code: 'busy' })
     // Past the limit: not even watched.
     alex.client.chat('a1', true)
     await wait(100)
     expect(t.watching).toEqual([])
+  })
+})
+
+describe('second review: what never reaches a guest, and what does', () => {
+  const roots = cleanRoots(['C:\\Proj\\app'])
+  const g = (x) => guestText(x, roots, 4000)
+  const user = (text) => guestChatPayload({ ok: true, events: [{ type: 'user', id: 'hist-u1', text }] }, ['C:\\Proj\\app']).events.map((e) => e.text)
+
+  it('%-encoding is undone on the host until nothing changes', () => {
+    expect(g('C%253A%255CUsers%255Cjean%255Csecret.txt')).toBe('…')
+    expect(g('C%25253A%25255CUsers%25255Cjean')).toBe('…')
+  })
+
+  it('a drive path stuck to the text before it is still a path; an address is not', () => {
+    expect(g('Error:C:\\Users\\jean\\x.txt')).toBe('Error:…')
+    expect(g('\x1b[1mxC:\\Users\\jean\\x\x1b[0m')).toBe('x…')
+    expect(g('C:\\\\Users\\\\jean\\\\x')).toBe('…')
+    expect(g('see https://example.com/a/b and http://localhost:8080/x/y')).toBe('see https://example.com/a/b and http://localhost:8080/x/y')
+  })
+
+  it('a path with spaces whose last part is a file name', () => {
+    expect(g('C:\\Users\\jean\\My Files\\plan 2026.docx')).toBe('…')
+    expect(g('C:\\Proj\\app\\docs\\plan 2026.docx, then more')).toBe('docs/plan 2026.docx, then more')
+  })
+
+  it('a harness block inside a prompt is cut to its last closing tag; one never closed only when it starts a line', () => {
+    expect(user('please check\n<task-notification>REPORT </task-notification> MORE REPORT</task-notification>')).toEqual(['please check'])
+    expect(user('fix this\n<system-reminder>SECRET never closed')).toEqual(['fix this'])
+    expect(user('what does <system-reminder> mean in Claude Code?')).toEqual(['what does <system-reminder> mean in Claude Code?'])
+  })
+
+  it('a prompt that only starts like the harness is kept; the harness’s exact forms are not', () => {
+    expect(user('A message arrived from my colleague: can you check?')).toEqual(['A message arrived from my colleague: can you check?'])
+    expect(user('No response requested. Just read the file.')).toEqual(['No response requested. Just read the file.'])
+    expect(user('(message 42) is the error I get')).toEqual(['(message 42) is the error I get'])
+    expect(user('Another Claude session sent a message:\n<cross-session-message from="s2">OTHER</cross-session-message>')).toEqual([])
+    expect(user('No response requested.')).toEqual([])
+    expect(user('(message 1760000000-pane-3, reply to 1759-pane-1) WORKER WORDS')).toEqual([])
+    expect(user('[Request interrupted by user]')).toEqual([])
+  })
+
+  it('more keys masked: Grafana, DigitalOcean, xAI, a password stuck to -p', () => {
+    for (const secret of ['glsa_abcdefghijklmnopqrstuvwxyz012345', 'dop_v1_abcdefghijklmnopqrstuvwxyz0123456789', 'xai-abcdefghijklmnopqrstuvwxyz0123']) expect(g(`use ${secret} here`)).toBe('use •••• here')
+    expect(g('mysql -uroot -pS3cretPw shop')).toBe('mysql -uroot -p•••• shop')
+    expect(g('mkdir -p build && cp -r a b')).toBe('mkdir -p build && cp -r a b')
+  })
+
+  it('the guest takes the host’s events as they are, one for one, and never decodes them again', () => {
+    const msg = cleanChatMessage({ ok: true, events: [{ type: 'user', id: 'hist-u1', text: 'C%3A%5CUsers' }, { type: 'approval', requestId: 'r' }, { type: 'assistant', messageId: 'm1', text: 'ok' }] })
+    expect(msg.events).toHaveLength(3)
+    expect(msg.events[0].text).toBe('C%3A%5CUsers')
+    expect(msg.events[1]).toEqual({ type: 'skip' })
+    expect(msg.total).toBe(3)
+  })
+
+  it('an update that does not line up is never merged: its counts must match', () => {
+    const have = [1, 2, 3].map((i) => ({ type: 'assistant', messageId: `m${i}`, text: `t${i}`, imported: true }))
+    const add = { type: 'assistant', messageId: 'm4', text: 't4', imported: true }
+    expect(mergeChatEvents(have, { ok: true, dropped: 1, from: 2, events: [add], total: 3 }).map((e) => e.text)).toEqual(['t2', 't3', 't4'])
+    expect(mergeChatEvents(have, { ok: true, dropped: 0, from: 2, events: [add], total: 4 })).toBe(null)
+    expect(mergeChatEvents(have, { ok: true, dropped: 2, from: 2, events: [add], total: 3 })).toBe(null)
+    expect(mergeChatEvents(have.slice(0, 2), { ok: true, dropped: 0, from: 3, events: [add], total: 4 })).toBe(null)
+  })
+})
+
+describe('second review: over the wire', () => {
+  let host
+  afterEach(() => host?.stop())
+  const ev = (i, text = `m${i}`) => ({ type: 'assistant', messageId: `m${i}`, text, imported: true })
+  async function share(t) {
+    const secret = newSecret()
+    host = createShareHost({ secret, hostName: 'Ada', callbacks: t.callbacks })
+    return { secret, port: await host.start() }
+  }
+  async function joined({ port, secret }, name) {
+    const r = recorder()
+    r.client = createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret, name, signingKey: newSigningKey(), callbacks: r.callbacks })
+    r.client.connect()
+    await until(() => r.states.includes('joined') && r.projects)
+    return r
+  }
+
+  it('a stop for a conversation the guest does not watch changes nothing (no flood of the host’s window)', async () => {
+    const t = fakeTessel()
+    let changes = 0
+    t.callbacks.onChatsWatched = () => changes++
+    const conn = await share(t)
+    const alex = await joined(conn, 'Alex')
+    const bea = await joined(conn, 'Bea')
+    bea.client.chat('a1', true)
+    await until(() => changes === 1)
+    for (let i = 0; i < 300; i++) alex.client.chat('a1', false)
+    await wait(200)
+    expect(changes).toBe(1)
+    expect(host.chatsWatched()).toEqual([{ id: 'a1', guests: [host.guests().find((x) => x.name === 'Bea').id] }])
+  })
+
+  it('when the window slides, a guest gets how many of its oldest events go, and only the new ones', async () => {
+    const t = fakeTessel()
+    const alex = await joined(await share(t), 'Alex')
+    alex.client.chat('a1', true)
+    await until(() => t.watching.length)
+    host.sendChat('a1', { ok: true, events: [1, 2, 3, 4, 5].map((i) => ev(i)) })
+    await until(() => alex.chats.length === 1)
+    await wait(1050)
+    host.sendChat('a1', { ok: true, events: [3, 4, 5, 6, 7].map((i) => ev(i)) })
+    await until(() => alex.chats.length === 2)
+    expect(alex.chats[1][1]).toMatchObject({ dropped: 2, from: 3, events: [ev(6), ev(7)], total: 5 })
+    const merged = mergeChatEvents(mergeChatEvents([], cleanChatMessage(alex.chats[0][1])), cleanChatMessage(alex.chats[1][1]))
+    expect(merged.map((e) => e.text)).toEqual(['m3', 'm4', 'm5', 'm6', 'm7'])
+  })
+
+  it('all of it again, on its own small limit; past the asks’ limit, “busy” once per pane', async () => {
+    const t = fakeTessel()
+    t.answers = { Alex: { yes: true, projects: ['ws-a'] } }
+    const alex = await joined(await share(t), 'Alex')
+    alex.client.chat('a1', true)
+    await until(() => t.watching.length)
+    host.sendChat('a1', { ok: true, events: [ev(1), ev(2)] })
+    await until(() => alex.chats.length === 1)
+    // Use up the asks (not its project: "unavailable" each time).
+    for (let i = 0; i < 29; i++) alex.client.chat('b1', true)
+    await until(() => alex.chats.length === 30)
+    alex.client.chat('b1', true)
+    alex.client.chat('b1', true)
+    alex.client.chat('a2', true)
+    await wait(200)
+    const busy = alex.chats.slice(30)
+    expect(busy.map(([id, m]) => [id, m.code])).toEqual([
+      ['b1', 'busy'],
+      ['a2', 'busy']
+    ])
+    // A resync still works: the whole conversation again.
+    alex.client.resyncChat('a1')
+    await until(() => alex.chats.length === 33)
+    expect(alex.chats[32][1]).toMatchObject({ ok: true, dropped: 0, from: 0, events: [ev(1), ev(2)], total: 2 })
   })
 })
