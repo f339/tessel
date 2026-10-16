@@ -305,7 +305,7 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     const page = embeddedIn('mcp')
     expect(calls.mcpList).toBeGreaterThan(0)
     expect(page.text()).toContain('context7')
-    expect(page.findAll('.launch-seg-btn').map((b) => b.text())).toEqual(expect.arrayContaining(['Catalog', 'Custom', 'Team connections']))
+    expect(page.findAll('[role="tab"]').map((b) => b.text())).toEqual(expect.arrayContaining(['Catalog', 'Custom']))
     const mcp = wrapper.findComponent(McpDialog)
     expect(mcp.props('cwd')).toBe('/p')
 
@@ -321,6 +321,14 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     embeddedIn('skills')
   })
 
+  it('the team connections link of MCP servers opens Orchestration', async () => {
+    wrapper = mountAt('mcp')
+    await flushPromises()
+    await wrapper.get('.set-page[data-page="mcp"] .mcp-orchestration-link').trigger('click')
+    await flushPromises()
+    expect(visiblePages(wrapper)).toEqual(['orchestration'])
+  })
+
   it("Orchestration's Details opens the MCP servers page on Team connections", async () => {
     wrapper = mountAt('orchestration')
     await flushPromises()
@@ -328,12 +336,13 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     await details.trigger('click')
     await flushPromises()
     expect(visiblePages(wrapper)).toEqual(['mcp'])
-    expect(wrapper.get('.set-page[data-page="mcp"] .launch-seg-btn.on').text()).toBe('Team connections')
+    expect(wrapper.find('.set-page[data-page="mcp"] .mcp-connections').exists()).toBe(true)
     // Another page, then back: on Installed again.
     await wrapper.get('.set-nav-item[data-page="agents"]').trigger('click')
     await wrapper.get('.set-nav-item[data-page="mcp"]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('.set-page[data-page="mcp"] .launch-seg-btn.on').text()).toContain('Installed')
+    expect(wrapper.find('.set-page[data-page="mcp"] .mcp-connections').exists()).toBe(false)
+    expect(wrapper.get('.set-page[data-page="mcp"] [role="tab"][aria-selected="true"]').text()).toContain('Installed')
   })
 
   it('search finds both pages by name, without loading their windows', async () => {

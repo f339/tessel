@@ -864,7 +864,7 @@
     },
     "mcp": {
       "installed": "Serveurs installés",
-      "installedHint": "Tous les serveurs MCP de vos agents, le catalogue, vos propres serveurs et les connexions d'équipe.",
+      "installedHint": "Tous les serveurs MCP de vos agents, le catalogue et vos propres serveurs.",
       "open": "Ouvrir Serveurs MCP"
     }
   },

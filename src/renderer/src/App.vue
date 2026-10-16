@@ -13191,6 +13191,12 @@ onBeforeUnmount(() => {
           skillsOpen = true
         }
       "
+      @orchestration="
+        () => {
+          mcpOpen = false
+          openSettingsAt('orchestration')
+        }
+      "
       @close="closeMcp"
     />
 

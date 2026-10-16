@@ -206,7 +206,19 @@ export function configToEntry(agent, cfg, extra = {}) {
   return { ...e, ...extra }
 }
 
-// -> { servers: [{ name, type, target }], error }
+// { envKeys, headerKeys }: the names of a server's environment variables and
+// headers, never their values; each only when there is one.
+export function secretNames(cfg = {}) {
+  const names = (o) => (o && typeof o === 'object' && !Array.isArray(o) ? Object.keys(o).filter(Boolean) : [])
+  const out = {}
+  const envKeys = names(cfg.env)
+  const headerKeys = names(cfg.headers)
+  if (envKeys.length) out.envKeys = envKeys
+  if (headerKeys.length) out.headerKeys = headerKeys
+  return out
+}
+
+// -> { servers: [{ name, type, target, envKeys?, headerKeys? }], error }
 export function listJsonAgent(agent, home) {
   const file = settingsFile(agent, home)
   if (!file) return { servers: [], error: t('main.jsonAgents.unknownAgent', 'Unknown agent.') }
@@ -224,7 +236,7 @@ export function listJsonAgent(agent, home) {
     // `agy mcp disable` keeps a server with "disabled": true, Muse's with
     // "enabled": false.
     const off = (agent === 'antigravity' && e && e.disabled === true) || (agent === 'muse' && e && e.enabled === false)
-    servers.push({ name, scope: 'user', type: cfg.transport === 'http' ? 'http' : 'stdio', target, ...(off ? { enabled: false } : {}) })
+    servers.push({ name, scope: 'user', type: cfg.transport === 'http' ? 'http' : 'stdio', target, ...(off ? { enabled: false } : {}), ...secretNames(cfg) })
   }
   return { servers, error: null }
 }

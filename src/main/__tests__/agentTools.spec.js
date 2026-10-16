@@ -7,6 +7,7 @@ import {
   psQuote,
   claudeServersFromConfig,
   codexServersFromList,
+  testMcpSpec,
   slugify,
   normalizeServerConfig,
   parseRpcBody,
@@ -115,11 +116,13 @@ describe('claudeServersFromConfig', () => {
       'local:local1',
       'project:shared'
     ])
-    expect(list[1]).toEqual({ name: 'fs', scope: 'user', type: 'stdio', target: 'cmd /c npx fs' })
+    expect(list[1]).toEqual({ name: 'fs', scope: 'user', type: 'stdio', target: 'cmd /c npx fs', envKeys: ['TOKEN'] })
   })
-  it('never exposes env values or headers', () => {
-    const text = JSON.stringify(claudeServersFromConfig(claudeJson, null, null))
-    expect(text).not.toContain('secret')
+  it('never exposes env values or headers, only their names', () => {
+    const list = claudeServersFromConfig(claudeJson, null, null)
+    expect(JSON.stringify(list)).not.toContain('secret')
+    expect(list[0].headerKeys).toEqual(['A'])
+    expect(list[1].envKeys).toEqual(['TOKEN'])
   })
   it('copes with missing config', () => {
     expect(claudeServersFromConfig(null, null, null)).toEqual([])
@@ -132,15 +135,38 @@ describe('codexServersFromList', () => {
       {
         name: 'a',
         enabled: true,
-        transport: { type: 'stdio', command: 'node', args: ['s.js'], env: { K: 'secret' } }
+        transport: { type: 'stdio', command: 'node', args: ['s.js'], env: { K: 'secret' }, env_vars: ['PASSED'] }
       },
-      { name: 'b', enabled: false, transport: { type: 'streamable_http', url: 'https://b' } }
+      { name: 'b', enabled: false, transport: { type: 'streamable_http', url: 'https://b', http_headers: { 'X-Key': 'secret' } } }
     ])
     expect(list).toEqual([
-      { name: 'a', scope: 'user', type: 'stdio', target: 'node s.js', enabled: true },
-      { name: 'b', scope: 'user', type: 'http', target: 'https://b', enabled: false }
+      { name: 'a', scope: 'user', type: 'stdio', target: 'node s.js', envKeys: ['K', 'PASSED'], enabled: true },
+      { name: 'b', scope: 'user', type: 'http', target: 'https://b', headerKeys: ['X-Key'], enabled: false }
     ])
     expect(JSON.stringify(list)).not.toContain('secret')
+  })
+})
+
+// "Test before adding" (Settings > MCP servers > Custom): the form's values,
+// checked first, then started like a configured server; nothing is written.
+describe('testMcpSpec', () => {
+  it('refuses a bad URL, an empty command or a bad variable line without starting anything', async () => {
+    const calls = []
+    const spawnFn = (...a) => calls.push(a)
+    expect((await testMcpSpec({ transport: 'http', url: 'ftp://x' }, {}, spawnFn)).status).toBe('error')
+    expect((await testMcpSpec({ transport: 'stdio', commandLine: '  ' }, {}, spawnFn)).error).toMatch(/command/)
+    expect((await testMcpSpec({ transport: 'stdio', commandLine: 'node s.js', env: 'NOEQUALS' }, {}, spawnFn)).status).toBe('error')
+    expect(calls).toEqual([])
+  })
+  it("starts the command with the form's variables over the environment", async () => {
+    const calls = []
+    const spawnFn = (cmd, args, opts) => {
+      calls.push([cmd, args, opts.env])
+      throw new Error('not here')
+    }
+    const res = await testMcpSpec({ transport: 'stdio', commandLine: 'node "my server.js" --x', env: 'API_KEY=k1' }, { PATH: 'p' }, spawnFn)
+    expect(res).toMatchObject({ ok: false, status: 'error', error: 'not here' })
+    expect(calls).toEqual([['node', ['my server.js', '--x'], { PATH: 'p', API_KEY: 'k1' }]])
   })
 })
 
