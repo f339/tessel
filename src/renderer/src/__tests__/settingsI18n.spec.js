@@ -42,7 +42,15 @@ describe('Settings in French', () => {
     await wrapper.get('.set-search input').setValue('graisse')
     await nextTick()
     await nextTick()
-    expect(visiblePages(wrapper)).toEqual(['text'])
+    expect(visiblePages(wrapper)).toEqual(['terminal'])
+    // Text is Terminal's Font group now: its old title (Texte), or "font", finds it.
+    for (const word of ['texte', 'font']) {
+      await wrapper.get('.set-search input').setValue(word)
+      await nextTick()
+      await nextTick()
+      expect(visiblePages(wrapper)).toContain('terminal')
+      expect(wrapper.get('#settings-font-weight').element.closest('[hidden]')).toBeNull()
+    }
     await wrapper.get('.set-search input').setValue('appearance')
     await nextTick()
     await nextTick()

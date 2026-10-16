@@ -471,7 +471,7 @@ const ignored = computed(() => ignoredSet(status.value))
 // for its Changes count either.
 watch(ignored, (set) => rememberIgnored(props.root, set))
 
-// Settings > Appearance, "Show Git-Ignored Files" off: hidden.
+// Settings > Editor > Files, "Show Git-ignored files" off: hidden.
 const hiddenEntry = (e) => !settings.showGitIgnoredFiles && ignoredOf(e.path)
 // What is being renamed or getting a new child stands on its own row.
 const noJoin = computed(() => {

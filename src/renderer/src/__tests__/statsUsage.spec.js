@@ -3,7 +3,7 @@ import { settings } from '../settings'
 import { flushPromises, mount } from '@vue/test-utils'
 import { toBlob } from 'html-to-image'
 import StatsUsage from '../components/StatsUsage.vue'
-import { tokens } from '../components/stats/statsFormat'
+import { tokens, money } from '../components/stats/statsFormat'
 
 vi.mock('html-to-image', () => ({ toBlob: vi.fn() }))
 
@@ -313,6 +313,78 @@ describe('Orca Stats & usage port', () => {
       'Clipboard unavailable'
     )
     expect(wrapper.get('[data-test="stats-copy-image"]').text()).toBe('Copy image')
+  })
+
+  it('shows a loading state while it looks for the agents, never an empty one', async () => {
+    let answer
+    api.listAgents.mockImplementation(() => new Promise((resolve) => (answer = resolve)))
+    await open()
+    expect(wrapper.find('[data-test="panel-loading"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="stats-overview"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Start tracking')
+    expect(wrapper.text()).not.toContain('No usage history')
+    expect(wrapper.find('[data-test="usage-visibility"]').exists()).toBe(false)
+    answer([{ id: 'claude', available: true }])
+    await flushPromises()
+    expect(wrapper.find('[data-test="panel-loading"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="stats-overview"]').exists()).toBe(true)
+  })
+
+  it('says what failed in a sentence, the raw message behind Details, with Retry', async () => {
+    api.statsUsage.summary.mockRejectedValue(new Error('EACCES: permission denied, open C:/x/data.json'))
+    api.listAgents.mockRejectedValueOnce(new Error('listAgents failed'))
+    await open()
+    const activity = wrapper.get('[data-test="stats-activity-error"]')
+    expect(activity.get('.set-callout-text').text()).toBe('Could not read activity statistics.')
+    expect(activity.get('details').text()).toContain('EACCES')
+    const catalog = wrapper.get('[data-test="stats-catalog-error"]')
+    expect(catalog.get('.set-callout-text').text()).not.toContain('listAgents failed')
+    expect(wrapper.find('[data-test="stats-overview"]').exists()).toBe(false)
+    await catalog.get('button').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="stats-catalog-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="stats-overview"]').exists()).toBe(true)
+  })
+
+  it('an empty history is one sentence, not zeros; "nothing found" is not an error', async () => {
+    const empty = (provider, query) =>
+      report(provider, query, {
+        totals: { input: 0, output: 0, turns: 0, sessions: 0, cacheRead: 0, cacheWrite: 0, cost: 0, cached: 0, reasoning: 0, total: 0 },
+        byDay: [],
+        byModel: [],
+        byProject: [],
+        sessions: []
+      })
+    api.claudeUsageReport.mockImplementation(async (query) => empty('claude', query))
+    api.codexUsageReport.mockImplementation(async () => ({ ok: false, code: 'none', error: 'No Codex usage found.' }))
+    await open()
+    const overview = wrapper.get('[data-test="stats-overview"]')
+    expect(overview.find('[data-test="stats-overview-empty"]').exists()).toBe(true)
+    expect(overview.find('.su-cards').exists()).toBe(false)
+    expect(overview.text()).not.toContain('$0.0000')
+    for (const id of ['claude', 'codex']) {
+      const card = overview.get(`[data-test="stats-overview-${id}"]`)
+      expect(card.text()).toContain('No usage found yet.')
+      expect(card.find('[role="alert"]').exists()).toBe(false)
+    }
+    expect(money(0)).toBe('$0.00')
+    expect(money(0.0042)).toBe('$0.0042')
+  })
+
+  it("puts a provider's notes in one About tooltip by its selection", async () => {
+    await open({ initialProvider: 'claude' })
+    const pane = wrapper.get('[data-test="stats-pane-claude"]')
+    const about = pane.get('[data-test="stats-about"]')
+    const tip = pane.get(`#${about.attributes('aria-describedby')}`)
+    expect(tip.attributes('role')).toBe('tooltip')
+    expect(tip.element.hidden).toBe(true)
+    expect(tip.text()).toContain('Cache reuse rate is calculated')
+    expect(tip.text()).toContain('not your subscription bill')
+    expect(pane.findAll('p.su-muted').filter((p) => /subscription bill|Cache reuse rate is/.test(p.text()))).toHaveLength(0)
+    await about.trigger('click')
+    expect(tip.element.hidden).toBe(false)
+    await about.trigger('keydown', { key: 'Escape' })
+    expect(tip.element.hidden).toBe(true)
   })
 
   it('supports dropdown Escape without closing Settings and dismisses filters on outside click', async () => {

@@ -1,5 +1,8 @@
 <script setup>
+// Stats & Usage > Reset history: the limit resets asked for in Tessel on
+// this computer, and the Codex credit records read on click.
 import { ref, watch, onBeforeUnmount } from 'vue'
+import { ChevronRight } from 'lucide-vue-next'
 import { t, intlLocale } from '../i18n'
 const props = defineProps({
   provider: { type: String, default: undefined },
@@ -26,6 +29,16 @@ const outcomes = {
   error: () => t('usage.history.outcome.error', 'Failed'),
   pending: () => t('usage.history.resultUnknown', 'Result unknown')
 }
+// The outcome's tag: done, failed, unsure, or neutral (nothing to reset…).
+const outcomeTag = (row) =>
+  row.uncertain || row.outcome === 'pending'
+    ? 'tag-warn'
+    : row.outcome === 'reset'
+      ? 'tag-ok'
+      : row.outcome === 'error'
+        ? 'tag-danger'
+        : ''
+const providerName = (row) => (row.provider === 'codex' ? 'Codex' : 'Claude') // product names // i18n-ignore
 const outcomeText = (row) =>
   row.uncertain
     ? t('usage.history.resultUnknown', 'Result unknown')
@@ -125,20 +138,22 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="reset-history" :class="{ compact }" data-test="reset-history">
-    <div class="rh-heading">
-      <button
-        type="button"
-        class="rh-title"
-        :aria-expanded="expanded"
-        @click="expanded = !expanded"
-      >
-        {{ t('usage.history.title', 'Reset history') }}
-        <span aria-hidden="true">{{ expanded ? '−' : '+' }}</span>
-      </button>
-      <button v-if="expanded" type="button" class="rh-button" :disabled="busy" @click="load">
+    <header class="rh-heading">
+      <h4 class="rh-head">
+        <button
+          type="button"
+          class="rh-title"
+          :aria-expanded="expanded"
+          @click="expanded = !expanded"
+        >
+          <ChevronRight :size="14" class="rh-chevron" :class="{ open: expanded }" aria-hidden="true" />
+          {{ t('usage.history.title', 'Reset history') }}
+        </button>
+      </h4>
+      <button v-if="expanded" type="button" class="exit-btn small rh-button" :disabled="busy" @click="load">
         {{ t('usage.history.refresh', 'Refresh') }}
       </button>
-    </div>
+    </header>
     <div v-if="expanded">
       <p class="rh-muted">
         {{
@@ -149,21 +164,25 @@ onBeforeUnmount(() => {
       <p v-if="busy" role="status" class="rh-muted">
         {{ t('usage.history.loading', 'Loading history…') }}
       </p>
-      <p v-if="error" class="rh-error" role="alert">{{ error }}</p>
+      <!-- A failed read: one sentence, the raw message behind Details. -->
+      <div v-if="error" class="set-callout warn rh-callout" role="alert">
+        <span class="set-callout-text">{{ t('usage.history.readError', 'Could not read reset history.') }}</span>
+        <details class="set-more rh-more">
+          <summary>{{ t('usage.history.details', 'Details') }}</summary>
+          <p>{{ error }}</p>
+        </details>
+      </div>
       <p v-else-if="!busy && !rows.length" class="rh-muted">
         {{ t('usage.history.empty', 'No resets recorded yet.') }}
       </p>
       <ol v-if="rows.length" class="rh-list">
         <li v-for="row in rows.slice(0, visible)" :key="row.id" class="rh-row">
           <div class="rh-line">
-            <strong :class="{ 'rh-error': row.uncertain || row.outcome === 'error' }">{{
-              outcomeText(row)
-            }}</strong
-            ><time>{{ date(row.at) }}</time>
-          </div>
-          <div class="rh-muted">
-            {{ row.provider === 'codex' ? 'Codex' : 'Claude' }} · {{ row.accountLabel }}
-            <span v-if="row.accountId" :title="row.accountId">({{ row.accountId }})</span>
+            <span class="rh-what">
+              <span class="tag" :class="outcomeTag(row)">{{ outcomeText(row) }}</span>
+              <span class="rh-account">{{ providerName(row) }}<template v-if="row.accountLabel"> · {{ row.accountLabel }}</template></span>
+            </span>
+            <time>{{ date(row.at) }}</time>
           </div>
           <div
             class="rh-muted"
@@ -187,7 +206,7 @@ onBeforeUnmount(() => {
                 : t('usage.history.requestFailed', 'The request failed before a reset was confirmed.')
             }}
           </p>
-          <details v-if="row.windows?.length" class="rh-windows">
+          <details v-if="row.windows?.length" class="set-more rh-windows">
             <summary>{{ t('usage.history.windows', 'Windows observed before request') }}</summary>
             <div
               v-for="(win, i) in row.windows"
@@ -206,14 +225,14 @@ onBeforeUnmount(() => {
       <button
         v-if="rows.length > visible"
         type="button"
-        class="rh-button"
+        class="exit-btn small"
         @click="visible += 20"
         v-text="t('usage.history.showMore', 'Show more ({{count}})', { count: rows.length - visible })"
       ></button>
       <div v-if="!provider || provider === 'codex'" class="rh-provider">
         <button
           type="button"
-          class="rh-button"
+          class="exit-btn small"
           :disabled="remoteBusy"
           data-test="reset-provider-credits"
           @click="loadCredits"
@@ -230,7 +249,9 @@ onBeforeUnmount(() => {
             )
           }}
         </p>
-        <p v-if="remoteError" class="rh-error" role="alert">{{ remoteError }}</p>
+        <div v-if="remoteError" class="set-callout warn rh-callout" role="alert">
+          <span class="set-callout-text">{{ remoteError }}</span>
+        </div>
         <template v-if="remote">
           <p class="rh-muted">{{ remote.label }} · {{ date(remote.observedAt) }}</p>
           <p v-if="!remote.available" class="rh-muted">
@@ -243,7 +264,7 @@ onBeforeUnmount(() => {
           </p>
           <ul v-else class="rh-list rh-credits">
             <li v-for="(credit, i) in remote.entries" :key="i" class="rh-row">
-              <strong>{{ credit.status }}</strong>
+              <span class="tag">{{ credit.status }}</span>
               <div
                 class="rh-muted"
                 v-text="
@@ -265,16 +286,19 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* The Stats & Usage page's type: 14 px headings, 13 px rows, 12 px notes,
+   in a panel like the page's others. */
 .reset-history {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
-  font-size: 12px;
   min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+  color: var(--text);
+  font-size: 13px;
 }
 .reset-history.compact {
-  margin-top: 12px;
-  padding-top: 10px;
+  padding: 10px 12px;
 }
 .rh-heading,
 .rh-line {
@@ -284,65 +308,84 @@ onBeforeUnmount(() => {
   gap: 8px;
   flex-wrap: wrap;
 }
-.rh-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font: inherit;
+.rh-head {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 14px;
   font-weight: 600;
-  color: inherit;
+  line-height: 1.4;
+}
+.rh-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
   border: 0;
   background: none;
-  padding: 3px 0;
-  cursor: pointer;
-}
-.rh-button {
-  font: inherit;
   color: inherit;
-  border: 1px solid var(--border);
-  background: transparent;
-  border-radius: 5px;
-  padding: 4px 8px;
+  font: inherit;
   cursor: pointer;
 }
-.rh-button:disabled {
-  opacity: 0.5;
-  cursor: default;
+.rh-title:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.rh-chevron {
+  color: var(--text-dim);
+  transition: transform 0.12s ease;
+}
+.rh-chevron.open {
+  transform: rotate(90deg);
 }
 .rh-muted,
 time {
-  color: var(--muted);
-  font-size: 11px;
+  color: var(--text-dim);
+  font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
 .rh-muted {
-  margin: 5px 0;
+  margin: 4px 0;
 }
-.rh-error {
-  color: var(--danger, #de877d);
+.rh-callout {
+  margin: 8px 0;
+}
+.rh-more {
+  flex: 1 1 100%;
+}
+.rh-more > p {
+  margin: 4px 0 0;
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 .rh-list {
   list-style: none;
   margin: 8px 0;
   padding: 0;
+  border-top: 1px solid var(--border);
 }
 .rh-row {
   padding: 9px 0;
   border-bottom: 1px solid var(--border);
   overflow-wrap: anywhere;
 }
-.rh-line strong {
-  font-weight: 500;
+.rh-what {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.rh-account {
+  color: var(--text-strong);
 }
 .rh-windows {
-  margin-top: 5px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.6;
+  margin-top: 4px;
 }
-.rh-windows summary {
-  cursor: pointer;
+.rh-windows > div {
+  color: var(--text-dim);
+  font-size: 12px;
 }
 .rh-provider {
   margin-top: 12px;

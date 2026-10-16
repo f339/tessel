@@ -138,9 +138,17 @@ describe('Settings > Windows and tools', { timeout: 30_000 }, () => {
 
   it('each row sits in its page and emits open-tool with its id', async () => {
     for (const [page, rows] of Object.entries(SETTINGS_TOOLS)) {
-      const group = wrapper.get(`.set-page[data-page="${page}"] [data-tools="${page}"]`)
-      expect(group.findAll('[data-open-tool]').map((b) => b.attributes('data-open-tool'))).toEqual(rows.map((r) => r.id))
+      // A page can show its rows in more than one group (General: Troubleshooting).
+      const groups = wrapper.findAll(`.set-page[data-page="${page}"] [data-tools="${page}"]`)
+      expect(groups.length).toBeGreaterThan(0)
+      const ids = groups.flatMap((g) => g.findAll('[data-open-tool]').map((b) => b.attributes('data-open-tool')))
+      expect([...ids].sort()).toEqual(rows.map((r) => r.id).sort())
     }
+    // General: logs and diagnostics under Troubleshooting, with the reset.
+    const trouble = wrapper.get('.set-page[data-page="general"] [data-group="troubleshooting"]')
+    expect(trouble.get('.set-group-title').text()).toBe('Troubleshooting')
+    expect(trouble.findAll('[data-open-tool]').map((b) => b.attributes('data-open-tool'))).toEqual(['logs', 'diagnostics'])
+    expect(trouble.find('[data-test="reset-settings"]').exists()).toBe(true)
     for (const id of SETTINGS_TOOL_IDS) await wrapper.get(`[data-open-tool="${id}"]`).trigger('click')
     expect(wrapper.emitted('open-tool').map((e) => e[0])).toEqual(SETTINGS_TOOL_IDS)
   })
@@ -384,9 +392,13 @@ describe('Settings: the sidebar and Source Control menu options', { timeout: 30_
     expect(settings.sidebarGroupBy).toBe('repo')
     expect(wrapper.find('#settings-project-order').exists()).toBe(true)
 
-    await wrapper.get('[data-card-property="ports"]').setValue(false)
+    // Card properties: toggle chips, pressed while shown.
+    const ports = wrapper.get('[data-card-property="ports"]')
+    expect(ports.attributes('aria-pressed')).toBe('true')
+    await ports.trigger('click')
     expect(settings.worktreeCardProperties).not.toContain('ports')
-    await wrapper.get('[data-card-property="ports"]').setValue(true)
+    expect(ports.attributes('aria-pressed')).toBe('false')
+    await ports.trigger('click')
     expect(settings.worktreeCardProperties).toContain('ports')
 
     await wrapper.findAll('[data-setting="agentActivityDisplayMode"] button')[1].trigger('click')

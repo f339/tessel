@@ -2795,7 +2795,7 @@ function applyRenderer() {
 }
 
 // Hide the mouse pointer while you type in the pane; it comes back as soon
-// as the mouse moves (Settings > Appearance, like Orca's).
+// as the mouse moves (Settings > Terminal, like Orca's).
 let mouseHidden = false
 function hideMouseOnType() {
   if (!settings.hideMouseWhileTyping || !hostEl.value || mouseHidden) return

@@ -1,10 +1,11 @@
 // The Settings pages for the settings taken from Orca: each row is there with
 // Orca's label, and its control changes the shared settings.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import SettingsDialog from '../components/SettingsDialog.vue'
 import { settings, resetSettings } from '../settings'
+import { selectOptions, setSelectValue } from './selectTestUtils'
 
 describe('Settings: the Orca settings', () => {
   let wrapper, previousApi
@@ -28,6 +29,13 @@ describe('Settings: the Orca settings', () => {
     await input.trigger('change')
     return input
   }
+  // A slider: moved to a value (its input event).
+  async function slide(id, value) {
+    const input = wrapper.get(`#${id}`)
+    input.element.value = String(value)
+    await input.trigger('input')
+    return input
+  }
 
   beforeEach(() => {
     resetSettings()
@@ -46,36 +54,64 @@ describe('Settings: the Orca settings', () => {
     }
   })
 
-  it('Editor: font family and the three diff options', async () => {
+  it('Editor: font family, the diff switches (a Diffs group) and the Files options', async () => {
     open('editor')
     await type('settings-editor-font', '  Fira Code ')
     expect(settings.editorFontFamily).toBe('Fira Code')
+    const diffs = wrapper.get('#set-editor [data-group="diffs"]')
+    expect(diffs.get('.set-group-title').text()).toBe('Diffs')
     for (const [label, key] of [
       ['Show whitespace in diffs', 'diffShowWhitespace'],
       ['Collapse unchanged regions', 'diffCollapseUnchanged'],
       ['Wrap lines in diffs', 'diffWordWrap']
     ]) {
       expect(settings[key]).toBe(false)
-      await clickSeg(label, 'On')
+      const r = row(label)
+      expect(r.findAll('.launch-seg-btn')).toHaveLength(0) // a switch, not Off/On
+      await r.get('input.set-switch').setValue(true)
       expect(settings[key]).toBe(true)
     }
+    // Moved from Appearance: the Files panel's options.
+    const files = wrapper.get('#set-editor [data-group="files"]')
+    await files.get('[data-setting="showGitIgnoredFiles"]').setValue(false)
+    expect(settings.showGitIgnoredFiles).toBe(false)
+    const compact = settings.explorerCompactFolders
+    await files.get('[data-test="settings-compact-folders"]').setValue(!compact)
+    expect(settings.explorerCompactFolders).toBe(!compact)
   })
 
-  it('Text: weights, line height and cursor opacity, kept in range', async () => {
-    open('text')
-    await type('settings-font-weight', 350)
-    expect(settings.fontWeight).toBe(350)
-    const bold = await type('settings-font-weight-bold', 2000)
-    expect(settings.fontWeightBold).toBe(900)
-    expect(bold.element.value).toBe('900')
+  it('Terminal: the font (the old Text page), weights as lists, line height and cursor opacity', async () => {
+    open('terminal')
+    const weight = wrapper.get('#settings-font-weight')
+    const labels = (await selectOptions(weight)).map((o) => o.text())
+    expect(labels).toHaveLength(9)
+    expect(labels[0]).toBe('Thin (100)')
+    expect(labels[3]).toBe('Normal (400)')
+    await setSelectValue(weight, 600)
+    expect(settings.fontWeight).toBe(600)
+    await setSelectValue(wrapper.get('#settings-font-weight-bold'), 800)
+    expect(settings.fontWeightBold).toBe(800)
+    // A weight saved before the lists (350) still shows, as itself.
+    settings.fontWeight = 350
+    await nextTick()
+    expect(wrapper.get('#settings-font-weight').text()).toBe('350')
     await type('settings-line-height', 1.25)
     expect(settings.lineHeight).toBe(1.25)
-    await type('settings-cursor-opacity', 0.4)
+    await slide('settings-cursor-opacity', 0.4)
     expect(settings.cursorOpacity).toBe(0.4)
+    // Moved from Appearance: the padding, and hiding the mouse.
+    await type('settings-pad-x', 12)
+    await type('settings-pad-y', 2)
+    expect([settings.terminalPaddingX, settings.terminalPaddingY]).toEqual([12, 2])
+    await row('Hide mouse while typing').get('input').setValue(true)
+    expect(settings.hideMouseWhileTyping).toBe(true)
+    // No icon before the shell list.
+    expect(wrapper.find('#set-terminal .set-shell').exists()).toBe(false)
   })
 
-  it('Appearance: UI Zoom, panes, padding, mouse, usage percentages, git-ignored files', async () => {
+  it('Appearance: four groups, UI zoom, sliders for the panes', async () => {
     open('appearance')
+    expect(wrapper.findAll('#set-appearance .set-group-title').map((h) => h.text())).toEqual(['Interface', 'Panes', 'Left sidebar', 'Status bar'])
     const zoom = row('UI zoom')
     expect(zoom.get('[data-test="ui-zoom-percent"]').text()).toBe('100%')
     await zoom.get('button[aria-label="Zoom in"]').trigger('click')
@@ -83,19 +119,52 @@ describe('Settings: the Orca settings', () => {
     expect(zoom.get('[data-test="ui-zoom-percent"]').text()).toBe('110%')
     await zoom.findAll('button').find((b) => b.text() === 'Reset').trigger('click')
     expect(settings.uiZoomLevel).toBe(0)
-    await type('settings-inactive-opacity', 0.5)
+    expect(wrapper.get('#settings-inactive-opacity').attributes('type')).toBe('range')
+    await slide('settings-inactive-opacity', 0.5)
     expect(settings.inactivePaneOpacity).toBe(0.5)
-    await type('settings-divider', 6)
+    expect(row('Inactive pane opacity').get('output').text()).toBe('50%')
+    expect(wrapper.get('#settings-divider').attributes('type')).toBe('range')
+    await slide('settings-divider', 6)
     expect(settings.dividerThickness).toBe(6)
-    await type('settings-pad-x', 12)
-    await type('settings-pad-y', 2)
-    expect([settings.terminalPaddingX, settings.terminalPaddingY]).toEqual([12, 2])
-    await row('Hide mouse while typing').get('input').setValue(true)
-    expect(settings.hideMouseWhileTyping).toBe(true)
+    expect(row('Divider thickness').get('output').text()).toBe('6 px')
+    // Moved out: usage to Stats & Usage, files to Editor, padding to Terminal.
+    const page = wrapper.get('#set-appearance')
+    for (const gone of ['Usage percentages', 'Usage refresh', 'Show Git-ignored files', 'Compact folders', 'Horizontal padding', 'Hide mouse while typing'])
+      expect(page.text()).not.toContain(gone)
+    // The status bar's indicators wait for the bar.
+    settings.statusBarVisible = false
+    await nextTick()
+    expect(wrapper.get('[data-status-item="ports"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('Stats & Usage: the usage menu settings, with the refresh as a list', async () => {
+    window.shellApi = {
+      providerUsage: {
+        capabilities: async () => ({
+          ok: true,
+          providers: [
+            { id: 'claude', name: 'Claude Code', report: true, quota: true },
+            { id: 'kimi', name: 'Kimi', report: false, quota: true }
+          ]
+        })
+      }
+    }
+    open('stats')
+    await flushPromises()
+    // Shown in the Usage menu (and the analytics): a chip per provider.
+    const kimi = wrapper.get('[data-usage-provider="kimi"]')
+    expect(kimi.attributes('aria-pressed')).toBe('true')
+    await kimi.trigger('click')
+    expect(settings.hiddenUsageProviders).toEqual(['kimi'])
+    expect(kimi.attributes('aria-pressed')).toBe('false')
+    await kimi.trigger('click')
+    expect(settings.hiddenUsageProviders).toEqual([])
     await clickSeg('Usage percentages', 'Remaining')
     expect(settings.usagePercentageDisplay).toBe('remaining')
-    await row('Show Git-ignored files').get('input').setValue(false)
-    expect(settings.showGitIgnoredFiles).toBe(false)
+    const refresh = wrapper.get('#settings-usage-refresh')
+    expect((await selectOptions(refresh)).map((o) => o.text())).toEqual(['Off', '2 min', '5 min', '15 min', '30 min', '60 min'])
+    await setSelectValue(refresh, 30)
+    expect(settings.usageRefreshMinutes).toBe(30)
   })
 
   it('Terminal: GPU Acceleration, Color Contrast, scroll speed, interaction and word separators', async () => {

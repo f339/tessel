@@ -1,6 +1,6 @@
 <script setup>
-// Settings > Editor: the code editor in Tessel panes.
-import { computed } from 'vue'
+// Settings > Editor: the code editor in Tessel panes, its diffs, and the
+// Files panel (moved from Appearance).
 import { t } from '../../i18n'
 import SettingsToolRows from '../SettingsToolRows.vue'
 import { settings, FONT_FAMILIES } from '../../settings'
@@ -8,11 +8,6 @@ import { PAGES } from './settingsPages'
 import { useSettingsShell } from './settingsShell'
 
 const { shown, emit } = useSettingsShell()
-
-const OFF_ON = computed(() => [
-  { id: false, label: t('settings.common.off', 'Off') },
-  { id: true, label: t('settings.common.on', 'On') }
-])
 </script>
 
 <template>
@@ -28,6 +23,7 @@ const OFF_ON = computed(() => [
       <p class="set-page-desc">{{ PAGES.editor.desc }}</p>
     </header>
     <div class="set-group">
+      <h3 class="set-group-title">{{ t('settings.editor.editing', 'Editing') }}</h3>
       <div class="set-card">
         <label class="set-row">
           <div class="set-label">
@@ -36,7 +32,7 @@ const OFF_ON = computed(() => [
           </div>
           <input v-model="settings.editorAutoSave" type="checkbox" class="set-switch" />
         </label>
-        <div v-if="settings.editorAutoSave" class="set-row">
+        <div v-if="settings.editorAutoSave" class="set-row set-row-nested">
           <label class="set-label" for="settings-autosave-ms">
             {{ t('settings.editor.saveAfter', 'Save after') }}
             <span class="set-hint">{{ t('settings.editor.saveAfterHint', 'Milliseconds without typing (250 to 10000)') }}</span>
@@ -73,17 +69,10 @@ const OFF_ON = computed(() => [
           </div>
           <input v-model="settings.editorPreviewTabs" type="checkbox" class="set-switch" />
         </label>
-        <label class="set-row">
-          <div class="set-label">
-            {{ t('settings.editor.sideBySide', 'Changes side by side') }}
-            <span class="set-hint">{{ t('settings.editor.sideBySideHint', 'Otherwise inline, in one column') }}</span>
-          </div>
-          <input v-model="settings.diffSideBySide" type="checkbox" class="set-switch" />
-        </label>
         <div class="set-row">
           <label class="set-label" for="settings-editor-font">
             {{ t('settings.editor.font', 'Editor font family') }}
-            <span class="set-hint">{{ t('settings.editor.fontHint', "Font used by file editors and diff views. Leave empty for VS Code's (Consolas).") }}</span>
+            <span class="set-hint">{{ t('settings.editor.fontHint', "For file editors and diffs. Empty: VS Code's (Consolas).") }}</span>
           </label>
           <input
             id="settings-editor-font"
@@ -113,64 +102,62 @@ const OFF_ON = computed(() => [
             @change="settings.editorFontSize = Math.min(100, Math.max(6, parseInt($event.target.value, 10) || 14)); $event.target.value = settings.editorFontSize"
           />
         </div>
-        <div class="set-row">
-          <div id="settings-diff-ws-label" class="set-label">
+      </div>
+    </div>
+    <div class="set-group" data-group="diffs">
+      <h3 class="set-group-title">{{ t('settings.editor.diffs', 'Diffs') }}</h3>
+      <p class="set-group-desc">{{ t('settings.editor.diffsDesc', 'How a file\'s changes show, in Source Control and in the editor.') }}</p>
+      <div class="set-card">
+        <label class="set-row">
+          <div class="set-label">
+            {{ t('settings.editor.sideBySide', 'Changes side by side') }}
+            <span class="set-hint">{{ t('settings.editor.sideBySideHint', 'Otherwise inline, in one column') }}</span>
+          </div>
+          <input v-model="settings.diffSideBySide" type="checkbox" class="set-switch" />
+        </label>
+        <label class="set-row">
+          <div class="set-label">
             {{ t('settings.editor.diffWhitespace', 'Show whitespace in diffs') }}
             <span class="set-hint">{{ t('settings.editor.diffWhitespaceHint', 'Show leading and trailing whitespace differences in diffs.') }}</span>
           </div>
-          <div class="launch-seg set-seg set-seg-small" role="group" aria-labelledby="settings-diff-ws-label">
-            <button
-              v-for="o in OFF_ON"
-              :key="String(o.id)"
-              type="button"
-              class="launch-seg-btn"
-              :class="{ on: settings.diffShowWhitespace === o.id }"
-              :aria-pressed="settings.diffShowWhitespace === o.id"
-              @click="settings.diffShowWhitespace = o.id"
-            >
-              {{ o.label }}
-            </button>
-          </div>
-        </div>
-        <div class="set-row">
-          <div id="settings-diff-collapse-label" class="set-label">
+          <input v-model="settings.diffShowWhitespace" type="checkbox" class="set-switch" data-setting="diffShowWhitespace" />
+        </label>
+        <label class="set-row">
+          <div class="set-label">
             {{ t('settings.editor.collapseUnchanged', 'Collapse unchanged regions') }}
-            <span class="set-hint">{{ t('settings.editor.collapseUnchangedHint', 'Show only changed lines and a little surrounding context in a file diff, hiding the rest behind expandable bands.') }}</span>
+            <span class="set-hint">{{ t('settings.editor.collapseUnchangedHint', 'Only the changed lines and a little context; the rest folds into bands.') }}</span>
           </div>
-          <div class="launch-seg set-seg set-seg-small" role="group" aria-labelledby="settings-diff-collapse-label">
-            <button
-              v-for="o in OFF_ON"
-              :key="String(o.id)"
-              type="button"
-              class="launch-seg-btn"
-              :class="{ on: settings.diffCollapseUnchanged === o.id }"
-              :aria-pressed="settings.diffCollapseUnchanged === o.id"
-              @click="settings.diffCollapseUnchanged = o.id"
-            >
-              {{ o.label }}
-            </button>
-          </div>
-        </div>
-        <div class="set-row">
-          <div id="settings-diff-wrap-label" class="set-label">
+          <input v-model="settings.diffCollapseUnchanged" type="checkbox" class="set-switch" data-setting="diffCollapseUnchanged" />
+        </label>
+        <label class="set-row">
+          <div class="set-label">
             {{ t('settings.editor.diffWordWrap', 'Wrap lines in diffs') }}
-            <span class="set-hint">{{ t('settings.editor.diffWordWrapHint', 'Wrap long lines in diff editors instead of requiring horizontal scrolling.') }}</span>
+            <span class="set-hint">{{ t('settings.editor.diffWordWrapHint', 'Long lines wrap instead of scrolling sideways.') }}</span>
           </div>
-          <div class="launch-seg set-seg set-seg-small" role="group" aria-labelledby="settings-diff-wrap-label">
-            <button
-              v-for="o in OFF_ON"
-              :key="String(o.id)"
-              type="button"
-              class="launch-seg-btn"
-              :class="{ on: settings.diffWordWrap === o.id }"
-              :aria-pressed="settings.diffWordWrap === o.id"
-              @click="settings.diffWordWrap = o.id"
-            >
-              {{ o.label }}
-            </button>
+          <input v-model="settings.diffWordWrap" type="checkbox" class="set-switch" data-setting="diffWordWrap" />
+        </label>
+      </div>
+    </div>
+    <div class="set-group" data-group="files">
+      <h3 class="set-group-title">{{ t('settings.editor.files', 'Files') }}</h3>
+      <p class="set-group-desc">{{ t('settings.editor.filesDesc', 'The Files panel of the sidebar.') }}</p>
+      <div class="set-card">
+        <label class="set-row">
+          <div class="set-label">
+            {{ t('settings.appearance.gitIgnored', 'Show Git-ignored files') }}
+            <span class="set-hint">{{ t('settings.appearance.gitIgnoredHint', 'Files matched by .gitignore.') }}</span>
           </div>
-        </div>
-
+          <input v-model="settings.showGitIgnoredFiles" type="checkbox" class="set-switch" data-setting="showGitIgnoredFiles" />
+        </label>
+        <label class="set-row">
+          <div class="set-label">
+            {{ t('settings.appearance.compactFolders', 'Compact folders') }}
+            <span class="set-hint">{{
+              t('settings.appearance.compactFoldersHint', 'In Files, a folder holding a single folder shares its row with it, like a/b/c.')
+            }}</span>
+          </div>
+          <input v-model="settings.explorerCompactFolders" type="checkbox" class="set-switch" data-test="settings-compact-folders" />
+        </label>
       </div>
     </div>
     <SettingsToolRows page="editor" @open="emit('open-tool', $event)" />
