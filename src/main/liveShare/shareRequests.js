@@ -1018,13 +1018,14 @@ op('scm.commit', {
     if (!a.message.replace(/\0/g, '').trim()) return fail('no-message')
     const { place, failed } = await placeOrFail(env)
     if (failed) return failed
-    // Nothing staged outside the project (the guest can't see it): else the
-    // host commits it first.
-    if (place.prefix) {
-      const staged = await sourceControl.stagedPaths(place.top)
-      if (!staged) return fail('failed')
-      if (staged.some((p) => !underRoot(place, p))) return fail('staged-outside')
-    }
+    // Nothing staged that the guest can't see (outside the project, or
+    // hidden or ignored for guests inside it): the host commits it first.
+    const staged = await sourceControl.stagedPaths(place.top)
+    if (!staged) return fail('failed')
+    if (staged.some((p) => !underRoot(place, p))) return fail('staged-outside')
+    const inside = staged.map((p) => fromTop(place, p))
+    if (inside.some((rel) => !rel || hiddenByName(rel, env.settings) || touchesSpecial(rel))) return fail('staged-hidden')
+    if ((await env.scope.hiddenOf(env.info, inside, env.settings, { charge: env.charge })).size) return fail('staged-hidden')
     if (!(await stillAllowed(env))) return fail('revoked')
     const res = await sourceControl.scmCommit({ root: env.info.real, message: a.message })
     if (!res.ok) return gitFail(env, res.error)

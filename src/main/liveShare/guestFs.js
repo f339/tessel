@@ -49,6 +49,7 @@ const MESSAGES = {
   'not-repo': () => t('main.liveShareFs.notRepo', 'This folder is not in a git repository.'),
   'nothing-staged': () => t('main.liveShareFs.nothingStaged', 'Stage at least one file to commit.'),
   'staged-outside': () => t('main.liveShareFs.stagedOutside', 'Files outside this project are staged on the host: the host must commit or unstage them first.'),
+  'staged-hidden': () => t('main.liveShareFs.stagedHidden', 'Files the host keeps hidden from guests are staged: the host must commit or unstage them first.'),
   'no-message': () => t('main.liveShareFs.noMessage', 'Enter a commit message to commit.'),
   'no-identity': () => t('main.liveShareFs.noIdentity', 'Git on the host does not know a name and email yet.'),
   'bad-commit': () => t('main.liveShareFs.badCommit', 'Unknown commit.'),
