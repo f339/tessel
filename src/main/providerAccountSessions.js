@@ -14,7 +14,8 @@ import {
   geminiSubagents,
   copilotSubagents,
   kimiSubagents,
-  cursorSubagents
+  cursorSubagents,
+  museSubagents
 } from './agentChildren'
 import { clineDataDir } from './jsonAgents'
 import { deleteSession, revealSessionFile, sessionDetails } from './sessionDetails'
@@ -25,7 +26,9 @@ export function createAccountSessions({
   accounts,
   home = os.homedir(),
   env = process.env,
-  listSessions: readList = async (...args) => listSessions(...args)
+  listSessions: readList = async (...args) => listSessions(...args),
+  // Where the agents' hooks note what they report (Muse's sub-agents).
+  sessionsDir = () => null
 }) {
   const root = (provider, result) =>
     provider === 'codex'
@@ -71,6 +74,7 @@ export function createAccountSessions({
       if (agent === 'copilot') return copilotSubagents(sessionId, env.COPILOT_HOME || join(home, '.copilot'))
       if (agent === 'kimi') return kimiSubagents(sessionId, env.KIMI_CODE_HOME || join(home, '.kimi-code'))
       if (agent === 'cursor') return cursorSubagents(sessionId, join(home, '.cursor'))
+      if (agent === 'muse') return museSubagents(sessionId, { sessionsDir: sessionsDir(), home })
       if (agent !== 'claude' && agent !== 'codex') return []
       const scope = await accounts.sessionEnv(agent, accountId)
       if (!scope.ok) return []

@@ -340,7 +340,9 @@ function backups(home, configDirs, env) {
     kimiConfigFile(home),
     ...STATUS_HOOK_AGENTS.map((id) => STATUS_HOOKS[id].file(home, env)),
     // DeepSeek Harness's patch layer, where Tessel's row points at its hooks.
-    dshPatchFile(home, env)
+    dshPatchFile(home, env),
+    // Muse Code's settings, which name Tessel's hooks as its managed file.
+    ...STATUS_HOOK_AGENTS.filter((id) => STATUS_HOOKS[id].settings).map((id) => STATUS_HOOKS[id].settings(home, env))
   ]
   return [...new Set(files)].map((f) => `${f}.before-tessel`).filter((f) => {
     try {

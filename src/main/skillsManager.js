@@ -18,6 +18,7 @@
 //   Copilot CLI  ~/.copilot/skills           .github/skills    (and the Claude and .agents folders)
 //   Gemini CLI   ~/.gemini/skills            .gemini/skills    (and the .agents folders)
 //   Antigravity  ~/.gemini/config/skills     .agents/skills    (agy, checked with its /skills)
+//   Muse Code    ~/.config/muse/skills       .agents/skills    (and the Claude, Codex and .agents folders)
 import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import path from 'node:path'
@@ -28,7 +29,7 @@ import { skillFrontmatter } from './chat/skills.js'
 import { readTar, gunzipCapped } from './skillsTar'
 import { writeFileAtomic } from './safeJson'
 
-export const SKILL_AGENTS = ['claude', 'codex', 'opencode', 'copilot', 'gemini', 'antigravity']
+export const SKILL_AGENTS = ['claude', 'codex', 'opencode', 'copilot', 'gemini', 'antigravity', 'muse']
 
 export const SKILL_CAPS = {
   files: 1000, // files in one skill
@@ -82,21 +83,23 @@ export function skillRoots({ home = os.homedir(), env = process.env, cwd = null 
   const codexHome = env.CODEX_HOME || path.join(home, '.codex')
   const config = env.XDG_CONFIG_HOME || path.join(home, '.config')
   const roots = [
-    { scope: 'user', path: path.join(home, '.claude', 'skills'), seenBy: ['claude', 'opencode', 'copilot'], installFor: ['claude'] },
-    { scope: 'user', path: path.join(home, '.agents', 'skills'), seenBy: ['codex', 'opencode', 'copilot', 'gemini'], installFor: ['codex'] },
-    { scope: 'user', path: path.join(codexHome, 'skills'), seenBy: ['codex'], installFor: [] },
+    { scope: 'user', path: path.join(home, '.claude', 'skills'), seenBy: ['claude', 'opencode', 'copilot', 'muse'], installFor: ['claude'] },
+    { scope: 'user', path: path.join(home, '.agents', 'skills'), seenBy: ['codex', 'opencode', 'copilot', 'gemini', 'muse'], installFor: ['codex'] },
+    { scope: 'user', path: path.join(codexHome, 'skills'), seenBy: ['codex', 'muse'], installFor: [] },
     { scope: 'user', path: path.join(config, 'opencode', 'skills'), seenBy: ['opencode'], installFor: ['opencode'] },
     { scope: 'user', path: path.join(home, '.copilot', 'skills'), seenBy: ['copilot'], installFor: ['copilot'] },
     { scope: 'user', path: path.join(home, '.gemini', 'skills'), seenBy: ['gemini'], installFor: ['gemini'] },
     // The Antigravity CLI's own (not Gemini CLI's ~/.gemini/skills).
-    { scope: 'user', path: path.join(home, '.gemini', 'config', 'skills'), seenBy: ['antigravity'], installFor: ['antigravity'] }
+    { scope: 'user', path: path.join(home, '.gemini', 'config', 'skills'), seenBy: ['antigravity'], installFor: ['antigravity'] },
+    // Muse Code's own (it also reads the Claude Code, Codex and .agents ones).
+    { scope: 'user', path: path.join(config, 'muse', 'skills'), seenBy: ['muse'], installFor: ['muse'] }
   ]
   if (typeof cwd === 'string' && path.isAbsolute(cwd)) {
     const at = (...parts) => path.join(cwd, ...parts)
     roots.push(
-      { scope: 'project', path: at('.claude', 'skills'), seenBy: ['claude', 'opencode', 'copilot'], installFor: ['claude'] },
-      { scope: 'project', path: at('.agents', 'skills'), seenBy: ['codex', 'opencode', 'copilot', 'gemini', 'antigravity'], installFor: ['codex', 'antigravity'] },
-      { scope: 'project', path: at('.codex', 'skills'), seenBy: ['codex'], installFor: [] },
+      { scope: 'project', path: at('.claude', 'skills'), seenBy: ['claude', 'opencode', 'copilot', 'muse'], installFor: ['claude'] },
+      { scope: 'project', path: at('.agents', 'skills'), seenBy: ['codex', 'opencode', 'copilot', 'gemini', 'antigravity', 'muse'], installFor: ['codex', 'antigravity', 'muse'] },
+      { scope: 'project', path: at('.codex', 'skills'), seenBy: ['codex', 'muse'], installFor: [] },
       { scope: 'project', path: at('.opencode', 'skills'), seenBy: ['opencode'], installFor: ['opencode'] },
       { scope: 'project', path: at('.github', 'skills'), seenBy: ['copilot'], installFor: ['copilot'] },
       { scope: 'project', path: at('.gemini', 'skills'), seenBy: ['gemini'], installFor: ['gemini'] }
@@ -590,16 +593,33 @@ export async function packageFromGithub(input, { fetchFn = fetch, pick = null, f
     const where = `${spec.owner}/${spec.repo}${base ? '/' + base : ''}` // i18n-ignore path
     if (!found.length) throw fail(t('main.skills.noSkillInRepo', 'No SKILL.md found in {{where}}.', { where }), 'SKILL_NO_MD')
     if (found.length === 1) chosen = found[0]
-    else
+    else {
+      // Each skill's files and size, as its package would hold them (a skill
+      // inside another counts in both): one pass, each file up its folders.
+      const shown = found.slice(0, 300)
+      const sizes = new Map(shown.map((dir) => [dir, { files: 0, bytes: 0 }]))
+      for (const e of entries) {
+        if (e.kind !== 'file') continue
+        const parts = e.rel.split('/')
+        for (let i = parts.length - 1; i > 0; i--) {
+          const size = sizes.get(parts.slice(0, i).join('/'))
+          if (size) {
+            size.files++
+            size.bytes += e.data.length
+          }
+        }
+      }
       return {
-        candidates: found.slice(0, 300).map((dir) => {
+        candidates: shown.map((dir) => {
           const md = entries.find((e) => e.kind === 'file' && e.rel === `${dir}/SKILL.md`)
           const fallback = path.posix.basename(dir)
           const meta = md ? skillFrontmatter(md.data.subarray(0, 64 * 1024).toString('utf8'), fallback) : null
-          return { path: dir, name: (meta && meta.name) || fallback, description: (meta && meta.description) || null }
+          return { path: dir, name: (meta && meta.name) || fallback, description: (meta && meta.description) || null, ...sizes.get(dir) }
         }),
-        repo: where
+        repo: where,
+        commit: tar.comment && /^[0-9a-f]{40}$/i.test(tar.comment) ? tar.comment : null
       }
+    }
   }
   const prefix = chosen ? chosen + '/' : ''
   const files = []
@@ -704,7 +724,10 @@ export async function installSkill({ id, agents = [], scope = 'user', cwd = null
   const results = []
   const hash = contentHash(pkg.files)
   for (const { root, dest } of targets) {
-    const result = { dir: dest, seenBy: root.seenBy, scope: root.scope }
+    // agents: the chosen agents this folder is for (the window says which
+    // agent each result is about); seenBy: every agent that reads it.
+    const forAgents = replace ? [...root.installFor] : [...new Set(agents)].filter((a) => root.installFor.includes(a))
+    const result = { dir: dest, seenBy: root.seenBy, scope: root.scope, agents: forAgents }
     const tmp = path.join(root.path, `.${path.basename(dest)}.tessel-${randomBytes(4).toString('hex')}`)
     const key = sameKey(dest)
     installing.add(key)

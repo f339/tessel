@@ -3,7 +3,7 @@
 // agent and its email, account id or login), the panes on an account and
 // the panes that can switch to one.
 
-const AGENT_ORDER = ['claude', 'codex', 'gemini', 'copilot', 'grok', 'cursor', 'kimi', 'qwen', 'opencode']
+const AGENT_ORDER = ['claude', 'codex', 'gemini', 'copilot', 'grok', 'cursor', 'kimi', 'qwen', 'opencode', 'muse']
 
 // The providers' order on the page.
 const rank = (a) => {

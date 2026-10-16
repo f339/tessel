@@ -39,6 +39,8 @@ const SECRETS = [
   'SECRET-MCP-ENV',
   'SECRET-GROK-KEY',
   'SECRET-KIMI',
+  'SECRET-MUSE-ACCESS',
+  'SECRET-MUSE-REFRESH',
   'SECRET-OPENCODE'
 ]
 const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url')
@@ -92,6 +94,8 @@ function seedHome(home) {
   write(home, '.copilot/config.json', { last_logged_in_user: { host: 'https://github.com', login: 'octocat' }, logged_in_users: [{ host: 'https://github.com', login: 'octocat' }] })
   write(home, '.grok/auth.json', { 'https://auth.x.ai': { key: 'SECRET-GROK-KEY', email: 'grok@example.com' } })
   write(home, '.kimi-code/credentials/kimi-code.json', { access_token: 'SECRET-KIMI' })
+  // Muse Code's browser sign-in, as its launcher reads it.
+  write(home, '.config/muse/auth.json', { providers: { meta: { mechanism: 'oauth', access_token: 'SECRET-MUSE-ACCESS', refresh_token: 'SECRET-MUSE-REFRESH' } } })
   write(home, '.local/share/opencode/auth.json', { anthropic: { type: 'oauth', refresh: 'SECRET-OPENCODE', access: 'SECRET-OPENCODE' } })
   // A Claude account folder Tessel made, signed in to another account.
   write(home, '.tessel-server/accounts/claude/abc123/.tessel-account', 'tessel-account claude abc123\n')
@@ -565,6 +569,8 @@ describe.skipIf(!gitSh())('remoteAccounts.sh on a POSIX sh (fake ssh)', () => {
     expect(by('copilot')).toMatchObject({ login: 'octocat', site: 'https://github.com' })
     expect(by('grok')).toMatchObject({ email: 'grok@example.com', cred: 'file' })
     expect(by('kimi')).toMatchObject({ cred: 'file' })
+    expect(by('muse')).toMatchObject({ cred: 'file', dir: `${home}/.config/muse` })
+    expect(by('muse').email).toBeUndefined()
     expect(by('opencode').providers).toEqual([{ name: 'anthropic', type: 'oauth' }])
     expect(by('claude', 'tessel')).toMatchObject({ id: 'abc123', email: 'work@corp.example', org: 'Corp', plan: 'max', cred: 'file' })
     expect(by('codex', 'tessel')).toMatchObject({ id: 'def456' })

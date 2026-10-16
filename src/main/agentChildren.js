@@ -4,14 +4,15 @@
 //     { agentType, description }
 //   .../agent-<id>.jsonl   its transcript (timestamps, token usage)
 // Read-only; only the first line and the end of each transcript are read.
-// Codex (spawn_agent threads), OpenCode and Cline (child sessions) and
-// Antigravity (child conversations) below.
+// Codex (spawn_agent threads), OpenCode and Cline (child sessions),
+// Antigravity (child conversations) and the others below.
 import fs from 'fs'
 import os from 'os'
 import { join, relative, isAbsolute } from 'path'
 import { createHash } from 'crypto'
-import { readRows } from './fileRead'
+import { readRows, readHead as readHeadText } from './fileRead'
 import { antigravityModelFromText } from './agentModel'
+import { museModelFromText, museSessionLog, museSessionsDir, museTextRecords, parseMuseHead } from './museSessions'
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TAIL_BYTES = 96 * 1024
@@ -1496,6 +1497,122 @@ export function cursorSubagents(sessionId, cursorDir = join(os.homedir(), '.curs
 
 // How much of a log is read whole (its last 32 MB) and how much per turn
 // of the event loop (1 MB), smaller in tests.
+// ---------------------------------------------------------------------------
+// Muse Code (its subagents): each child session writes its own log inside its
+// parent session's folder, subagent/<child session id>/session.jsonl (its own
+// sub-agents nested the same way). Muse's background observers (memory
+// recall, goal, verification) write logs there too, so only the children its
+// hooks announced are listed (SubagentStart, by child session id: teamMcp
+// server.cjs reportMuseChild, <sessions>/muse-children/<session>/<child>.json).
+// Done once its SubagentStop came; its title is the task it was given (its
+// first prompt); its model and effort, and the tokens of its last request,
+// from its log (museSessions.js).
+const MUSE_HEAD_BYTES = 64 * 1024
+const MUSE_DEPTH = 4
+
+// From the end of a child's log: when it last wrote, the tokens of its last
+// model request (what it held in context), its model and effort.
+export function summarizeMuseTail(text) {
+  let last = null
+  let tokens = null
+  for (const rec of museTextRecords(text)) {
+    if (rec.at) last = rec.at
+    const e = rec.type === 'runtime.session' && rec.payload.event && typeof rec.payload.event === 'object' ? rec.payload.event : null
+    if (e && e.kind === 'model_completed' && e.usage && typeof e.usage === 'object') {
+      const n = (num(e.usage.input_tokens) || 0) + (num(e.usage.output_tokens) || 0)
+      if (n > 0) tokens = n
+    }
+  }
+  const m = museModelFromText(text)
+  return { last, tokens, model: m ? m.model : null, effort: m ? m.effort : null }
+}
+
+// sessionsDir: where the hooks note the children (Tessel's sessions folder).
+export function museSubagents(sessionId, { sessionsDir = null, home = os.homedir(), now = Date.now() } = {}) {
+  if (!ID.test(String(sessionId)) || typeof sessionsDir !== 'string' || !isAbsolute(sessionsDir)) return []
+  const sid = String(sessionId).toLowerCase()
+  const registry = join(sessionsDir, 'muse-children', sid)
+  const noted = new Map()
+  let names
+  try {
+    names = fs.readdirSync(registry).filter((n) => /^[0-9a-f-]{36}\.json$/i.test(n))
+  } catch {
+    return []
+  }
+  for (const n of names.slice(0, 200)) {
+    const id = n.slice(0, -5).toLowerCase()
+    if (!ID.test(id)) continue
+    let entry
+    try {
+      entry = JSON.parse(fs.readFileSync(join(registry, n), 'utf8')) || {}
+    } catch {
+      entry = {}
+    }
+    noted.set(id, entry)
+  }
+  if (!noted.size) return []
+  const root = museSessionsDir(home)
+  const log = museSessionLog(sid, root)
+  let base
+  try {
+    base = fs.realpathSync.native(root)
+  } catch {
+    return []
+  }
+  if (!log) return []
+  // Each noted child's folder: under its parent's, or under another noted
+  // child's (a sub-agent's own), a few levels down at most.
+  const folders = new Map()
+  let parents = [join(log, '..')]
+  for (let depth = 0; depth < MUSE_DEPTH && parents.length && folders.size < noted.size; depth++) {
+    const next = []
+    for (const parent of parents) {
+      for (const id of noted.keys()) {
+        if (folders.has(id)) continue
+        const dir = join(parent, 'subagent', id)
+        if (realInside(base, dir, true)) {
+          folders.set(id, dir)
+          next.push(dir)
+        }
+      }
+    }
+    parents = next
+  }
+  const out = []
+  for (const [id, dir] of folders) {
+    const file = join(dir, 'session.jsonl')
+    if (!realInside(base, file, false)) continue
+    const entry = noted.get(id)
+    let st = null
+    let head = { started: 0, prompt: '', model: '' }
+    let tail = { last: null, tokens: null, model: null, effort: null }
+    try {
+      st = fs.statSync(file)
+      head = parseMuseHead(readHeadText(file, MUSE_HEAD_BYTES))
+      tail = summarizeMuseTail(readTail(file, st.size).join('\n'))
+    } catch {
+      // being written: next time
+    }
+    const lastAt = Math.max(tail.last || 0, (st && st.mtimeMs) || 0) || null
+    const stopped = num(entry.stoppedAt)
+    const state = stopped ? 'done' : lastAt && now - lastAt > QUIET_MS ? 'quiet' : 'running'
+    out.push({
+      id,
+      type: typeof entry.name === 'string' && /^[A-Za-z0-9_.:-]{1,80}$/.test(entry.name) ? entry.name.slice(0, 60) : 'subagent',
+      title: firstLine(head.prompt, 200),
+      state,
+      startedAt: head.started || num(entry.startedAt) || (st && st.birthtimeMs) || null,
+      endedAt: state === 'done' ? Math.max(stopped, tail.last || 0) : null,
+      lastAt,
+      tokens: tail.tokens,
+      model: tail.model || head.model || null,
+      effort: tail.effort || null
+    })
+  }
+  out.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0))
+  return out.slice(0, MAX_AGENTS)
+}
+
 export function _setLogSizesForTest(tail = LOG_TAIL_BYTES, chunk = LOG_CHUNK) {
   logTail = tail
   logChunk = chunk

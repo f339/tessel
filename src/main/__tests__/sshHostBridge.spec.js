@@ -227,6 +227,102 @@ describe('one connection per host', () => {
   }, 30000)
 })
 
+// The pane is created at 80x24 and fitted once it is on screen, which often
+// lands while its channel is still opening (the sign-in, or the channel's own
+// round trips). The host's terminal must end up at the pane's size: a program
+// started there (a TUI's first-run screen) reads it, and draws for 80x24 in a
+// shorter, wider pane otherwise.
+describe("the host's terminal size follows the pane", () => {
+  // The size the host's terminal has now: its PTY request, then each change.
+  const sizeOf = (channel) => {
+    const last = server.events.windowChanges[server.events.windowChanges.length - 1]
+    return last ? { cols: last.cols, rows: last.rows } : { cols: channel.pty.cols, rows: channel.pty.rows }
+  }
+  const quietSock = { destroyed: false, write() {} }
+
+  it('resized during the sign-in: the shell gets the new size once it is open', async () => {
+    let pty = null
+    makeBridge({
+      broadcast: (m) => {
+        broadcasts.push(JSON.stringify(m))
+        if (m.op !== 'ssh-prompt') return
+        // The pane fitted while the password question waits.
+        if (m.kind === 'password') pty.resize(235, 18)
+        const value = m.kind === 'hostkey' ? 'yes' : PASSWORD
+        setTimeout(() => bridge.handle(quietSock, { op: 'ssh-answer', promptId: m.promptId, value }, () => {}), 5)
+      }
+    })
+    const t = terminal()
+    pty = t.pty
+    await until(() => t.out.text.includes('welcome'))
+    const shell = server.events.channels.find((c) => c.kind === 'shell')
+    expect(shell.pty).toMatchObject({ term: 'xterm-256color' })
+    await until(() => sizeOf(shell).cols === 235, 5000, 'the new size').catch(() => {})
+    expect(sizeOf(shell)).toEqual({ cols: 235, rows: 18 })
+  }, 30000)
+
+  it('resized while its channel opens on a live connection: the shell gets the new size', async () => {
+    let resizeOnPty = null
+    await server.close()
+    server = await startSshServer({
+      auth: { password: PASSWORD, methods: ['password'] },
+      onPty: () => {
+        const p = resizeOnPty
+        resizeOnPty = null
+        if (p) p.resize(235, 18)
+      }
+    })
+    makeBridge()
+    const first = terminal()
+    await until(() => first.out.text.includes('welcome'))
+    // Already open and never resized: nothing sent for it.
+    expect(server.events.windowChanges).toEqual([])
+    const second = terminal()
+    resizeOnPty = second.pty
+    await until(() => second.out.text.split('welcome').length === 2)
+    const shell = server.events.channels.filter((c) => c.kind === 'shell')[1]
+    expect(shell.pty).toMatchObject({ cols: 80, rows: 24 })
+    await until(() => server.events.windowChanges.length > 0, 5000, 'a window change').catch(() => {})
+    expect(sizeOf(shell)).toEqual({ cols: 235, rows: 18 })
+    expect(server.events.connections).toBe(1)
+  }, 30000)
+
+  it('a project terminal (exec with a PTY) resized while it opens gets the new size too', async () => {
+    let resizeOnPty = null
+    await server.close()
+    server = await startSshServer({
+      auth: { password: PASSWORD, methods: ['password'] },
+      onPty: () => {
+        const p = resizeOnPty
+        resizeOnPty = null
+        if (p) p.resize(200, 20)
+      },
+      // The project's shell stays open.
+      onExec: (_command, stream) => stream.write('project shell\r\n')
+    })
+    makeBridge()
+    const t = terminal({ remotePath: '/srv/app' })
+    resizeOnPty = t.pty
+    await until(() => t.out.text.includes('project shell'))
+    const exec = server.events.channels.find((c) => c.kind === 'exec')
+    expect(exec.pty).toMatchObject({ term: 'xterm-256color' })
+    await until(() => server.events.windowChanges.length > 0, 5000, 'a window change').catch(() => {})
+    expect(sizeOf(exec)).toEqual({ cols: 200, rows: 20 })
+  }, 30000)
+
+  it('a shell started again after a lost connection opens at the size the pane has now', async () => {
+    makeBridge()
+    const { pty, out } = terminal()
+    await until(() => out.text.includes('welcome'))
+    pty.resize(150, 30)
+    await until(() => server.events.windowChanges.some((w) => w.cols === 150 && w.rows === 30))
+    server.dropClients()
+    await until(() => out.text.split('welcome').length === 3)
+    const shells = server.events.channels.filter((c) => c.kind === 'shell')
+    expect(shells[1].pty).toMatchObject({ cols: 150, rows: 30, term: 'xterm-256color' })
+  }, 30000)
+})
+
 describe('a server that limits sessions per connection (MaxSessions)', () => {
   it('a second connection is opened with the kept password, no new question', async () => {
     await server.close()

@@ -27,7 +27,7 @@ export const ACCOUNTS_SHELL = String(shellSource).replace(/\r/g, '')
 
 // The agents whose identity is read, and the ones Tessel can run on a folder
 // of their own (the variable that names it).
-export const ACCOUNT_AGENTS = ['claude', 'codex', 'gemini', 'copilot', 'grok', 'cursor', 'kimi', 'qwen', 'opencode']
+export const ACCOUNT_AGENTS = ['claude', 'codex', 'gemini', 'copilot', 'grok', 'cursor', 'kimi', 'qwen', 'opencode', 'muse']
 export const FOLDER_ENV = Object.freeze({ claude: 'CLAUDE_CONFIG_DIR', codex: 'CODEX_HOME' })
 export const FOLDER_AGENTS = Object.keys(FOLDER_ENV)
 const SCOPES = new Set(['default', 'env', 'tessel', 'orphan'])

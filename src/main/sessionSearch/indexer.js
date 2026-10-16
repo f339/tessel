@@ -9,10 +9,11 @@ import { createHash } from 'crypto'
 import fs from 'fs'
 import os from 'os'
 import { basename, join } from 'path'
-import { grokSessions, insideDir, ompSessions, ompSessionsDir, piSessions, piSessionsDir, sessionDirs } from '../agentSessionSources.js'
+import { grokSessions, insideDir, museHistorySessions, ompSessions, ompSessionsDir, piSessions, piSessionsDir, sessionDirs } from '../agentSessionSources.js'
 import { listSessions, qoderDir, qoderTextLine } from '../agentSessions.js'
 import { claudeHistoryEvents, codexHistoryEvents } from '../chat/transcriptHistory.js'
-import { grokViewEvents, ompViewEvents } from '../chat/transcriptView.js'
+import { grokViewEvents, museViewEvents, ompViewEvents } from '../chat/transcriptView.js'
+import { museRecords } from '../museSessions.js'
 
 // Small on purpose: a slice is one step of the background work, between two timers.
 export const SLICE_BYTES = 32 * 1024
@@ -21,7 +22,7 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
 // Whole messages are indexed (the history's own cut is for display).
 const LIMITS = { text: 256 * 1024, events: Infinity, bytes: Infinity }
 // Agents whose conversation text is indexed; the others by their title.
-export const CONTENT_AGENTS = ['claude', 'openclaude', 'codex', 'grok', 'pi', 'omp', 'qoder']
+export const CONTENT_AGENTS = ['claude', 'openclaude', 'codex', 'grok', 'pi', 'omp', 'qoder', 'muse']
 const META = 'meta:' // a title-only session's key: meta:<agent>:<id>
 
 const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : null)
@@ -106,6 +107,8 @@ export function listSources({ home = os.homedir(), since = 0, titles = true } = 
   }
   for (const s of safe(() => piSessions(home, { since }))) add('pi', piSessionsDir(home), s.file, { id: s.id, cwd: s.cwd, title: s.title })
   for (const s of safe(() => ompSessions(home, { since }))) add('omp', ompSessionsDir(home), s.file, { id: s.id, cwd: s.cwd, title: s.title })
+  // Muse Code: its session logs (museSessions.js), newest days first.
+  for (const s of safe(() => museHistorySessions(home, { since }))) add('muse', sessionDirs(home).muse, s.file, { id: s.id, cwd: s.cwd, title: s.title })
   // The other agents: their title only (what the history list shows).
   if (titles) {
     for (const s of safe(() => listSessions({ limit: 200 }, home, { claude: null, codex: null }))) {
@@ -222,6 +225,16 @@ function sessionFacts(agent, lines) {
     // Qoder's own records carry their time in ms, its messages an ISO date.
     const ts = typeof r.timestamp === 'number' ? r.timestamp : Date.parse(r.timestamp || '')
     if (facts.createdAt == null && Number.isFinite(ts)) facts.createdAt = ts
+    if (agent === 'muse') {
+      // Its records: when (recorded_at) and the folder of its metadata.
+      for (const rec of museRecords(r)) {
+        if (facts.createdAt == null && rec.at) facts.createdAt = rec.at
+        const m = rec.type === 'runtime.session.metadata' ? obj(rec.payload.record) : null
+        if (m && typeof m.workspace_root === 'string' && !facts.cwd) facts.cwd = m.workspace_root
+      }
+      if (facts.cwd && facts.createdAt != null) break
+      continue
+    }
     if (agent === 'codex') {
       const p = obj(r.payload)
       if (r.type === 'session_meta' && p) {
@@ -251,6 +264,7 @@ export function rowsFromLines(agent, lines, sessionId) {
     if (agent === 'codex') events = codexHistoryEvents(lines, sessionId, LIMITS)
     else if (agent === 'grok') events = grokViewEvents(lines, LIMITS)
     else if (agent === 'pi' || agent === 'omp') events = ompViewEvents(lines, LIMITS)
+    else if (agent === 'muse') events = museViewEvents(lines, LIMITS)
     else if (agent === 'qoder') events = claudeHistoryEvents(lines.map(qoderTextLine), LIMITS)
     else events = claudeHistoryEvents(lines, LIMITS)
   } catch {
