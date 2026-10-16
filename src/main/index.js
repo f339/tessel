@@ -163,7 +163,7 @@ import { remoteToolsReason as remoteToolsReasonText, remoteInstallErrorFor, REMO
 import { removeStatusHooks, STATUS_HOOK_AGENTS } from './agentStatusHooks'
 import teamServerSource from './teamMcp/server.cjs?raw'
 import remoteShimSource from './remoteAgent/tessel-shim.cjs?raw'
-import { REMOTE_AGENT_PROVIDERS, createShimInstaller, instanceName, newRemoteToken, readInstallId, remoteProjectDataDir, remoteServerEnv, createRemoteAgentCheck } from './remoteAgent/remoteAgentSetup'
+import { BIN_NAME, REMOTE_AGENT_PROVIDERS, createShimInstaller, instanceName, newRemoteToken, readInstallId, remoteProjectDataDir, remoteServerEnv, createRemoteAgentCheck } from './remoteAgent/remoteAgentSetup'
 import { ensureInbox, takeInbox, removeInbox } from './leadInbox'
 import { t, setLanguage as setMainLanguage, currentLocale, onLanguageChange } from './i18n'
 import { createCliServer, CliError } from './cliServer'
@@ -3595,9 +3595,13 @@ const remoteShims = createShimInstaller({
 // (once signed in) puts the shim there and looks for the agents installed
 // there, in the background; the window hears remoteAgents:status and may
 // ask again (remoteAgents:check, after installing one).
+// Every built-in agent is looked for there, by its command (its first word,
+// as on this computer): one request for all of them.
+const REMOTE_AGENT_BINS = AGENT_PRESETS.map((a) => ({ id: a.id, bin: firstWord(a.command) })).filter((b) => BIN_NAME.test(b.bin))
 const remoteAgentCheck = createRemoteAgentCheck({
   ensureShim: (hostId) => remoteShims.ensure(hostId),
-  agentTools: (hostId) => remoteFs.agentTools(hostId),
+  agentTools: (hostId) => remoteFs.agentTools(hostId, REMOTE_AGENT_BINS.map((b) => b.bin)),
+  agentBins: REMOTE_AGENT_BINS,
   label: (hostId) => {
     const target = remoteHosts.get(hostId)
     return (target && target.label) || hostId
@@ -3616,9 +3620,11 @@ ipcMain.handle('sessions:listRemote', async (_evt, req) => {
   if (!shim.ok) return { ok: false, error: remoteShimWarning(shim.reason) }
   return remoteFs.listAgentSessions(hostId, req.limit)
 })
-ipcMain.handle('remoteAgents:check', async (_evt, hostId) => {
+// opts.fresh: the host itself (Check again, after an install), never the
+// last check's answer.
+ipcMain.handle('remoteAgents:check', async (_evt, hostId, opts) => {
   if (typeof hostId !== 'string' || !/^[\w-]{1,80}$/.test(hostId) || !remoteHosts.get(hostId)) return null
-  return remoteAgentCheck.check(hostId)
+  return remoteAgentCheck.check(hostId, { fresh: !!(opts && typeof opts === 'object' && opts.fresh === true) })
 })
 function remoteShimWarning(reason) {
   if (reason === 'no-node') return t('main.remoteAgent.noNode', 'Node.js was not found on this host, so the agent there has no team tools or live status. Install Node.js 18 or newer on the host.')

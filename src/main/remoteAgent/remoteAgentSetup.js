@@ -119,34 +119,80 @@ export function createShimInstaller({ install, source, log = () => {} }) {
   return { ensure, version, forget: (hostId) => done.delete(hostId) }
 }
 
-// What __t_agents (remoteShell.js) printed: one line per tool,
-// `claude <abs path>|-`, `codex …`, `vscode-claude …`.
-// -> { claude, codex, vscodeClaude } (null when missing)
+// What __t_agents (remoteShell.js) printed: one line per command looked
+// for, `<name> <abs path>|-` (claude, codex, agy...), `vscode-claude …`, then
+// what an install there needs, one `@<key> <value>` line each.
+// -> { claude, codex, vscodeClaude, bins: { name: path | null },
+//      host: { node, nodeMajor, npm, npmPrefix, npmWritable, snap, curl, wget, os }, uid }
+// (null when missing or not said)
 const AGENT_TOOL_KEYS = { claude: 'claude', codex: 'codex', 'vscode-claude': 'vscodeClaude' }
+export const BIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/
+const HOST_PATHS = { '@node': 'node', '@npm': 'npm', '@prefix': 'npmPrefix', '@snap': 'snap', '@curl': 'curl', '@wget': 'wget' }
+const absPath = (v) => (v.startsWith('/') && v.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(v) ? v : null)
+const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k)
+export function emptyHost() {
+  return { node: null, nodeMajor: null, npm: null, npmPrefix: null, npmWritable: null, snap: null, curl: null, wget: null, os: null }
+}
 export function parseAgentTools(text) {
-  const out = { claude: null, codex: null, vscodeClaude: null }
+  const out = { claude: null, codex: null, vscodeClaude: null, bins: {}, host: emptyHost(), uid: null }
   for (const line of String(text || '').split('\n')) {
     const sp = line.indexOf(' ')
     if (sp < 0) continue
-    const key = AGENT_TOOL_KEYS[line.slice(0, sp)]
-    const path = line.slice(sp + 1).replace(/\r$/, '')
-    if (!key || out[key]) continue
-    if (path.startsWith('/') && path.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(path)) out[key] = path
+    const name = line.slice(0, sp)
+    const value = line.slice(sp + 1).replace(/\r$/, '')
+    if (name.startsWith('@')) {
+      const key = HOST_PATHS[name]
+      if (key) {
+        if (!out.host[key]) out.host[key] = absPath(value)
+      } else if (name === '@nodev') {
+        const m = /^(\d{1,3})\.\d/.exec(value)
+        if (m && out.host.nodeMajor == null) out.host.nodeMajor = Number(m[1])
+      } else if (name === '@prefixw') {
+        if (value === '1' || value === '0') out.host.npmWritable = value === '1'
+      } else if (name === '@uid') {
+        if (/^\d{1,10}$/.test(value)) out.uid = Number(value)
+      } else if (name === '@os') {
+        if (/^[A-Za-z][\w.-]{0,31}$/.test(value)) out.host.os = value
+      }
+      continue
+    }
+    const path = absPath(value)
+    const key = AGENT_TOOL_KEYS[name]
+    if (key && !out[key] && path) out[key] = path
+    if (name === 'vscode-claude' || !BIN_NAME.test(name)) continue
+    if (!own(out.bins, name) || (!out.bins[name] && path)) out.bins[name] = path
   }
   return out
 }
 
 // The check made when a terminal opens on a host (like VS Code's server):
 // the shim put there (ensureShim: createShimInstaller().ensure) and the
-// agents found there (agentTools: remoteFs.agentTools). Once per host and
-// app run, in the background; again at the next terminal when the host could
-// not be reached. send(status) tells the window:
-//   { hostId, label, claude, codex, vscodeClaude, shim: 'ok' | reason, error? }
+// agents found there (agentTools: remoteFs.agentTools, looking for each
+// agent's command, agentBins: [{ id, bin }]). Once per host and app run, in
+// the background; again at the next terminal when the host could not be
+// reached. send(status) tells the window:
+//   { hostId, label, claude, codex, vscodeClaude, agents: { id: path | null },
+//     host: { node, npm... }, uid?, shim: 'ok' | reason, error? }
 // A pane whose ssh still signs in (system ssh with askpass) waits for its
 // sign-in (paneConnected), so the user is never asked twice at once.
-export function createRemoteAgentCheck({ ensureShim, agentTools, label = (id) => id, send = () => {}, log = () => {} }) {
+// The window may ask again (check): a check younger than ttlMs, or one
+// already running, answers it (several panes starting at once ask the host
+// once); fresh (Check again, after an install) always asks the host.
+export const AGENT_CHECK_TTL_MS = 10_000
+export function createRemoteAgentCheck({ ensureShim, agentTools, agentBins = [], label = (id) => id, send = () => {}, log = () => {}, now = Date.now, ttlMs = AGENT_CHECK_TTL_MS }) {
   const done = new Map() // hostId -> Promise<status>
   const waiting = new Map() // paneId -> hostId
+  const latest = new Map() // hostId -> { at, status } (the last check that reached the host)
+  const running = new Map() // hostId -> Promise<status>
+  const bins = (Array.isArray(agentBins) ? agentBins : []).filter((b) => b && typeof b.id === 'string' && typeof b.bin === 'string' && BIN_NAME.test(b.bin))
+  // Each agent by its command: its path there, null when missing; not
+  // reported (an older shell): left out (not checked).
+  function agentsOf(found) {
+    const agents = {}
+    const reported = found && found.bins && typeof found.bins === 'object' ? found.bins : {}
+    for (const { id, bin } of bins) if (own(reported, bin)) agents[id] = reported[bin] || null
+    return agents
+  }
   async function run(hostId) {
     let shim
     try {
@@ -160,25 +206,37 @@ export function createRemoteAgentCheck({ ensureShim, agentTools, label = (id) =>
     } catch (err) {
       tools = { error: (err && err.message) || 'failed' }
     }
-    const found = tools && !tools.error ? tools : { claude: null, codex: null, vscodeClaude: null }
+    const ok = tools && !tools.error
+    const found = ok ? tools : { claude: null, codex: null, vscodeClaude: null }
     const status = {
       hostId,
       label: String(label(hostId) || hostId),
       claude: found.claude || null,
       codex: found.codex || null,
       vscodeClaude: found.vscodeClaude || null,
+      ...(ok ? { agents: agentsOf(found), host: { ...emptyHost(), ...(found.host || {}) } } : {}),
+      ...(ok && Number.isInteger(found.uid) ? { uid: found.uid } : {}),
       shim: shim && shim.ok ? 'ok' : (shim && shim.reason) || 'failed',
       ...(tools && tools.error ? { error: String(tools.error).slice(0, 500) } : {})
     }
     if (status.error) log(`remote agent check on ${hostId}: ${status.error}`)
+    else latest.set(hostId, { at: now(), status })
     return status
+  }
+  // One check of the host at a time; a newer one replaces the older answer.
+  function ask(hostId) {
+    const p = run(hostId).finally(() => {
+      if (running.get(hostId) === p) running.delete(hostId)
+    })
+    running.set(hostId, p)
+    return p
   }
   // A terminal on the host started (connected). -> Promise<status>
   function hostStarted(hostId) {
     if (typeof hostId !== 'string' || !hostId) return Promise.resolve(null)
     let p = done.get(hostId)
     if (p) return p
-    p = run(hostId).then((status) => {
+    p = ask(hostId).then((status) => {
       // Not reached: the next terminal there tries again.
       if (status.error && done.get(hostId) === p) done.delete(hostId)
       try {
@@ -206,9 +264,17 @@ export function createRemoteAgentCheck({ ensureShim, agentTools, label = (id) =>
     paneExited(paneId) {
       waiting.delete(paneId)
     },
-    // The window asks again (after installing an agent there): a new check,
-    // answered (not sent).
-    check: (hostId) => run(hostId)
+    // The window asks again (a pane starting an agent missing in the last
+    // check, Check again, after installing one): answered, not sent.
+    check(hostId, { fresh = false } = {}) {
+      if (!fresh) {
+        const last = latest.get(hostId)
+        if (last && now() - last.at < ttlMs) return Promise.resolve(last.status)
+        const busy = running.get(hostId)
+        if (busy) return busy
+      }
+      return ask(hostId)
+    }
   }
 }
 

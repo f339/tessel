@@ -754,7 +754,10 @@
       "checking": "Vérification…",
       "shell": "Ouvrir un terminal à la place",
       "stillMissing": "Toujours introuvable sur l'hôte.",
-      "installing": "Installation dans le panneau du dessous. Il démarre ici une fois l'installation terminée."
+      "installing": "Installation dans le panneau du dessous. Il démarre ici une fois l'installation terminée.",
+      "installPage": "Ouvrir sa page d'installation",
+      "cancel": "Annuler",
+      "cancelHint": "Fermer ce panneau"
     },
     "agentTerminal": {
       "keys": "touches",

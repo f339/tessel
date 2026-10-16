@@ -73,6 +73,8 @@ function load({ projectOpen = 'ask', remoteStatus = {} } = {}) {
       return ws.tree
     }),
     resumeSession: vi.fn(async () => {}),
+    // Picked as Install… (App.vue launch): its install asked in its pane's card.
+    offerHostInstall: vi.fn(),
     window: { shellApi: { killPty: vi.fn() } },
     Promise,
     Array,
@@ -175,20 +177,17 @@ describe('each choice starts the right pane', () => {
     expect(ctx.resumeSession).toHaveBeenCalledWith(session)
   })
 
-  it('an agent missing on the host (Install…): its install, nothing started; installed by hand since: started', async () => {
+  it('an agent missing on the host (Install…): its pane on the host (its card, the host checked as it starts), and its install asked there', async () => {
     const env = load({ remoteStatus: { 'ssh-box': { claude: 'x', codex: null } } })
-    env.ctx.recheckOrInstall = vi.fn(async () => false)
     await env.api.addProjects({ projects: [REMOTE] })
     await env.api.pickFromLauncher({ kind: 'install', id: 'codex' }, { remember: true })
-    expect(env.ctx.recheckOrInstall).toHaveBeenCalledWith('ssh-box', 'codex')
-    expect(env.ctx.createLeaf).not.toHaveBeenCalled()
-    // Never remembered as what new projects start.
-    expect(env.ctx.settings.projectOpen).toBe('ask')
-    env.ctx.recheckOrInstall = vi.fn(async () => true)
-    await env.api.pickFromLauncher({ kind: 'install', id: 'codex' }, { remember: false })
     expect(env.ctx.createLeaf).toHaveBeenCalledTimes(1)
     expect(env.ctx.createLeaf.mock.calls[0][1]).toBe(AGENTS[1])
     expect(env.ctx.createLeaf.mock.calls[0][4]).toEqual({ remoteHostId: 'ssh-box', remotePath: '/srv/app' })
+    const leaf = await env.ctx.createLeaf.mock.results[0].value
+    expect(env.ctx.offerHostInstall).toHaveBeenCalledWith(leaf, true)
+    // Never remembered as what new projects start.
+    expect(env.ctx.settings.projectOpen).toBe('ask')
   })
 
   it('an agent that is not in the list starts nothing', async () => {

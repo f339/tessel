@@ -117,7 +117,9 @@ describe("a pane whose agent is not installed on its SSH host", () => {
       connectLeaf: vi.fn(),
       installMissingAgent: vi.fn(),
       recheckMissingAgent: vi.fn(),
-      missingAgentShell: vi.fn()
+      missingAgentShell: vi.fn(),
+      missingAgentInstallable: vi.fn(() => true),
+      closeLeaf: vi.fn()
     }
   })
   afterEach(() => {
@@ -140,7 +142,7 @@ describe("a pane whose agent is not installed on its SSH host", () => {
     expect(wrapper.find('[data-test="remote-connect-overlay"]').exists()).toBe(false)
   })
 
-  it("Install, Check again and Open a shell instead call the pane's actions", async () => {
+  it("Install, Check again, Open a shell instead and Cancel call the pane's actions", async () => {
     mountPane({ agent: 'codex', name: 'Codex CLI', resume: true })
     await wrapper.get('[data-test="missing-agent-install"]').trigger('click')
     expect(ctx.installMissingAgent).toHaveBeenCalledWith('pane-m1')
@@ -148,6 +150,18 @@ describe("a pane whose agent is not installed on its SSH host", () => {
     expect(ctx.recheckMissingAgent).toHaveBeenCalledWith('pane-m1')
     await wrapper.get('[data-test="missing-agent-shell"]').trigger('click')
     expect(ctx.missingAgentShell).toHaveBeenCalledWith('pane-m1')
+    expect(wrapper.get('[data-test="missing-agent-cancel"]').text()).toBe('Cancel')
+    await wrapper.get('[data-test="missing-agent-cancel"]').trigger('click')
+    expect(ctx.closeLeaf).toHaveBeenCalledWith('pane-m1', { force: true })
+  })
+
+  it('an agent Tessel knows no automatic install of on the host: its install page instead', async () => {
+    ctx.missingAgentInstallable = vi.fn(() => false)
+    mountPane({ agent: 'opencode2', name: 'OpenCode 2', resume: false })
+    expect(ctx.missingAgentInstallable).toHaveBeenCalledWith('pane-m1')
+    expect(wrapper.get('[data-test="missing-agent-install"]').text()).toBe('Open its install page')
+    await wrapper.get('[data-test="missing-agent-install"]').trigger('click')
+    expect(ctx.installMissingAgent).toHaveBeenCalledWith('pane-m1')
   })
 
   it('while checking or installing: said, and not asked twice', async () => {

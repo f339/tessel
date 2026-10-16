@@ -560,6 +560,35 @@ it('on an SSH host: an agent missing there is not typed; the pane shows its card
   expect(ctx.remoteAgentCommand).not.toHaveBeenCalled()
 })
 
+// Found on a server: Antigravity in an SSH project typed `agy
+// --dangerously-skip-permissions` and the shell said "Command 'agy' not
+// found". Every agent of Tessel's own is checked on its host now.
+it('on an SSH host, any agent (Antigravity): missing there, nothing typed and its card; found, its path there with its flags (Yolo kept); a command of your own typed as is', async () => {
+  const { ctx, api, written } = wakeSandbox()
+  const agy = { id: 'antigravity', name: 'Antigravity', command: 'agy' }
+  const yolo = { command: 'agy', args: '--dangerously-skip-permissions' }
+  ctx.remoteAgentName = (id) => (id === 'antigravity' ? 'Antigravity' : id)
+  ctx.remoteAgentCommand = vi.fn(async () => null)
+  const leaf = { id: 'pane-a' }
+  await api.launch(leaf, agy, { id: 'pane-a', remoteHostId: 'ssh-box', sessionId: null }, 'pane-a', yolo, undefined, null)
+  expect(ctx.remoteAgentCommand).toHaveBeenCalledWith('ssh-box', 'antigravity', 'agy', { strict: false })
+  expect(leaf.agentMissing).toEqual({ agent: 'antigravity', name: 'Antigravity', resume: false })
+  expect(written()).toEqual([])
+  // Installed: its path there, its Yolo flag as first asked.
+  ctx.remoteAgentCommand = vi.fn(async () => "'/home/fivem2/.local/bin/agy'")
+  const again = { id: 'pane-a' }
+  await api.launch(again, agy, { id: 'pane-a', remoteHostId: 'ssh-box' }, 'pane-a', yolo, undefined, null)
+  expect(again.agentMissing).toBeUndefined()
+  expect(written()).toEqual(["'/home/fivem2/.local/bin/agy' --dangerously-skip-permissions\r"])
+  // A command of your own (Settings > Agents) or your own agent: never checked.
+  ctx.remoteAgentCommand = vi.fn()
+  await api.launch({ id: 'pane-b' }, agy, { id: 'pane-b', remoteHostId: 'ssh-box' }, 'pane-b', { command: '/opt/agy/agy', args: '' }, undefined, null)
+  await api.launch({ id: 'pane-c' }, { id: 'mine', name: 'Mine', command: 'mine', custom: true }, { id: 'pane-c', remoteHostId: 'ssh-box' }, 'pane-c', { command: 'mine', args: '' }, undefined, null)
+  expect(ctx.remoteAgentCommand).not.toHaveBeenCalled()
+  expect(written()).toContain('/opt/agy/agy\r')
+  expect(written()).toContain('mine\r')
+})
+
 it('team wake-ups off: no launch prompt, checked before and after counting and when the line is typed; nothing recorded', async () => {
   const prompt = WAKE_LAUNCH_PROMPT
   const opts = () => ({ id: 'pane-2', sessionId: 's-2', resume: true, wake: { teamId: 'team-1', gen: 1 } })

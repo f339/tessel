@@ -144,7 +144,10 @@ export const FUNCTIONS = new Set([
   // in ~/.tessel-server and have it register the team tools there.
   '__t_ragent',
   // The agents installed on this host (remoteAgent/remoteAgentSetup.js
-  // parseAgentTools): their paths only.
+  // parseAgentTools): their paths only (an agent is never run); and what an
+  // install there needs (node and npm, npm's folder and whether it is the user's,
+  // snap, curl, wget, the user id). Its arguments: the command names looked
+  // for (each checked here and there).
   '__t_agents',
   // An image pasted for an agent in a terminal on this host: written in
   // ~/.tessel-server/paste (kept a day), its path printed (remoteFs.js
@@ -571,18 +574,54 @@ __t_paste() {
   ( umask 077; __t_b64d <"$__T_D/u" >"$__f" ) || { rm -f "$__f"; return 98; }
   printf '%s\\n' "$__f"
 }
+__t_tmo() { if command -v timeout >/dev/null 2>&1; then timeout "$@"; else shift; "$@"; fi; }
+__t_which() {
+  __w=
+  set -f
+  __o=$IFS; IFS=:
+  for __d in $__X; do
+    case $__d in /*) ;; *) continue ;; esac
+    if [ -f "$__d/$1" ] && [ -x "$__d/$1" ]; then __w="$__d/$1"; break; fi
+  done
+  IFS=$__o
+  set +f
+  [ -n "$__w" ]
+}
 __t_agents() {
-  for __a in claude codex; do
-    __p=$(command -v "$__a" 2>/dev/null) || __p=
-    case $__p in /*) ;; *) __p= ;; esac
-    if [ -z "$__p" ]; then __p=$("\${SHELL:-/bin/sh}" -lc "command -v $__a" </dev/null 2>/dev/null | tail -n 1) || __p=; case $__p in /*) ;; *) __p= ;; esac; fi
-    if [ -z "$__p" ]; then for __c in "$HOME/.local/bin/$__a" "$HOME/.npm-global/bin/$__a" "$HOME"/.nvm/versions/node/*/bin/"$__a"; do [ -f "$__c" ] && [ -x "$__c" ] && __p=$__c; done; fi
-    [ -n "$__p" ] && [ -x "$__p" ] || __p=-
+  __lp=$(__t_tmo 6 "\${SHELL:-/bin/sh}" -lc 'printf "%s\\n" "$PATH"' </dev/null 2>/dev/null | tail -n 1) || __lp=
+  __nv=
+  for __c in "$HOME"/.nvm/versions/node/*/bin; do [ -d "$__c" ] && __nv="$__c:$__nv"; done
+  __X="$PATH:$__lp:$HOME/.local/bin:$HOME/bin:$HOME/.npm-global/bin:$HOME/.npm-packages/bin:$HOME/.volta/bin:$HOME/.bun/bin:$HOME/.yarn/bin:$HOME/.local/share/pnpm:$HOME/.cargo/bin:$HOME/.opencode/bin:$HOME/.grok/bin:$__nv:/snap/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/home/linuxbrew/.linuxbrew/bin"
+  if __t_which npm; then
+    __npm=$__w
+    __pf=$(__t_tmo 10 env PATH="\${__npm%/*}:$PATH" "$__npm" --no-update-notifier config get prefix </dev/null 2>/dev/null | tail -n 1) || __pf=
+    case $__pf in /*) __X="$__X:$__pf/bin" ;; *) __pf= ;; esac
+  else
+    __npm=; __pf=
+  fi
+  [ $# -gt 0 ] || set -- claude codex
+  for __a in "$@"; do
+    case $__a in ''|[-.]*|*[!0-9A-Za-z._+-]*) continue ;; esac
+    if __t_which "$__a"; then __p=$__w
+    elif [ -f "$HOME/.$__a/bin/$__a" ] && [ -x "$HOME/.$__a/bin/$__a" ]; then __p="$HOME/.$__a/bin/$__a"
+    else __p=-; fi
     printf '%s %s\\n' "$__a" "$__p"
   done
   __p=$(for __c in "$HOME"/.vscode-server/extensions/anthropic.claude-code-*/resources/native-binary/claude; do [ -f "$__c" ] && [ -x "$__c" ] && printf '%s\\n' "$__c"; done | awk '{ v = $0; sub(/.*\\/anthropic\\.claude-code-/, "", v); sub(/\\/.*/, "", v); n = split(v, a, /[.-]/); k = ""; for (i = 1; i <= 4; i++) k = k sprintf("%09d", (i <= n && a[i] ~ /^[0-9]+$/) ? a[i] : 0); if (p == "" || k > b) { b = k; p = $0 } } END { print p }')
   [ -n "$__p" ] || __p=-
   printf 'vscode-claude %s\\n' "$__p"
+  if __t_which node; then __nd=$__w; else __nd=-; fi
+  printf '@node %s\\n' "$__nd"
+  if [ "$__nd" != - ]; then __v=$(__t_tmo 10 "$__nd" -v </dev/null 2>/dev/null | tail -n 1) || __v=; case $__v in v[0-9]*) printf '@nodev %s\\n' "\${__v#v}" ;; esac; fi
+  printf '@npm %s\\n' "\${__npm:--}"
+  if [ -n "$__pf" ]; then
+    __pw=0
+    if [ -d "$__pf/lib/node_modules" ]; then [ -w "$__pf/lib/node_modules" ] && __pw=1; else [ -w "$__pf" ] && __pw=1; fi
+    [ -d "$__pf/bin" ] && [ ! -w "$__pf/bin" ] && __pw=0
+    printf '@prefix %s\\n@prefixw %s\\n' "$__pf" "$__pw"
+  fi
+  for __c in snap curl wget; do if __t_which "$__c"; then __p=$__w; else __p=-; fi; printf '@%s %s\\n' "$__c" "$__p"; done
+  printf '@uid %s\\n@os %s\\n' "$(id -u 2>/dev/null)" "$(uname -s 2>/dev/null)"
 }
 __t_tfile() {
   case $2 in ''|*[!0-9A-Za-z-]*) return 90 ;; esac

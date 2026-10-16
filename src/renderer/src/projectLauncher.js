@@ -19,23 +19,38 @@ export function validProjectOpen(v) {
   return typeof v === 'string' && PROJECT_OPEN.test(v)
 }
 
-// The agents Tessel can start on an SSH host (team 4's detection,
-// remoteAgents:status: { claude, codex, vscodeClaude }).
+// The agents always offered on an SSH host, even before it was checked or
+// when it lacks them (then as Install…). Every built-in agent is looked for
+// there (team 4's detection, remoteAgents:status: { claude, codex,
+// vscodeClaude, agents: { id: path | null } }).
 export const REMOTE_AGENT_IDS = ['claude', 'codex']
 
+// What the host's last check says of agent `id`: its path there (or true),
+// null when missing, undefined when it was not looked for (your own agent,
+// a check that did not list the agents: only Claude Code and Codex then).
+export function hostAgentEntry(id, status) {
+  if (!status || status.error) return undefined
+  if (status.agents && typeof status.agents === 'object' && Object.prototype.hasOwnProperty.call(status.agents, id)) return status.agents[id] || null
+  if (id === 'claude' || id === 'codex') return status[id] || null
+  return undefined
+}
+
 // Is this agent on the host? true / false, or null: not checked yet (the
-// host was not connected since Tessel started; nothing connects to ask).
+// host was not connected since Tessel started; nothing connects to ask), or
+// an agent the check does not look for.
 export function remoteAgentFound(id, status) {
   if (!status || status.error) return null
-  if (id === 'claude') return !!(status.claude || status.vscodeClaude)
-  if (id === 'codex') return !!status.codex
-  return false
+  if (id === 'claude' && status.vscodeClaude) return true
+  const entry = hostAgentEntry(id, status)
+  return entry === undefined ? null : !!entry
 }
 
 // The agents the launcher offers: here, the installed and enabled ones; on
-// an SSH host, the ones found there (both, marked unchecked, before the
-// host was checked), and those found missing there as "Install…" (missing:
-// never started as if ready). -> [{ id, name, accent, unchecked, missing }]
+// an SSH host, the ones found there, and Claude Code, Codex and the agents
+// installed here (the ones you use) when found missing there, as
+// "Install…" (missing: never started as if ready); before the host was
+// checked, Claude Code and Codex, marked unchecked.
+// -> [{ id, name, accent, unchecked, missing }]
 export function launcherAgents({ agents = [], remote = false, remoteStatus = null, enabled = () => true } = {}) {
   const list = Array.isArray(agents) ? agents : []
   if (!remote)
@@ -43,11 +58,12 @@ export function launcherAgents({ agents = [], remote = false, remoteStatus = nul
       .filter((a) => a && a.available !== false && enabled(a.id))
       .map((a) => ({ id: a.id, name: a.name, accent: a.accent || null, unchecked: false, missing: false }))
   const out = []
-  for (const id of REMOTE_AGENT_IDS) {
-    const a = list.find((x) => x && x.id === id)
-    if (!a || !enabled(id)) continue
-    const found = remoteAgentFound(id, remoteStatus)
-    out.push({ id, name: a.name, accent: a.accent || null, unchecked: found === null, missing: found === false })
+  for (const a of list) {
+    if (!a || a.custom || !enabled(a.id)) continue
+    const always = REMOTE_AGENT_IDS.includes(a.id)
+    const found = remoteAgentFound(a.id, remoteStatus)
+    if (found === null ? !always : found === false && !always && a.available === false) continue
+    out.push({ id: a.id, name: a.name, accent: a.accent || null, unchecked: found === null, missing: found === false })
   }
   return out
 }

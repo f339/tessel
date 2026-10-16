@@ -649,9 +649,10 @@ const api = {
     }
   },
   // Agents on SSH hosts (src/main/remoteAgent/REMOTE_AGENTS.md): which agent
-  // CLIs a host has, sent when it connects; check() asks again.
+  // CLIs a host has, sent when it connects; check() asks again ({ fresh:
+  // true }: the host itself, not a check of a few seconds ago).
   remoteAgents: {
-    check: (hostId) => ipcRenderer.invoke('remoteAgents:check', hostId),
+    check: (hostId, opts) => ipcRenderer.invoke('remoteAgents:check', hostId, opts && opts.fresh === true ? { fresh: true } : undefined),
     onStatus: (cb) => {
       const handler = (_e, payload) => cb(payload)
       ipcRenderer.on('remoteAgents:status', handler)

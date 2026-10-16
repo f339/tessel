@@ -7,7 +7,8 @@ import ViewTabs from './components/ViewTabs.vue'
 import FloatingTerminal from './components/FloatingTerminal.vue'
 import ProjectLauncher from './components/ProjectLauncher.vue'
 import { allowDropRetry, droppedRemotePane, emptiedWorkspaceChoice, launcherAgents, launcherShells, projectOpenChoice, rememberedValue, remoteAgentFound } from './projectLauncher'
-import { claudeStartChoice, codexResumes, hostMenuAgents, needsRemoteAgentCheck, remoteAgentLine, remoteInstallCommand, remotePaneInstallCommand, hostRunsAsRoot, hasClaudeYoloFlag, rootSafeClaudeArgs, rootRefusalWatcher } from './remoteAgentLaunch'
+import { claudeStartChoice, codexResumes, hostMenuAgents, needsRemoteAgentCheck, remoteAgentLine, hostRunsAsRoot, hasClaudeYoloFlag, rootSafeClaudeArgs, rootRefusalWatcher } from './remoteAgentLaunch'
+import { remoteInstallLine, remoteInstallPlan } from './remoteAgentInstalls'
 import { createFloatingTerminal, isFloatingToggleKey } from './floatingTerminal'
 import BrandIcon from './components/BrandIcon.vue'
 import SidePanel from './components/SidePanel.vue'
@@ -1565,19 +1566,19 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     return leaf
   }
   // Launch the agent CLI once the shell has had a moment to print its prompt.
-  // Claude or Codex on an SSH host: its own install there (Claude: else VS
-  // Code's copy), checked first when it was missing or never checked; none:
-  // nothing is typed, the pane shows it (its "not installed" card: Install,
-  // Check again, Open a shell instead) and keeps its conversation id. A pane
-  // already missing it (restored, reconnected) starts it only when the host
-  // says it is there now.
+  // An agent on an SSH host (any of Tessel's own, started by its own
+  // command): its install there (Claude: else VS Code's copy), checked first
+  // when it was missing or never checked; none: nothing is typed, the pane
+  // shows it (its "not installed" card: Install, Check again, Open a shell
+  // instead, Cancel) and keeps its conversation id. A pane already missing
+  // it (restored, reconnected) starts it only when the host says it is
+  // there now. A command of your own (Settings > Agents) is typed as is.
   let launchCommand = launch && launch.command
-  const hostKind = agent && opts.remoteHostId ? sessionKind(agent) : null
-  if (agent && agent.command && (hostKind === 'claude' || hostKind === 'codex') && launchCommand === hostKind) {
-    launchCommand = await remoteAgentCommand(opts.remoteHostId, hostKind, launchCommand, { strict: !!opts.agentMissing })
+  if (agent && agent.command && opts.remoteHostId && !agent.custom && launchCommand === agent.command) {
+    launchCommand = await remoteAgentCommand(opts.remoteHostId, agent.id, launchCommand, { strict: !!opts.agentMissing })
     if (!launchCommand) {
       leaf.sessionId = opts.sessionId || null
-      leaf.agentMissing = { agent: hostKind, name: remoteAgentName(hostKind), resume: !!opts.resume }
+      leaf.agentMissing = { agent: agent.id, name: remoteAgentName(agent.id), resume: !!opts.resume }
     }
   }
   // Claude Code refuses its Yolo flag as root and never starts: on a host
@@ -3064,6 +3065,7 @@ provide('panelCtx', {
   installMissingAgent: (id) => installMissingAgent(id),
   recheckMissingAgent: (id) => recheckMissingAgent(id),
   missingAgentShell: (id) => missingAgentShell(id),
+  missingAgentInstallable: (id) => missingAgentInstallable(id),
   setActive,
   toggleMaximize,
   // The tabs above the panes, drawn in the header of the editor or browser
@@ -3384,7 +3386,10 @@ function agentById(id) {
 
 // Open a terminal (kind 'shell') or an agent next to `targetId`, per the
 // chosen placement. Agents run inside the default shell.
-async function launch({ kind, id, sessionOptions = null, accountId }, targetId = activeId.value, where = placement.value) {
+// installOnHost: picked as "Install…" on an SSH project (the agent missing
+// there): its pane opens with its "not installed" card and its install is
+// asked right away; installed by hand since, it simply starts.
+async function launch({ kind, id, sessionOptions = null, accountId, installOnHost = false }, targetId = activeId.value, where = placement.value) {
   // The account it starts on, chosen in the + menu (else the default one).
   const account = accountId === null || typeof accountId === 'string' ? { accountId } : {}
   closeMenus()
@@ -3407,10 +3412,10 @@ async function launch({ kind, id, sessionOptions = null, accountId }, targetId =
     return
   }
   const agent = kind === 'agent' ? agentById(id) : null
-  // On an SSH host, Claude Code and Codex go by what the host has (checked
-  // again as they start), not by this computer's install.
+  // On an SSH host, Tessel's agents go by what the host has (checked again
+  // as they start), not by this computer's install.
   const hostWs = (targetId && wsOfLeaf(targetId)) || currentWs.value
-  const onHostAgent = !!(agent && hostWs && hostWs.remote && (agent.id === 'claude' || agent.id === 'codex'))
+  const onHostAgent = !!(agent && hostWs && hostWs.remote && !agent.custom)
   if (kind === 'agent' && (!agent || (agent.available === false && !onHostAgent))) return
   const shellId = kind === 'shell' ? id : selectedShell.value
 
@@ -3451,12 +3456,14 @@ async function launch({ kind, id, sessionOptions = null, accountId }, targetId =
       ws.tree = leaf
       showActive(ws, leaf.id)
     }
+    offerHostInstall(leaf, installOnHost)
     return
   }
 
   const ws = (targetId && wsOfLeaf(targetId)) || currentWs.value
   if (targetId && ws && ws.tree) {
-    await splitLeaf(targetId, where === 'down' ? 'col' : 'row', agent, shellId, worktree, { before: where === 'left', sessionOptions, inheritView: true, ...account })
+    const leaf = await splitLeaf(targetId, where === 'down' ? 'col' : 'row', agent, shellId, worktree, { before: where === 'left', sessionOptions, inheritView: true, ...account })
+    offerHostInstall(leaf, installOnHost)
     return
   }
   if (!ws) return
@@ -3465,6 +3472,11 @@ async function launch({ kind, id, sessionOptions = null, accountId }, targetId =
     ws.tree = leaf
     showActive(ws, leaf.id)
   }
+  offerHostInstall(leaf, installOnHost)
+}
+// Picked as "Install…": the pane shows its card; its install asked now.
+function offerHostInstall(leaf, asked) {
+  if (asked && leaf && leaf.agentMissing) installMissingAgent(leaf.id)
 }
 
 // Agents: built-in list from the main process plus your own (settings), with
@@ -4022,10 +4034,11 @@ function openLauncherCentered() {
 function onLauncherLaunch(item) {
   const target = launcher.targetId
   launcher.open = false
-  // An agent missing on the project's host: its install there (asked first).
+  // An agent missing on the project's host: its pane, with its card, and
+  // its install there (asked first); installed by hand since: it starts.
   if (item && item.kind === 'install') {
     const ws = (target && wsOfLeaf(target)) || currentWs.value
-    if (ws && ws.remote) recheckOrInstall(ws.remote.hostId, item.id).then((there) => there && launch({ kind: 'agent', id: item.id }, target))
+    if (ws && ws.remote) launch({ kind: 'agent', id: item.id, installOnHost: true }, target)
     return
   }
   launch(item, target)
@@ -5094,11 +5107,14 @@ async function startInEmptyWorkspace(ws, choice) {
     await resumeSession(choice.session)
     return ws.tree ? findLeafIn(ws.tree, ws.activeId) : null
   }
-  // An agent missing on the host (shown as Install…): installed there once
-  // you confirm; installed by hand since: started.
+  // An agent missing on the host (shown as Install…): its pane, with its
+  // card, and its install there once you confirm; installed by hand since:
+  // started.
   if (choice.kind === 'install') {
-    if (!ws.remote || !(await recheckOrInstall(ws.remote.hostId, choice.id))) return null
-    return startInEmptyWorkspace(ws, { kind: 'agent', id: choice.id })
+    if (!ws.remote) return null
+    const leaf = await startInEmptyWorkspace(ws, { kind: 'agent', id: choice.id })
+    offerHostInstall(leaf, true)
+    return leaf
   }
   if (choice.kind !== 'agent' && choice.kind !== 'terminal') return null
   const agent = choice.kind === 'agent' ? agentById(choice.id) : null
@@ -5469,11 +5485,11 @@ onBeforeUnmount(() => offRemoteBranches && offRemoteBranches())
 
 // Agents on an SSH host (src/main/remoteAgent/REMOTE_AGENTS.md): when a host
 // connects, main puts Tessel's helper there and says which agent CLIs it
-// has. Claude Code missing: offered once per host and run, with a button that
-// runs its official installer in a new pane on that host (it then shows its
-// sign-in link there).
-// Codex (or Claude) missing when a pane starts it there: the same offer
-// (remoteAgentLaunch.js has the official install commands).
+// has (every built-in agent, by its command). Claude Code missing: offered
+// once per host and run, with a button that runs its official installer in
+// a new pane on that host (it then shows its sign-in link there).
+// Any agent missing when a pane starts it there: the pane's card, with its
+// install (remoteAgentInstalls.js has each one's install for a host).
 const remoteAgentOffered = new Set()
 // Reactive: an empty SSH project's launcher lists the agents found there.
 const remoteAgentTools = reactive({}) // hostId -> the last agent check (remoteAgents:status)
@@ -5488,12 +5504,13 @@ function onRemoteAgentsStatus(st) {
 }
 function remoteAgentName(id) {
   const a = agentById(id)
-  return (a && a.name) || (id === 'codex' ? 'Codex CLI' : 'Claude Code') // i18n-ignore
+  return (a && a.name) || (id === 'codex' ? 'Codex CLI' : id === 'claude' ? 'Claude Code' : id) // i18n-ignore
 }
 // Agent `id` is not on the host: a toast whose button shows the official
 // install command and runs it there once you confirm.
 function offerAgentInstall(hostId, id, label) {
-  if (!remoteInstallCommand(id)) return
+  const plan = hostInstallPlan(hostId, id)
+  if (!plan || !plan.command) return
   const host = label || remoteHostLabel(hostId)
   const agent = remoteAgentName(id)
   const text =
@@ -5570,23 +5587,61 @@ async function remoteAgentCommand(hostId, id, command, { strict = false } = {}) 
   if (strict && remoteAgentFound(id, st) !== true) return null
   return remoteAgentLine(id, st, command)
 }
+// How agent `id` installs on the host (remoteAgentInstalls.js), from what
+// the host's last check found there (npm, its folder, curl, snap...).
+function hostInstallPlan(hostId, id) {
+  const st = remoteAgentTools[hostId]
+  return remoteInstallPlan(agentById(id) || { id }, (st && st.host) || null)
+}
+// Whether the card of pane `leafId` can install its agent (else it opens
+// the agent's install page).
+function missingAgentInstallable(leafId) {
+  const leaf = findLeaf(leafId)
+  if (!leaf || !leaf.agentMissing || !leaf.remoteHostId) return true
+  const plan = hostInstallPlan(leaf.remoteHostId, leaf.agentMissing.agent)
+  return !(plan && plan.docsUrl && !plan.command)
+}
 // Install agent `id` on the host: its exact command shown, then run in a new
-// pane there (it shows its own output and questions).
+// pane there (it shows its own output and questions, a sudo password too).
+// Nothing runs before you click Install. No automatic install known for it:
+// its install page opens instead.
 // opts.forLeafId: installed for that pane's "not installed" card: the pane
 // opens under it, and its shell ending with 0 (the install worked) checks
 // the host again and starts the agent there (missingAgentInstallExit).
 // -> the install pane, or null.
 async function installAgentOnHost(hostId, id, { forLeafId = null } = {}) {
-  const command = forLeafId ? remotePaneInstallCommand(id) : remoteInstallCommand(id)
-  if (!command) return null
+  const plan = hostInstallPlan(hostId, id)
+  if (!plan) return null
   const agent = remoteAgentName(id)
+  const host = remoteHostLabel(hostId)
+  if (plan.error) {
+    showToast(t('app.remoteAgents.noDownload', 'Neither curl nor wget is installed on {{host}}, so {{agent}} cannot be downloaded there. Install one of them on the host first.', { agent, host }), { kind: 'error', timeout: 12000 })
+    return null
+  }
+  if (!plan.command) {
+    if (plan.docsUrl) {
+      openExternalUrl(plan.docsUrl)
+      showToast(t('app.remoteAgents.installPage', 'Tessel has no automatic install of {{agent}} for {{host}}: its install page is open in your browser.', { agent, host }), { timeout: 10000 })
+    }
+    return null
+  }
+  const command = remoteInstallLine(id, plan.command, { pane: !!forLeafId })
+  const details = [{ label: t('app.install.confirmSource', 'Source'), value: plan.source }]
+  if (plan.node)
+    details.push({ label: 'Node.js', value: t('app.remoteAgents.nodeNote', 'Not on the host, or too old for {{agent}}: installed first with nvm, in your home folder (no password asked). nvm comes from {{url}}', { agent, url: NVM_INSTALL_URL }) })
+  if (plan.sudo) details.push({ label: 'sudo', value: t('app.remoteAgents.sudoNote', 'This installer uses sudo: the host asks for your password, and your account there must be allowed to use sudo.') })
+  if (plan.alt)
+    details.push({ label: t('app.remoteAgents.snapLabel', 'Or with snap'), value: t('app.remoteAgents.snapNote', '{{command}}: a community package, not from the vendor; it needs sudo (your password, and your account allowed to use it).', { command: plan.alt.command }) })
   const ok = await askConfirm({
-    title: t('app.remoteAgents.installTitle', 'Install {{agent}} on {{host}}?', { agent, host: remoteHostLabel(hostId) }),
+    title: t('app.remoteAgents.installTitle', 'Install {{agent}} on {{host}}?', { agent, host }),
     text: t('app.remoteAgents.installText', 'Tessel opens a terminal on the host and runs this official install command there:'),
     code: command,
+    details,
+    altLabel: plan.alt ? t('app.remoteAgents.installSnap', 'Install with snap (sudo)') : '',
     confirmLabel: t('app.remoteAgents.installConfirm', 'Install')
   })
-  if (ok !== true) return null
+  if (ok !== true && !(ok === 'alt' && plan.alt)) return null
+  const line = ok === 'alt' ? remoteInstallLine(id, plan.alt.command, { pane: !!forLeafId }) : command
   const ws = workspaces.value.find((w) => w.remote && w.remote.hostId === hostId)
   const opts = ws ? { remoteHostId: hostId, remotePath: ws.remote.path } : { remoteHostId: hostId }
   const waiting = forLeafId ? findLeaf(forLeafId) : null
@@ -5598,22 +5653,25 @@ async function installAgentOnHost(hostId, id, { forLeafId = null } = {}) {
     waiting.agentMissing.installing = leaf.id
   }
   // Typed while the remote shell starts: the terminal host keeps it for it.
-  window.shellApi.writePty(leaf.id, command + '\r')
+  window.shellApi.writePty(leaf.id, line + '\r')
   return leaf
 }
 
 // --- An agent missing on its SSH host: its pane's card ----------------------
 // createLeaf typed nothing (leaf.agentMissing: { agent, name, resume,
 // checking, notFound, installing }); TerminalPane shows the card over the
-// pane's shell on the host, with Install, Check again, Open a shell instead.
+// pane's shell on the host, with Install, Check again, Open a shell instead,
+// Cancel (the pane closes).
 const missingAgentInstalls = {} // install pane id -> the waiting pane's id
-// The host's agents, asked now (at most REMOTE_CHECK_MS). -> its status, or null.
-async function askHostAgents(hostId) {
+// The host's agents, asked now (at most REMOTE_CHECK_MS). opts.fresh: the
+// host itself, never main's check of a few seconds ago (Check again, after
+// an install). -> its status, or null.
+async function askHostAgents(hostId, { fresh: anew = false } = {}) {
   const api = window.shellApi.remoteAgents
   if (!api || !api.check) return null
   let timer = null
   const fresh = await Promise.race([
-    api.check(hostId).catch(() => null),
+    (anew ? api.check(hostId, { fresh: true }) : api.check(hostId)).catch(() => null),
     new Promise((resolve) => {
       timer = setTimeout(() => resolve(null), REMOTE_CHECK_MS)
     })
@@ -5632,7 +5690,7 @@ async function recheckMissingAgent(leafId) {
   missing.notFound = false
   let found = false
   try {
-    const st = await askHostAgents(leaf.remoteHostId)
+    const st = await askHostAgents(leaf.remoteHostId, { fresh: true })
     found = remoteAgentFound(missing.agent, st) === true
   } finally {
     missing.checking = false
@@ -5692,17 +5750,6 @@ onMounted(() => {
   if (window.shellApi.onExit) offMissingAgentExit = window.shellApi.onExit((e) => e && missingAgentInstallExit(e.id, e.exitCode))
 })
 onBeforeUnmount(() => offMissingAgentExit && offMissingAgentExit())
-// Picked an agent shown as "Install…" (the launcher, the "+" menu): asked
-// again first (installed by hand since?); there now: started; else its
-// install. -> true when it is there now.
-async function recheckOrInstall(hostId, id) {
-  const api = window.shellApi.remoteAgents
-  const fresh = api && api.check ? await api.check(hostId).catch(() => null) : null
-  if (fresh && !fresh.error) remoteAgentTools[hostId] = fresh
-  if (remoteAgentFound(id, remoteAgentTools[hostId]) === true) return true
-  await installAgentOnHost(hostId, id)
-  return false
-}
 onMounted(() => {
   const api = window.shellApi.remoteAgents
   if (api && api.onStatus) offRemoteAgents = api.onStatus(onRemoteAgentsStatus)

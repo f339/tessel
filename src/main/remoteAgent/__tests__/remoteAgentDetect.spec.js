@@ -7,26 +7,58 @@ import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
 import { createRemoteSession, sessionArgs } from '../../remoteShell'
-import { parseAgentTools, createRemoteAgentCheck } from '../remoteAgentSetup'
+import { parseAgentTools, createRemoteAgentCheck, emptyHost } from '../remoteAgentSetup'
 import { gitSh, fakeSshLaunch, posixPath } from '../../__tests__/fixtures/fakeSsh'
+
+const tops = (r) => ({ claude: r.claude, codex: r.codex, vscodeClaude: r.vscodeClaude })
 
 describe('parseAgentTools', () => {
   it('reads one absolute path per tool, "-" or anything else as missing', () => {
-    expect(parseAgentTools('claude /home/me/.local/bin/claude\ncodex -\nvscode-claude /home/me/.vscode-server/extensions/anthropic.claude-code-2.0.10-linux-x64/resources/native-binary/claude\n')).toEqual({
+    expect(tops(parseAgentTools('claude /home/me/.local/bin/claude\ncodex -\nvscode-claude /home/me/.vscode-server/extensions/anthropic.claude-code-2.0.10-linux-x64/resources/native-binary/claude\n'))).toEqual({
       claude: '/home/me/.local/bin/claude',
       codex: null,
       vscodeClaude: '/home/me/.vscode-server/extensions/anthropic.claude-code-2.0.10-linux-x64/resources/native-binary/claude'
     })
-    expect(parseAgentTools('claude relative/claude\r\ncodex /usr/bin/codex\r\nother /x\n')).toEqual({ claude: null, codex: '/usr/bin/codex', vscodeClaude: null })
-    expect(parseAgentTools('claude /a\u0007b\nclaude /usr/bin/claude\n')).toEqual({ claude: '/usr/bin/claude', codex: null, vscodeClaude: null })
-    expect(parseAgentTools('')).toEqual({ claude: null, codex: null, vscodeClaude: null })
+    expect(tops(parseAgentTools('claude relative/claude\r\ncodex /usr/bin/codex\r\nother /x\n'))).toEqual({ claude: null, codex: '/usr/bin/codex', vscodeClaude: null })
+    expect(tops(parseAgentTools('claude /a\u0007b\nclaude /usr/bin/claude\n'))).toEqual({ claude: '/usr/bin/claude', codex: null, vscodeClaude: null })
+    expect(parseAgentTools('')).toMatchObject({ claude: null, codex: null, vscodeClaude: null, bins: {}, uid: null })
     expect(parseAgentTools('claude /a b/claude')).toMatchObject({ claude: '/a b/claude' })
+  })
+
+  it('every command looked for: its path, or null; names that are not commands are left out', () => {
+    const r = parseAgentTools('agy /home/me/.local/bin/agy\nkiro-cli -\ngemini relative\nconstructor -\n../x /etc/x\n-rf /x\nvscode-claude -\nagy -\n')
+    expect(r.bins).toEqual({ agy: '/home/me/.local/bin/agy', 'kiro-cli': null, gemini: null, constructor: null })
+    // The first path found counts; a later "-" does not undo it.
+    expect(parseAgentTools('agy -\nagy /snap/bin/agy\n').bins.agy).toBe('/snap/bin/agy')
+  })
+
+  it('what an install there needs: node and its version, npm, its folder and whether it is the user\'s, snap, curl, wget, uid, system', () => {
+    const r = parseAgentTools(
+      ['claude -', '@node /home/me/.nvm/versions/node/v22.11.0/bin/node', '@nodev 22.11.0', '@npm /home/me/.nvm/versions/node/v22.11.0/bin/npm', '@prefix /home/me/.nvm/versions/node/v22.11.0', '@prefixw 1', '@snap /usr/bin/snap', '@curl /usr/bin/curl', '@wget -', '@uid 1001', '@os Linux', '@bogus x'].join('\n')
+    )
+    expect(r.host).toEqual({
+      node: '/home/me/.nvm/versions/node/v22.11.0/bin/node',
+      nodeMajor: 22,
+      npm: '/home/me/.nvm/versions/node/v22.11.0/bin/npm',
+      npmPrefix: '/home/me/.nvm/versions/node/v22.11.0',
+      npmWritable: true,
+      snap: '/usr/bin/snap',
+      curl: '/usr/bin/curl',
+      wget: null,
+      os: 'Linux'
+    })
+    expect(r.uid).toBe(1001)
+    // Nothing said, or something odd: not known.
+    const odd = parseAgentTools('@nodev banana\n@prefixw yes\n@uid -1\n@os $(rm)\n@npm -\n')
+    expect(odd.host).toMatchObject({ nodeMajor: null, npmWritable: null, os: null, npm: null })
+    expect(odd.uid).toBe(null)
+    expect(parseAgentTools('@prefixw 0\n').host.npmWritable).toBe(false)
   })
 })
 
 describe('createRemoteAgentCheck', () => {
   const tools = { claude: '/usr/bin/claude', codex: null, vscodeClaude: null }
-  function make({ shim = { ok: true }, agentTools } = {}) {
+  function make({ shim = { ok: true }, agentTools, agentBins, now, ttlMs } = {}) {
     const calls = { shim: 0, tools: 0 }
     const sent = []
     const check = createRemoteAgentCheck({
@@ -38,11 +70,15 @@ describe('createRemoteAgentCheck', () => {
         calls.tools++
         return agentTools ? agentTools(hostId) : tools
       },
+      ...(agentBins ? { agentBins } : {}),
+      ...(now ? { now } : {}),
+      ...(ttlMs != null ? { ttlMs } : {}),
       label: (hostId) => `Label ${hostId}`,
       send: (s) => sent.push(s)
     })
     return { check, calls, sent }
   }
+  const status = (extra = {}) => ({ hostId: 'h1', label: 'Label h1', ...tools, agents: {}, host: emptyHost(), shim: 'ok', ...extra })
 
   it('once per host and app run; the window hears the status', async () => {
     const { check, calls, sent } = make()
@@ -52,7 +88,7 @@ describe('createRemoteAgentCheck', () => {
     await a
     await check.hostStarted('h1')
     expect(calls).toEqual({ shim: 1, tools: 1 })
-    expect(sent).toEqual([{ hostId: 'h1', label: 'Label h1', claude: '/usr/bin/claude', codex: null, vscodeClaude: null, shim: 'ok' }])
+    expect(sent).toEqual([status()])
     await check.hostStarted('h2')
     expect(sent.map((s) => s.hostId)).toEqual(['h1', 'h2'])
   })
@@ -72,7 +108,7 @@ describe('createRemoteAgentCheck', () => {
     await check.hostStarted('h1')
     await check.hostStarted('h1')
     expect(calls.tools).toBe(2)
-    expect(sent[1]).toEqual({ hostId: 'h1', label: 'Label h1', ...tools, shim: 'ok' })
+    expect(sent[1]).toEqual(status())
   })
 
   it('throwing helpers end as a status, never a rejection', async () => {
@@ -104,13 +140,54 @@ describe('createRemoteAgentCheck', () => {
     expect(calls.tools).toBe(1)
   })
 
-  it('check() asks again and answers, without sending', async () => {
-    const { check, calls, sent } = make()
+  it('check() answers without sending: from a check of a few seconds ago, else the host again; fresh: always the host', async () => {
+    let t = 1000
+    const { check, calls, sent } = make({ now: () => t, ttlMs: 10_000 })
     await check.hostStarted('h1')
-    const res = await check.check('h1')
-    expect(res).toEqual({ hostId: 'h1', label: 'Label h1', ...tools, shim: 'ok' })
+    expect(await check.check('h1')).toEqual(status())
+    expect(calls.tools).toBe(1)
+    expect(await check.check('h1', { fresh: true })).toEqual(status())
     expect(calls.tools).toBe(2)
+    t += 10_001
+    await check.check('h1')
+    expect(calls.tools).toBe(3)
     expect(sent).toHaveLength(1)
+  })
+
+  it('several panes asking at once: one check of the host', async () => {
+    let release
+    const gate = new Promise((r) => (release = r))
+    const { check, calls } = make({ agentTools: async () => (await gate, tools) })
+    const a = check.check('h1')
+    const b = check.check('h1')
+    release()
+    expect(await a).toBe(await b)
+    expect(calls.tools).toBe(1)
+  })
+
+  it('a check that failed is never reused', async () => {
+    let fail = true
+    const { check, calls } = make({ agentTools: () => (fail ? { error: 'timeout' } : tools) })
+    expect(await check.check('h1')).toMatchObject({ error: 'timeout' })
+    fail = false
+    expect(await check.check('h1')).not.toHaveProperty('error')
+    expect(calls.tools).toBe(2)
+  })
+
+  it('each agent by its command: its path there, null when missing, left out when not reported', async () => {
+    const agentBins = [
+      { id: 'claude', bin: 'claude' },
+      { id: 'antigravity', bin: 'agy' },
+      { id: 'kiro', bin: 'kiro-cli' },
+      { id: 'grok', bin: 'grok' },
+      { id: 'bad', bin: '../x' }
+    ]
+    const found = { ...tools, bins: { claude: '/usr/bin/claude', agy: null, 'kiro-cli': '/home/u/.local/bin/kiro-cli' }, host: { npm: '/usr/bin/npm', npmWritable: false }, uid: 0 }
+    const { check } = make({ agentBins, agentTools: () => found })
+    const res = await check.check('h1')
+    expect(res.agents).toEqual({ claude: '/usr/bin/claude', antigravity: null, kiro: '/home/u/.local/bin/kiro-cli' })
+    expect(res.host).toEqual({ ...emptyHost(), npm: '/usr/bin/npm', npmWritable: false })
+    expect(res.uid).toBe(0)
   })
 })
 
@@ -129,7 +206,7 @@ describe.skipIf(!gitSh())('__t_agents on a POSIX sh (fake ssh)', () => {
     if (exec) fs.chmodSync(p, 0o755)
   }
 
-  async function agentsIn(home, extraEnv = {}) {
+  async function agentsIn(home, extraEnv = {}, names = []) {
     const launch = fakeSshLaunch({ home })
     // No agent on the PATH of this computer is seen; the login shell finds none.
     session = createRemoteSession({
@@ -139,15 +216,73 @@ describe.skipIf(!gitSh())('__t_agents on a POSIX sh (fake ssh)', () => {
       spawnImpl: launch.spawnImpl
     })
     await session.start()
-    const res = await session.run('__t_agents', [], { cap: 16 * 1024, timeoutMs: 30000 })
+    const res = await session.run('__t_agents', names, { cap: 64 * 1024, timeoutMs: 30000 })
     expect(res.rc).toBe(0)
     return res.out.toString('utf8')
   }
+  // A program for the host's sh that prints `text` (its arguments in $*).
+  const script = (p, body) => {
+    fs.mkdirSync(join(p, '..'), { recursive: true })
+    fs.writeFileSync(p, `#!/bin/sh\n${body}\n`)
+    fs.chmodSync(p, 0o755)
+  }
 
-  it('nothing installed: three dashes', async () => {
+  it('nothing installed: three dashes, then what the host has for an install', async () => {
     dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-agents-'))
     const out = await agentsIn(dir)
-    expect(out).toBe('claude -\ncodex -\nvscode-claude -\n')
+    expect(out.startsWith('claude -\ncodex -\nvscode-claude -\n@node ')).toBe(true)
+    const r = parseAgentTools(out)
+    expect(r.bins).toEqual({ claude: null, codex: null })
+    expect(out).toMatch(/^@uid \d+$/m)
+    expect(out).toMatch(/^@os \S+$/m)
+  }, 60000)
+
+  it('every command asked for, in the usual folders and the login shell\'s PATH; names that are not commands skipped', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-agents-'))
+    const home = posixPath(dir)
+    tool(join(dir, '.local', 'bin', 'agy'))
+    tool(join(dir, '.grok', 'bin', 'grok'))
+    tool(join(dir, '.bun', 'bin', 'opencode'))
+    tool(join(dir, 'loginbin', 'kiro-cli'))
+    // The login shell (its .profile) adds a folder this session lacks.
+    script(join(dir, 'fakesh'), `echo motd line\necho '${home}/loginbin:/usr/bin'`)
+    const out = await agentsIn(dir, { SHELL: `${home}/fakesh` }, ['agy', 'grok', 'opencode', 'kiro-cli', 'gemini', '../etc', '-rf'])
+    const r = parseAgentTools(out)
+    expect(r.bins).toEqual({
+      agy: `${home}/.local/bin/agy`,
+      grok: `${home}/.grok/bin/grok`,
+      opencode: `${home}/.bun/bin/opencode`,
+      'kiro-cli': `${home}/loginbin/kiro-cli`,
+      gemini: null
+    })
+    expect(out).not.toMatch(/^\.\.\/etc |^-rf /m)
+  }, 60000)
+
+  it('npm: its folder (where its agents are) and whether it is the user\'s; node and its version', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-agents-'))
+    const home = posixPath(dir)
+    const prefix = join(dir, 'npmprefix')
+    fs.mkdirSync(join(prefix, 'lib', 'node_modules'), { recursive: true })
+    tool(join(prefix, 'bin', 'gemini'))
+    script(join(dir, '.local', 'bin', 'npm'), `case "$*" in *"config get prefix"*) echo '${posixPath(prefix)}' ;; esac`)
+    script(join(dir, '.nvm', 'versions', 'node', 'v20.1.0', 'bin', 'node'), 'echo v20.1.0')
+    script(join(dir, '.nvm', 'versions', 'node', 'v22.3.0', 'bin', 'node'), 'echo v22.3.0')
+    const r = parseAgentTools(await agentsIn(dir, {}, ['gemini']))
+    expect(r.bins.gemini).toBe(`${posixPath(prefix)}/bin/gemini`)
+    expect(r.host).toMatchObject({ npm: `${home}/.local/bin/npm`, npmPrefix: posixPath(prefix), npmWritable: true })
+    // The newest nvm Node.js first.
+    expect(r.host).toMatchObject({ node: `${home}/.nvm/versions/node/v22.3.0/bin/node`, nodeMajor: 22 })
+  }, 60000)
+
+  it('a login shell that never ends (its .profile hangs): given up after a few seconds, the rest still found', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-agents-'))
+    const home = posixPath(dir)
+    tool(join(dir, '.local', 'bin', 'agy'))
+    script(join(dir, 'hangsh'), 'sleep 40')
+    const t0 = Date.now()
+    const r = parseAgentTools(await agentsIn(dir, { SHELL: `${home}/hangsh` }, ['agy']))
+    expect(r.bins.agy).toBe(`${home}/.local/bin/agy`)
+    expect(Date.now() - t0).toBeLessThan(25000)
   }, 60000)
 
   it('finds ~/.local/bin, ~/.nvm and the newest executable VS Code extension binary', async () => {
