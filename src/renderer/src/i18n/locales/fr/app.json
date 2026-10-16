@@ -895,7 +895,14 @@
     "hostAccount": {
       "refused": "{{agent}} n’a pas été démarré sur son compte sur cet hôte : {{error}} Menu du panneau > Redémarrer sur… le démarre sur un autre.",
       "createFailed": "Impossible de préparer un nouveau compte sur cet hôte : {{error}}",
-      "signInHint": "Connectez-vous à l’autre compte dans le nouveau panneau. Ensuite, Redémarrer sur… dans le menu d’un panneau le passe à ce compte."
+      "signInHint": "Connectez-vous à l’autre compte dans le nouveau panneau. Ensuite, Redémarrer sur… dans le menu d’un panneau le passe à ce compte.",
+      "defaultFallback": "Le compte par défaut de {{agent}} sur {{host}} ne peut pas être utilisé ({{error}}) : il a démarré sur la connexion propre de l’hôte.",
+      "thisAccount": "ce compte",
+      "ownSignIn": "la connexion propre de l’hôte",
+      "defaultSet": "Les nouveaux panneaux {{agent}} sur {{host}} démarrent maintenant sur {{account}}.",
+      "detailsCopied": "Détails du compte copiés (oui / non seulement : aucun jeton, aucun courriel).",
+      "detailsNotCopied": "Les détails du compte n’ont pas pu être copiés.",
+      "signedOutThere": "déconnecté là-bas"
     }
   }
 }

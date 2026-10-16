@@ -311,11 +311,15 @@ const api = {
   remoteAccounts: {
     detect: (hostId, opts) => ipcRenderer.invoke('remoteAccounts:detect', { hostId, fresh: !!(opts && opts.fresh === true), relogin: !!(opts && opts.relogin === true) }),
     create: (hostId, agent) => ipcRenderer.invoke('remoteAccounts:create', { hostId, agent }),
-    launchEnv: (hostId, agent, id) => ipcRenderer.invoke('remoteAccounts:launchEnv', { hostId, agent, id }),
+    // opts.signedIn: only a folder signed in (a new pane on the host's default account).
+    launchEnv: (hostId, agent, id, opts) => ipcRenderer.invoke('remoteAccounts:launchEnv', { hostId, agent, id, signedIn: !!(opts && opts.signedIn === true) }),
     // opts.panes: the panes still on that login (main stops them after your yes).
     remove: (hostId, agent, id, opts) => ipcRenderer.invoke('remoteAccounts:remove', { hostId, agent, id, panes: (opts && Array.isArray(opts.panes) && opts.panes) || [], orphan: !!(opts && opts.orphan === true) }),
     signOut: (hostId, agent, opts) => ipcRenderer.invoke('remoteAccounts:signOut', { hostId, agent, panes: (opts && Array.isArray(opts.panes) && opts.panes) || [] }),
-    copyPolicy: (agent) => ipcRenderer.invoke('remoteAccounts:copyPolicy', agent)
+    copyPolicy: (agent) => ipcRenderer.invoke('remoteAccounts:copyPolicy', agent),
+    // The config folder a pane's agent really runs on there; presence-only details.
+    paneFolder: (hostId, agent, paneId) => ipcRenderer.invoke('remoteAccounts:paneFolder', { hostId, agent, paneId }),
+    diagnose: (hostId, agent, id, paneId) => ipcRenderer.invoke('remoteAccounts:diagnose', { hostId, agent, id, paneId })
   },
   // "Where you're signed in" (src/main/signedInPlaces.js): this PC, its WSL
   // distros and the saved SSH hosts; scan(id) checks one of them.

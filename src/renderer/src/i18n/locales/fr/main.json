@@ -1023,6 +1023,7 @@
       "invalid": "Ce compte ne peut pas être utilisé sur cet hôte.",
       "createFailed": "Tessel n’a pas pu créer le dossier du compte sur {{host}}.",
       "gone": "Le dossier de ce compte n’est plus sur {{host}}. Démarrez l’agent sur un autre compte.",
+      "signedOutFolder": "Ce compte est déconnecté sur {{host}}.",
       "unusable": "Le dossier de ce compte sur {{host}} ne peut pas être utilisé sans risque (il a été modifié en dehors de Tessel).",
       "removeFailed": "Tessel n’a pas pu retirer le dossier de ce compte de {{host}} : il n’a pas été créé par Tessel, ou il a été modifié depuis.",
       "signOutFailed": "Tessel n’a pas pu déconnecter {{agent}} sur {{host}}.",

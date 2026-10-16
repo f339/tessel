@@ -143,6 +143,28 @@ server.cjs runs with cwd = the pane env's `TESSEL_PROJECT_DIR` (when absolute).
   into it) and deleted. A folder there without its marker that still holds
   a sign-in (an agent wrote it again) is listed as `orphan` and removed only
   as such (`__t_acctrm <agent> <id> orphan`).
+- Where Claude Code keeps an account with `CLAUDE_CONFIG_DIR`: its login in
+  `<folder>/.credentials.json` (the macOS Keychain, one entry per folder, on
+  a Mac), its profile (`oauthAccount`: email, organization) in
+  `<folder>/.claude.json`, or `<folder>/.config.json` when that older file
+  is there. `oauthAccount` holds nested objects: read with a brace-matching
+  reader, never a flat pattern.
+- A folder's sign-in files are never links (only its settings and
+  conversations are): one that is a link (made outside Tessel) is listed
+  `linked`, and `__t_acctmk` refuses it (rc 98), so no agent runs on another
+  folder's login or writes that one's renewed token.
+- The host's default account per agent (Settings `hostAccountDefaults`): a
+  new pane, a team worker, the launcher and a restart without an account of
+  its own start on it, through `launchEnv(..., { signedIn: true })`
+  (`__t_acctmk <agent> <id> signed`: rc 92 when the folder holds no sign-in);
+  gone or signed out, the pane starts on the host's own sign-in and says so.
+- The folder a pane's agent really runs on (`__t_acctpane <pane> <agent>`,
+  Linux): the process carrying `TESSEL_PANE_ID=<pane>`, its
+  `CLAUDE_CONFIG_DIR` / `CODEX_HOME` only (nothing else of its environment
+  printed). Asked 8 s after a launch and on Check again, never per poll; a
+  pane whose layout names another folder follows what runs.
+- "Copy account details" (`__t_acctdiag`): presence flags only (yes / no),
+  never a value, an email or a token.
 
 ## Parts
 1. Shim (`src/main/remoteAgent/tessel-shim.cjs` + tests) – Gauss.

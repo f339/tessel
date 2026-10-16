@@ -2123,11 +2123,12 @@ ipcMain.handle('remoteAccounts:create', async (_evt, q) => {
   return res.ok ? { ok: true, id: res.id } : { ok: false, error: res.error, ...(res.notConnected ? { notConnected: true } : {}) }
 })
 // The words typed before the agent's command on the host (its folder).
+// signedIn: only a folder signed in (a new pane on the host's default account).
 ipcMain.handle('remoteAccounts:launchEnv', async (_evt, q) => {
   const { hostId, agent, id } = remoteAccountArgs(q)
   if (!hostId) return noHost()
-  const res = await remoteAccounts.launchEnv(hostId, agent, id)
-  return res.ok ? { ok: true, prefix: res.prefix } : { ok: false, error: res.error, ...(res.missing ? { missing: true } : {}) }
+  const res = await remoteAccounts.launchEnv(hostId, agent, id, { signedIn: !!(q && q.signedIn === true) })
+  return res.ok ? { ok: true, prefix: res.prefix } : { ok: false, error: res.error, ...(res.missing ? { missing: true } : {}), ...(res.signedOut ? { signedOut: true } : {}) }
 })
 // panes: the window's panes still on that login (stopped first, after the yes).
 ipcMain.handle('remoteAccounts:remove', async (_evt, q) => {
@@ -2139,6 +2140,19 @@ ipcMain.handle('remoteAccounts:signOut', async (_evt, q) => {
   const { hostId, agent, panes } = remoteAccountArgs(q)
   if (!hostId) return noHost()
   return remoteAccounts.signOut(hostId, agent, { panes })
+})
+// Which config folder a pane's agent really runs on there (its process's
+// CLAUDE_CONFIG_DIR / CODEX_HOME, nothing else read). ({ hostId, agent, paneId })
+ipcMain.handle('remoteAccounts:paneFolder', async (_evt, q) => {
+  const { hostId, agent } = remoteAccountArgs(q)
+  if (!hostId) return noHost()
+  return remoteAccounts.paneFolder(hostId, agent, q && typeof q.paneId === 'string' ? q.paneId : null)
+})
+// "Copy account details": presence flags only. ({ hostId, agent, id, paneId })
+ipcMain.handle('remoteAccounts:diagnose', async (_evt, q) => {
+  const { hostId, agent, id } = remoteAccountArgs(q)
+  if (!hostId) return noHost()
+  return remoteAccounts.diagnose(hostId, agent, id, q && typeof q.paneId === 'string' ? q.paneId : null)
 })
 // Why a sign-in is never copied from this PC to a host (the sign-in dialog says it).
 ipcMain.handle('remoteAccounts:copyPolicy', (_evt, agent) => copyRemotePolicy(agent))

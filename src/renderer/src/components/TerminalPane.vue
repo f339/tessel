@@ -44,7 +44,7 @@ import { promptShowsPlaceholder } from '../promptCheck'
 import { detectTaskDone } from '../agentLimit'
 import { modelLabel } from '../../../shared/modelLabel'
 import { paneAccount, accountChoices } from '../accountChoices'
-import { HOST_ACCOUNT_AGENTS, hostAccountChoices, hostPaneAccount, refreshHostAccounts, unwatchHostAccounts, watchHostAccounts } from '../hostAccounts'
+import { HOST_ACCOUNT_AGENTS, defaultRestartChoice, hostAccountChoices, hostEntry, hostPaneAccount, isDefaultHostAccount, recheckAfterTurn, refreshHostAccounts, unwatchHostAccounts, watchHostAccounts } from '../hostAccounts'
 import { modelFromScreen, modelFromSwitchLine } from '../../../shared/screenModel'
 import { findFileRefs } from '../../../shared/fileLinks'
 import { osc52Text } from '../../../shared/osc52'
@@ -143,7 +143,24 @@ const accountInfo = computed(() => {
   if (props.node.remoteHostId) return hostPaneAccount(props.node.remoteHostId, props.node.agentId, props.node.hostAccount, remoteHostName.value)
   return paneAccount(props.node.agentId, props.node.accountId)
 })
-const accountChipLabel = computed(() => (accountInfo.value ? t('pane.account.chip', 'Account: {{account}}', { account: accountInfo.value.title }) : ''))
+// On an SSH host: whether this pane's account is the one new panes use there.
+const onHostDefault = computed(() => {
+  const n = props.node
+  return isAgent.value && !!n.remoteHostId && HOST_ACCOUNT_AGENTS.includes(n.agentId) && isDefaultHostAccount(n.remoteHostId, n.agentId, n.hostAccount)
+})
+// What is said under its account (hover card, chip title): "Default on this
+// host", and Check again when its account is not known yet (the hover card
+// has its own Check again button: hint left out there).
+function accountNotesOf(withCheckHint) {
+  const info = accountInfo.value
+  if (!info) return []
+  const lines = []
+  if (props.node.remoteHostId && onHostDefault.value && typeof props.node.hostAccount === 'string') lines.push(t('pane.account.hostDefault', 'Default on this host'))
+  if (withCheckHint && (info.unknown || info.signedIn === false)) lines.push(t('pane.account.checkAgainHint', 'Pane menu > Check account again'))
+  return lines
+}
+const accountTitle = computed(() => (accountInfo.value ? [accountInfo.value.title, ...accountNotesOf(true)].join('\n') : ''))
+const accountChipLabel = computed(() => (accountInfo.value ? t('pane.account.chip', 'Account: {{account}}', { account: accountTitle.value }) : ''))
 // An agent on an SSH host follows its accounts there: read when it opens and
 // after a restart; then the host's one timer (hostAccounts.js: every minute,
 // sooner while a pane waits for a sign-in in its account folder).
@@ -168,8 +185,24 @@ watch(
     if (watchedHost) refreshHostAccounts(watchedHost)
   }
 )
+// Which config folder its agent really runs on: checked once it has had time
+// to start (a pane restored, reattached, or started before account folders
+// may not be on the folder its layout names), and on Check again.
+let verifyTimer = null
+watch(
+  () => [props.node.kind, props.node.remoteHostId, props.node.launchedAt, !!props.node.notConnected],
+  ([kind, hostId, , notConnected]) => {
+    clearTimeout(verifyTimer)
+    if (kind !== 'agent' || !hostId || notConnected || !ctx.verifyHostAccount || !HOST_ACCOUNT_AGENTS.includes(props.node.agentId)) return
+    verifyTimer = setTimeout(() => ctx.verifyHostAccount(props.node.id), 8000)
+  },
+  { immediate: true }
+)
+let afterTurnTimer = null
 onBeforeUnmount(() => {
   if (watchedHost) unwatchHostAccounts(watchedHost, props.node.id)
+  clearTimeout(verifyTimer)
+  clearTimeout(afterTurnTimer)
 })
 // An agent pane asks for its model list (missing or a day old) once it
 // opens: its pickers (header, chat view, Settings) all list from it, not
@@ -738,6 +771,18 @@ watch(
 // Hook observations own supported launches. Older panes and other providers
 // retain their explicitly estimated output-based display.
 const agentStatus = ref(managedAgentStatus(props.node) ? 'unknown' : 'idle')
+// A /login, or the first answer after one: when its turn ends and its
+// account is not fully known (not signed in, or no email yet), the host is
+// asked again a few seconds later (hostAccounts.js recheckAfterTurn).
+watch(
+  () => agentStatus.value,
+  (now, before) => {
+    const n = props.node
+    if (before !== 'busy' || now === 'busy' || !n.remoteHostId) return
+    clearTimeout(afterTurnTimer)
+    afterTurnTimer = recheckAfterTurn(n.remoteHostId, n.agentId, n.hostAccount)
+  }
+)
 let pendingScreenWrites = 0
 let hasLiveScreen = false
 const observedState = computed(() => managedAgentStatus(props.node) ? getAgentState(props.node.id, props.node.agentLaunchToken) : null)
@@ -1514,6 +1559,10 @@ const hoverInfo = computed(() => {
     accent: showsAgent.value ? n.accent : null,
     model: agent ? modelText.value : guestRuns.value ? guestInfo.value.model || '' : '',
     account: accountInfo.value ? accountInfo.value.title : '',
+    // On an SSH host: its notes, Check again, Restart on the host's default.
+    accountNotes: accountNotesOf(!canCheckHostAccount.value),
+    accountCheck: canCheckHostAccount.value,
+    restartDefault: restartDefault.value ? t('pane.account.restartDefault', 'Restart on {{account}} (default on this host)', { account: restartDefault.value.name }) : '',
     conversation: autoTitle.value,
     branch: n.worktree ? n.worktree.branch : guestInfo.value && guestInfo.value.copy ? guestInfo.value.copy.branch : '',
     state: headerState.value,
@@ -2475,7 +2524,7 @@ const accountRestartChoices = computed(() => {
     const fresh = n.agentId === 'codex'
     return hostAccountChoices(n.remoteHostId, n.agentId, remoteHostName.value)
       .filter((c) => c.id !== (n.hostAccount ?? null))
-      .map((c) => ({ ...c, hint: fresh ? t('pane.menu.restartOnHostAccountNew', 'Restart Codex on {{account}}: same pane, a new conversation (a Codex conversation stays with its account)', { account: c.title }) : t('pane.menu.restartOnAccountHint', 'Restart this agent on {{account}}: same pane, its conversation resumed', { account: c.title }) }))
+      .map((c) => ({ ...c, name: c.isDefault ? t('pane.menu.defaultAccount', '{{account}} (default)', { account: c.name }) : c.name, hint: fresh ? t('pane.menu.restartOnHostAccountNew', 'Restart Codex on {{account}}: same pane, a new conversation (a Codex conversation stays with its account)', { account: c.title }) : t('pane.menu.restartOnAccountHint', 'Restart this agent on {{account}}: same pane, its conversation resumed', { account: c.title }) }))
   }
   if (n.agentId !== 'claude') return []
   return accountChoices('claude').filter((c) => c.id !== (n.accountId ?? null))
@@ -2488,6 +2537,43 @@ const canSignInOnHost = computed(() => {
 function menuSignInOnHost() {
   closeCtxMenu()
   ctx.signInOnHost(props.node.id)
+}
+// Pane menu > Check account again / Copy account details / Make this the
+// default on <host> (App: checkHostAccount, copyAccountDetails, setHostAccountDefault).
+const canCheckHostAccount = computed(() => canSignInOnHost.value && !!ctx.checkHostAccount)
+function menuCheckHostAccount() {
+  closeCtxMenu()
+  ctx.checkHostAccount(props.node.id)
+}
+// "Restart on <default>": the host's default account for this agent, for a
+// pane on another one (the hover card; marked "(default)" in Restart on).
+const restartDefault = computed(() => {
+  const n = props.node
+  if (!canSignInOnHost.value || !ctx.restartOnAccount) return null
+  return defaultRestartChoice(n.remoteHostId, n.agentId, n.hostAccount, remoteHostName.value)
+})
+// The hover card's own buttons (it closes once the pointer leaves it).
+function hoverCheckAccount() {
+  if (canCheckHostAccount.value) ctx.checkHostAccount(props.node.id)
+}
+function hoverRestartDefault() {
+  const c = restartDefault.value
+  if (c) ctx.restartOnAccount(props.node.id, c.id)
+}
+function menuCopyAccountDetails() {
+  closeCtxMenu()
+  ctx.copyAccountDetails(props.node.id)
+}
+const canMakeHostDefault = computed(() => {
+  const n = props.node
+  if (!canSignInOnHost.value || !ctx.setHostAccountDefault || onHostDefault.value) return false
+  // Only an account that is there: a folder signed in, or the host's own.
+  const e = hostEntry(n.remoteHostId, n.agentId, n.hostAccount)
+  return typeof n.hostAccount !== 'string' || (!!e && e.state === 'signed-in')
+})
+function menuMakeHostDefault() {
+  closeCtxMenu()
+  ctx.setHostAccountDefault(props.node.id)
 }
 function menuRestartOnAccount(accountId) {
   closeCtxMenu()
@@ -3271,8 +3357,13 @@ const paneMenuBindings = computed(() => ({
   menuRestartOnAccount: unref(menuRestartOnAccount),
   canSignInOnHost: unref(canSignInOnHost),
   menuSignInOnHost: unref(menuSignInOnHost),
+  canCheckHostAccount: unref(canCheckHostAccount),
+  menuCheckHostAccount: unref(menuCheckHostAccount),
+  menuCopyAccountDetails: unref(menuCopyAccountDetails),
+  canMakeHostDefault: unref(canMakeHostDefault),
+  menuMakeHostDefault: unref(menuMakeHostDefault),
   hostName: unref(remoteHostName),
-  accountInfo: unref(accountInfo),
+  accountInfo: accountInfo.value ? { ...accountInfo.value, title: accountTitle.value } : null,
   canViewTranscript: unref(canViewTranscript),
   menuViewTranscript: unref(menuViewTranscript),
   transcriptOpen: unref(transcriptOpen),
@@ -3436,7 +3527,7 @@ const paneMenuBindings = computed(() => ({
         </span>
       </div>
       <HoverCardContent :hc="headerHover" side="bottom" align="start" :side-offset="6" class="pane-hover-card" data-test="pane-hover-card">
-        <PaneHoverDetails :info="hoverInfo" />
+        <PaneHoverDetails :info="hoverInfo" @check-account="hoverCheckAccount" @restart-default="hoverRestartDefault" />
       </HoverCardContent>
       <!-- An agent typing in this terminal (its terminal tools): who, what
            it ran, and Stop. -->

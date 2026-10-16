@@ -567,7 +567,14 @@
       "continueOnHostHint": "Arrêter cet agent du terminal et poursuivre la même conversation dans un panneau de chat qui tourne sur l’hôte SSH",
       "restartOnHostAccountNew": "Redémarrer Codex sur {{account}} : même panneau, nouvelle conversation (une conversation Codex reste avec son compte)",
       "signInOnHost": "Se connecter à un autre compte sur {{host}}…",
-      "signInOnHostHint": "Ouvre cet agent à côté de ce panneau dans un nouveau dossier de compte sur {{host}}, où vous vous connectez avec sa propre connexion. Votre connexion reste sur l’hôte ; rien n’est copié depuis ce PC."
+      "signInOnHostHint": "Ouvre cet agent à côté de ce panneau dans un nouveau dossier de compte sur {{host}}, où vous vous connectez avec sa propre connexion. Votre connexion reste sur l’hôte ; rien n’est copié depuis ce PC.",
+      "defaultAccount": "{{account}} (par défaut)",
+      "makeHostDefault": "En faire le compte par défaut sur {{host}}",
+      "makeHostDefaultHint": "Les nouveaux panneaux de cet agent sur {{host}} démarrent sur le compte de ce panneau (les panneaux déjà sur un autre compte gardent le leur)",
+      "checkHostAccount": "Vérifier le compte de nouveau",
+      "checkHostAccountHint": "Demande maintenant à {{host}} avec quel compte cet agent est connecté, et sur quel dossier il tourne vraiment",
+      "copyAccountDetails": "Copier les détails du compte",
+      "copyAccountDetailsHint": "Copie quels fichiers de connexion existent sur l’hôte et comment cet agent a été démarré : oui / non seulement, jamais un jeton ni un courriel"
     },
     "badge": {
       "quiet": "silencieux depuis {{minutes}} min",
@@ -779,7 +786,11 @@
       "yolo": "Yolo, sans demander"
     },
     "account": {
-      "chip": "Compte : {{account}}"
+      "chip": "Compte : {{account}}",
+      "hostDefault": "Par défaut sur cet hôte",
+      "checkAgainHint": "Menu du panneau > Vérifier le compte de nouveau",
+      "checkAgain": "Vérifier de nouveau",
+      "restartDefault": "Redémarrer sur {{account}} (par défaut sur cet hôte)"
     }
   },
   "floating": {
@@ -803,6 +814,10 @@
       "token": "un jeton de connexion",
       "gateway": "une adresse de passerelle"
     },
-    "overrideNote": "Attention : {{what}} défini sur l’hôte est utilisé à la place de cette connexion (settings.json ou le shell de connexion)."
+    "overrideNote": "Attention : {{what}} défini sur l’hôte est utilisé à la place de cette connexion (settings.json ou le shell de connexion).",
+    "signedInShort": "connecté",
+    "onHostShort": "sur {{host}}",
+    "unknownAccount": "{{what}} : connecté, compte inconnu (son courriel n’est pas encore connu). Vérifiez de nouveau une fois que l’agent a répondu.",
+    "linkedNote": "Son fichier de connexion est un lien vers un autre dossier (créé en dehors de Tessel) : aucun agent n’y est démarré."
   }
 }

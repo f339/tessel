@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import fs from 'fs'
 import vm from 'vm'
 import { join } from 'path'
-import { validHostAccount } from '../hostAccounts'
+import { validHostAccount, hostAccountChoice, defaultHostAccount } from '../hostAccounts'
 import { isRemotePath } from '../../../shared/remotePath'
 
 const source = fs.readFileSync(join(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
@@ -23,6 +23,8 @@ function load(settingsMode) {
   const ctx = {
     isRemotePath,
     validHostAccount,
+    hostAccountChoice,
+    defaultHostAccount,
     CHAT_AGENTS: ['claude', 'codex'],
     settings: { yoloFolders: [], agentPermissions: settingsMode, agentSessionOptions: {}, agentPrefs: {} },
     launchPermissions: () => settingsMode,

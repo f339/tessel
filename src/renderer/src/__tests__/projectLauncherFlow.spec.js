@@ -11,7 +11,7 @@ import { join } from 'path'
 import { computed, reactive, ref } from 'vue'
 import * as launcher from '../projectLauncher'
 import { viewKey, leafViewPath } from '../paneViews'
-import { validHostAccount } from '../hostAccounts'
+import { validHostAccount, hostAccountChoice, defaultHostAccount } from '../hostAccounts'
 
 // App.vue's Live Share helper (liveShareWindow.js): nothing shared or joined.
 const noLiveShare = { isGuestWs: () => false, isGuestLeaf: () => false, state: { host: { state: 'off', guests: [] }, guest: { state: 'off' } } }
@@ -40,6 +40,8 @@ function load({ projectOpen = 'ask', remoteStatus = {} } = {}) {
   let n = 0
   const ctx = {
     validHostAccount,
+    hostAccountChoice,
+    defaultHostAccount,
     ...launcher,
     t: (k, en, vars) => en.replace(/\{\{(\w+)\}\}/g, (_, x) => (vars && vars[x] != null ? vars[x] : '')),
     computed,
@@ -169,9 +171,10 @@ describe('each choice starts the right pane', () => {
   it('on an SSH host, the account chosen beside an agent: that account folder of the host (never this PC’s account)', async () => {
     const a = await pick({ kind: 'agent', id: 'claude', accountId: 'abc123' }, REMOTE)
     expect(a.ctx.createLeaf.mock.calls[0][4]).toEqual({ hostAccount: 'abc123', remoteHostId: 'ssh-box', remotePath: '/srv/app' })
-    // The host's own sign-in, or an id that is not a host folder's: nothing more.
+    // The host's own sign-in chosen: said (the host's default does not apply).
     const b = await pick({ kind: 'agent', id: 'claude', accountId: null }, REMOTE)
-    expect(b.ctx.createLeaf.mock.calls[0][4]).toEqual({ remoteHostId: 'ssh-box', remotePath: '/srv/app' })
+    expect(b.ctx.createLeaf.mock.calls[0][4]).toEqual({ hostAccount: null, remoteHostId: 'ssh-box', remotePath: '/srv/app' })
+    // An id that is not a host folder's: nothing more.
     const c = await pick({ kind: 'agent', id: 'claude', accountId: '1f0c6d1e-0000-4000-8000-000000000000' }, REMOTE)
     expect(c.ctx.createLeaf.mock.calls[0][4]).toEqual({ remoteHostId: 'ssh-box', remotePath: '/srv/app' })
   })

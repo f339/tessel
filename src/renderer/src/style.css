@@ -12091,6 +12091,30 @@ body.osb-project-dragging * {
   margin-top: 4px;
 }
 
+/* A pane on an SSH host: Check again, Restart on the host's default. */
+.hc-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 4px;
+  padding-left: 18px;
+}
+
+.hc-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.hc-link:hover,
+.hc-link:focus-visible {
+  text-decoration: underline;
+}
+
 .hc-warn {
   margin-top: -4px;
   color: var(--warn);
@@ -12338,6 +12362,11 @@ body.osb-project-dragging * {
     inset 0 1px 0 rgb(255 255 255 / 0.14);
   backdrop-filter: blur(40px);
   font-size: 12px;
+}
+/* A menu opened from Settings (Where you're signed in: a place's menu) shows
+   above the Settings page (z-index 400). */
+body:has(.settings-page) > .orca-menu {
+  z-index: 410;
 }
 
 .orca-menu-label {

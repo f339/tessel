@@ -21,7 +21,23 @@
 # running wrote it again after its folder was removed).
 __ta_flat() { head -c 8388608 "$1" 2>/dev/null | tr -d '\n\r'; }
 __ta_str() { grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" 2>/dev/null | head -n 1 | sed 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//'; }
-__ta_obj() { grep -o "\"$1\"[[:space:]]*:[[:space:]]*{[^{}]*}" 2>/dev/null | head -n 1; }
+# The object a key holds, nested objects in it included (Claude Code's
+# oauthAccount now holds ccOnboardingFlags: {...}); quoted braces skipped.
+__ta_obj() {
+  awk -v k="\"$1\"" '{
+    s = $0; i = index(s, k); if (!i) exit
+    s = substr(s, i + length(k)); j = index(s, "{"); if (!j) exit
+    pre = substr(s, 1, j - 1); gsub(/[ \t:]/, "", pre); if (pre != "") exit
+    s = substr(s, j); d = 0; q = 0; e = 0; n = length(s)
+    for (x = 1; x <= n; x++) {
+      c = substr(s, x, 1)
+      if (q) { if (e) e = 0; else if (c == "\\") e = 1; else if (c == "\"") q = 0; continue }
+      if (c == "\"") q = 1
+      else if (c == "{") d++
+      else if (c == "}") { d--; if (d == 0) { print substr(s, 1, x); exit } }
+    }
+  }' 2>/dev/null
+}
 __ta_set() { grep -q "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]" 2>/dev/null && echo 1; }
 __ta_v() { [ -n "$2" ] && printf 'v %s %s\n' "$1" "$2"; return 0; }
 __ta_mt() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
@@ -76,9 +92,14 @@ __ta_over() {
   __sf=
   return 0
 }
+# Where Claude Code keeps its config (oauthAccount...) for a config folder,
+# as it decides: <folder>/.config.json when that file is there and not
+# empty (its older name), else $2 (<CLAUDE_CONFIG_DIR>/.claude.json, or
+# ~/.claude.json for the default folder).
+__ta_cfg() { if [ -f "$1/.config.json" ] && [ -s "$1/.config.json" ]; then printf '%s\n' "$1/.config.json"; else printf '%s\n' "$2"; fi; }
 # $1 scope, $2 id, $3 config folder, $4 its .claude.json
 __ta_claude() {
-  __j=$4; __c="$3/.credentials.json"
+  __j=$(__ta_cfg "$3" "$4"); __c="$3/.credentials.json"
   if [ "$1" != tessel ] && [ ! -f "$__j" ] && [ ! -f "$__c" ]; then return 0; fi
   __ta_head claude "$1" "$2" "$__j" "$3" || return 0
   if [ -f "$__j" ] && [ -r "$__j" ]; then
@@ -90,6 +111,7 @@ __ta_claude() {
       __ta_v account "$(printf '%s' "$__o" | __ta_str accountUuid)"
       __ta_v name "$(printf '%s' "$__o" | __ta_str displayName)"
       __ta_v billing "$(printf '%s' "$__o" | __ta_str billingType)"
+      __ta_v planName "$(printf '%s' "$__o" | __ta_str planDisplayName)"
     fi
     [ "$(__ta_flat "$__j" | __ta_set primaryApiKey)" = 1 ] && __ta_v method apikey
   fi
@@ -98,6 +120,9 @@ __ta_claude() {
     __ta_v plan "$(__ta_flat "$__c" | __ta_str subscriptionType)"
     __ta_v tier "$(__ta_flat "$__c" | __ta_str rateLimitTier)"
   fi
+  # A folder of Tessel's whose sign-in file is a link (made outside Tessel):
+  # what it names is another folder's login; no agent is started on it.
+  [ "$1" = tessel ] && { [ -L "$__c" ] || [ -L "$__j" ]; } && __ta_v linked yes
   __ta_over "$3/settings.json"
   return 0
 }
@@ -106,6 +131,7 @@ __ta_codex() {
   __f="$3/auth.json"
   if [ "$1" != tessel ] && [ ! -f "$__f" ]; then return 0; fi
   __ta_head codex "$1" "$2" "$__f" "$3" || return 0
+  [ "$1" = tessel ] && [ -L "$__f" ] && __ta_v linked yes
   [ -f "$__f" ] && [ -r "$__f" ] || return 0
   [ "$(__ta_flat "$__f" | __ta_set refresh_token)" = 1 ] && __ta_v cred file
   [ "$(__ta_flat "$__f" | __ta_set OPENAI_API_KEY)" = 1 ] && __ta_v method apikey
@@ -283,6 +309,12 @@ __t_acctmk() {
     [ -z "$(ls -A "$__d" 2>/dev/null)" ] || return 98
     ( umask 077; printf 'tessel-account %s %s\n' "$1" "$2" >"$__d/.tessel-account" ) || return 98
   fi
+  # Its sign-in files are its own, never a link (only its settings and
+  # conversations are linked into the default folder): an agent on it would
+  # run on the account the link points to and write that one's renewed login.
+  for __n in .credentials.json .claude.json .config.json auth.json; do
+    [ -L "$__d/$__n" ] && return 98
+  done
   if [ "$1" = claude ]; then
     __b="$HOME/.claude"
     [ -d "$__b" ] || ( umask 077; mkdir -p "$__b" ) || return 98
@@ -301,6 +333,12 @@ __t_acctmk() {
       if [ -e "$__d/$__n" ] || [ -L "$__d/$__n" ]; then continue; fi
       [ -e "$__b/$__n" ] && ln -s "$__b/$__n" "$__d/$__n" 2>/dev/null
     done
+  fi
+  # signed: only a folder signed in (a new pane on the host's default
+  # account; a sign-in pane starts on an empty one). On macOS Claude Code
+  # keeps its login in the Keychain: its profile there counts.
+  if [ "$3" = signed ] && ! __ta_signed "$__d"; then
+    [ "$1" = claude ] && [ "$(uname -s 2>/dev/null)" = Darwin ] && __ta_oa "$(__ta_cfg "$__d" "$__d/.claude.json")" || return 92
   fi
   printf '%s\n' "$__d"
 }
@@ -355,6 +393,91 @@ __t_acctrm() {
   mv -- "$__d" "$__tr" || return 98
   rm -rf -- "$__tr"
   [ ! -e "$__tr" ] || return 98
+}
+# The agent a pane runs (its processes carry TESSEL_PANE_ID=<pane>, from the
+# pane's env file), on Linux: which config folder it really uses
+# (CLAUDE_CONFIG_DIR / CODEX_HOME in its environment; nothing else of it is
+# read). Prints `@p <pid> <folder|->`, or `@p none` / `@p unknown` (no /proc).
+__ta_panepid() {
+  [ -d /proc ] && [ -r /proc/self/environ ] || { echo unknown; return 0; }
+  __pp=
+  for __e in /proc/[0-9]*/environ; do
+    [ -r "$__e" ] || continue
+    tr '\0' '\n' 2>/dev/null <"$__e" | grep -qx "TESSEL_PANE_ID=$1" || continue
+    __q=${__e%/environ}; __q=${__q#/proc/}
+    __a=$(tr '\0' '\n' 2>/dev/null <"/proc/$__q/cmdline" | head -n 1)
+    case ${__a##*/} in "$2"|"$2".exe) __pp=$__q; break ;; esac
+    case $(tr '\0' ' ' 2>/dev/null <"/proc/$__q/cmdline") in *"/$2"*|*"$2-code"*) [ -n "$__pp" ] || __pp=$__q ;; esac
+  done
+  [ -n "$__pp" ] && echo "$__pp" || echo none
+}
+__ta_paneenv() { tr '\0' '\n' 2>/dev/null <"/proc/$1/environ" | sed -n "s/^$2=//p" | head -n 1; }
+__t_acctpane() {
+  case $1 in ''|*[!0-9A-Za-z_-]*) return 90 ;; esac
+  case $2 in claude) __v=CLAUDE_CONFIG_DIR ;; codex) __v=CODEX_HOME ;; *) return 90 ;; esac
+  __pp=$(__ta_panepid "$1" "$2")
+  case $__pp in none|unknown) printf '@p %s\n' "$__pp"; return 0 ;; esac
+  __dv=$(__ta_paneenv "$__pp" "$__v")
+  case $__dv in *'
+'*) __dv= ;; esac
+  printf '@p %s %s\n' "$__pp" "${__dv:--}"
+}
+# What a "Copy account details" shows: presence only (yes / no), never a
+# value, a token or an email. $1 agent, $2 folder id or -, $3 pane id or -.
+__ta_yn() { if "$@"; then echo yes; else echo no; fi; }
+__ta_has() { [ "$(__ta_flat "$1" | __ta_set "$2")" = 1 ]; }
+__ta_oa() { [ -n "$(__ta_flat "$1" | __ta_obj oauthAccount)" ]; }
+__ta_oaem() { [ -n "$(__ta_flat "$1" | __ta_obj oauthAccount | __ta_str emailAddress)" ]; }
+__t_acctdiag() {
+  case $1 in claude|codex) ;; *) return 90 ;; esac
+  case $2 in -) ;; *) __ta_id "$2" || return 90 ;; esac
+  case $3 in -) ;; ''|*[!0-9A-Za-z_-]*) return 90 ;; esac
+  printf 'd os %s\n' "$(uname -s 2>/dev/null | tr -cd 'A-Za-z0-9_.-')"
+  if [ "$1" = claude ]; then __h=$HOME/.claude; __hj=$(__ta_cfg "$HOME/.claude" "$HOME/.claude.json"); __cf=.credentials.json; else __h=$HOME/.codex; __cf=auth.json; fi
+  printf 'd home.credentials %s\n' "$(__ta_yn [ -f "$__h/$__cf" ])"
+  if [ "$1" = claude ]; then
+    printf 'd home.config %s\n' "$(__ta_yn [ -f "$__hj" ])"
+    printf 'd home.legacyConfig %s\n' "$(__ta_yn [ -s "$__h/.config.json" ])"
+    printf 'd home.oauthAccount %s\n' "$(__ta_yn __ta_oa "$__hj")"
+    printf 'd home.email %s\n' "$(__ta_yn __ta_oaem "$__hj")"
+  fi
+  if [ "$2" != - ]; then
+    __d=$HOME/.tessel-server/accounts/$1/$2
+    printf 'd folder.exists %s\n' "$(__ta_yn [ -d "$__d" ])"
+    printf 'd folder.marker %s\n' "$(__ta_yn __ta_mark "$__d" "$1" "$2")"
+    printf 'd folder.credentials %s\n' "$(__ta_yn [ -f "$__d/$__cf" ])"
+    printf 'd folder.credentialsLink %s\n' "$(__ta_yn [ -L "$__d/$__cf" ])"
+    if [ "$1" = claude ]; then
+      printf 'd folder.configLink %s\n' "$(__ta_yn [ -L "$__d/.claude.json" ])"
+      __fj=$(__ta_cfg "$__d" "$__d/.claude.json")
+      printf 'd folder.config %s\n' "$(__ta_yn [ -f "$__fj" ])"
+      printf 'd folder.legacyConfig %s\n' "$(__ta_yn [ -s "$__d/.config.json" ])"
+      printf 'd folder.oauthAccount %s\n' "$(__ta_yn __ta_oa "$__fj")"
+      printf 'd folder.email %s\n' "$(__ta_yn __ta_oaem "$__fj")"
+      printf 'd folder.plan %s\n' "$(__ta_yn __ta_has "$__d/$__cf" subscriptionType)"
+      printf 'd folder.projectsLink %s\n' "$(__ta_yn [ -L "$__d/projects" ])"
+      printf 'd folder.settingsLink %s\n' "$(__ta_yn [ -L "$__d/settings.json" ])"
+    else
+      printf 'd folder.apiKey %s\n' "$(__ta_yn __ta_has "$__d/auth.json" OPENAI_API_KEY)"
+    fi
+  fi
+  if [ "$3" != - ]; then
+    __pp=$(__ta_panepid "$3" "$1")
+    case $__pp in
+      none|unknown) printf 'd process.found %s\n' "$__pp" ;;
+      *)
+        printf 'd process.found yes\n'
+        [ "$1" = claude ] && __v=CLAUDE_CONFIG_DIR || __v=CODEX_HOME
+        __dv=$(__ta_paneenv "$__pp" "$__v")
+        printf 'd process.configDirSet %s\n' "$(__ta_yn [ -n "$__dv" ])"
+        [ "$2" != - ] && printf 'd process.onFolder %s\n' "$(__ta_yn [ "$__dv" = "$HOME/.tessel-server/accounts/$1/$2" ])"
+        printf 'd process.keyEnv %s\n' "$(__ta_yn [ -n "$(__ta_paneenv "$__pp" ANTHROPIC_API_KEY)$(__ta_paneenv "$__pp" CLAUDE_CODE_OAUTH_TOKEN)$(__ta_paneenv "$__pp" ANTHROPIC_AUTH_TOKEN)" ])"
+        printf 'd process.dbus %s\n' "$(__ta_yn [ -n "$(__ta_paneenv "$__pp" DBUS_SESSION_BUS_ADDRESS)" ])"
+        ;;
+    esac
+  fi
+  printf 'd keyring.secretTool %s\n' "$(__ta_yn command -v secret-tool)"
+  return 0
 }
 # Sign the agent out of its own default login there (Tessel asks you first):
 # its credentials file only, as its own logout does. On macOS Claude Code

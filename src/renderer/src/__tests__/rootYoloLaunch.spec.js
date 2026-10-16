@@ -9,7 +9,8 @@ import fs from 'fs'
 import vm from 'vm'
 import { join } from 'path'
 import { reactive } from 'vue'
-import { HOST_ACCOUNT_AGENTS, validHostAccount } from '../hostAccounts'
+import { HOST_ACCOUNT_AGENTS, validHostAccount, hostAccountChoice, defaultHostAccount } from '../hostAccounts'
+import { settings as appSettings } from '../settings'
 import {
   claudeStartChoice,
   codexResumes,
@@ -55,6 +56,8 @@ function load({ username = 'root', status = { hostId: HOST, claude: '/usr/local/
   const ctx = {
     HOST_ACCOUNT_AGENTS,
     validHostAccount,
+    hostAccountChoice,
+    defaultHostAccount,
     refreshHostAccounts: () => {},
     t: (k, en, vars) => en.replace(/\{\{(\w+)\}\}/g, (_, n) => (vars && vars[n] != null ? vars[n] : '')),
     reactive,
@@ -331,6 +334,75 @@ describe('an agent on an account folder of its host (hostAccounts.js)', () => {
     other.shellApi.remoteAccounts = { launchEnv: vi.fn() }
     const leaf = await onFolder(other, { hostAccount: '../../etc' })
     expect(other.shellApi.remoteAccounts.launchEnv).not.toHaveBeenCalled()
-    expect(leaf.hostAccount).toBeUndefined()
+    // Started on the host's own sign-in: kept for its restarts.
+    expect(leaf.hostAccount).toBeNull()
   })
+})
+
+describe('the host’s default account for new panes (Settings, per host and agent)', () => {
+  const PREFIX = "CLAUDE_CONFIG_DIR='/home/u/.tessel-server/accounts/claude/def789' "
+  const start = (env, opts = {}) => env.ctx.api.createLeaf('pwsh', claude, null, null, { id: 'pane-1', remoteHostId: HOST, remotePath: '/srv/app', ...opts })
+  function withDefault(fn) {
+    appSettings.hostAccountDefaults = { [HOST]: { claude: 'def789' } }
+    return Promise.resolve(fn()).finally(() => (appSettings.hostAccountDefaults = {}))
+  }
+
+  it('a new pane with no account of its own starts on the default folder, and keeps it', () =>
+    withDefault(async () => {
+      const env = load({ username: 'u', permissions: 'manual' })
+      env.shellApi.remoteAccounts = { launchEnv: vi.fn(async () => ({ ok: true, prefix: PREFIX })) }
+      const leaf = await start(env)
+      expect(env.shellApi.remoteAccounts.launchEnv).toHaveBeenCalledWith(HOST, 'claude', 'def789', { signedIn: true })
+      expect(env.typed()).toEqual([`${PREFIX}'/usr/local/bin/claude' --session-id ${SID}\r`])
+      expect(leaf.hostAccount).toBe('def789')
+    }))
+
+  it('an account of its own wins: a folder, or the host’s own sign-in chosen (null)', () =>
+    withDefault(async () => {
+      const env = load({ username: 'u', permissions: 'manual' })
+      env.shellApi.remoteAccounts = { launchEnv: vi.fn(async (h, a, id) => ({ ok: true, prefix: `CLAUDE_CONFIG_DIR='/home/u/.tessel-server/accounts/claude/${id}' ` })) }
+      expect((await start(env, { hostAccount: 'abc123' })).hostAccount).toBe('abc123')
+      expect(env.shellApi.remoteAccounts.launchEnv).toHaveBeenLastCalledWith(HOST, 'claude', 'abc123')
+      const own = load({ username: 'u', permissions: 'manual' })
+      own.shellApi.remoteAccounts = { launchEnv: vi.fn() }
+      const leaf = await start(own, { hostAccount: null })
+      expect(own.shellApi.remoteAccounts.launchEnv).not.toHaveBeenCalled()
+      expect(own.typed()).toEqual([`'/usr/local/bin/claude' --session-id ${SID}\r`])
+      expect(leaf.hostAccount).toBeNull()
+    }))
+
+  it('the default folder gone or signed out: the host’s own sign-in, said, never silently', () =>
+    withDefault(async () => {
+      const env = load({ username: 'u', permissions: 'manual' })
+      env.shellApi.remoteAccounts = { launchEnv: vi.fn(async () => ({ ok: false, missing: true, error: 'This account’s folder is no longer on Box.' })) }
+      const leaf = await start(env)
+      expect(env.typed()).toEqual([`'/usr/local/bin/claude' --session-id ${SID}\r`])
+      expect(env.ctx.showToast.mock.calls.at(-1)[0]).toContain('started on the host’s own sign-in')
+      expect(leaf.hostAccount).toBeNull()
+    }))
+
+  it('the default folder signed out there (checked as it starts): the host’s own sign-in, said', () =>
+    withDefault(async () => {
+      const env = load({ username: 'u', permissions: 'manual' })
+      env.shellApi.remoteAccounts = { launchEnv: vi.fn(async () => ({ ok: false, signedOut: true, error: 'This account is signed out on Box.' })) }
+      const leaf = await start(env)
+      expect(env.shellApi.remoteAccounts.launchEnv).toHaveBeenCalledWith(HOST, 'claude', 'def789', { signedIn: true })
+      expect(env.typed()).toEqual([`'/usr/local/bin/claude' --session-id ${SID}\r`])
+      expect(env.ctx.showToast.mock.calls.at(-1)[0]).toContain('signed out on Box')
+      expect(leaf.hostAccount).toBeNull()
+    }))
+
+  it('a team worker (its launch options) starts on the default too; a host or agent with no default: as before', () =>
+    withDefault(async () => {
+      const env = load({ username: 'u', permissions: 'manual' })
+      env.shellApi.remoteAccounts = { launchEnv: vi.fn(async () => ({ ok: true, prefix: PREFIX })) }
+      env.ctx.workerLaunchArgs = () => ''
+      await start(env, { launchOptions: { model: 'opus', initialPrompt: 'Do the task' } })
+      expect(env.shellApi.remoteAccounts.launchEnv).toHaveBeenCalledWith(HOST, 'claude', 'def789', { signedIn: true })
+      expect(env.typed()[0].startsWith(PREFIX)).toBe(true)
+      const cx = load({ username: 'u', permissions: 'manual' })
+      cx.shellApi.remoteAccounts = { launchEnv: vi.fn() }
+      await cx.ctx.api.createLeaf('pwsh', codex, null, null, { id: 'pane-2', remoteHostId: HOST, remotePath: '/srv/app' })
+      expect(cx.shellApi.remoteAccounts.launchEnv).not.toHaveBeenCalled()
+    }))
 })
