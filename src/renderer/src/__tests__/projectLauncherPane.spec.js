@@ -4,6 +4,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ProjectLauncher from '../components/ProjectLauncher.vue'
+import { applyHostAccounts } from '../hostAccounts'
+import { settings } from '../settings'
 
 const NOW = Date.now()
 const SESSIONS = [
@@ -141,6 +143,45 @@ describe('the launcher of an SSH project', () => {
     expect(rows).toHaveLength(1)
     await rows[0].trigger('click')
     expect(picks().at(-1)[0]).toMatchObject({ kind: 'session', session: { id: 'dddddddd-1111-4222-8333-444444444444', host: 'ssh-box' } })
+  })
+})
+
+describe('the account an agent starts on, on an SSH host', () => {
+  const remote = { hostId: 'ssh-acct', host: 'Box', path: '/srv/app' }
+  const own = { agent: 'claude', scope: 'default', dir: '/home/u/.claude', email: 'pro@example.com', plan: 'pro', cred: 'file', state: 'signed-in' }
+  const max = { agent: 'claude', scope: 'tessel', id: 'bd93c7f5566d', dir: '/home/u/.tessel-server/accounts/claude/bd93c7f5566d', email: 'max@example.com', plan: 'max', cred: 'file', state: 'signed-in' }
+  afterEach(() => {
+    settings.hostAccountDefaults = {}
+  })
+
+  it('the host’s default shown as chosen and marked; nothing picked: none sent (the pane starts on the default, checked as it starts)', async () => {
+    applyHostAccounts('ssh-acct', { ok: true, entries: [own, max] })
+    settings.hostAccountDefaults = { 'ssh-acct': { claude: 'bd93c7f5566d' } }
+    await open({ cwd: null, remote, shells: [], hostConnected: true, agents: [{ id: 'claude', name: 'Claude Code' }] })
+    const select = wrapper.find('[data-test="launcher-account-claude"]')
+    expect(select.exists()).toBe(true)
+    expect(select.text()).toContain('max · Max (default)')
+    // Already the default: no Make default.
+    expect(wrapper.find('[data-test="launcher-account-default-claude"]').exists()).toBe(false)
+    await wrapper.get('[data-test="launcher-agent-claude"]').trigger('click')
+    expect(picks().at(-1)[0]).toEqual({ kind: 'agent', id: 'claude' })
+  })
+
+  it('no default: the host’s own sign-in, sent as chosen; Make default keeps the one chosen for new panes', async () => {
+    applyHostAccounts('ssh-acct', { ok: true, entries: [own, max] })
+    await open({ cwd: null, remote, shells: [], hostConnected: true, agents: [{ id: 'claude', name: 'Claude Code' }] })
+    await wrapper.get('[data-test="launcher-agent-claude"]').trigger('click')
+    expect(picks().at(-1)[0]).toEqual({ kind: 'agent', id: 'claude', accountId: null })
+    // The host's own is the default already (nothing kept): no Make default.
+    expect(wrapper.find('[data-test="launcher-account-default-claude"]').exists()).toBe(false)
+    settings.hostAccountDefaults = { 'ssh-acct': { claude: 'bd93c7f5566d' } }
+    await flushPromises()
+    // The default signed out there (not among the choices): the host's own
+    // shown; nothing picked, none sent (the start falls back, said).
+    applyHostAccounts('ssh-acct', { ok: true, entries: [own, { ...max, cred: undefined, state: 'profile' }] })
+    await flushPromises()
+    await wrapper.get('[data-test="launcher-agent-claude"]').trigger('click')
+    expect(picks().at(-1)[0]).toEqual({ kind: 'agent', id: 'claude' })
   })
 })
 

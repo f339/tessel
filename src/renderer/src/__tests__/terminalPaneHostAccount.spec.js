@@ -3,7 +3,7 @@
 // accounts and a sign-in to another one (TerminalPane, PaneActionsMenu).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import { ref } from 'vue'
+import { reactive, ref } from 'vue'
 import { resetSettings, settings } from '../settings'
 import { remoteHostsState } from '../remoteHosts'
 
@@ -124,6 +124,94 @@ describe('an agent pane on an SSH host: its account', () => {
     expect(signIn.textContent.trim()).toBe('Sign in to another account on linux-box…')
     signIn.click()
     expect(ctx.signInOnHost).toHaveBeenCalledWith('pane-a3')
+  })
+
+  it('its menu: Check account again, Copy account details, Make this the default; the default marked, and shown in its title', async () => {
+    ctx.checkHostAccount = vi.fn()
+    ctx.copyAccountDetails = vi.fn()
+    ctx.setHostAccountDefault = vi.fn()
+    settings.hostAccountDefaults = { 'ssh-dflt': { claude: 'abc123' } }
+    remoteHostsState.targets.push({ id: 'ssh-dflt', label: 'dflt-box', host: 'd.example' })
+    await mountPane({ id: 'pane-a5', remoteHostId: 'ssh-dflt' })
+    const open = async () => {
+      await wrapper.get('[data-pane-id="pane-a5"]').trigger('contextmenu', { clientX: 10, clientY: 10 })
+      await flushPromises()
+    }
+    await open()
+    // On the host's own sign-in while the default is the folder: Restart on it is marked.
+    expect([...document.body.querySelectorAll('[data-test="menu-restart-on-account"]')].map((b) => b.textContent.trim())).toEqual(['Restart on work · Max (default)'])
+    document.body.querySelector('[data-test="menu-check-host-account"]').click()
+    expect(ctx.checkHostAccount).toHaveBeenCalledWith('pane-a5')
+    await open()
+    document.body.querySelector('[data-test="menu-copy-account-details"]').click()
+    expect(ctx.copyAccountDetails).toHaveBeenCalledWith('pane-a5')
+    await open()
+    document.body.querySelector('[data-test="menu-host-default"]').click()
+    expect(ctx.setHostAccountDefault).toHaveBeenCalledWith('pane-a5')
+    wrapper.unmount()
+    // A pane on the default folder: "Default on this host" in its title, no Make default.
+    await mountPane({ id: 'pane-a6', remoteHostId: 'ssh-dflt', hostAccount: 'abc123' })
+    expect(wrapper.get('[data-test="pane-account-chip"]').attributes('title')).toContain('Default on this host')
+    await wrapper.get('[data-pane-id="pane-a6"]').trigger('contextmenu', { clientX: 10, clientY: 10 })
+    await flushPromises()
+    expect(document.body.querySelector('[data-test="menu-host-default"]')).toBeNull()
+    settings.hostAccountDefaults = {}
+  })
+
+  it('its hover card: Check again only (restarting on another account is the menu’s: never one click that stops a busy agent)', async () => {
+    ctx.checkHostAccount = vi.fn()
+    ctx.restartOnAccount = vi.fn()
+    settings.hostAccountDefaults = { 'ssh-acct': { claude: 'abc123' } }
+    await mountPane({ id: 'pane-h1' })
+    await wrapper.get('[data-test="pane-hover-trigger"]').trigger('pointerover')
+    await new Promise((r) => setTimeout(r, 500))
+    await flushPromises()
+    const card = document.body.querySelector('.pane-hover-card')
+    expect(card.querySelector('[data-hover-account]').textContent).toContain('coreine13@gmail.com')
+    card.querySelector('[data-test="hover-check-account"]').click()
+    expect(ctx.checkHostAccount).toHaveBeenCalledWith('pane-h1')
+    expect(card.querySelectorAll('.hc-account-actions button')).toHaveLength(1)
+    expect(ctx.restartOnAccount).not.toHaveBeenCalled()
+    wrapper.unmount()
+    // On the default already: "Default on this host" said.
+    await mountPane({ id: 'pane-h2', hostAccount: 'abc123' })
+    await wrapper.get('[data-test="pane-hover-trigger"]').trigger('pointerover')
+    await new Promise((r) => setTimeout(r, 500))
+    await flushPromises()
+    const again = [...document.body.querySelectorAll('.pane-hover-card')].at(-1)
+    expect(again.querySelector('[data-hover-account-note]').textContent).toBe('Default on this host')
+    settings.hostAccountDefaults = {}
+  })
+
+  it('its agent runs on another account than the pane’s: the pane asks, Update or Keep (nothing changed until then); a new launch ends the notice', async () => {
+    ctx.resolveHostAccountMismatch = vi.fn()
+    const node = reactive({ id: 'pane-m1', type: 'leaf', kind: 'agent', agentId: 'claude', agentCommand: 'claude', title: 'Archimedes', remoteHostId: 'ssh-acct', sessionId: 's-1', hostAccount: 'abc123', hostAccountMismatch: { runs: null }, launchedAt: 1 })
+    wrapper = mount(TerminalPane, { props: { node }, global: { provide: { panelCtx: ctx } }, attachTo: document.body })
+    await flushPromises()
+    const note = wrapper.get('[data-test="host-account-mismatch"]')
+    expect(note.text()).toContain('This pane is running on coreine13 · Pro, not work · Max.')
+    expect(node.hostAccount).toBe('abc123')
+    await wrapper.get('[data-test="host-account-update"]').trigger('click')
+    expect(ctx.resolveHostAccountMismatch).toHaveBeenLastCalledWith('pane-m1', true)
+    await wrapper.get('[data-test="host-account-keep"]').trigger('click')
+    expect(ctx.resolveHostAccountMismatch).toHaveBeenLastCalledWith('pane-m1', false)
+    // A folder the host no longer lists: named as one.
+    node.hostAccountMismatch = { runs: 'zzz999' }
+    await flushPromises()
+    expect(wrapper.get('[data-test="host-account-mismatch"]').text()).toContain('running on another account folder, not work · Max')
+    node.launchedAt = 2
+    await flushPromises()
+    expect(wrapper.find('[data-test="host-account-mismatch"]').exists()).toBe(false)
+  })
+
+  it('signed in, its email not known yet: its plan in the header, Check again in its title', async () => {
+    detect.mockResolvedValue({ ok: true, entries: [{ agent: 'claude', scope: 'tessel', id: 'bd93c7f5566d', dir: '/home/u/.tessel-server/accounts/claude/bd93c7f5566d', plan: 'max', cred: 'file', state: 'signed-in' }] })
+    remoteHostsState.targets.push({ id: 'ssh-unk', label: '192.99.0.20', host: '192.99.0.20' })
+    await mountPane({ id: 'pane-a7', remoteHostId: 'ssh-unk', hostAccount: 'bd93c7f5566d' })
+    const chip = wrapper.get('[data-test="pane-account-chip"]')
+    expect(chip.text()).toBe('Max')
+    expect(chip.attributes('title')).toContain('not known yet')
+    expect(chip.attributes('title')).toContain('Check account again')
   })
 
   it('a Codex pane restarts on another account with a new conversation (said in its hint)', async () => {

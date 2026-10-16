@@ -44,7 +44,8 @@ const EXPECTED_ACTION = {
   floating: 'toggleFloating()',
   browser: 'openInBrowser({ newPane: true, focusAddress: true })',
   help: 'helpOpen.value = true',
-  logs: 'openLogs()'
+  logs: 'openLogs()',
+  diagnostics: 'copyDiagnostics()'
 }
 
 describe('settingsTools', () => {

@@ -11,6 +11,10 @@ import { createRemoteSession, sessionArgs, FUNCTIONS, prelude } from '../../remo
 import { spawnSync } from 'child_process'
 import {
   parseAccounts,
+  parsePaneProcesses,
+  parseDiag,
+  folderIdOf,
+  ownFolder,
   chatsOnLogin,
   shellQuote,
   createRemoteAccounts,
@@ -419,6 +423,17 @@ describe('createRemoteAccounts', () => {
     expect(await service.launchEnv('ssh-1', 'claude', '../../x')).toMatchObject({ ok: false })
   })
 
+  it('the host’s default account (signedIn): only a folder signed in there, checked as it starts', async () => {
+    const { service, calls } = make({ run: (fn, args) => ({ rc: 0, out: Buffer.from(`/home/u/.tessel-server/accounts/${args[0]}/${args[1]}\n`) }) })
+    expect((await service.launchEnv('ssh-1', 'claude', 'abc123', { signedIn: true })).ok).toBe(true)
+    expect(calls[0].args).toEqual(['claude', 'abc123', 'signed'])
+    // Anything but a plain true: an ordinary launch (a sign-in pane starts on an empty folder).
+    await service.launchEnv('ssh-1', 'claude', 'abc123', { signedIn: 'yes' })
+    expect(calls[1].args).toEqual(['claude', 'abc123'])
+    const out = make({ run: () => ({ rc: 92, out: Buffer.from('') }) }).service
+    expect(await out.launchEnv('ssh-1', 'claude', 'abc123', { signedIn: true })).toMatchObject({ ok: false, signedOut: true, error: expect.stringContaining('signed out') })
+  })
+
   it('a home whose name the command cannot carry: said clearly; a folder just made there is taken away again', async () => {
     const calls = []
     const service = createRemoteAccounts({
@@ -809,4 +824,360 @@ describe.skipIf(!gitSh())('remoteAccounts.sh on a POSIX sh (fake ssh)', () => {
     await new Promise((r) => setTimeout(r, 5000))
     expect(fs.existsSync(join(dir, 'late'))).toBe(false)
   }, 60000)
+})
+
+// The user's report (1.16.0): a Claude pane on its account folder showed
+// "not signed in yet", then only "Max". Claude Code 2.1 keeps oauthAccount in
+// <CLAUDE_CONFIG_DIR>/.claude.json with a nested ccOnboardingFlags object,
+// which the flat-object pattern never matched; right after a /login its
+// subscriptionType is null until its profile is fetched.
+describe.skipIf(!gitSh())('a folder after a fresh /login, as Claude Code 2.1 leaves it (fake ssh)', () => {
+  let dir
+  let session
+  afterEach(() => {
+    if (session) session.close('done')
+    session = null
+    if (dir) fs.rmSync(dir, { recursive: true, force: true })
+    dir = null
+  })
+  async function open(home, extraEnv = {}) {
+    const launch = fakeSshLaunch({ home })
+    session = createRemoteSession({
+      file: launch.file,
+      args: sessionArgs(launch.args),
+      env: { SystemRoot: process.env.SystemRoot || '', PATH: process.env.SystemRoot ? join(process.env.SystemRoot, 'System32') : '/usr/bin:/bin', SHELL: '/usr/bin/false', ...extraEnv },
+      spawnImpl: launch.spawnImpl
+    })
+    await session.start()
+    return session
+  }
+  const folder = (id = 'bd93c7f5566d') => `.tessel-server/accounts/claude/${id}`
+  function seedFolder(home, { plan = 'max', profile = true } = {}) {
+    write(home, `${folder()}/.tessel-account`, 'tessel-account claude bd93c7f5566d\n')
+    write(home, `${folder()}/.credentials.json`, { claudeAiOauth: { accessToken: 'sk-ant-oat01-SECRETA', refreshToken: 'sk-ant-ort01-SECRETR', expiresAt: 1790000000000, scopes: ['user:inference', 'user:profile'], subscriptionType: plan, rateLimitTier: plan ? 'default_claude_max_20x' : null } })
+    write(home, `${folder()}/.claude.json`, {
+      numStartups: 1,
+      installMethod: 'native',
+      mcpServers: { 'tessel-team': { type: 'stdio', command: '/usr/bin/node', args: ['/home/u/.tessel-server/bin/tessel-shim.cjs', 'mcp'] } },
+      oauthAccount: profile
+        ? {
+            accountUuid: '1f0c6d1e-1111-4111-8111-111111111111',
+            emailAddress: 'coreine13@gmail.com',
+            organizationUuid: '2f0c6d1e-2222-4222-8222-222222222222',
+            displayName: 'Coreine',
+            hasExtraUsageEnabled: false,
+            billingType: 'stripe_subscription',
+            accountCreatedAt: '2025-01-01T00:00:00Z',
+            subscriptionCreatedAt: '2025-02-01T00:00:00Z',
+            ccOnboardingFlags: { seen: true, nested: { note: 'a "}{" in a string' } },
+            claudeCodeTrialEndsAt: null,
+            seatTier: null,
+            planDisplayName: 'Claude Max',
+            profileFetchedAt: 1790000000000,
+            organizationRole: 'admin',
+            organizationName: "coreine13@gmail.com's Organization"
+          }
+        : { accountUuid: '1f0c6d1e-1111-4111-8111-111111111111', emailAddress: 'coreine13@gmail.com', organizationUuid: '2f0c6d1e-2222-4222-8222-222222222222' },
+      projects: { '/home/u/app': { allowedTools: [], hasTrustDialogAccepted: true } }
+    })
+    for (const n of ['projects', 'todos']) fs.mkdirSync(join(home, folder(), n), { recursive: true })
+  }
+
+  it('reads the account (email, organization, plan) from a nested oauthAccount; never a token', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-login-'))
+    seedFolder(dir)
+    const s = await open(dir)
+    const res = await s.run('__t_accts', [], { cap: 64 * 1024, timeoutMs: 30000 })
+    const raw = res.out.toString('utf8')
+    expect(raw).not.toContain('SECRET')
+    expect(parseAccounts(raw).entries.find((e) => e.id === 'bd93c7f5566d')).toMatchObject({
+      scope: 'tessel',
+      email: 'coreine13@gmail.com',
+      org: "coreine13@gmail.com's Organization",
+      orgId: '2f0c6d1e-2222-4222-8222-222222222222',
+      account: '1f0c6d1e-1111-4111-8111-111111111111',
+      name: 'Coreine',
+      planName: 'Claude Max',
+      plan: 'max',
+      cred: 'file'
+    })
+  }, 60000)
+
+  it('right after the /login (subscriptionType still null): signed in, the account named by its email', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-login-'))
+    seedFolder(dir, { plan: null, profile: false })
+    const s = await open(dir)
+    const e = parseAccounts((await s.run('__t_accts', [], { cap: 64 * 1024, timeoutMs: 30000 })).out.toString('utf8')).entries.find((x) => x.id === 'bd93c7f5566d')
+    expect(e).toMatchObject({ email: 'coreine13@gmail.com', cred: 'file' })
+    expect(e.plan).toBeUndefined()
+    expect(entryState(e)).toBe('signed-in')
+  }, 60000)
+
+  it('Claude Code’s older config name in the folder (.config.json, not empty) is the one it reads: read there too', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-login-'))
+    seedFolder(dir)
+    write(dir, `${folder()}/.config.json`, { oauthAccount: { emailAddress: 'legacy@example.com', ccOnboardingFlags: {} } })
+    const s = await open(dir)
+    const e = parseAccounts((await s.run('__t_accts', [], { cap: 64 * 1024, timeoutMs: 30000 })).out.toString('utf8')).entries.find((x) => x.id === 'bd93c7f5566d')
+    expect(e.email).toBe('legacy@example.com')
+  }, 60000)
+
+  it('signed: a folder signed in starts; an empty one (92) or a missing one (91) does not', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-login-'))
+    seedFolder(dir)
+    write(dir, `${folder('e1')}/.tessel-account`, 'tessel-account claude e1\n')
+    const s = await open(dir)
+    const ok = await s.run('__t_acctmk', ['claude', 'bd93c7f5566d', 'signed'], { cap: 4096, timeoutMs: 30000 })
+    expect(ok.rc).toBe(0)
+    expect(ok.out.toString('utf8')).toContain('/.tessel-server/accounts/claude/bd93c7f5566d')
+    expect((await s.run('__t_acctmk', ['claude', 'e1', 'signed'], { cap: 4096, timeoutMs: 30000 })).rc).toBe(92)
+    // Without signed (a sign-in pane): the empty folder is fine.
+    expect((await s.run('__t_acctmk', ['claude', 'e1'], { cap: 4096, timeoutMs: 30000 })).rc).toBe(0)
+    expect((await s.run('__t_acctmk', ['claude', 'nope1', 'signed'], { cap: 4096, timeoutMs: 30000 })).rc).toBe(91)
+  }, 60000)
+
+  it('a folder whose sign-in file is a link (made outside Tessel): flagged, and no agent started on it', async (t) => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-login-'))
+    seedFolder(dir)
+    write(dir, '.claude/.credentials.json', { claudeAiOauth: { accessToken: 'sk-ant-oat01-SECRETH', refreshToken: 'sk-ant-ort01-SECRETH', subscriptionType: 'pro' } })
+    fs.rmSync(join(dir, folder(), '.credentials.json'))
+    try {
+      fs.symlinkSync(join(dir, '.claude', '.credentials.json'), join(dir, folder(), '.credentials.json'), 'file')
+    } catch {
+      t.skip() // no symlinks for this user on this PC
+    }
+    const s = await open(dir)
+    const raw = (await s.run('__t_accts', [], { cap: 64 * 1024, timeoutMs: 30000 })).out.toString('utf8')
+    if (!/^v linked yes$/m.test(raw)) t.skip() // the test shell does not see Windows links as links
+    expect(raw).not.toContain('SECRET')
+    expect(parseAccounts(raw).entries.find((e) => e.id === 'bd93c7f5566d')).toMatchObject({ linked: true })
+    expect((await s.run('__t_acctmk', ['claude', 'bd93c7f5566d'], { cap: 4096, timeoutMs: 30000 })).rc).toBe(98)
+    expect(parseDiag((await s.run('__t_acctdiag', ['claude', 'bd93c7f5566d', '-'], { cap: 16 * 1024, timeoutMs: 30000 })).out.toString('utf8'))).toMatchObject({ 'folder.credentialsLink': 'yes', 'folder.configLink': 'no' })
+  }, 60000)
+
+  it('Copy account details: yes / no only, never an email or a token', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-login-'))
+    seedFolder(dir)
+    const s = await open(dir)
+    const res = await s.run('__t_acctdiag', ['claude', 'bd93c7f5566d', 'pane-none1'], { cap: 16 * 1024, timeoutMs: 30000 })
+    const raw = res.out.toString('utf8')
+    expect(raw).not.toContain('coreine13')
+    expect(raw).not.toContain('SECRET')
+    expect(parseDiag(raw)).toMatchObject({ 'folder.exists': 'yes', 'folder.marker': 'yes', 'folder.credentials': 'yes', 'folder.credentialsLink': 'no', 'folder.config': 'yes', 'folder.oauthAccount': 'yes', 'folder.email': 'yes', 'folder.plan': 'yes', 'home.credentials': 'no', 'process.found': 'none' })
+    expect((await s.run('__t_acctdiag', ['claude', '../x', '-'], { cap: 4096, timeoutMs: 30000 })).rc).toBe(90)
+  }, 60000)
+
+  it('the folder a pane’s agent really runs on: its process’s CLAUDE_CONFIG_DIR (or none), found by the pane id it carries', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-login-'))
+    const home = posixPath(dir)
+    write(dir, 'bin/claude', '#!/bin/sh\nsleep 25\n')
+    fs.chmodSync(join(dir, 'bin', 'claude'), 0o755)
+    const { spawn } = await import('child_process')
+    const sh = gitSh()
+    const env = { ...process.env, TESSEL_PANE_ID: 'pane-acct1', CLAUDE_CONFIG_DIR: `${home}/.tessel-server/accounts/claude/bd93c7f5566d` }
+    const off = { ...process.env, TESSEL_PANE_ID: 'pane-acct2' }
+    delete off.CLAUDE_CONFIG_DIR
+    const a = spawn(sh, [`${home}/bin/claude`], { env, stdio: 'ignore' })
+    const b = spawn(sh, [`${home}/bin/claude`], { env: off, stdio: 'ignore' })
+    try {
+      await new Promise((r) => setTimeout(r, 800))
+      const s = await open(dir)
+      // All the panes in one pass.
+      const all = parsePaneProcesses((await s.run('__t_acctpane', ['pane-acct1', 'claude', 'pane-acct2', 'claude', 'pane-gone9', 'claude'], { cap: 8192, timeoutMs: 30000 })).out.toString('utf8'))
+      expect(all.home).toBe(home)
+      expect(all.panes['pane-acct1']).toEqual({ found: 'yes', dir: `${home}/.tessel-server/accounts/claude/bd93c7f5566d` })
+      expect(folderIdOf('claude', all.panes['pane-acct1'].dir, all.home)).toBe('bd93c7f5566d')
+      expect(all.panes['pane-acct2']).toEqual({ found: 'yes', dir: null })
+      expect(all.panes['pane-gone9']).toEqual({ found: 'none', dir: null })
+      expect((await s.run('__t_acctpane', ['bad id', 'claude'], { cap: 8192, timeoutMs: 30000 })).rc).toBe(90)
+      expect((await s.run('__t_acctpane', ['pane-acct1', 'gemini'], { cap: 8192, timeoutMs: 30000 })).rc).toBe(90)
+      expect((await s.run('__t_acctpane', ['pane-acct1'], { cap: 8192, timeoutMs: 30000 })).rc).toBe(90)
+    } finally {
+      a.kill()
+      b.kill()
+    }
+  }, 60000)
+})
+
+// The pane lookup on a /proc of files (remoteAccounts.sh with /proc pointed
+// at it, as a host's): processes made of a command line and an environment.
+describe.skipIf(!gitSh())('the pane’s real folder, on a /proc of files', () => {
+  let root
+  afterEach(() => {
+    if (root) fs.rmSync(root, { recursive: true, force: true })
+    root = null
+  })
+  const proc = (pid, cmd, env) => {
+    fs.mkdirSync(join(root, String(pid)), { recursive: true })
+    fs.writeFileSync(join(root, String(pid), 'cmdline'), Buffer.from(cmd.map((a) => `${a}\0`).join(''), 'latin1'))
+    fs.writeFileSync(join(root, String(pid), 'environ'), Buffer.from(env.map((a) => `${a}\0`).join(''), 'latin1'))
+  }
+  // before: shell run after the script (a function redefined, say). On
+  // stdin: the whole script is too long for a Windows command line.
+  const ask = (args, before = '') => {
+    const fake = posixPath(root)
+    const script = `${ACCOUNTS_SHELL.replace(/\/proc/g, fake)}\nHOME=/home/u\n${before}\n__t_acctpane ${args.join(' ')}\n`
+    return spawnSync(gitSh(), ['-s'], { input: script, encoding: 'utf8' }).stdout
+  }
+  const folder = (id) => `CLAUDE_CONFIG_DIR=/home/u/.tessel-server/accounts/claude/${id}`
+  function seed() {
+    root = fs.mkdtempSync(join(os.tmpdir(), 'tessel-proc-'))
+    fs.mkdirSync(join(root, 'self'))
+    fs.writeFileSync(join(root, 'self', 'environ'), 'A=1\0')
+  }
+
+  for (const mode of ['an awk that splits at NUL', 'an awk that cannot (BusyBox: tr first)']) {
+    const before = mode.startsWith('an awk that cannot') ? '__ta_nulawk() { return 1; }' : ''
+    it(`${mode}: whole entries only (a value holding a newline forges nothing), the first one, one pass for all panes`, () => {
+      seed()
+      proc(98765, ['claude'], ['TESSEL_PANE_ID=pane-3-1', 'X=a\nCLAUDE_CONFIG_DIR=/home/u/.tessel-server/accounts/claude/ccc333', folder('aaa111'), folder('ddd444'), 'ANTHROPIC_API_KEY=sk-ant-SECRETKEY'])
+      // Sorts first; its only entry is FOO, whatever its value says.
+      proc(102345, ['claude'], ['FOO=x\nTESSEL_PANE_ID=pane-3-1\nCLAUDE_CONFIG_DIR=/tmp/x/.tessel-server/accounts/claude/bbb222'])
+      proc(4242, ['codex'], ['TESSEL_PANE_ID=pane-7-1', 'CODEX_HOME=/home/u/.tessel-server/accounts/codex/cdx1'])
+      // The pane's shell carries its id too: not its agent.
+      proc(4000, ['-bash'], ['TESSEL_PANE_ID=pane-3-1', folder('shell9')])
+      const out = ask(['pane-3-1', 'claude', 'pane-7-1', 'codex', 'pane-9-1', 'claude'], before)
+      expect(out).not.toContain('SECRET')
+      const p = parsePaneProcesses(out)
+      expect(p.home).toBe('/home/u')
+      expect(p.panes).toEqual({
+        'pane-3-1': { found: 'yes', dir: '/home/u/.tessel-server/accounts/claude/aaa111' },
+        'pane-7-1': { found: 'yes', dir: '/home/u/.tessel-server/accounts/codex/cdx1' },
+        'pane-9-1': { found: 'none', dir: null }
+      })
+    })
+
+    it(`${mode}: an older session’s agent still running on another folder: mixed (neither taken); gone, the new one`, () => {
+      seed()
+      proc(100, ['claude'], ['TESSEL_PANE_ID=pane-3-1', folder('old111')])
+      proc(99999, ['claude'], ['TESSEL_PANE_ID=pane-3-1', folder('new222')])
+      expect(parsePaneProcesses(ask(['pane-3-1', 'claude'], before)).panes['pane-3-1']).toEqual({ found: 'mixed', dir: null })
+      fs.rmSync(join(root, '100'), { recursive: true })
+      expect(parsePaneProcesses(ask(['pane-3-1', 'claude'], before)).panes['pane-3-1']).toEqual({ found: 'yes', dir: '/home/u/.tessel-server/accounts/claude/new222' })
+    })
+
+    it(`${mode}: only this user’s processes (as root, another user’s could pass for a pane); a folder on two lines is unknown`, () => {
+      seed()
+      proc(555, ['claude'], ['TESSEL_PANE_ID=pane-3-1', folder('evil999')])
+      proc(556, ['claude'], ['TESSEL_PANE_ID=pane-3-1', folder('mine111')])
+      proc(557, ['claude'], ['TESSEL_PANE_ID=pane-4-1', 'CLAUDE_CONFIG_DIR=/home/u/x\n@p pane-3-1 1 /evil'])
+      const out = ask(['pane-3-1', 'claude', 'pane-4-1', 'claude'], `${before}\n__ta_mine() { [ "\${1##*/}" != 555 ]; }`)
+      const p = parsePaneProcesses(out)
+      expect(p.panes['pane-3-1']).toEqual({ found: 'yes', dir: '/home/u/.tessel-server/accounts/claude/mine111' })
+      expect(p.panes['pane-4-1']).toEqual({ found: 'unknown', dir: null })
+      expect(out.split('\n').filter((l) => l.startsWith('@p '))).toHaveLength(2)
+    })
+  }
+
+  it('Copy account details on that process: whether a key is in its environment, never its value', () => {
+    seed()
+    proc(98765, ['claude'], ['TESSEL_PANE_ID=pane-3-1', folder('aaa111'), 'ANTHROPIC_API_KEY=sk-ant-SECRETKEY'])
+    const fake = posixPath(root)
+    const script = `${ACCOUNTS_SHELL.replace(/\/proc/g, fake)}\nHOME=/home/u\nset -x\n__t_acctdiag claude aaa111 pane-3-1\n`
+    const r = spawnSync(gitSh(), ['-s'], { input: script, encoding: 'utf8' })
+    // Not in its output, nor in a variable the trace would show.
+    expect(r.stdout + r.stderr).not.toContain('SECRET')
+    expect(parseDiag(r.stdout)).toMatchObject({ 'process.found': 'yes', 'process.configDirSet': 'yes', 'process.onFolder': 'yes', 'process.keyEnv': 'yes', 'process.dbus': 'no' })
+    proc(100, ['claude'], ['TESSEL_PANE_ID=pane-3-1', folder('old111')])
+    const mixed = spawnSync(gitSh(), ['-s'], { input: script.replace('set -x\n', ''), encoding: 'utf8' }).stdout
+    expect(parseDiag(mixed)['process.found']).toBe('mixed')
+  })
+})
+
+describe.skipIf(!gitSh())('an account object in a config file (__ta_obj)', () => {
+  it('its own fields only (a nested field never passes for its own), the key and not a string equal to it, quoted braces skipped', () => {
+    const dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-obj-'))
+    try {
+      const shapes = {
+        nested: '{"oauthAccount":{"ccOnboardingFlags":{"a":{"b":1}},"emailAddress":"me@x.com"}}',
+        shadow: '{"oauthAccount":{"flags":{"emailAddress":"sk-ant-TOKEN@x.com"},"emailAddress":"me@x.com"}}',
+        quoted: '{"oauthAccount":{"displayName":"a}b{\\"}","emailAddress":"me@x.com"}}',
+        valueFirst: '{"note":"oauthAccount","oauthAccount":{"emailAddress":"me@x.com"}}',
+        escaped: '{"p":"\\"oauthAccount\\":{\\"emailAddress\\":\\"evil@x.com\\"}","oauthAccount":{"emailAddress":"me@x.com"}}',
+        unbalanced: '{"oauthAccount":{"emailAddress":"me@x.com"'
+      }
+      const out = {}
+      for (const [name, text] of Object.entries(shapes)) {
+        fs.writeFileSync(join(dir, `${name}.json`), text)
+        const script = `${ACCOUNTS_SHELL}\n__ta_flat ${shellQuote(`${posixPath(dir)}/${name}.json`)} | __ta_obj oauthAccount | __ta_str emailAddress\n`
+        out[name] = spawnSync(gitSh(), ['-s'], { input: script, encoding: 'utf8' }).stdout.trim()
+      }
+      expect(out).toEqual({ nested: 'me@x.com', shadow: 'me@x.com', quoted: 'me@x.com', valueFirst: 'me@x.com', escaped: 'me@x.com', unbalanced: '' })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('the pane’s real folder and the details, in main', () => {
+  it('parses the host’s answers: a folder of Tessel’s, none, unknown, mixed; details are known keys with yes / no only', () => {
+    const p = parsePaneProcesses('@h Linux /home/u\n@p pane-a 123 /home/u/.tessel-server/accounts/claude/abc123\n@p pane-b 9 -\n@p pane-c none\n@p pane-d mixed\n@p pane-e 7 relative/dir\n@p pane-a 5 /evil\ngarbage\n@p bad 1 /x')
+    expect(p.home).toBe('/home/u')
+    expect(p.panes).toEqual({
+      'pane-a': { found: 'yes', dir: '/home/u/.tessel-server/accounts/claude/abc123' },
+      'pane-b': { found: 'yes', dir: null },
+      'pane-c': { found: 'none', dir: null },
+      'pane-d': { found: 'mixed', dir: null },
+      // A folder that is no plain path: unknown, never the host's own sign-in.
+      'pane-e': { found: 'unknown', dir: null }
+    })
+    expect(parsePaneProcesses('garbage')).toEqual({ home: null, panes: {} })
+    // Only a folder of that home, of that agent.
+    expect(folderIdOf('claude', '/home/u/.tessel-server/accounts/claude/abc123', '/home/u')).toBe('abc123')
+    expect(folderIdOf('claude', '/home/u/.tessel-server/accounts/claude/abc123/', '/home/u/')).toBe('abc123')
+    expect(folderIdOf('claude', '/tmp/x/.tessel-server/accounts/claude/abc123', '/home/u')).toBeNull()
+    expect(folderIdOf('claude', '/home/u2/.tessel-server/accounts/claude/abc123', '/home/u')).toBeNull()
+    expect(folderIdOf('claude', '/home/u/.tessel-server/accounts/claude/abc123', null)).toBeNull()
+    expect(folderIdOf('claude', '/home/u/.tessel-server/accounts/claude/../abc123', '/home/u')).toBeNull()
+    expect(folderIdOf('claude', '/opt/claude', '/home/u')).toBeNull()
+    expect(folderIdOf('codex', '/home/u/.tessel-server/accounts/claude/abc123', '/home/u')).toBeNull()
+    // The host's own sign-in: no folder, the agent's own, the login shell's.
+    expect(ownFolder('claude', null, '/home/u')).toBe(true)
+    expect(ownFolder('claude', '/home/u/.claude/', '/home/u')).toBe(true)
+    expect(ownFolder('codex', '/home/u/.codex', '/home/u')).toBe(true)
+    expect(ownFolder('claude', '/srv/cc', '/home/u', '/srv/cc/')).toBe(true)
+    expect(ownFolder('claude', '/srv/other', '/home/u', '/srv/cc')).toBe(false)
+    expect(parseDiag('d folder.email yes\nd folder.email no\nd evil.key yes\nd process.found sk-ant-x\nd os Linux\nd home.email maybe')).toEqual({ 'folder.email': 'yes', os: 'Linux' })
+  })
+
+  it('paneFolders (all the panes of a host in one run) and diagnose ask the host with checked arguments', async () => {
+    const calls = []
+    const service = createRemoteAccounts({
+      run: async (hostId, fn, args) => {
+        calls.push(`${fn} ${args.join(' ')}`)
+        return fn === '__t_acctpane'
+          ? { rc: 0, out: Buffer.from('@h Linux /home/u\n@p pane-a1 42 /home/u/.tessel-server/accounts/claude/abc123\n@p pane-a2 43 -\n@p pane-a3 44 /tmp/x/.tessel-server/accounts/codex/abc123\n@p pane-a4 mixed\n') }
+          : { rc: 0, out: Buffer.from('d folder.email no\n') }
+      }
+    })
+    const res = await service.paneFolders('ssh-1', [
+      { paneId: 'pane-a1', agent: 'claude' },
+      { paneId: 'pane-a2', agent: 'claude' },
+      { paneId: 'pane-a3', agent: 'codex' },
+      { paneId: 'pane-a4', agent: 'claude' },
+      { paneId: 'pane-a1', agent: 'claude' },
+      { paneId: 'bad id', agent: 'claude' },
+      { paneId: 'pane-a5', agent: 'gemini' }
+    ])
+    expect(res).toEqual({
+      ok: true,
+      panes: {
+        'pane-a1': { found: 'yes', dir: '/home/u/.tessel-server/accounts/claude/abc123', folderId: 'abc123', own: false },
+        'pane-a2': { found: 'yes', dir: null, folderId: null, own: true },
+        // Named like one of Tessel's, but not under that home: neither.
+        'pane-a3': { found: 'yes', dir: '/tmp/x/.tessel-server/accounts/codex/abc123', folderId: null, own: false },
+        'pane-a4': { found: 'mixed', dir: null, folderId: null, own: false }
+      }
+    })
+    expect(await service.diagnose('ssh-1', 'claude', 'abc123', 'pane-a1')).toEqual({ ok: true, flags: { 'folder.email': 'no' } })
+    expect(await service.diagnose('ssh-1', 'claude', '../x', 'bad id')).toMatchObject({ ok: true })
+    expect(calls).toEqual(['__t_acctpane pane-a1 claude pane-a2 claude pane-a3 codex pane-a4 claude', '__t_acctdiag claude abc123 pane-a1', '__t_acctdiag claude - -'])
+    expect(await service.paneFolders('ssh-1', [{ paneId: 'bad id', agent: 'claude' }])).toMatchObject({ ok: false })
+    expect(await service.paneFolders('ssh-1', 'nope')).toMatchObject({ ok: false })
+  })
+
+  it('paneFolders without the host’s home in its answer: nothing taken for sure', async () => {
+    const service = createRemoteAccounts({ run: async () => ({ rc: 0, out: Buffer.from('@p pane-a1 42 -\n') }) })
+    expect((await service.paneFolders('ssh-1', [{ paneId: 'pane-a1', agent: 'claude' }])).panes['pane-a1']).toEqual({ found: 'unknown', dir: null, folderId: null, own: false })
+  })
 })

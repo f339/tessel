@@ -269,3 +269,51 @@ describe('pointerStillTyped / draftVisible', () => {
     expect(draftVisible({ screenText: () => 'something else' }, msg)).toBe(false)
   })
 })
+
+describe('never typed into a menu (the observed failure: Codex switched to a smaller model)', () => {
+  it('no digit in the pointer: a "1" typed into "switch model? 1. Yes 2. No" answered it', () => {
+    expect(pointerText(1)).not.toMatch(/\d/)
+    expect(pointerText(3)).not.toMatch(/\d/)
+    // An older pointer (with its count) left in an input box is still known.
+    expect(pointerStillTyped({ screenText: () => '› [Tessel] You have 1 new team message: read it with team_inbox.' }, null)).toBe(true)
+    expect(pointerStillTyped({ screenText: () => `› ${pointerText()}` }, null)).toBe(true)
+  })
+
+  it('an input box that is not shown empty (a menu or a question drawn over it): the pointer waits, nothing typed', async () => {
+    const a = fakeAgent()
+    let menu = true
+    a.deps.inputEmpty = () => (menu ? false : !a.input)
+    const d = createTeamDelivery(a.deps)
+    await d.notify('pane-1')
+    await vi.advanceTimersByTimeAsync(POINTER.enterDelayMs)
+    expect(a.writes).toEqual([])
+    expect(a.logs).toEqual(['info #1 Codex CLI (pane-1): pointer waits: its input box is not shown empty (a menu, a question or a draft may be open)'])
+    // The menu is gone: typed then.
+    menu = false
+    d.notify('pane-1')
+    await vi.advanceTimersByTimeAsync(POINTER.enterDelayMs)
+    expect(a.writes.map((w) => w.kind)).toEqual(['text', 'enter'])
+  })
+
+  it('a pointer of its own still in the input box: Enter on it is allowed (not empty, but known)', async () => {
+    const a = fakeAgent({ swallowEnter: true })
+    a.deps.inputEmpty = () => !a.input
+    const d = createTeamDelivery(a.deps)
+    d.notify('pane-1')
+    await vi.advanceTimersByTimeAsync(POINTER.enterDelayMs)
+    a.deps.blocked.mockImplementation((id, o) => (o.phase === 'verify' ? 'busy' : '')) // no quick re-Enter
+    await vi.advanceTimersByTimeAsync(POINTER.retryMs)
+    expect(a.texts()).toBe(1)
+    expect(a.enters()).toBe(2)
+    expect(a.logs.some((l) => /retry 1\/3: the pointer is still in the input box, Enter only/.test(l))).toBe(true)
+  })
+
+  it('agents whose input box cannot be read (inputEmpty null) are unchanged', async () => {
+    const a = fakeAgent()
+    a.deps.inputEmpty = () => null
+    const d = createTeamDelivery(a.deps)
+    d.notify('pane-1')
+    await vi.advanceTimersByTimeAsync(POINTER.enterDelayMs)
+    expect(a.writes.map((w) => w.kind)).toEqual(['text', 'enter'])
+  })
+})

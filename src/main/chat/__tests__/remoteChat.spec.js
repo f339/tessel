@@ -261,7 +261,7 @@ describe('chat sessions on an SSH host', () => {
     const chat = createChatSessions(deps)
     const r = await chat.open({ paneId, cwd, projectDir: cwd, permissions: 'manual', hostAccount: 'abc123' })
     expect(r.ok).toBe(true)
-    expect(remote.accountFolder).toHaveBeenCalledWith({ hostId: HOST, agent: 'claude', id: 'abc123' })
+    expect(remote.accountFolder).toHaveBeenCalledWith({ hostId: HOST, agent: 'claude', id: 'abc123', signedIn: false })
     expect(remote.spawnFor).toHaveBeenCalledWith({ hostId: HOST, cwd: '/home/me/app', env: { TESSEL_PANE_ID: paneId, TESSEL_AGENT_PROVIDER: 'claude', CLAUDE_CONFIG_DIR: '/home/me/.tessel-server/accounts/claude/abc123' } })
     // Its host and account, for main to stop it before that login is removed.
     expect(chat.list().find((c) => c.paneId === paneId)).toMatchObject({ hostId: HOST, hostAccount: 'abc123' })
@@ -277,6 +277,16 @@ describe('chat sessions on an SSH host', () => {
     // Only a folder id, only on a host.
     expect(await chat.open({ paneId: 'pane-r4', cwd, permissions: 'manual', hostAccount: '../x' })).toMatchObject({ ok: false, code: 'invalid' })
     expect(await chat.open({ paneId: 'pane-r5', cwd: tmp, permissions: 'manual', hostAccount: 'abc123' })).toMatchObject({ ok: false, code: 'invalid' })
+  })
+
+  it('on the host’s default account: only when signed in there (asked of the host); signed out, it fails as "account" for the window to start it on the host’s own sign-in', async () => {
+    remote.accountFolder = vi.fn(async ({ id, signedIn }) => (signedIn ? { ok: false, error: 'Signed out there.' } : { ok: true, name: 'CLAUDE_CONFIG_DIR', dir: `/home/me/.tessel-server/accounts/claude/${id}` }))
+    const chat = createChatSessions(deps)
+    const spawns = remote.spawnFor.mock.calls.length
+    const r = await chat.open({ paneId: 'pane-d1', cwd, projectDir: cwd, permissions: 'manual', hostAccount: 'abc123', hostAccountSignedIn: true })
+    expect(remote.accountFolder).toHaveBeenCalledWith({ hostId: HOST, agent: 'claude', id: 'abc123', signedIn: true })
+    expect(r).toMatchObject({ ok: false, code: 'account', error: expect.stringContaining('Signed out there.') })
+    expect(remote.spawnFor.mock.calls.length).toBe(spawns)
   })
 
   it('asks to trust the host folder, and refuses OpenCode and a project on another host', async () => {

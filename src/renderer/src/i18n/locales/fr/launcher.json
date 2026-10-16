@@ -27,6 +27,9 @@
     "remembered": "Les nouveaux projets démarreront ainsi. Modifiable dans Paramètres > Agents.",
     "installAgent": "Installer {{name}}…",
     "agentMissing": "Pas installé sur l’hôte",
-    "accountFor": "Compte de {{name}}"
+    "accountFor": "Compte de {{name}}",
+    "defaultAccount": "{{account}} (par défaut)",
+    "makeDefault": "Par défaut",
+    "makeDefaultHint": "Les nouveaux panneaux de cet agent sur cet hôte démarrent sur le compte choisi ici"
   }
 }

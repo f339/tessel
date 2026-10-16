@@ -10,6 +10,7 @@ import {
   resourceTree,
   portsSummary,
   sparklinePoints,
+  sparklineLead,
   createResourceHistory,
   APP_HISTORY_KEY,
   HISTORY_CAPACITY,
@@ -19,15 +20,27 @@ import { createPortScanner, addressForPort, browserUrlForPort } from '../portSca
 import { acquireChildren, splitChildren, childDotState, _resetFeedsForTest } from '../agentChildrenFeed'
 
 describe('Resource Manager sparklines (Orca)', () => {
-  it('points: a flat midline under two samples, else min-max scaled into 48 x 14', () => {
+  it('points: the latest sample at the right edge, history filling in to the left, scaled around the middle', () => {
+    // Nothing yet: a flat midline.
     expect(sparklinePoints([])).toBe('0,7.0 48,7.0')
-    expect(sparklinePoints([5])).toBe('0,7.0 48,7.0')
     expect(sparklinePoints(null)).toBe('0,7.0 48,7.0')
-    expect(sparklinePoints([10, 20, 30])).toBe('0.0,14.0 24.0,7.0 48.0,0.0')
-    expect(sparklinePoints([30, 10])).toBe('0.0,0.0 48.0,14.0')
-    // Equal samples: range 1, the line lies on the bottom.
-    expect(sparklinePoints([4, 4, 4])).toBe('0.0,14.0 24.0,14.0 48.0,14.0')
-    expect(sparklinePoints([0, 1], 10, 4)).toBe('0.0,4.0 10.0,0.0')
+    // One sample (first open): a short stub at the right, not a line across.
+    expect(sparklinePoints([5])).toBe('46.3,7.0 48.0,7.0')
+    // A few samples of the 30 the width holds: at the right end.
+    expect(sparklinePoints([10, 20, 30])).toBe('44.7,14.0 46.3,7.0 48.0,0.0')
+    // A full window spans the width.
+    expect(sparklinePoints([10, 20, 30], 48, 14, 3)).toBe('0.0,14.0 24.0,7.0 48.0,0.0')
+    expect(sparklinePoints([30, 10], 48, 14, 2)).toBe('0.0,0.0 48.0,14.0')
+    expect(sparklinePoints([1, 2, 3, 4], 48, 14, 2)).toBe('0.0,14.0 48.0,0.0')
+    // Equal samples: in the middle; a 1 % change barely moves the line.
+    expect(sparklinePoints([4, 4, 4], 48, 14, 3)).toBe('0.0,7.0 24.0,7.0 48.0,7.0')
+    expect(sparklinePoints([100, 101], 48, 14, 2)).toBe('0.0,7.7 48.0,6.3')
+    expect(sparklinePoints([0, 1], 10, 4, 2)).toBe('0.0,4.0 10.0,0.0')
+    // Where history is to come: a faint baseline at the first sample's level.
+    expect(sparklineLead([5])).toBe('0.0,7.0 46.3,7.0')
+    expect(sparklineLead([10, 20, 30])).toBe('0.0,14.0 44.7,14.0')
+    expect(sparklineLead([10, 20, 30], 48, 14, 3)).toBe('')
+    expect(sparklineLead([])).toBe('')
   })
 
   it('history: one memory sample per snapshot for Tessel and each workspace, bounded to 60', () => {
@@ -75,6 +88,17 @@ describe('status bar model', () => {
     expect(formatMemory(300 * 1024 * 1024)).toBe('300.0 MB')
     expect(formatMemory(1.44 * 1024 * 1024 * 1024)).toBe('1.44 GB')
     expect(formatCpu(12.345)).toBe('12.3%')
+    expect(formatCpu(NaN)).toBe('—')
+  })
+
+  it('CPU in French: a comma and a space that never breaks before %', async () => {
+    const { setMessages } = await import('../i18n')
+    setMessages('fr', {})
+    try {
+      expect(formatCpu(41.7)).toMatch(/^41,7[\u00a0\u202f]%$/)
+    } finally {
+      setMessages('en', {})
+    }
   })
 
   it("keep awake: Tessel's modes with Orca's words", () => {
