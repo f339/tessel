@@ -6,9 +6,13 @@ import ThemedSelect from './ui/ThemedSelect.vue'
 // by dragging it (TaskBoard takes the drop).
 // It only ever reads/writes its own `task`, so a change to one card never forces
 // its siblings to re-render.
+// A card of another board (a Live Share host's, taskBoardSource.js) asks that
+// board's source instead, and offers only what the source lets you do; its
+// agent is the host's, shown, never chosen here.
 
 import { ref, computed, nextTick, inject, watch } from 'vue'
 import { updateTask, removeTask, assignAgent, moveTask, tasks as allTasks } from '../taskBoardStore'
+import { cardsOf, canOf } from '../taskBoardSource'
 import { COLUMNS } from '../../../shared/taskModel'
 import BrandIcon from './BrandIcon.vue'
 import JobCostLine from './JobCostLine.vue'
@@ -27,8 +31,11 @@ const props = defineProps({
   selectable: { type: Boolean, default: false },
   selected: { type: Boolean, default: false },
   // What its agent used for it (jobCost.js entry), or null.
-  cost: { type: Object, default: null }
+  cost: { type: Object, default: null },
+  // Its board's source when it is not this computer's (TaskBoard's).
+  source: { type: Object, default: null }
 })
+const can = computed(() => canOf(props.source))
 
 const emit = defineEmits(['focus-pane', 'review', 'toggle-select'])
 
@@ -45,7 +52,7 @@ function onDragStart(e) {
   // Not from its controls (the agent menu, the buttons, the title being
   // edited): those keep working normally.
   const fromControl = e.target && e.target.closest && e.target.closest('select, input, button, textarea')
-  if (editing.value || fromControl || !e.dataTransfer) return e.preventDefault()
+  if (editing.value || fromControl || !e.dataTransfer || !can.value.move) return e.preventDefault()
   e.dataTransfer.setData(TASK_DRAG_TYPE, props.task.id)
   e.dataTransfer.effectAllowed = 'move'
   dragging.value = true
@@ -58,7 +65,7 @@ const draft = ref('')
 const titleInputEl = ref(null)
 // Only a task not started yet (To do) is renamed: once an agent works on it,
 // its title is what the agent was given.
-const canEdit = computed(() => props.task.column === 'todo')
+const canEdit = computed(() => props.task.column === 'todo' && can.value.edit)
 // It left To do while being renamed: the edit is dropped.
 watch(canEdit, (ok) => {
   if (!ok) editing.value = false
@@ -75,7 +82,8 @@ function saveTitle() {
   if (!editing.value) return
   const next = draft.value.trim()
   // Blank title is rejected rather than silently wiping the task name.
-  if (next) updateTask(props.task.id, { title: next })
+  if (next && props.source) props.source.edit(props.task.id, { title: next })
+  else if (next) updateTask(props.task.id, { title: next })
   editing.value = false
 }
 
@@ -87,12 +95,14 @@ function cancelEdit() {
 function onCardKey(e) {
   if (!e.altKey || e.ctrlKey || e.shiftKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return
   if (e.target !== e.currentTarget) return // typing in its title or menu
+  if (!can.value.move) return
   e.preventDefault()
   e.stopPropagation()
   const i = COLUMNS.indexOf(props.task.column)
   const j = i + (e.key === 'ArrowRight' ? 1 : -1)
   if (i < 0 || j < 0 || j >= COLUMNS.length) return
-  moveTask(props.task.id, COLUMNS[j])
+  if (props.source) props.source.move(props.task.id, COLUMNS[j])
+  else moveTask(props.task.id, COLUMNS[j])
   nextTick(() => {
     // It moved to another column (a new card element): keep the focus on it.
     const el = document.querySelector(`[data-task-id="${props.task.id}"]`) // i18n-ignore
@@ -103,6 +113,11 @@ function onCardKey(e) {
 // The app asks first (and cleans up the task's copy); alone (tests), direct.
 const deleteTask = inject('deleteTask', null)
 function onDelete() {
+  // Another board's card: its host deletes it.
+  if (props.source) {
+    if (can.value.remove) props.source.remove(props.task.id)
+    return
+  }
   if (deleteTask) deleteTask(props.task.id)
   else removeTask(props.task.id)
 }
@@ -120,7 +135,7 @@ const assignedPane = computed(
 // The agent is chosen while the work is to do or under way; once it waits
 // for review or is done, the agent that did it is shown, not changeable (the
 // review merges or discards that agent's copy).
-const canAssign = computed(() => props.task.column === 'todo' || props.task.column === 'doing')
+const canAssign = computed(() => !props.source && (props.task.column === 'todo' || props.task.column === 'doing'))
 // "Show agent": while it works on it or waits for review.
 const canShowAgent = computed(
   () => !!assignedPane.value && (props.task.column === 'doing' || props.task.column === 'review')
@@ -160,9 +175,10 @@ const timingTitle = computed(() => {
 // --- Orchestration --------------------------------------------------------------
 // The cards this one waits for (team_task_add "after"), those not done yet.
 // A card deleted from the board still blocks: it shows as removed.
+const boardTasks = computed(() => (props.source ? cardsOf(props.source) : allTasks))
 const waitsFor = computed(() =>
   (props.task.deps || [])
-    .map((id) => allTasks.find((x) => x.id === id) || { id, title: t('tasks.card.removed', '{{id}} (removed)', { id }), column: 'gone' })
+    .map((id) => boardTasks.value.find((x) => x.id === id) || { id, title: t('tasks.card.removed', '{{id}} (removed)', { id }), column: 'gone' })
     .filter((x) => x.column !== 'done')
 )
 const hadDeps = computed(() => (props.task.deps || []).length > 0)
@@ -170,7 +186,9 @@ const hadDeps = computed(() => (props.task.deps || []).length > 0)
 const resolveDecision = inject('resolveDecision', null)
 const gateDraft = ref('')
 function decide(answer) {
-  if (resolveDecision) resolveDecision(props.task.id, answer)
+  if (props.source) {
+    if (can.value.answer) props.source.answer(props.task.id, answer)
+  } else if (resolveDecision) resolveDecision(props.task.id, answer)
   gateDraft.value = ''
 }
 const reportOpen = ref(false)
@@ -200,10 +218,10 @@ function paneLabel(pane) {
     data-test="task-card"
     :data-task-id="task.id"
     :data-column="task.column"
-    :draggable="!editing"
+    :draggable="!editing && can.move"
     tabindex="0"
-    :title="t('tasks.card.dragHint', 'Drag to another column (keyboard: Alt+Left / Alt+Right)')"
-    aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"
+    :title="can.move ? t('tasks.card.dragHint', 'Drag to another column (keyboard: Alt+Left / Alt+Right)') : null"
+    :aria-keyshortcuts="can.move ? 'Alt+ArrowLeft Alt+ArrowRight' : null"
     @keydown="onCardKey"
     @click="onCardClick"
     @dragstart="onDragStart"
@@ -257,7 +275,7 @@ function paneLabel(pane) {
         </svg>
       </button>
       <button
-        v-if="!selectable"
+        v-if="!selectable && can.remove"
         class="task-btn task-icon-btn danger"
         :title="t('tasks.card.delete', 'Delete task')"
         :aria-label="t('tasks.card.delete', 'Delete task')"
@@ -317,10 +335,10 @@ function paneLabel(pane) {
 
     <div v-if="task.gate && task.gate.status === 'pending'" class="task-gate" data-test="task-gate">
       <div class="task-gate-q"><strong>{{ t('tasks.card.yourDecision', 'Your decision:') }}</strong> {{ task.gate.question }}</div>
-      <div class="task-gate-options">
+      <div v-if="can.answer" class="task-gate-options">
         <button v-for="o in task.gate.options || []" :key="o" class="task-btn" @click="decide(o)">{{ o }}</button>
       </div>
-      <form class="task-gate-own" @submit.prevent="decide(gateDraft)">
+      <form v-if="can.answer" class="task-gate-own" @submit.prevent="decide(gateDraft)">
         <input v-model="gateDraft" class="task-gate-input" :placeholder="t('tasks.card.ownAnswerPlaceholder', 'Or your own answer')" :aria-label="t('tasks.card.ownAnswer', 'Your own answer')" />
         <button class="task-btn" type="submit" :disabled="!gateDraft.trim()">{{ t('tasks.card.answer', 'Answer') }}</button>
       </form>
@@ -352,7 +370,7 @@ function paneLabel(pane) {
     </div>
 
     <!-- Bottom line: when, then what can be done now. -->
-    <div v-if="timing || canShowAgent || task.column === 'review'" class="task-card-foot">
+    <div v-if="timing || canShowAgent || (task.column === 'review' && !source)" class="task-card-foot">
       <span v-if="timing" class="task-timing" data-test="task-timing" :title="timingTitle">{{ timing }}</span>
       <span class="task-card-actions">
         <button
@@ -365,7 +383,7 @@ function paneLabel(pane) {
           {{ t('tasks.card.showAgent', 'Show agent') }}
         </button>
         <button
-          v-if="task.column === 'review'"
+          v-if="task.column === 'review' && !source"
           class="task-btn task-review-btn"
           :title="t('tasks.card.reviewHint', 'See the changes, then merge, ask for changes or discard')"
           data-test="review-task"

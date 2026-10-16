@@ -526,6 +526,17 @@
   margin-left: -1px;
 }
 
+/* No menu beside it (a Live Share host's project: commit only). */
+.sc-primary:last-child {
+  border-radius: 6px;
+}
+
+/* A Live Share host's project without the git right. */
+.sc-notice.sc-read-only {
+  margin: 8px 12px 0;
+  color: var(--text-dim);
+}
+
 .sc-primary:hover:not(:disabled),
 .sc-chevron:hover {
   background: var(--surface-3);

@@ -7,7 +7,8 @@ import { t } from './i18n'
 
 const api = () => window.shellApi && window.shellApi.scm
 
-// key (lowercased path) -> { loading, loaded, error, data }
+// key (lowercased path) -> { loading, loaded, error, code, data } (code: why
+// a status failed, when the answer said: 'no-access', 'outdated-host'…)
 export const scmStatus = reactive({})
 // Bumped after anything that changes the files or the index: diff tabs
 // showing a side read from git load it again.
@@ -51,7 +52,7 @@ export function refreshStatus(root) {
 async function readStatus(root) {
   const k = rootKey(root)
   const my = (seqs[k] = (seqs[k] || 0) + 1)
-  if (!scmStatus[k]) scmStatus[k] = { loading: true, loaded: false, error: '', data: null }
+  if (!scmStatus[k]) scmStatus[k] = { loading: true, loaded: false, error: '', code: '', data: null }
   else scmStatus[k].loading = true
   let res = null
   let failed = ''
@@ -67,10 +68,12 @@ async function readStatus(root) {
   if (!res || !res.ok) {
     // Never a clean copy without a status that worked.
     s.error = (res && res.error) || failed || t('changes.status.failed', 'Git status failed.')
+    s.code = res && typeof res.code === 'string' ? res.code : ''
     s.data = null
     return null
   }
   s.error = ''
+  s.code = ''
   s.data = res
   return res
 }

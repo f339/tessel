@@ -76,6 +76,8 @@ import ImageViewer from './components/ImageViewer.vue'
 import FileViewer from './components/FileViewer.vue'
 import { fileKind, isViewed } from '../../shared/fileKinds'
 import { remoteRoot, isRemotePath, parseRemotePath } from '../../shared/remotePath'
+import { isLsharePath } from '../../shared/liveSharePath'
+import { localOnlyText } from './liveShareGuestAccess'
 import NotificationsMenu from './components/NotificationsMenu.vue'
 import FileFinder from './components/FileFinder.vue'
 import UsageMenu from './components/UsageMenu.vue'
@@ -309,6 +311,8 @@ const fileView = ref(null) // { file, label, line }
 async function viewFile({ file, label = '', line = null, preview = true }) {
   if (!file) return
   if (fileKind(file) === 'pdf') {
+    // The PDF window reads a file of this computer: not a Live Share host's.
+    if (isLsharePath(file)) return showToast(localOnlyText())
     const res = window.shellApi.openPdf ? await window.shellApi.openPdf(file).catch(() => null) : null
     if (!res || !res.ok) showToast(res && res.error ? t('app.file.openFailedWhy', 'Could not open {{file}}: {{error}}', { file: label || file, error: res.error }) : t('app.file.openFailed', 'Could not open {{file}}', { file: label || file }), { kind: 'error', timeout: 5000 })
     return
@@ -319,6 +323,7 @@ async function viewFile({ file, label = '', line = null, preview = true }) {
 }
 // Outside Tessel: VS Code at the line when installed, else the file's own program.
 async function openExternally({ file, line, col }) {
+  if (isLsharePath(file)) return showToast(localOnlyText())
   const res = await window.shellApi.openFile({ file, line: line || undefined, col: col || undefined }).catch(() => null)
   if (!res || !res.ok) showToast(res && res.error ? t('app.file.openFailedWhy', 'Could not open {{file}}: {{error}}', { file, error: res.error }) : t('app.file.openFailed', 'Could not open {{file}}', { file }), { kind: 'error', timeout: 5000 })
 }
@@ -2795,6 +2800,8 @@ const canInsertPath = computed(() => {
   return !!l && !hasNoTerminal(l)
 })
 function terminalHere(dir) {
+  // A Live Share host's folder: not on this computer.
+  if (isLsharePath(dir)) return showToast(localOnlyText())
   // A folder of a remote project: a terminal on its host, in that folder.
   if (isRemotePath(dir)) {
     const p = parseRemotePath(dir)

@@ -35,13 +35,17 @@ import {
   saveViewState,
   viewStateOf,
   registerEditorPane,
-  unregisterEditorPane
+  unregisterEditorPane,
+  isReadOnlyDoc,
+  isDisconnectedDoc
 } from '../editor/documents'
 import { pathKey, samePath, closeTab as closeTabData, pinTab, docPathOf } from '../editor/editorTabs'
 import { fileKind } from '../../../shared/fileKinds'
 import { pickLanguage } from '../../../shared/editorLanguage'
 import { formatDiffComments } from '../../../shared/sourceControl'
 import { isRemotePath, remoteHostPath } from '../../../shared/remotePath'
+import { isLsharePath, parseLsharePath } from '../../../shared/liveSharePath'
+import { localOnlyText } from '../liveShareGuestAccess'
 import { notesFor, addNote, deleteNote, updateNote, clearDelivered } from '../reviewNotes'
 import { scmRevision } from '../scmState'
 import { installDiffNotes } from '../editor/diffNotes'
@@ -179,6 +183,35 @@ const showDiff = computed(() => !message.value && ['changes', 'compare', 'diff']
 const showCode = computed(() => !message.value && mode.value === 'edit')
 const showRich = computed(() => !message.value && (mode.value === 'rich' || mode.value === 'image'))
 const isDiffSurface = computed(() => ['changes', 'diff'].includes(mode.value) && !!activeFile.value)
+
+// --- A Live Share host's file ------------------------------------------------------------
+// Read-only while the host does not let this guest edit it (documents.js
+// isReadOnlyDoc), live; disconnected once the session ended or the access
+// was taken away: the text stays, selectable and copyable, nothing saves.
+const docReadOnly = computed(() => isReadOnlyDoc(activeDoc.value))
+const docDisconnected = computed(() => isDisconnectedDoc(activeDoc.value))
+const lockedText = computed(() =>
+  docDisconnected.value
+    ? t('editor.lshare.disconnected', 'Disconnected: the Live Share session ended. You can still select and copy the text.')
+    : t('editor.lshare.readOnly', 'Read-only: the host has not let you edit files.')
+)
+// Monaco's own read-only: no typing, the text still selectable; its message
+// when a key is pressed. Only touched for such a file (and the next one).
+let editorLocked = false
+let diffLocked = false
+function applyReadOnly() {
+  const ro = docReadOnly.value
+  const message = { value: lockedText.value }
+  if (editor && (ro || editorLocked)) {
+    editor.updateOptions({ readOnly: ro, readOnlyMessage: message })
+    editorLocked = ro
+  }
+  if (diffEditor && (ro || diffLocked)) {
+    diffEditor.updateOptions({ readOnly: ro || diffReadOnly.value, readOnlyMessage: message })
+    diffLocked = ro
+  }
+}
+watch([docReadOnly, docDisconnected, () => props.node.activePath], () => applyReadOnly())
 
 // --- Theme and options (follow Tessel's settings live) ---------------------------------
 function isDark() {
@@ -522,7 +555,7 @@ async function enterDiff(d, m) {
   const model = modelOf(d.path)
   if (!model || token !== diffSeq) return
   ensureDiffEditor()
-  diffEditor.updateOptions({ readOnly: false })
+  diffEditor.updateOptions({ readOnly: docReadOnly.value })
   const oldO = diffOriginal
   const oldM = diffModified
   diffOriginal = monaco.editor.createModel(text, model.getLanguageId())
@@ -600,7 +633,7 @@ async function enterDiffTab(f) {
     modified = diffModified
     diffReadOnly.value = true
   }
-  diffEditor.updateOptions({ readOnly: diffReadOnly.value })
+  diffEditor.updateOptions({ readOnly: diffReadOnly.value || docReadOnly.value })
   detachNotes()
   diffEditor.setModel({ original: diffOriginal, modified })
   if (oldO) oldO.dispose()
@@ -725,7 +758,19 @@ async function closeTab(path) {
   const d = getDoc(docPath)
   // Its last tab: closing it would lose the unsaved edits.
   const holders = files.value.filter((x) => samePath(docPathOf(x), docPath)).length
-  if (d && d.dirty && holders <= 1 && ownersOf(docPath).length <= 1) {
+  // Unsaved edits that can no longer be saved (a Live Share host's file, now
+  // read-only or disconnected): closing loses them, so it asks that only.
+  if (d && d.dirty && holders <= 1 && ownersOf(docPath).length <= 1 && isReadOnlyDoc(d)) {
+    const ok = askConfirm
+      ? await askConfirm({
+          title: t('editor.close.title', 'Unsaved changes'),
+          text: t('editor.close.readOnlyText', '"{{name}}" has unsaved changes that can no longer be saved: copy them first to keep them. Close it anyway?', { name: d.name }),
+          confirmLabel: t('editor.close.closeAnyway', 'Close'),
+          danger: true
+        })
+      : window.confirm(t('editor.close.readOnlyText', '"{{name}}" has unsaved changes that can no longer be saved: copy them first to keep them. Close it anyway?', { name: d.name }))
+    if (ok !== true) return
+  } else if (d && d.dirty && holders <= 1 && ownersOf(docPath).length <= 1) {
     const answer = askConfirm
       ? await askConfirm({
           title: t('editor.close.title', 'Unsaved changes'),
@@ -846,6 +891,11 @@ function onNavMouseDown(e) {
 function openExternally() {
   const d = activeDoc.value
   if (!d) return
+  // A Live Share host's file is not on this computer.
+  if (isLsharePath(d.path)) {
+    if (ctx.toast) ctx.toast(localOnlyText())
+    return
+  }
   const pos = editor && shownKey === d.key ? editor.getPosition() : null
   window.shellApi
     .openFile({ file: d.path, line: pos ? pos.lineNumber : undefined, col: pos ? pos.column : undefined })
@@ -863,8 +913,9 @@ function openExternally() {
 function copyPath() {
   const p = activeDocPath.value
   if (p && window.shellApi.writeClipboard) {
-    // A remote project's file: its path on the host.
-    window.shellApi.writeClipboard(isRemotePath(p) ? remoteHostPath(p) || p : p)
+    // A remote project's file: its path on the host. A Live Share host's: its
+    // path in the project (the host's folder is never known here).
+    window.shellApi.writeClipboard(isRemotePath(p) ? remoteHostPath(p) || p : isLsharePath(p) ? parseLsharePath(p)?.rel || p : p)
     if (ctx.copied) ctx.copied('Path')
   }
 }
@@ -951,6 +1002,7 @@ onMounted(async () => {
   editor.onDidChangeModelContent(onEdited)
   editor.onDidChangeCursorPosition(onCursor)
   editor.onDidFocusEditorText(publishActive)
+  applyReadOnly()
   ready.value = true
   await nextTick()
   showActive()
@@ -1033,8 +1085,9 @@ onBeforeUnmount(() => {
           </svg>
         </button>
         <button
-          v-if="activeDoc"
+          v-if="activeDoc && !isLsharePath(activeDoc.path)"
           class="pane-nav-btn"
+          data-test="editor-open-external"
           :title="t('editor.pane.openVsCodeHint', 'Open in VS Code (at the cursor\'s line)')"
           :aria-label="t('editor.viewer.openInVsCode', 'Open in VS Code')"
           @click="openExternally"
@@ -1191,7 +1244,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="!diffInfo && activeDoc && activeDoc.external" class="ed-banner" role="alert">
+      <div v-if="!diffInfo && activeDoc && activeDoc.external && !docDisconnected" class="ed-banner" role="alert">
         <span class="ed-banner-text">{{
           t('editor.banner.text', 'This file changed on disk while you have unsaved edits. Saving will overwrite the newer disk content.')
         }}</span>
@@ -1211,6 +1264,9 @@ onBeforeUnmount(() => {
           diffInfo.area === 'staged' ? t('editor.diff.stagedReadOnly', 'Staged: read-only') : t('editor.diff.readOnly', 'Read-only')
         }}</span>
         <span class="ed-spacer"></span>
+        <span v-if="docReadOnly && (mode === 'edit' || mode === 'diff' || mode === 'changes')" class="ed-state" :class="{ warn: docDisconnected }" :title="lockedText" data-test="editor-locked">{{
+          docDisconnected ? t('editor.lshare.disconnectedTag', 'Disconnected') : t('editor.lshare.readOnlyTag', 'Read-only')
+        }}</span>
         <span v-if="activeDoc && activeDoc.saving" class="ed-state">{{ t('editor.state.saving', 'Saving…') }}</span>
         <span v-else-if="!diffInfo && activeDoc && activeDoc.deleted" class="ed-state warn">{{
           t('editor.state.deletedOnDisk', 'Deleted on disk: saving creates it again')

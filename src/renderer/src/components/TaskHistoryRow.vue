@@ -14,7 +14,10 @@ defineProps({
   record: { type: Object, required: true },
   open: { type: Boolean, default: false },
   // Its agent pane still exists.
-  alive: { type: Boolean, default: false }
+  alive: { type: Boolean, default: false },
+  // Its cost in dollars may be shown (a Live Share host's history: only
+  // with the host's "See my usage").
+  usd: { type: Boolean, default: true }
 })
 const emit = defineEmits(['toggle', 'focus-pane'])
 </script>
@@ -26,7 +29,7 @@ const emit = defineEmits(['toggle', 'focus-pane'])
       <span class="th-main">
         <span class="th-line1">
           <span class="th-task" :title="record.title">{{ record.title }}</span>
-          <span class="th-cost" :class="{ dim: pricedUsd(record) === null }" :title="estimateHint()" data-test="row-cost">{{ costCell(record) }}</span>
+          <span v-if="usd" class="th-cost" :class="{ dim: pricedUsd(record) === null }" :title="estimateHint()" data-test="row-cost">{{ costCell(record) }}</span>
         </span>
         <span class="th-line2">
           <span class="th-date" data-test="row-date">{{ when(record.doneAt) }}</span>
@@ -49,12 +52,12 @@ const emit = defineEmits(['toggle', 'focus-pane'])
       </ul>
       <div v-else class="th-dim">{{ t('taskHistory.detail.noPeriods', 'No time in Doing was recorded.') }}</div>
       <template v-if="record.cost && record.cost.status === 'ok'">
-        <div class="th-detail-head">{{ t('taskHistory.detail.models', 'Cost by model') }}</div>
+        <div class="th-detail-head">{{ usd ? t('taskHistory.detail.models', 'Cost by model') : t('taskHistory.detail.modelsTokens', 'Tokens by model') }}</div>
         <table class="th-models" data-test="history-models"><tbody>
           <tr v-for="(m, i) in record.cost.models" :key="i">
             <td>{{ modelLabel(m.model) || m.model || t('taskHistory.detail.unknownModel', 'Unknown model') }}</td>
             <td :title="tokensTitle({ status: 'ok', ...m })">{{ formatTokens((m.inputTokens || 0) + (m.outputTokens || 0)) }}</td>
-            <td :title="estimateHint()">{{ m.known && typeof m.usd === 'number' ? usdText(m.usd) : t('taskHistory.unknown', 'unknown') }}</td>
+            <td v-if="usd" :title="estimateHint()">{{ m.known && typeof m.usd === 'number' ? usdText(m.usd) : t('taskHistory.unknown', 'unknown') }}</td>
           </tr>
         </tbody></table>
         <div v-if="record.cost.subagents" class="th-dim" data-test="history-subagents">

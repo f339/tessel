@@ -1225,6 +1225,15 @@ body.popup-open .toolbar {
   border-bottom: 1px solid var(--border);
 }
 
+/* A Live Share host's board this guest may only look at. */
+.task-board-readonly {
+  margin: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
 .task-board-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -8867,6 +8876,12 @@ button.act-stat:hover,
   font-weight: normal;
   line-height: 11px;
   text-align: center;
+}
+/* A Live Share host's project the guest cannot edit. */
+.explorer-badge.explorer-readonly {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
 }
 .explorer-open-editors {
   flex: 0 0 auto;
