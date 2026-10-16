@@ -8,27 +8,24 @@
 //   Catalog   - popular servers in two panes, searchable, added one or
 //               several at a time (asks only for what a server needs).
 //   Custom    - any other server, by command or URL, tested before adding.
-// Team connections (each agent's hooks for team messages) belong to Settings
-// > Orchestration, which opens them here (initialTab 'connections') until
-// that page shows them itself. Only the agents installed here (or that
-// already have servers) are shown. Running agents load changes when
-// restarted.
+// The team connections (each agent's hooks for team messages) are not here:
+// Settings > Orchestration shows them (mcp/McpTeamConnections.vue), and
+// Installed links there. Only the agents installed here (or that already
+// have servers) are shown. Running agents load changes when restarted.
 import { ref, onMounted } from 'vue'
-import { ArrowLeft, X } from 'lucide-vue-next'
+import { X } from 'lucide-vue-next'
 import McpInstalled from './mcp/McpInstalled.vue'
 import McpCatalog from './mcp/McpCatalog.vue'
 import McpCustom from './mcp/McpCustom.vue'
-import McpTeamConnections from './mcp/McpTeamConnections.vue'
 import { useMcpState } from './mcp/mcpState'
 import { tabKeys } from './mcp/mcpShared'
 import { t } from '../i18n'
-import './mcp/mcpFallback.css'
 
 const props = defineProps({
   cwd: { type: String, default: null }, // current workspace's project folder
   agents: { type: Array, default: () => [] },
-  // Open on this tab: 'catalog', 'custom', or 'connections' (Settings >
-  // Orchestration's Details).
+  // Open on this tab: 'installed', 'catalog' or 'custom' (anything else,
+  // the old 'connections' included, opens Installed).
   initialTab: { type: String, default: 'installed' },
   // Shown as a Settings page: no backdrop, card, title bar or Escape to close.
   embedded: { type: Boolean, default: false }
@@ -38,7 +35,7 @@ const emit = defineEmits(['close', 'run', 'tools', 'skills', 'orchestration'])
 const TABS = ['installed', 'catalog', 'custom']
 const m = useMcpState(props, emit)
 const cardEl = ref(null)
-const tab = ref(TABS.includes(props.initialTab) || props.initialTab === 'connections' ? props.initialTab : 'installed')
+const tab = ref(TABS.includes(props.initialTab) ? props.initialTab : 'installed')
 const tabLabel = (id) =>
   id === 'installed' ? t('mcp.tab.installed', 'Installed') : id === 'catalog' ? t('mcp.tab.catalog', 'Catalog') : t('mcp.tab.custom', 'Custom')
 
@@ -75,69 +72,56 @@ onMounted(() => {
         </button>
       </div>
 
-      <!-- From Orchestration: each agent's hooks for team messages. -->
-      <template v-if="tab === 'connections'">
-        <div class="mcpd-connections-head">
-          <button type="button" class="exit-btn small" @click="tab = 'installed'">
-            <ArrowLeft :size="12" aria-hidden="true" />{{ t('mcp.backToServers', 'MCP servers') }}
-          </button>
-          <h3>{{ t('mcp.tab.connections', 'Team connections') }}</h3>
-        </div>
-        <McpTeamConnections :agents="agents" />
-      </template>
+      <p class="mcp-intro">
+        {{
+          t('mcp.intro', "MCP servers give your agents extra tools: a browser, library docs, GitHub, your issue tracker. They're added with each agent's own command, so they also work outside this app.")
+        }}
+      </p>
 
-      <template v-else>
-        <p class="mcp-intro">
-          {{
-            t('mcp.intro', "MCP servers give your agents extra tools: a browser, library docs, GitHub, your issue tracker. They're added with each agent's own command, so they also work outside this app.")
-          }}
-        </p>
-
-        <div class="mcp-tabbar">
-          <div class="launch-seg" role="tablist" :aria-label="t('mcp.title', 'MCP servers')" @keydown="tabKeys($event, TABS, tab, (v) => (tab = v))">
-            <button
-              v-for="id in TABS"
-              :id="'mcpd-tab-' + id"
-              :key="id"
-              type="button"
-              role="tab"
-              class="launch-seg-btn"
-              :class="{ on: tab === id }"
-              :aria-selected="tab === id ? 'true' : 'false'"
-              :aria-controls="'mcpd-panel'"
-              :tabindex="tab === id ? 0 : -1"
-              @click="tab = id"
-            >
-              {{ tabLabel(id) }}<span v-if="id === 'installed' && m.rows.length" class="mcp-count">{{ m.rows.length }}</span>
-            </button>
-          </div>
+      <div class="mcp-tabbar">
+        <div class="launch-seg" role="tablist" :aria-label="t('mcp.title', 'MCP servers')" @keydown="tabKeys($event, TABS, tab, (v) => (tab = v))">
           <button
+            v-for="id in TABS"
+            :id="'mcpd-tab-' + id"
+            :key="id"
             type="button"
-            class="exit-btn mcp-skills-link"
-            :title="t('mcp.skillsHint', 'Agent skills: instructions and files agents load when a task needs them')"
-            @click="emit('skills')"
+            role="tab"
+            class="launch-seg-btn"
+            :class="{ on: tab === id }"
+            :aria-selected="tab === id ? 'true' : 'false'"
+            :aria-controls="'mcpd-panel'"
+            :tabindex="tab === id ? 0 : -1"
+            @click="tab = id"
           >
-            {{ t('mcp.skills', 'Skills') }}
+            {{ tabLabel(id) }}<span v-if="id === 'installed' && m.rows.length" class="mcp-count">{{ m.rows.length }}</span>
           </button>
         </div>
+        <button
+          type="button"
+          class="exit-btn mcp-skills-link"
+          :title="t('mcp.skillsHint', 'Agent skills: instructions and files agents load when a task needs them')"
+          @click="emit('skills')"
+        >
+          {{ t('mcp.skills', 'Skills') }}
+        </button>
+      </div>
 
-        <div v-if="m.message.text" class="set-callout mcpd-message" :class="m.message.kind === 'error' ? 'danger' : 'info'" role="status">
-          <span class="set-callout-text">{{ m.message.text }}</span>
-          <button type="button" class="tb-icon mcpd-dismiss" :aria-label="t('mcp.dismiss', 'Dismiss')" :title="t('mcp.dismiss', 'Dismiss')" @click="m.say('')">
-            <X :size="12" aria-hidden="true" />
-          </button>
-          <details v-if="m.message.detail" class="set-more mcpd-raw">
-            <summary>{{ t('mcp.details', 'Details') }}</summary>
-            <p>{{ m.message.detail }}</p>
-          </details>
-        </div>
+      <div v-if="m.message.text" class="set-callout mcpd-message" :class="m.message.kind === 'error' ? 'danger' : 'info'" role="status">
+        <span class="set-callout-text">{{ m.message.text }}</span>
+        <button type="button" class="tb-icon mcpd-dismiss" :aria-label="t('mcp.dismiss', 'Dismiss')" :title="t('mcp.dismiss', 'Dismiss')" @click="m.say('')">
+          <X :size="12" aria-hidden="true" />
+        </button>
+        <details v-if="m.message.detail" class="set-more mcpd-raw">
+          <summary>{{ t('mcp.details', 'Details') }}</summary>
+          <p>{{ m.message.detail }}</p>
+        </details>
+      </div>
 
-        <div id="mcpd-panel" role="tabpanel" :aria-labelledby="'mcpd-tab-' + tab">
-          <McpInstalled v-if="tab === 'installed'" :m="m" :cwd="cwd" @browse="tab = 'catalog'" @orchestration="emit('orchestration')" />
-          <McpCatalog v-else-if="tab === 'catalog'" :m="m" :cwd="cwd" @tools="emit('tools')" />
-          <McpCustom v-else :m="m" :cwd="cwd" @added="tab = 'installed'" />
-        </div>
-      </template>
+      <div id="mcpd-panel" role="tabpanel" :aria-labelledby="'mcpd-tab-' + tab">
+        <McpInstalled v-if="tab === 'installed'" :m="m" :cwd="cwd" @browse="tab = 'catalog'" @orchestration="emit('orchestration')" />
+        <McpCatalog v-else-if="tab === 'catalog'" :m="m" :cwd="cwd" @tools="emit('tools')" />
+        <McpCustom v-else :m="m" :cwd="cwd" @added="tab = 'installed'" />
+      </div>
     </div>
   </div>
 </template>
@@ -152,18 +136,6 @@ onMounted(() => {
 .mcpd.help-card {
   --mcp-pad-x: 20px;
   --mcp-pad-b: 18px;
-}
-.mcpd-connections-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0 0 8px;
-}
-.mcpd-connections-head h3 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 600;
 }
 .mcpd-message {
   position: relative;

@@ -28,7 +28,7 @@ import { channelHead, leadHead, reviewRequest, teammateHead } from '../../shared
 import { notePanes } from './paneSessionTrail'
 import LaunchMenu from './components/LaunchMenu.vue'
 import { accountChoices, refreshAccountChoices, setOpenPanesSource } from './accountChoices'
-import { HOST_ACCOUNT_AGENTS, refreshHostAccounts, validHostAccount } from './hostAccounts'
+import { HOST_ACCOUNT_AGENTS, checkHostAccountsNow, defaultHostAccount, hostAccountChoice, hostAccountsOf, hostEntry, hostPaneFolder, refreshHostAccounts, setDefaultHostAccount, validHostAccount } from './hostAccounts'
 import SettingsDialog from './components/SettingsDialog.vue'
 import UpdateDialog from './components/UpdateDialog.vue'
 import UpdateCard from './components/UpdateCard.vue'
@@ -544,6 +544,19 @@ function openChatAgent({ ws = currentWs.value, agent = 'claude', accountId } = {
   const leaf = makeChatLeaf({ agentId: agent, cwd, projectDir: hostRoot || ws.cwd || null })
   // The account chosen in the + menu (else the default one, when it opens).
   if (!hostRoot && (accountId === null || typeof accountId === 'string')) leaf.accountId = accountId
+  // On an SSH host: the host's default account for that agent (Settings).
+  if (hostRoot && HOST_ACCOUNT_AGENTS.includes(agent)) {
+    const d = defaultHostAccount(ws.remote.hostId, agent)
+    const e = d ? hostEntry(ws.remote.hostId, agent, d) : null
+    // Known signed out there (its last check): the host's own sign-in, said.
+    if (e && (e.state !== 'signed-in' || e.linked)) {
+      leaf.hostAccount = null
+      showToast(t('app.hostAccount.defaultFallback', 'The default account for {{agent}} on {{host}} cannot be used ({{error}}): it started on the host’s own sign-in.', { agent: agentById(agent)?.name || agent, host: remoteHostLabel(ws.remote.hostId), error: t('app.hostAccount.signedOutThere', 'signed out there') }), { kind: 'warning', timeout: 15000 })
+    } else if (d) {
+      leaf.hostAccount = d
+      leaf.hostAccountFromDefault = true
+    }
+  }
   if (copy) leaf.worktree = { path: copy.path, branch: copy.branch || '' }
   const split = (orig) => reactive({ type: 'split', id: newId('split'), dir: 'row', sizes: [50, 50], children: [orig, leaf] })
   // Opened from an editor or a browser tab: in its grid, beside the terminal
@@ -619,11 +632,21 @@ async function chatOpen(leaf, { askTrust = true } = {}) {
       extraEnv,
       accountEnv,
       unsetEnv,
-      // On an SSH host: the account folder its terminal ran on (checked in main).
-      ...(isRemotePath(leaf.cwd) && validHostAccount(leaf.hostAccount) ? { hostAccount: leaf.hostAccount } : {})
+      // On an SSH host: the account folder its terminal ran on (checked in main);
+      // the host's default account only when signed in there (else the
+      // fallback below, as a terminal pane's).
+      ...(isRemotePath(leaf.cwd) && validHostAccount(leaf.hostAccount) ? { hostAccount: leaf.hostAccount, ...(leaf.hostAccountFromDefault ? { hostAccountSignedIn: true } : {}) } : {})
     })
   } catch (err) {
     res = { ok: false, code: 'failed', error: err && err.message }
+  }
+  // The host's default account can't be used: the host's own sign-in, said.
+  if (res && res.code === 'account' && leaf.hostAccountFromDefault) {
+    const where = parseRemotePath(leaf.cwd)
+    showToast(t('app.hostAccount.defaultFallback', 'The default account for {{agent}} on {{host}} cannot be used ({{error}}): it started on the host’s own sign-in.', { agent: agent.name || agentId, host: where ? remoteHostLabel(where.hostId) : '', error: res.error || t('app.common.unknownError', 'unknown error') }), { kind: 'warning', timeout: 15000 })
+    leaf.hostAccount = null
+    delete leaf.hostAccountFromDefault
+    return chatOpen(leaf, { askTrust })
   }
   if (res && res.ok) {
     leaf.chatPermissions = permissions
@@ -1306,10 +1329,14 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
   // else Yolo in a Yolo folder, else Settings > Agents.
   const panePermissions = opts.permissions === 'manual' || opts.permissions === 'yolo' ? opts.permissions : null
   // An agent on an SSH host: the account folder Tessel made there that it
-  // runs on (hostAccounts.js), or none: the agent's own sign-in there. A
-  // launcher's account choice (accountId) is that folder for a pane on a host.
-  const hostAccount =
-    agent && opts.remoteHostId && HOST_ACCOUNT_AGENTS.includes(agent.id) ? validHostAccount(opts.hostAccount !== undefined ? opts.hostAccount : opts.accountId) : undefined
+  // runs on (hostAccounts.js), or null: the agent's own sign-in there. The
+  // pane's own (or a launcher's choice: accountId is that folder for a pane
+  // on a host); none chosen: the host's default for that agent (Settings),
+  // which falls back to the host's own sign-in, said, when it can't be used.
+  const onHostAgent = !!(agent && opts.remoteHostId && HOST_ACCOUNT_AGENTS.includes(agent.id))
+  const chosenHostAccount = onHostAgent ? hostAccountChoice(opts.hostAccount !== undefined ? opts.hostAccount : opts.accountId) : undefined
+  let hostAccount = chosenHostAccount === undefined && onHostAgent ? defaultHostAccount(opts.remoteHostId, agent.id) : chosenHostAccount || undefined
+  const hostAccountFromDefault = chosenHostAccount === undefined && !!hostAccount
   // A pane on an SSH host reopened when Tessel starts, its terminal gone (the
   // terminal host restarted): it does not connect by itself (no password
   // question nobody asked for). It keeps its place, name and conversation and
@@ -1331,7 +1358,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
       startDir: opts.startDir || null,
       sessionId: opts.sessionId || null,
       accountId: opts.accountId,
-      ...(hostAccount ? { hostAccount } : {}),
+      ...(chosenHostAccount !== undefined ? { hostAccount: chosenHostAccount } : {}),
       launchedAt: opts.launchedAt || null,
       ...(paneChoice ? { sessionOptions: paneChoice } : {}),
       ...(panePermissions ? { permissions: panePermissions } : {}),
@@ -1445,7 +1472,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
       backend: 'conpty',
       sessionId: opts.sessionId || null,
       accountId,
-      ...(hostAccount ? { hostAccount } : {}),
+      ...(chosenHostAccount !== undefined ? { hostAccount: chosenHostAccount } : {}),
       ...(paneChoice ? { sessionOptions: paneChoice } : {}),
       ...(panePermissions ? { permissions: panePermissions } : {}),
       ...(permissionMode ? { permissionMode } : {}),
@@ -1552,16 +1579,25 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
   // its command (the folder made whole again first). It can't be used (gone,
   // changed outside Tessel, the host not answering): the agent is not started
   // on another account; the pane says why and keeps its shell.
+  // The host's default account that can't be used (gone, signed out there,
+  // checked as it starts): the host's own sign-in, said (never silently).
   let hostPrefix = ''
   if (agent && launchCommand && hostAccount) {
-    const env = window.shellApi.remoteAccounts ? await window.shellApi.remoteAccounts.launchEnv(opts.remoteHostId, agent.id, hostAccount).catch(() => null) : null
+    const onlySignedIn = hostAccountFromDefault ? [{ signedIn: true }] : []
+    const env = window.shellApi.remoteAccounts ? await window.shellApi.remoteAccounts.launchEnv(opts.remoteHostId, agent.id, hostAccount, ...onlySignedIn).catch(() => null) : null
     if (env && env.ok && typeof env.prefix === 'string') hostPrefix = env.prefix
-    else {
+    else if (hostAccountFromDefault) {
+      hostAccount = undefined
+      showToast(t('app.hostAccount.defaultFallback', 'The default account for {{agent}} on {{host}} cannot be used ({{error}}): it started on the host’s own sign-in.', { agent: agent.name || agent.id, host: remoteHostLabel(opts.remoteHostId), error: (env && env.error) || t('app.common.unknownError', 'unknown error') }), { kind: 'warning', timeout: 15000 })
+    } else {
       launchCommand = null
       leaf.sessionId = opts.sessionId || null
       showToast(t('app.hostAccount.refused', '{{agent}} was not started on its account on this host: {{error}} Pane menu > Restart on… starts it on another one.', { agent: agent.name || agent.id, error: (env && env.error) || t('app.common.unknownError', 'unknown error') }), { kind: 'error', timeout: 15000 })
     }
   }
+  // Started: the pane keeps the account it started on (its folder, or null:
+  // the host's own sign-in), for its restarts; a later default changes it not.
+  if (onHostAgent && launchCommand) leaf.hostAccount = hostAccount || null
   if (agent && agent.command && launchCommand) {
     const start = await agentStartLine({ ...agent, command: launchCommand }, opts.sessionId || null, !!opts.resume, accountId, {
       known: opts.remoteSession === true && !!opts.remoteHostId,
@@ -1747,7 +1783,7 @@ function serializeNode(node) {
       model: node.model || null,
       effort: node.effort || null,
       accountId: node.accountId,
-      hostAccount: isRemotePath(node.cwd) ? validHostAccount(node.hostAccount) : undefined,
+      hostAccount: isRemotePath(node.cwd) ? hostAccountChoice(node.hostAccount) : undefined,
       team: node.team || null,
       worker: node.worker ? true : undefined,
       maxPermissions: node.maxPermissions === 'manual' ? 'manual' : undefined,
@@ -1791,7 +1827,7 @@ function serializeNode(node) {
       // Left out when not recorded (see createLeaf); null is kept.
       accountId: node.detected ? undefined : node.accountId,
       // On an SSH host: the account folder it runs on there (none: the host's own sign-in).
-      hostAccount: node.detected || !node.remoteHostId ? undefined : validHostAccount(node.hostAccount),
+      hostAccount: node.detected || !node.remoteHostId ? undefined : hostAccountChoice(node.hostAccount),
       remoteHostId: node.remoteHostId || undefined,
       remotePath: node.remotePath || undefined,
       // Asleep: restored asleep (no terminal) until you open it.
@@ -1874,7 +1910,7 @@ async function deserializeNode(snap, cwd = null) {
     if (snap.paneName) leaf.paneName = snap.paneName
     if (Number.isInteger(snap.num) && snap.num > 0) leaf.num = snap.num
     if (typeof snap.accountId === 'string' || snap.accountId === null) leaf.accountId = snap.accountId
-    if (isRemotePath(leaf.cwd) && validHostAccount(snap.hostAccount)) leaf.hostAccount = snap.hostAccount
+    if (isRemotePath(leaf.cwd) && hostAccountChoice(snap.hostAccount) !== undefined) leaf.hostAccount = hostAccountChoice(snap.hostAccount)
     if (typeof snap.team === 'string') leaf.team = snap.team
     const flag = (v) => (typeof v === 'string' && /^[A-Za-z0-9._:[\]-]{1,60}$/.test(v) ? v : null)
     // OpenCode's models are provider/model.
@@ -1937,7 +1973,7 @@ async function deserializeNode(snap, cwd = null) {
             ? snap.accountId
             : undefined,
         launchedAt: Number.isFinite(snap.launchedAt) ? snap.launchedAt : null,
-        ...(validHostAccount(snap.hostAccount) && typeof snap.remoteHostId === 'string' ? { hostAccount: snap.hostAccount } : {}),
+        ...(hostAccountChoice(snap.hostAccount) !== undefined && typeof snap.remoteHostId === 'string' ? { hostAccount: hostAccountChoice(snap.hostAccount) } : {}),
         ...(validPaneSessionOptions(snap.sessionOptions) ? { sessionOptions: validPaneSessionOptions(snap.sessionOptions) } : {}),
         // Only a Yolo pin survives a restart of Tessel: an "ask first" pane
         // follows Settings again (Yolo on: every agent starts in Yolo).
@@ -1968,7 +2004,7 @@ async function deserializeNode(snap, cwd = null) {
           ? snap.accountId
           : undefined,
       launchedAt: Number.isFinite(snap.launchedAt) ? snap.launchedAt : null,
-      hostAccount: validHostAccount(snap.hostAccount),
+      hostAccount: hostAccountChoice(snap.hostAccount),
       startDir: typeof snap.startDir === 'string' ? snap.startDir : null,
       sessionOptions: snap.sessionOptions,
       permissions: snap.permissions === 'yolo' ? 'yolo' : undefined,
@@ -3181,6 +3217,11 @@ provide('panelCtx', {
   restartWithPermissions,
   restartOnAccount,
   signInOnHost,
+  verifyHostAccount,
+  resolveHostAccountMismatch,
+  checkHostAccount,
+  setHostAccountDefault,
+  copyAccountDetails,
   // Chat <-> terminal (the same conversation).
   // Asked while the agent works: done when its turn ends (never interrupted).
   switchToChat: (id) => requestSwitch(id, 'chat'),
@@ -4521,7 +4562,7 @@ function waitForHostAgain(leafId, { exitCode, pid = null } = {}) {
     startDir: old.startDir || null,
     sessionId: old.sessionId || null,
     accountId: old.accountId,
-    ...(old.hostAccount ? { hostAccount: old.hostAccount } : {}),
+    ...(old.hostAccount !== undefined ? { hostAccount: old.hostAccount } : {}),
     launchedAt: old.launchedAt || null,
     ...(old.sessionOptions ? { sessionOptions: old.sessionOptions } : {}),
     ...(old.permissions ? { permissions: old.permissions } : {}),
@@ -4569,7 +4610,7 @@ async function restartOnAccount(leafId, accountId) {
   let ok
   if (leaf.remoteHostId) {
     if (!HOST_ACCOUNT_AGENTS.includes(leaf.agentId) || !(accountId === null || validHostAccount(accountId))) return
-    ok = await restartInPlace(leafId, { resume: leaf.agentId === 'claude', hostAccount: accountId === null ? undefined : accountId })
+    ok = await restartInPlace(leafId, { resume: leaf.agentId === 'claude', hostAccount: accountId === null ? null : accountId })
     refreshHostAccounts(leaf.remoteHostId, { fresh: true })
   } else {
     if (leaf.agentId !== 'claude' || !(accountId === null || typeof accountId === 'string')) return
@@ -4577,6 +4618,107 @@ async function restartOnAccount(leafId, accountId) {
   }
   if (ok === false && findLeaf(leafId) === leaf)
     showToast(t('app.restart.failed', '{{name}} could not be restarted: its terminal did not stop. Try again.', { name: leaf.paneName || leaf.title }), { kind: 'error', timeout: 8000 })
+}
+
+// A pane on an SSH host: which config folder its agent really runs on (its
+// process's CLAUDE_CONFIG_DIR / CODEX_HOME there, the host's panes asked
+// together). A folder its layout names but it does not run on (a pane
+// restored or reattached without a relaunch, one started before account
+// folders) is never changed behind your back: the pane asks (Update / Keep,
+// leaf.hostAccountMismatch, not saved). Changed at once only when the host
+// was sure (one folder for all its agent processes, one Tessel knows or the
+// host's own sign-in) and the saved account is not signed in there.
+// -> the host's answer, or null
+async function verifyHostAccount(leafId) {
+  const leaf = findLeaf(leafId)
+  if (!leaf || leaf.kind !== 'agent' || !leaf.remoteHostId || leaf.notConnected || !HOST_ACCOUNT_AGENTS.includes(leaf.agentId)) return null
+  const hostId = leaf.remoteHostId
+  const res = await hostPaneFolder(hostId, leaf.agentId, leafId).catch(() => null)
+  if (!res || !res.ok || findLeaf(leafId) !== leaf || leaf.remoteHostId !== hostId) return res
+  // No agent process now, mixed or unknown evidence, a folder Tessel does
+  // not know: nothing said, nothing changed.
+  const runs = res.found !== 'yes' ? undefined : typeof res.folderId === 'string' ? res.folderId : res.own === true ? null : undefined
+  if (runs === undefined) return res
+  const saved = typeof leaf.hostAccount === 'string' ? leaf.hostAccount : null
+  if (runs === saved) {
+    delete leaf.hostAccountMismatch
+    return res
+  }
+  const known = hostAccountsOf(hostId)
+  const savedEntry = known && known.at ? hostEntry(hostId, leaf.agentId, saved ?? undefined) : undefined
+  if (known && known.at && (!savedEntry || savedEntry.state !== 'signed-in')) {
+    if (window.shellApi.log) window.shellApi.log('info', `remote accounts: pane ${leafId} runs on ${runs || 'the host’s own sign-in'}; its saved account (${saved || 'none'}) is not signed in there: followed`) // i18n-ignore log
+    delete leaf.hostAccountMismatch
+    leaf.hostAccount = runs
+    scheduleSave()
+    return res
+  }
+  // Kept once for this folder: not asked again for it.
+  if (leaf.hostAccountKept !== runs) leaf.hostAccountMismatch = { runs }
+  return res
+}
+// The pane's notice: Update (the pane's account becomes the one its agent
+// runs on, saved with the layout) or Keep (the saved one stays, its next
+// restart starts there).
+function resolveHostAccountMismatch(leafId, update) {
+  const leaf = findLeaf(leafId)
+  const m = leaf && leaf.hostAccountMismatch
+  if (!m) return
+  delete leaf.hostAccountMismatch
+  if (update) {
+    leaf.hostAccount = m.runs
+    delete leaf.hostAccountKept
+    scheduleSave()
+  } else leaf.hostAccountKept = m.runs
+}
+// Pane menu > Check account again: the host asked now (past the cache and
+// the back-off), and the folder its agent runs on checked.
+async function checkHostAccount(leafId) {
+  const leaf = findLeaf(leafId)
+  if (!leaf || !leaf.remoteHostId) return
+  // Asked by you: a folder kept before is asked about again.
+  delete leaf.hostAccountKept
+  await Promise.all([checkHostAccountsNow(leaf.remoteHostId), verifyHostAccount(leafId)])
+}
+// Pane menu > Make this the default on <host>: new panes of this agent there
+// start on this pane's account (its folder, or the host's own sign-in).
+function setHostAccountDefault(leafId) {
+  const leaf = findLeaf(leafId)
+  if (!leaf || !leaf.remoteHostId || !HOST_ACCOUNT_AGENTS.includes(leaf.agentId)) return
+  const id = typeof leaf.hostAccount === 'string' ? leaf.hostAccount : null
+  setDefaultHostAccount(leaf.remoteHostId, leaf.agentId, id)
+  const e = hostEntry(leaf.remoteHostId, leaf.agentId, id ?? undefined)
+  const who = (e && (e.email || (e.plan ? e.plan : ''))) || (id ? t('app.hostAccount.thisAccount', 'this account') : t('app.hostAccount.ownSignIn', 'the host’s own sign-in'))
+  showToast(t('app.hostAccount.defaultSet', 'New {{agent}} panes on {{host}} now start on {{account}}.', { agent: agentById(leaf.agentId)?.name || leaf.agentId, host: remoteHostLabel(leaf.remoteHostId), account: who }), { timeout: 8000 })
+}
+// Pane menu > Copy account details: presence flags only (which sign-in files
+// exist on the host, how its agent was started), for you to share.
+async function copyAccountDetails(leafId) {
+  const leaf = findLeaf(leafId)
+  const api = window.shellApi.remoteAccounts
+  if (!leaf || !leaf.remoteHostId || !api || !api.diagnose) return
+  const id = typeof leaf.hostAccount === 'string' ? leaf.hostAccount : undefined
+  const res = await api.diagnose(leaf.remoteHostId, leaf.agentId, id, leafId).catch(() => null)
+  const host = hostAccountsOf(leaf.remoteHostId)
+  const e = hostEntry(leaf.remoteHostId, leaf.agentId, id)
+  const def = defaultHostAccount(leaf.remoteHostId, leaf.agentId)
+  const lines = [
+    // A diagnostic to share, kept in English (like a log).
+    'Tessel account details (no secrets)', // i18n-ignore
+    `agent: ${leaf.agentId}`, // i18n-ignore
+    `pane account: ${id ? `folder ${id}` : 'host own sign-in'}`, // i18n-ignore
+    `host default: ${def ? `folder ${def}` : 'host own sign-in'}`, // i18n-ignore
+    `last check: ${host && host.at ? new Date(host.at).toISOString() : 'never'}`, // i18n-ignore
+    `entry: ${e ? `${e.scope} ${e.state}, email ${e.email ? 'known' : 'unknown'}, plan ${e.plan ? 'known' : 'unknown'}` : 'none'}` // i18n-ignore
+  ]
+  if (res && res.ok && res.flags) for (const [k, v] of Object.entries(res.flags)) lines.push(`${k}: ${v}`)
+  else lines.push(`host: ${(res && res.notConnected && 'not connected') || 'not answered'}`) // i18n-ignore
+  try {
+    await window.shellApi.writeClipboard(lines.join('\n'))
+    showToast(t('app.hostAccount.detailsCopied', 'Account details copied (yes / no only: no token, no email).'), { timeout: 6000 })
+  } catch {
+    showToast(t('app.hostAccount.detailsNotCopied', 'The account details could not be copied.'), { kind: 'error' })
+  }
 }
 
 // Pane menu > Sign in to another account on <host>: Tessel makes a new
@@ -5326,7 +5468,7 @@ async function startInEmptyWorkspace(ws, choice) {
   if (choice.kind === 'agent' && !agent) return null
   const shellId = choice.kind === 'terminal' && choice.shellId && shells.value.some((s) => s.id === choice.shellId) ? choice.shellId : selectedShell.value
   // The account chosen in the launcher (else the default one).
-  const account = agent && !ws.remote && (choice.accountId === null || typeof choice.accountId === 'string') ? { accountId: choice.accountId } : agent && ws.remote && validHostAccount(choice.accountId) ? { hostAccount: choice.accountId } : {}
+  const account = agent && !ws.remote && (choice.accountId === null || typeof choice.accountId === 'string') ? { accountId: choice.accountId } : agent && ws.remote && hostAccountChoice(choice.accountId) !== undefined ? { hostAccount: hostAccountChoice(choice.accountId) } : {}
   // The empty grid of a task copy (only its editors or browsers left): the
   // new pane works in that copy (paneViews.js).
   const from = ws.tree && ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
@@ -8797,7 +8939,7 @@ async function switchToTerminal(leafId) {
     // On a host: the agent launch there, in the chat's folder, resuming the
     // conversation by its id (its file is the host's, never looked up here).
     const where = onHost
-      ? [null, null, { remoteHostId: onHost.hostId, remotePath: onHost.path, remoteSession: true, ...(validHostAccount(old.hostAccount) ? { hostAccount: old.hostAccount } : {}) }]
+      ? [null, null, { remoteHostId: onHost.hostId, remotePath: onHost.path, remoteSession: true, ...(hostAccountChoice(old.hostAccount) !== undefined ? { hostAccount: hostAccountChoice(old.hostAccount) } : {}) }]
       : [old.cwd || ws.cwd, old.worktree || null, { accountId: old.accountId }]
     const fresh = await createLeaf(selectedShell.value, agent, where[0], where[1], {
       id: leafId,
@@ -8902,7 +9044,7 @@ async function switchToChat(leafId) {
     leaf.paneName = old.paneName
     leaf.accountId = old.accountId
     // On an SSH host's account folder: the chat runs on it too.
-    if (hostRoot && validHostAccount(old.hostAccount)) leaf.hostAccount = old.hostAccount
+    if (hostRoot && hostAccountChoice(old.hostAccount) !== undefined) leaf.hostAccount = hostAccountChoice(old.hostAccount)
     if (old.worktree) leaf.worktree = old.worktree
     const choice = old.modelChoice || old.sessionOptions || null
     if (choice && choice.model) leaf.model = choice.model

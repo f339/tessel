@@ -28,6 +28,12 @@ async function fixture(
   await fs.writeFile(file, content)
 }
 describe('read-only skill discovery', () => {
+  it('a description longer than the cap ends with an ellipsis', () => {
+    const fm = skillFrontmatter('---\nname: long\ndescription: ' + 'word '.repeat(150) + '\n---', 'fallback')
+    expect(fm.description).toHaveLength(512)
+    expect(fm.description.endsWith('…')).toBe(true)
+    expect(skillFrontmatter('---\nname: short\ndescription: Few words.\n---', 'x').description).toBe('Few words.')
+  })
   it('skips 64 KiB frontmatter lines promptly and strips scalar comments linearly', () => {
     const started = performance.now()
     expect(

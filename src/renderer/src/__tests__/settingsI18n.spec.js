@@ -29,7 +29,7 @@ describe('Settings in French', () => {
   it('shows the pages, groups and choices in French, and back in English', async () => {
     const nav = wrapper.get('.set-side').text()
     expect(nav).toContain('Apparence')
-    expect(nav).toContain('Configurer')
+    expect(nav).toContain('Espace de travail')
     expect(wrapper.get('#set-agents').text()).toContain('Empêcher la mise en veille')
     expect(THEMES[0].label).toBe('Classique')
     await setUiLanguage('en')

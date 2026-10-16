@@ -1,8 +1,18 @@
 <script setup>
-// How each agent gets its team messages (its hooks): the old "Team
-// connections" tab of MCP servers. It belongs to Settings > Orchestration
-// now, which opens it (its Details) until the Orchestration page shows it
-// itself.
+// How each agent gets its team messages (its hooks): the old Team
+// connections tab of MCP servers, standalone, for Settings > Orchestration
+// (its Agent hooks group) to mount: <McpTeamConnections :agents="agents" />.
+//
+// Props:  agents - the agent list Settings gets from App.vue ({ id, name,
+//                  available }): which agents are installed, and the names of
+//                  your own agents.
+// Events: none. It reads and acts by itself, through window.shellApi:
+//           teamHooksStatus()  - read on mount and on Check again
+//                                (src/main/teamHooksStatus.js);
+//           installTeamTools() - Set up again (team tools, hooks, memory
+//                                rule); its errors show in its own message.
+// Styles: the .mcp-* classes in style.css (.mcp-about, .mcp-toolbar,
+//         .mcp-server, .mcp-agents, .mcp-status, .mcp-error, .mcp-notice).
 import { ref, reactive, computed, onMounted } from 'vue'
 import BrandIcon from '../BrandIcon.vue'
 import { t } from '../../i18n'

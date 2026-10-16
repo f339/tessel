@@ -108,6 +108,18 @@ describe('provider capability visibility', () => {
     expect(wrapper.find('[data-test="stats-provider-codex"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('No installed agents with a local usage history collector')
   })
+  it('says it is looking for the agents while it does, not that none keeps a history', async () => {
+    let answer
+    api.providerUsage.capabilities = vi.fn(() => new Promise((resolve) => (answer = resolve)))
+    wrapper = mount(StatsUsage)
+    await flushPromises()
+    expect(wrapper.text()).toContain('Looking for installed agents…')
+    expect(wrapper.text()).not.toContain('No installed agents with a local usage history collector')
+    answer({ ok: true, providers: [] })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('Looking for installed agents…')
+    expect(wrapper.text()).toContain('No installed agents with a local usage history collector')
+  })
   it('normalizes saved visibility to known unique IDs', () => {
     expect(validHiddenUsageProviders(['kimi', 'kimi', 'qwen', null, {}, 'minimax'])).toEqual([
       'kimi',

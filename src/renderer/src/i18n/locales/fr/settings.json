@@ -18,7 +18,9 @@
     "search": {
       "placeholder": "Rechercher dans les paramètres",
       "title": "Rechercher dans les paramètres (Ctrl+F)",
-      "noMatch": "Aucun paramètre ne correspond à « {{query}} »."
+      "noMatch": "Aucun paramètre ne correspond à « {{query}} ».",
+      "count_one": "{{count}} résultat",
+      "count_other": "{{count}} résultats"
     },
     "pages": {
       "stats": {
@@ -95,10 +97,10 @@
       }
     },
     "groups": {
-      "ai": "Capacités IA",
-      "configure": "Configurer",
+      "ai": "IA",
+      "workspace": "Espace de travail",
       "workflows": "Workflows",
-      "interface": "Interface",
+      "insights": "Analyses",
       "about": "À propos"
     },
     "common": {
@@ -804,8 +806,8 @@
       "removeFailed": "Impossible de retirer la commande « {{name}} » du PATH.",
       "refreshLabel": "Actualiser l'état de la commande",
       "refresh": "Actualiser",
-      "commandPath": "Chemin de la commande :",
-      "examples": "Dans un terminal : {{examples}}",
+      "commandPath": "Chemin de la commande",
+      "examplesLead": "Dans un terminal :",
       "showInExplorer": "Afficher dans l'Explorateur",
       "registerTitle": "Activer la commande « {{name}} » ?",
       "registerText": "Tessel va installer la commande à cet emplacement : {{path}}. Son dossier sera ajouté au PATH de votre compte Windows pour que vos terminaux la trouvent. Vous pourrez la retirer ici à tout moment.",
@@ -899,10 +901,8 @@
       "unknown": "non vérifié"
     },
     "lastSeen": "dernier changement {{when}}",
-    "unnamed": "Connecté (sans nom de compte)",
     "checking": "vérification…",
     "notConnectedStale": "non connecté (affiché tel que vérifié la dernière fois)",
-    "notConnected": "non connecté : ouvrez un terminal ou son projet là-bas pour le vérifier",
     "stopped": "pas démarrée",
     "error": "n’a pas pu être vérifié",
     "notChecked": "pas encore vérifié",
@@ -914,15 +914,55 @@
     "removed": "Retiré de {{host}}.",
     "signedOut": "Déconnecté sur {{host}}.",
     "actionFailed": "Cela n’a pas pu être fait.",
-    "switchHint": "Redémarrer {{pane}} sur ce compte (même panneau)",
-    "switch": "Basculer {{pane}}",
-    "remove": "Retirer de cet hôte",
     "signOut": "Se déconnecter sur l’hôte…",
-    "places": "Endroits vérifiés",
     "startHint": "Démarre cette distribution pour voir ses connexions",
     "check": "Vérifier",
     "recheck": "Vérifier de nouveau",
     "override": "utilise {{what}} à la place",
-    "signedOutKeychain": "Déconnecté du fichier de connexion sur {{host}} ; la connexion du trousseau macOS reste (déconnectez-vous dans Claude Code là-bas pour la retirer)."
+    "signedOutKeychain": "Déconnecté du fichier de connexion sur {{host}} ; la connexion du trousseau macOS reste (déconnectez-vous dans Claude Code là-bas pour la retirer).",
+    "isDefault": "par défaut pour les nouveaux panneaux",
+    "makeDefaultHint": "Les nouveaux panneaux de cet agent sur {{host}} démarrent sur ce compte",
+    "scopeShort": {
+      "added": "ajouté dans Tessel",
+      "own": "propre connexion",
+      "folder": "dossier",
+      "orphan": "reste d’un dossier retiré",
+      "env": "dossier du shell de connexion"
+    },
+    "menu": {
+      "isDefault": "Par défaut pour les nouveaux panneaux ici",
+      "makeDefault": "Utiliser par défaut ici",
+      "remove": "Retirer de cet hôte…"
+    },
+    "scopeNoteShort": "Seules les machines connues de Tessel : ce PC, WSL et vos hôtes SSH.",
+    "notConnectedShort": "non connecté",
+    "unknownAccount": "Compte inconnu",
+    "unnamedShort": "Compte",
+    "unknownHint": "connecté ; son compte n’est pas encore connu",
+    "usedByOne": "Utilisé par 1 panneau",
+    "usedBy_one": "Utilisé par {{count}} panneau",
+    "usedBy_other": "Utilisé par {{count}} panneaux",
+    "defaultSet": "Les nouveaux panneaux {{agent}} sur {{host}} démarrent maintenant sur ce compte.",
+    "openToCheck": "Ouvrez un terminal là-bas pour le vérifier",
+    "switchedMany_one": "{{count}} panneau redémarre sur {{account}}.",
+    "switchedMany_other": "{{count}} panneaux redémarrent sur {{account}}.",
+    "notCheckedMore_one": "Pas encore vérifiés : {{names}} et {{count}} autre. Ouvrez un terminal là-bas pour les vérifier.",
+    "notCheckedMore_other": "Pas encore vérifiés : {{names}} et {{count}} autres. Ouvrez un terminal là-bas pour les vérifier.",
+    "notCheckedList": "Pas encore vérifié : {{names}}. Ouvrez un terminal là-bas pour le vérifier.",
+    "checkingList": "Vérification de {{names}}…",
+    "placesOf": "Où {{account}} est connecté",
+    "defaultShort": "par défaut",
+    "switchPanes": "Basculer des panneaux…",
+    "switchIntro": "Redémarrer ces panneaux sur {{account}} (même panneau, sa conversation reprise quand c’est possible) :",
+    "restartOnAccount": "Redémarrer sur ce compte",
+    "cancel": "Annuler",
+    "wslStopped": "{{name}} pas démarrée",
+    "hidePlaces": "Masquer les endroits",
+    "showPlaces": "Tous les endroits ({{count}})",
+    "unknownSignedOut": "déconnecté ; son compte n’est pas connu",
+    "stateShort": {
+      "unknown": "non vérifié",
+      "out": "déconnecté"
+    }
   }
 }

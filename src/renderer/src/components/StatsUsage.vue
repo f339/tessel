@@ -6,6 +6,7 @@ import { Check, ChevronDown } from 'lucide-vue-next'
 import BrandIcon from './BrandIcon.vue'
 import ResetHistory from './ResetHistory.vue'
 import UsageVisibility from './UsageVisibility.vue'
+import PanelState from './ui/PanelState.vue'
 import { settings } from '../settings'
 import { loadUsageProviders } from '../usageProviders'
 import StatsStatCard from './stats/StatsStatCard.vue'
@@ -28,6 +29,8 @@ const props = defineProps({
   statsSummary: { type: Object, default: null }
 })
 const catalog = ref([])
+// Until the first look for installed agents answers.
+const detecting = ref(true)
 const catalogError = ref('')
 const PROVIDERS = computed(() => [
   { id: 'overview', label: t('stats.overviewTab', 'Overview') },
@@ -123,6 +126,8 @@ async function detectProviders() {
     if (!disposed && request === catalogRequest)
       catalogError.value = t('stats.catalogError', 'Could not detect installed usage providers. Refresh to retry.'
       )
+  } finally {
+    if (!disposed && request === catalogRequest) detecting.value = false
   }
 }
 watch(
@@ -357,14 +362,15 @@ onBeforeUnmount(() => {
       </button>
     </p>
     <UsageVisibility :providers="catalog" />
-    <p v-if="PROVIDERS.length === 1 && !catalogError" class="su-muted">
+    <PanelState v-if="detecting && PROVIDERS.length === 1 && !catalogError" :text="t('stats.detecting', 'Looking for installed agents…')" :rows="1" />
+    <p v-else-if="PROVIDERS.length === 1 && !catalogError" class="su-muted">
       {{
         t('stats.noCollector', 'No installed agents with a local usage history collector. Subscription quotas are available in the Usage menu.'
         )
       }}
     </p>
     <header class="su-analytics-head">
-      <h3>{{ t('stats.analytics', 'Usage Analytics') }}</h3>
+      <h3>{{ t('stats.analytics', 'Usage analytics') }}</h3>
       <div class="su-provider-control" @keydown="selectionKey">
         <button
           type="button"

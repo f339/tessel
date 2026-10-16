@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import McpDialog from '../components/McpDialog.vue'
+import McpTeamConnections from '../components/mcp/McpTeamConnections.vue'
 import { MCP_CATALOG, catalogDocs } from '../mcpCatalog'
 
 const agentsOf = (ids) => ids.map((id) => ({ id, available: true }))
@@ -42,6 +43,19 @@ describe('MCP servers dialog', () => {
     await flushPromises()
     expect(w.find('.sl-skeleton').exists()).toBe(false)
     expect(row(w, 'tessel-team').exists()).toBe(true)
+  })
+
+  it('a failed check for node and uvx is no unhandled rejection, and flags nothing as missing', async () => {
+    const w = mountWith({
+      mcpList: async () => ({ claude: [], codex: [] }),
+      checkTools: async () => {
+        throw new Error('ipc closed')
+      }
+    })
+    await flushPromises()
+    await tabBtn(w, 'Catalog').trigger('click')
+    await catalogItem(w, 'fetch').get('.mcpc-row').trigger('click')
+    expect(w.text()).not.toMatch(/needs uv|needs node/i)
   })
 
   it('shows one row per server, never one per server and agent, with the icons of the agents that have it', async () => {
@@ -389,7 +403,7 @@ describe('MCP servers dialog', () => {
     expect(tabBtn(w, 'Catalog').attributes('aria-selected')).toBe('true')
   })
 
-  it('as a window, Escape and the backdrop close it; embedded (a Settings page), nothing does; team connections link to Orchestration', async () => {
+  it('as a window, Escape and the backdrop close it; embedded (a Settings page), nothing does; the team connections are in Orchestration', async () => {
     const api = { mcpList: async () => ({ claude: [{ name: 'context7', scope: 'user', type: 'http', target: 'https://x' }], codex: [], others: {} }) }
     const modal = mountWith(api)
     await flushPromises()
@@ -400,15 +414,13 @@ describe('MCP servers dialog', () => {
     modal.unmount()
     wrapper = null
 
+    // The old Team connections tab is gone: asked for, it opens Installed.
     const page = mountWith(api, { embedded: true, initialTab: 'connections' })
     await flushPromises()
     for (const sel of ['.help-backdrop', '.help-card', '.help-head', '[role="dialog"]']) expect(page.find(sel).exists(), sel).toBe(false)
-    // From Orchestration: the team connections, and a way back.
-    expect(page.find('.mcp-connections').exists()).toBe(true)
-    expect(page.find('[role="tab"]').exists()).toBe(false)
-    await button(page, 'MCP servers').trigger('click')
     expect(page.find('.mcp-connections').exists()).toBe(false)
     expect(page.findAll('[role="tab"]').map((b) => b.text())).toEqual(['Installed1', 'Catalog', 'Custom'])
+    expect(tabBtn(page, 'Installed').attributes('aria-selected')).toBe('true')
     expect(page.text()).toContain('context7')
     await page.get('.mcp-embedded-body').trigger('keydown', { key: 'Escape' })
     await page.trigger('pointerdown')
@@ -420,6 +432,30 @@ describe('MCP servers dialog', () => {
     // Arrow keys move between the tabs.
     await page.get('[role="tablist"]').trigger('keydown', { key: 'ArrowRight' })
     expect(tabBtn(page, 'Catalog').attributes('aria-selected')).toBe('true')
+  })
+
+  it('the team connections stand alone (for Orchestration): each agent\'s hooks, Check again, Set up again', async () => {
+    let reads = 0
+    let setups = 0
+    previousApi = window.shellApi
+    window.shellApi = {
+      teamHooksStatus: async () => {
+        reads++
+        return { agents: [{ id: 'claude', hooks: 'installed', lastSignal: { at: Date.now() - 5000 }, inbox: true }, { id: 'codex', hooks: 'installed', approval: 'needs-approval' }] }
+      },
+      installTeamTools: async () => (setups++, { errors: ['Codex: config locked'] })
+    }
+    wrapper = mount(McpTeamConnections, { props: { agents: agentsOf(['claude', 'codex', 'gemini']) }, attachTo: document.body })
+    await flushPromises()
+    expect(reads).toBe(1)
+    const names = wrapper.findAll('.mcp-server .mcp-name').map((n) => n.text())
+    expect(names).toEqual(['Claude Code', 'Codex', 'No hooks yet'])
+    expect(wrapper.text()).toContain('Needs your approval')
+    await button(wrapper, 'Check again').trigger('click')
+    await button(wrapper, 'Set up again').trigger('click')
+    await flushPromises()
+    expect([reads, setups]).toEqual([3, 1])
+    expect(wrapper.get('.mcp-error').text()).toBe('Codex: config locked')
   })
 
   it("links each catalog server to its docs: its own, else its npm or PyPI package", () => {
