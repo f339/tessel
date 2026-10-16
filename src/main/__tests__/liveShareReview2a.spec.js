@@ -316,14 +316,28 @@ describe('L2: a project below its repository’s top', () => {
     const head = g(repo, 'rev-parse', 'HEAD').trim()
     expect(await ask('scm.commit', { message: 'guest' }, GIT)).toEqual({ ok: false, code: 'staged-hidden' })
     g(repo, 'reset', '-q', '--', 'proj/.env')
-    // An ignored file (hidden from the guest) the host force-added: the same.
+    // An ignored file the host force-added (the guest never saw it): the
+    // same; and with the setting off (guests see ignored files) it goes.
     put(root, 'local.yml', 'password: x')
-    expect((await ask('fs.read', { path: 'local.yml' }, E)).ok).toBe(false)
     g(repo, 'add', '-f', 'proj/local.yml')
-    expect(await ask('scm.commit', { message: 'guest' }, GIT)).toEqual({ ok: false, code: 'staged-hidden' })
+    const spent = []
+    expect(await ask('scm.commit', { message: 'guest' }, GIT, { spend: (k) => (spent.push(k), true) })).toEqual({ ok: false, code: 'staged-hidden' })
+    expect(spent).toContain('git')
+    expect(g(repo, 'rev-parse', 'HEAD').trim()).toBe(head)
+    // Over the budget: refused as busy, nothing committed.
+    expect(await ask('scm.commit', { message: 'guest' }, GIT, { spend: () => false })).toEqual({ ok: false, code: 'busy' })
     expect(g(repo, 'rev-parse', 'HEAD').trim()).toBe(head)
     g(repo, 'reset', '-q', '--', 'proj/local.yml')
     expect((await ask('scm.commit', { message: 'guest' }, GIT)).ok).toBe(true)
+  })
+
+  it('refuses a guest commit when git cannot say whether a staged file is ignored', async () => {
+    requests = createShareRequests({ ignoreCheck: async () => null })
+    put(root, 'a.js', 'a4')
+    expect((await ask('scm.stage', { paths: ['a.js'] }, GIT)).ok).toBe(true)
+    expect(await ask('scm.commit', { message: 'guest' }, GIT)).toEqual({ ok: false, code: 'staged-hidden' })
+    const allowed = createShareRequests({ ignoreCheck: async () => null })
+    expect((await allowed.handle({ op: 'scm.commit', project: 'p1', args: { message: 'guest' } }, { roots: { p1: root }, rights: GIT, settings: { hideIgnored: false }, recheck: () => true })).ok).toBe(true)
   })
 })
 

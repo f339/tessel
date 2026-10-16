@@ -190,12 +190,13 @@ const IGNORE_TIMEOUT_MS = 10000
 const BELOW_MAX = 20000
 
 // git check-ignore -z --stdin over rels (paths from cwd): -> Set of the
-// ignored ones | null (git failed: the caller hides them all).
-export function checkIgnore(cwd, safety, rels) {
+// ignored ones | null (git failed: the caller hides them all). noIndex: also
+// a file git tracks (staged by force) that its rules ignore.
+export function checkIgnore(cwd, safety, rels, { noIndex = false } = {}) {
   return new Promise((done) => {
     let child
     try {
-      child = spawn('git', ['-C', cwd, ...safety, 'check-ignore', '-z', '--stdin'], {
+      child = spawn('git', ['-C', cwd, ...safety, 'check-ignore', ...(noIndex ? ['--no-index'] : []), '-z', '--stdin'], {
         windowsHide: true,
         env: { ...cleanEnv(process.env), GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' }
       })
