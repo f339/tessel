@@ -31,6 +31,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@huggingface/jinja": "0.5.10",
+    "@huggingface/tokenizers": "0.2.0",
     "@vitejs/plugin-vue": "^6.0.7",
     "@vue/test-utils": "^2.4.11",
     "@xterm/addon-fit": "^0.10.0",
@@ -48,6 +50,7 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-vue": "^10.9.2",
     "globals": "^17.6.0",
+    "gpt-tokenizer": "4.0.3",
     "html-to-image": "1.11.13",
     "jsdom": "^29.1.1",
     "lucide-vue-next": "0.577.0",

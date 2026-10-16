@@ -981,3 +981,18 @@ describe('rate limiting', () => {
     expect(JSON.stringify(result)).not.toContain('fixture-claude-token')
   })
 })
+
+describe('Settings > Context: the Claude sign-in as API headers', () => {
+  it('reads the selected account’s login now, gives only its bearer, sends nothing itself', async () => {
+    const { service, request, state } = fixture()
+    expect(await service.apiAuth('claude')).toEqual({ ok: true, headers: { Authorization: 'Bearer fixture-claude-token' } })
+    expect(request).not.toHaveBeenCalled()
+    state.selected.claude = 'managed-a'
+    expect((await service.apiAuth('claude')).ok).toBe(true)
+    state.claudeAuth = { claudeAiOauth: { accessToken: 'expired-token', expiresAt: epoch - 1000 } }
+    const expired = await service.apiAuth('claude')
+    expect(expired).toMatchObject({ ok: false, code: 'auth' })
+    expect(JSON.stringify(expired)).not.toContain('expired-token')
+    expect((await service.apiAuth('codex')).ok).toBe(false)
+  })
+})

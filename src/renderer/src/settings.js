@@ -295,7 +295,11 @@ export const DEFAULT_SETTINGS = Object.freeze({
   branchPrefixCustom: 'agent',
   sourceControlGroupOrder: 'changes-first',
   // The Changes tab shows files as a folder tree or a flat list (Orca's view mode).
-  sourceControlViewMode: 'tree'
+  sourceControlViewMode: 'tree',
+  // Settings > Context: exact Claude token counts with the Claude Code
+  // sign-in (Anthropic's count_tokens) when no API key is set. Off until the
+  // user turns it on: Anthropic may refuse a subscription sign-in there.
+  contextClaudeSignIn: false
 })
 
 export const SIDEBAR_SORTS = ['name', 'smart', 'recent', 'repo', 'manual']

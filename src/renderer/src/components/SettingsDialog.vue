@@ -19,6 +19,7 @@ import AgentTerminalSettings from './AgentTerminalSettings.vue'
 import SettingsToolRows from './SettingsToolRows.vue'
 import SkillsDialog from './SkillsDialog.vue'
 import McpDialog from './McpDialog.vue'
+import SettingsContext from './settings/SettingsContext.vue'
 import { BarChart3, Cable, LoaderCircle } from 'lucide-vue-next'
 import { updateFailureText, updateKindLabel } from '../agentUpdateErrors'
 import { settings, FONT_FAMILIES, resetSettings, clamp, MAX_LEFT_SIDEBAR_TINT_OPACITY, limitNumber, DEFAULT_SETTINGS, LIMITS, USAGE_REFRESH_MINUTES } from '../settings'
@@ -125,6 +126,16 @@ const PAGES = {
       return t('settings.pages.mcp.desc', 'Give your agents extra tools: install, turn on or off and connect MCP servers.')
     },
     icon: 'M6 2v3M10 2v3M4.5 5h7v2.5a3.5 3.5 0 01-7 0zM8 11v3'
+  },
+  // What each agent loads into its context, in tokens (settings/SettingsContext.vue).
+  context: {
+    get title() {
+      return t('settings.pages.context.title', 'Context')
+    },
+    get desc() {
+      return t('settings.pages.context.desc', 'What each agent loads before you type anything, what it costs in tokens, and what you can turn off.')
+    },
+    icon: 'M2.5 3.5h11v3h-11zM2.5 8h7M2.5 11h9M2.5 14h5'
   },
   orchestration: {
     get title() {
@@ -261,7 +272,7 @@ const GROUPS = [
     get title() {
       return t('settings.groups.ai', 'AI capabilities')
     },
-    pages: ['agents', 'accounts', 'skills', 'mcp', 'orchestration', 'voice']
+    pages: ['agents', 'accounts', 'skills', 'mcp', 'context', 'orchestration', 'voice']
   },
   {
     id: 'configure',
@@ -306,6 +317,7 @@ const PAGE_TITLES_EN = {
   accounts: 'AI provider accounts', // i18n-ignore
   skills: 'Skills', // i18n-ignore
   mcp: 'MCP servers', // i18n-ignore
+  context: 'Context', // i18n-ignore
   orchestration: 'Orchestration', // i18n-ignore
   voice: 'Voice typing', // i18n-ignore
   general: 'General', // i18n-ignore
@@ -1900,6 +1912,23 @@ function previewSound() {
                 <span class="set-hint">{{ t('settings.mcp.installedHint', 'Every MCP server of your agents, the catalog, your own servers and the team connections.') }}</span>
               </div>
               <button type="button" class="exit-btn" @click="go('mcp')">{{ t('settings.mcp.open', 'Open MCP servers') }}</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ Context ============ -->
+        <section id="set-context" class="set-page" data-page="context" :hidden="!shown('context')" aria-labelledby="set-context-title">
+          <header class="set-page-head">
+            <h2 id="set-context-title">{{ PAGES.context.title }}</h2>
+            <p class="set-page-desc">{{ PAGES.context.desc }}</p>
+          </header>
+          <SettingsContext v-if="page === 'context' && !searching" :cwd="projectCwd" :agents="agents" @go="go" />
+          <div v-else class="set-group">
+            <div class="set-row">
+              <div class="set-label">{{ t('settings.context.summary', 'Context cost') }}
+                <span class="set-hint">{{ t('settings.context.summaryHint', 'Tokens each agent loads up front: rules files, skills, MCP tools and Tessel’s team tools.') }}</span>
+              </div>
+              <button type="button" class="exit-btn" @click="go('context')">{{ t('settings.context.open', 'Open Context') }}</button>
             </div>
           </div>
         </section>

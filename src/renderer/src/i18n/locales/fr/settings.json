@@ -92,6 +92,10 @@
       "browser": {
         "title": "Navigateur",
         "desc": "Le navigateur intégré : importer vos connexions et la session utilisée par les agents."
+      },
+      "context": {
+        "title": "Contexte",
+        "desc": "Ce que chaque agent charge avant que vous tapiez quoi que ce soit, ce que ça coûte en jetons, et ce que vous pouvez désactiver."
       }
     },
     "groups": {
@@ -864,6 +868,11 @@
       "installed": "Serveurs installés",
       "installedHint": "Tous les serveurs MCP de vos agents, le catalogue, vos propres serveurs et les connexions d'équipe.",
       "open": "Ouvrir Serveurs MCP"
+    },
+    "context": {
+      "summary": "Coût du contexte",
+      "summaryHint": "Les jetons que chaque agent charge d’emblée : fichiers de règles, skills, outils MCP et outils d’équipe de Tessel.",
+      "open": "Ouvrir Contexte"
     }
   },
   "accounts": {

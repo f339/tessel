@@ -1,0 +1,151 @@
+// @vitest-environment node
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import fs from 'fs'
+import os from 'os'
+import { join } from 'path'
+import { createContextCost, summarize, shapeTools, skillLine, agentServers } from '../contextCost'
+import { createContextCounter, createCountCache } from '../contextCost/counts'
+
+let root, home, project, userData
+beforeEach(() => {
+  root = fs.mkdtempSync(join(os.tmpdir(), 'tessel-ctxsvc-'))
+  home = join(root, 'home')
+  project = join(root, 'app')
+  userData = join(root, 'data')
+  for (const d of [home, join(project, '.git'), userData]) fs.mkdirSync(d, { recursive: true })
+  fs.mkdirSync(join(home, '.claude'), { recursive: true })
+  fs.writeFileSync(join(home, '.claude', 'CLAUDE.md'), 'one two three four')
+  fs.mkdirSync(join(home, '.codex'), { recursive: true })
+  fs.writeFileSync(join(home, '.codex', 'AGENTS.md'), 'codex rules here')
+})
+afterEach(() => {
+  fs.rmSync(root, { recursive: true, force: true })
+})
+
+// One token per word; the team tools as the counting process answers them.
+const worker = {
+  async request(msg) {
+    const words = (s) => (String(s).trim() ? String(s).trim().split(/\s+/).length : 0)
+    if (msg.op === 'encoding') return { counts: msg.texts.map(words) }
+    if (msg.op === 'tessel') return { tessel: { instructions: 'Use the board.', tools: [{ name: 'team_inbox', description: 'Inbox.', inputSchema: { type: 'object', properties: {} } }] } }
+    return null
+  }
+}
+const skillsIn = (home) => [
+  { name: 'pdf', description: 'Read PDF files', skillFile: join(home, '.claude', 'skills', 'pdf', 'SKILL.md'), seenBy: ['claude', 'opencode'], scope: 'user' },
+  { name: 'lint', description: 'Lint the code base', skillFile: join(home, '.agents', 'skills', 'lint', 'SKILL.md'), seenBy: ['codex'], scope: 'user' }
+]
+const mcpListed = {
+  claude: [{ name: 'fs', scope: 'user', target: 'npx fs' }, { name: 'tessel-team', scope: 'user' }],
+  codex: [{ name: 'browser', scope: 'user', enabled: false }, { name: 'tessel-team', scope: 'user' }],
+  others: {}
+}
+
+function service(extra = {}) {
+  const anthropic = { count: vi.fn(async (model, items) => Object.fromEntries(items.map((i) => [i.key, { tokens: 100 }]))) }
+  const testMcp = vi.fn(async () => ({ ok: true, status: 'connected', defs: [{ name: 'read', description: 'Read a file', inputSchema: { type: 'object', properties: { path: { type: 'string' } } } }] }))
+  const listMcp = vi.fn(async () => mcpListed)
+  const counter = createContextCounter({ cache: createCountCache(join(userData, 'counts.json')), worker, apis: { anthropic } })
+  const svc = createContextCost({
+    userData,
+    counter,
+    worker,
+    files: { status: async () => ({}), loaderFor: async () => null },
+    apis: { anthropic },
+    listSkills: async () => ({ skills: skillsIn(home) }),
+    listMcp,
+    testMcp,
+    agentModel: () => null,
+    home,
+    env: () => ({}),
+    ...extra
+  })
+  return { svc, anthropic, testMcp, listMcp }
+}
+
+describe('summarize: one agent’s totals', () => {
+  it('adds loaded, counted items by group, says how exact it is and what is optional', () => {
+    const items = [
+      { group: 'rules', loaded: true, optional: true, result: { tokens: 100, exact: true } },
+      { group: 'skills', loaded: true, optional: true, result: { tokens: 20, exact: false } },
+      { group: 'mcp', loaded: false, result: { tokens: 999, exact: true } }, // turned off
+      { group: 'mcp', loaded: true, result: null }, // not measured
+      { group: 'tessel', loaded: true, optional: false, result: { tokens: 50, exact: true } }
+    ]
+    expect(summarize(items)).toEqual({ total: 170, groups: { rules: 100, skills: 20, mcp: 0, tessel: 50 }, optional: 120, pending: 1, exact: 'some' })
+    expect(summarize([]).exact).toBe('none')
+    expect(summarize([items[0]]).exact).toBe('all')
+  })
+})
+
+describe('the Context summary', () => {
+  it('lists rules, skills, MCP and Tessel per agent, counted with each model, never with the text', async () => {
+    const { svc, anthropic } = service()
+    const res = await svc.summary({ cwd: project, agents: [{ id: 'claude' }, { id: 'codex' }, { id: 'unknown' }] })
+    expect(res.agents.map((a) => a.id)).toEqual(['claude', 'codex'])
+    const [claude, codex] = res.agents
+    expect(claude.counter).toMatchObject({ kind: 'api', api: 'anthropic', defaulted: true })
+    expect(codex.counter).toMatchObject({ kind: 'local', tokenizer: 'o200k_base' })
+    // Without remote: no count API asked, Claude's counts are estimates.
+    expect(anthropic.count).not.toHaveBeenCalled()
+    const groupsOf = (a) => a.items.map((i) => `${i.group}:${i.label}`)
+    expect(groupsOf(claude)).toEqual(expect.arrayContaining(['rules:CLAUDE.md', 'skills:pdf', 'mcp:fs', 'tessel:tessel-team']))
+    expect(groupsOf(codex)).toEqual(expect.arrayContaining(['rules:AGENTS.md', 'skills:lint', 'mcp:browser']))
+    expect(groupsOf(claude)).not.toContain('skills:lint')
+    expect(codex.items.find((i) => i.label === 'browser')).toMatchObject({ loaded: false, note: 'off' })
+    expect(claude.items.find((i) => i.label === 'fs')).toMatchObject({ loaded: true, note: 'notMeasured', result: null })
+    expect(codex.items.find((i) => i.label === 'AGENTS.md').result).toMatchObject({ tokens: 3, exact: true })
+    expect(codex.summary.exact).toBe('all')
+    expect(claude.summary.exact).toBe('none')
+    expect(claude.summary.pending).toBe(1) // fs, not measured
+    for (const a of res.agents) for (const i of a.items) expect(i.text).toBeUndefined()
+    expect(JSON.stringify(res)).not.toContain('one two three four')
+  })
+
+  it('asks the count API when the page is looked at (remote)', async () => {
+    const { svc, anthropic } = service()
+    const res = await svc.summary({ cwd: project, agents: [{ id: 'claude', model: 'claude-sonnet-5-5' }], remote: true })
+    expect(anthropic.count).toHaveBeenCalled()
+    expect(anthropic.count.mock.calls[0][0]).toBe('claude-sonnet-5-5')
+    expect(res.agents[0].summary.exact).toBe('all')
+  })
+})
+
+describe('MCP Measure: the server starts on the click only', () => {
+  it('never starts a server for the summary or the kept counts; Measure does, and its count is kept', async () => {
+    const { svc, testMcp } = service()
+    await svc.summary({ cwd: project, agents: [{ id: 'claude' }, { id: 'codex' }], remote: true })
+    expect(await svc.mcpMeasures({ cwd: project })).toEqual({})
+    expect(testMcp).not.toHaveBeenCalled()
+    const measured = await svc.measureMcp({ agent: 'claude', name: 'fs', scope: 'user', cwd: project })
+    expect(testMcp).toHaveBeenCalledTimes(1)
+    expect(testMcp.mock.calls[0]).toEqual([{ agent: 'claude', name: 'fs', scope: 'user', cwd: project }, { defs: true }])
+    expect(measured).toMatchObject({ ok: true, tools: 1, result: { exact: true, source: 'api', tokens: 100 } })
+    const kept = await svc.mcpMeasures({ cwd: project })
+    expect(kept['claude:user:fs']).toMatchObject({ tools: 1, result: { tokens: 100 } })
+    const again = await svc.summary({ cwd: project, agents: [{ id: 'claude' }] })
+    expect(again.agents[0].items.find((i) => i.label === 'fs')).toMatchObject({ toolCount: 1, result: { tokens: 100, exact: true } })
+    expect(testMcp).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a server the agent does not have, and says why a server could not be measured', async () => {
+    const { svc, testMcp } = service()
+    expect((await svc.measureMcp({ agent: 'claude', name: 'nope', cwd: project })).ok).toBe(false)
+    expect(testMcp).not.toHaveBeenCalled()
+    testMcp.mockResolvedValueOnce({ ok: false, status: 'error', error: 'Command not found: npx' })
+    expect(await svc.measureMcp({ agent: 'claude', name: 'fs', cwd: project })).toMatchObject({ ok: false, error: 'Command not found: npx' })
+  })
+})
+
+describe('helpers', () => {
+  it('names MCP tools as each agent presents them, within API limits', () => {
+    const defs = [{ name: 'read file', description: 'd', inputSchema: { properties: {} } }, { name: 'read file' }]
+    const forClaude = shapeTools('fs', defs, 'claude')
+    expect(forClaude[0]).toEqual({ name: 'mcp__fs__read_file', description: 'd', input_schema: { type: 'object', properties: {} } })
+    expect(forClaude[1].name).not.toBe(forClaude[0].name)
+    expect(shapeTools('fs', defs, 'codex')[0].name).toBe('read_file')
+    expect(shapeTools('x'.repeat(80), [{ name: 't' }], 'claude')[0].name).toHaveLength(64)
+    expect(skillLine({ name: 'pdf', description: 'Read PDFs' })).toBe('- pdf: Read PDFs')
+    expect(agentServers({ others: { gemini: { servers: [{ name: 'a' }] } } }, 'gemini')).toEqual([{ name: 'a' }])
+  })
+})

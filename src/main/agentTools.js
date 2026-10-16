@@ -746,15 +746,33 @@ async function testHttp(cfg, baseEnv) {
     await post({ jsonrpc: '2.0', method: 'notifications/initialized' }, extra)
     const toolsRes = await post({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, extra)
     const tools = parseRpcBody(await toolsRes.text(), 2)
-    return {
-      ok: true,
-      status: 'connected',
-      server,
-      tools: ((tools && tools.result && tools.result.tools) || []).map((t) => t.name)
-    }
+    const list = (tools && tools.result && tools.result.tools) || []
+    return { ok: true, status: 'connected', server, tools: list.map((t) => t.name), defs: toolDefs(list) }
   } catch {
     return { ok: true, status: 'connected', server, tools: [] }
   }
+}
+
+// A server's tool definitions as an agent loads them (name, description,
+// input schema), for Settings > Context's Measure: bounded (500 tools, 1 MB),
+// kept in the main process.
+const MAX_DEFS = 500
+const MAX_DEFS_BYTES = 1024 * 1024
+export function toolDefs(list) {
+  const out = []
+  let bytes = 0
+  for (const tl of Array.isArray(list) ? list.slice(0, MAX_DEFS) : []) {
+    if (!tl || typeof tl.name !== 'string') continue
+    const def = {
+      name: tl.name.slice(0, 200),
+      description: typeof tl.description === 'string' ? tl.description : '',
+      inputSchema: tl.inputSchema && typeof tl.inputSchema === 'object' ? tl.inputSchema : { type: 'object', properties: {} }
+    }
+    bytes += JSON.stringify(def).length
+    if (bytes > MAX_DEFS_BYTES) break
+    out.push(def)
+  }
+  return out
 }
 
 function tail(text) {
@@ -862,12 +880,8 @@ function testStdio(cfg, baseEnv, spawnFn) {
           send({ jsonrpc: '2.0', method: 'notifications/initialized' })
           send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
         } else if (msg.id === 2) {
-          finish({
-            ok: true,
-            status: 'connected',
-            server,
-            tools: ((msg.result && msg.result.tools) || []).map((t) => t.name)
-          })
+          const list = (msg.result && msg.result.tools) || []
+          finish({ ok: true, status: 'connected', server, tools: list.map((t) => t.name), defs: toolDefs(list) })
         }
       }
     })
@@ -875,13 +889,16 @@ function testStdio(cfg, baseEnv, spawnFn) {
   })
 }
 
-export async function testMcp(ref, baseEnv = process.env, spawnFn = spawn) {
+// opts.defs: also the tool definitions (Settings > Context's Measure; the
+// window's Test gets the names only).
+export async function testMcp(ref, baseEnv = process.env, spawnFn = spawn, opts = {}) {
   const cfg = await fullConfig(ref)
   if (!cfg) return { ok: false, status: 'error', error: t('main.mcp.notInConfig', 'Server not found in the configuration.') }
   const started = Date.now()
   const res =
     cfg.transport === 'http' ? await testHttp(cfg, baseEnv) : await testStdio(cfg, baseEnv, spawnFn)
-  return { ...res, ms: Date.now() - started }
+  const { defs, ...rest } = res
+  return { ...rest, ...(opts && opts.defs && defs ? { defs } : {}), ms: Date.now() - started }
 }
 
 function quoteWord(w) {

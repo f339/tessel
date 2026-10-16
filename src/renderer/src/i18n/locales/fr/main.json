@@ -1051,6 +1051,13 @@
       "startTitle": "Démarrer {{name}} ?",
       "startMessage": "La distribution WSL {{name}} ne tourne pas. Tessel la démarre pour voir les connexions des agents qui s’y trouvent (elle tourne ensuite jusqu’à ce que Windows l’arrête).",
       "start": "Démarrer et vérifier"
+    },
+    "context": {
+      "downloadHttp": "Hugging Face a répondu HTTP {{status}}.",
+      "downloadTooBig": "Le fichier est plus gros que prévu.",
+      "downloadHash": "Le fichier téléchargé ne correspond pas à son empreinte attendue.",
+      "unknownTokenizer": "Tokenizer inconnu.",
+      "downloadTimeout": "Le téléchargement a pris trop de temps."
     }
   },
   "main.chat.image.tooLarge": "Cette image dépasse {{mb}} Mo.",

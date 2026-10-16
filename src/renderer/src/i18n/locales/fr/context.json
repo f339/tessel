@@ -1,0 +1,136 @@
+{
+  "context": {
+    "tokens": {
+      "exact": "{{n}} jetons",
+      "estimate": "≈ {{n}} jetons"
+    },
+    "source": {
+      "apiShort": "exact · {{api}}",
+      "localShort": "exact · {{tokenizer}}",
+      "estimateShort": "estimation"
+    },
+    "reason": {
+      "offline": "impossible de joindre {{api}}",
+      "claudeRefused": "Anthropic n’a pas accepté la clé ou la connexion",
+      "signedOut": "{{api}} n’a pas accepté la clé ou la connexion",
+      "claudeNoKey": "activez « Compter avec ma connexion Claude », ou définissez ANTHROPIC_API_KEY",
+      "googleNoKey": "connectez-vous à Gemini CLI, ou définissez GEMINI_API_KEY",
+      "noKey": "il faut une clé d’API ({{key}})",
+      "rateLimited": "{{api}} limite les requêtes, réessayez plus tard",
+      "refused": "{{api}} a refusé cette requête",
+      "unavailable": "{{api}} est indisponible",
+      "notCounted": "pas encore compté",
+      "noTokenizer": "téléchargez le tokenizer {{tokenizer}} pour un compte exact",
+      "noCounter": "ce modèle n’a pas de tokenizer public",
+      "worker": "le processus de comptage n’a pas répondu"
+    },
+    "title": {
+      "api": "{{n}} jetons, exact : {{api}} pour {{model}}.",
+      "localTemplate": "{{n}} jetons, exact : le tokenizer {{tokenizer}} de {{model}}, avec le modèle de conversation (chat template) du modèle, compté sur cet ordinateur.",
+      "local": "{{n}} jetons, exact : le tokenizer {{tokenizer}} de {{model}}, compté sur cet ordinateur.",
+      "chars": "caractères ÷ 4",
+      "calibrated": "o200k_base × {{factor}}, calibré sur vos propres comptes exacts",
+      "factor": "o200k_base × {{factor}}",
+      "estimateWhy": "≈ {{n}} jetons, estimation ({{how}}) : {{why}}.",
+      "estimate": "≈ {{n}} jetons, estimation ({{how}})."
+    },
+    "counter": {
+      "api": "compté par {{api}}",
+      "local": "compté avec {{tokenizer}}",
+      "estimate": "estimé",
+      "waitTokenizer": "estimé jusqu’au téléchargement du tokenizer {{tokenizer}}",
+      "estimatedWhy": "estimé : {{why}}"
+    },
+    "counting": "Comptage…",
+    "skill": {
+      "upfrontHint": "Ce que l’agent charge à chaque conversation : le nom et la description du skill.",
+      "fullHint": "Ce que coûte la lecture du SKILL.md entier quand le skill sert.",
+      "upfront": "D’emblée",
+      "full": "À l’usage"
+    },
+    "mcp": {
+      "tool": "{{count}} outil",
+      "tools": "{{count}} outils",
+      "hint": "Ses définitions d’outils, chargées à chaque conversation.",
+      "failed": "Le serveur n’a pas donné la liste de ses outils.",
+      "measureHint": "Démarre le serveur (ou s’y connecte) pour lire ses définitions d’outils et les compter.",
+      "measuring": "Mesure…",
+      "measureAgain": "Mesurer à nouveau",
+      "measure": "Mesurer"
+    },
+    "group": {
+      "rules": "Fichiers de règles et de mémoire",
+      "skills": "Skills, listés d’emblée",
+      "mcp": "Serveurs MCP, définitions d’outils",
+      "tessel": "Outils d’équipe de Tessel et règle du tableau des tâches"
+    },
+    "short": {
+      "rules": "Règles",
+      "skills": "Skills",
+      "mcp": "MCP",
+      "tessel": "Tessel"
+    },
+    "link": {
+      "skills": "Gérer les skills",
+      "mcp": "Gérer les serveurs MCP",
+      "tessel": "Réglages d’orchestration"
+    },
+    "tokenizer": {
+      "failed": "Le téléchargement a échoué.",
+      "size": "{{mb}} Mo",
+      "downloading": "Téléchargement…",
+      "download": "Télécharger",
+      "ready": "Téléchargé",
+      "remove": "Supprimer"
+    },
+    "scope": {
+      "project": "Ce projet",
+      "user": "Tous les projets"
+    },
+    "item": {
+      "boardRule": "Règle du tableau des tâches dans {{file}}",
+      "teamInstructions": "Outils d’équipe : instructions",
+      "teamTools": "Outils d’équipe : {{count}} définitions"
+    },
+    "note": {
+      "memory": "200 premières lignes",
+      "truncated": "coupé à sa taille limite",
+      "onDemand": "chargé seulement au besoin, non compté",
+      "import": "importé",
+      "off": "désactivé, non compté",
+      "notMeasured": "pas encore mesuré"
+    },
+    "agents": {
+      "title": "Par agent",
+      "desc": "Non compté : l’invite système et les outils intégrés de chaque agent. Un élément barré ne se charge qu’au besoin."
+    },
+    "recount": "Compter à nouveau",
+    "loading": "Lecture de ce que charge chaque agent…",
+    "noAgents": "Aucun agent que Tessel sait mesurer n’est installé.",
+    "defaultModelHint": "Aucun modèle trouvé dans ses réglages : compté pour le modèle qu’il utilise par défaut.",
+    "defaultModel": "modèle par défaut",
+    "exact": {
+      "all": "exact",
+      "some": "en partie estimé",
+      "none": "estimation"
+    },
+    "needTokenizer": "Les comptes exacts pour {{model}} demandent le tokenizer {{tokenizer}} ({{size}}), téléchargé une fois depuis Hugging Face.",
+    "claudeSignInCallout": "Le tokenizer de Claude n’est pas public : les comptes exacts viennent de count_tokens d’Anthropic, avec une clé d’API (ANTHROPIC_API_KEY) ou votre connexion Claude.",
+    "claudeSignIn": "Compter avec ma connexion Claude",
+    "claudeSignInHint": "Comptes Claude exacts avec count_tokens d’Anthropic quand aucune ANTHROPIC_API_KEY n’est définie. Anthropic peut refuser une connexion d’abonnement ; une estimation s’affiche alors.",
+    "someEstimates": "Certains comptes sont des estimations : {{why}}.",
+    "retry": "Réessayer",
+    "open": "Ouvrir",
+    "optionalFoot": "Tout est facultatif : désactivez skills et serveurs là où ils se gèrent, et modifiez ou supprimez un fichier de règles pour l’enlever.",
+    "howTitle": "Comment les jetons sont comptés",
+    "tokenizers": {
+      "title": "Tokenizers des modèles ouverts",
+      "hint": "Le tokenizer propre à chaque modèle, téléchargé une fois depuis Hugging Face quand vous cliquez sur Télécharger, vérifié par empreinte. Ceux d’OpenAI sont fournis avec Tessel."
+    },
+    "pane": {
+      "start": "Au départ : {{tokens}}",
+      "title": "Contexte",
+      "hint": "Fichiers de règles, skills, outils MCP et outils d’équipe de Tessel qu’il charge avant votre premier message. Détails dans Réglages > Contexte."
+    }
+  }
+}

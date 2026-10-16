@@ -9,7 +9,7 @@ import { loadTasks, loadBoard, saveTasks } from './taskBoardPersistence'
 import { createAutomations } from './automations'
 import { createRemotePromptWriter } from './automationRemotePrompt'
 import { trimEvents, isEvent, isActivityText } from '../shared/activity'
-import { agentModelLive, watchModelFiles } from './agentModel'
+import { agentModel, agentModelLive, watchModelFiles } from './agentModel'
 import { createRemoteModelReader, remoteAgentModel } from './remoteAgentModel'
 import { createCodexAccounts } from './codexAccounts'
 import { createClaudeAccounts } from './claudeAccounts'
@@ -133,6 +133,15 @@ import {
   dropStaleSources
 } from './skillsManager'
 import { createSkillHistory } from './skillHistory'
+import { createProviderUsage } from './providerUsage'
+import { createCountWorker } from './contextCost/workerClient'
+import { createHfTokenizers } from './contextCost/hfTokenizers'
+import { createAnthropicCounter } from './contextCost/anthropic'
+import { createGeminiCounter } from './contextCost/gemini'
+import { createXaiCounter, createResponsesCounter, META_INPUT_TOKENS_URL, OPENAI_INPUT_TOKENS_URL } from './contextCost/apis'
+import { createOllamaCounter } from './contextCost/ollama'
+import { createContextCounter, createCountCache } from './contextCost/counts'
+import { createContextCost } from './contextCost'
 import { createSkillUpdates } from './skillUpdates'
 import { reviewInfo, reviewDiff, reviewMerge, reviewRemove, reviewCommit, reviewPush, setLeftoverStore } from './review'
 import { createLeftoverStore } from './worktreeLeftover'
@@ -2246,6 +2255,10 @@ ipcMain.handle('accounts:list', safe(() => accounts.list()))
 // once a minute; accountUsage is made further down, read only once a guest
 // follows it).
 const shareUsage = createShareUsage({ localUsage: () => accountUsage.usage(), log })
+// Settings > AI provider accounts: Gemini, OpenCode Go and MiniMax usage
+// credentials, encrypted with the OS (providerCredentials.js). Also read by
+// Settings > Context for Gemini's exact counts (the Gemini CLI login).
+const providerCredentials = createProviderCredentials({ dir: join(app.getPath('userData'), 'provider-credentials'), safeStorage })
 // Usage refresh: at startup, every 2 min (Settings) while the window is in use,
 // on focus when older than 5 min, and from the chats' own rate-limit reports
 // (usagePoller.js); results are pushed on providerUsage:update.
@@ -2267,9 +2280,7 @@ registerProviderUsage({
   // provider call of its own.
   onResult: (result) => shareUsage.onResult(result),
   onCache: (read) => shareUsage.setCache(read),
-  // Settings > AI provider accounts: Gemini, OpenCode Go and MiniMax usage
-  // credentials, encrypted with the OS (providerCredentials.js).
-  credentials: createProviderCredentials({ dir: join(app.getPath('userData'), 'provider-credentials'), safeStorage })
+  credentials: providerCredentials
 })
 ipcMain.handle('accounts:loginStatus', safe((id) => accounts.loginStatus(id)))
 ipcMain.handle('accounts:launchEnv', safe((query) => typeof query === 'string'
@@ -2783,6 +2794,126 @@ ipcMain.handle(
     if (!isSkillPath(dir, { cwd: skillCwd(q && q.cwd) })) return { ok: false, error: t('main.skills.unknownFolder', 'This is not a skill folder Tessel knows.') }
     const error = await shell.openPath(dir)
     return error ? { ok: false, error } : { ok: true }
+  })
+)
+
+// Settings > Context (contextCost/): what each agent loads into its context
+// before the user types (rules files, skills, MCP tools, Tessel's team tools)
+// and its cost in tokens; also the token tags of the Skills and MCP pages
+// (SkillTokenTag.vue, McpTokenTag.vue). Counted in a process of its own with
+// the model's own tokenizer, or, for models with none, by the provider's
+// count API, only when a page is opened or a button clicked. The Claude
+// sign-in is used for that only when the user turned it on (Settings >
+// Context); an API key in the environment is used when there is one.
+const contextOptions = { claudeSignIn: false }
+const claudeCountLogin = createProviderUsage({ accounts, log })
+const geminiCountSources = createUsageProviderSources({ credentials: providerCredentials })
+const envKey = (name) => {
+  const value = freshEnv()[name]
+  return typeof value === 'string' && /^[!-~]{8,1024}$/.test(value.trim()) ? value.trim() : null
+}
+const contextWorker = createCountWorker({
+  fork: () => utilityProcess.fork(join(__dirname, 'contextCostWorker.js'), [], { serviceName: 'Tessel token counting' }),
+  log
+})
+app.on('will-quit', () => contextWorker.close())
+const contextFiles = createHfTokenizers({ dir: join(app.getPath('userData'), 'tokenizers'), log })
+const contextApis = {
+  anthropic: createAnthropicCounter({
+    log,
+    auth: async () => {
+      const key = envKey('ANTHROPIC_API_KEY')
+      if (key) return { ok: true, kind: 'apiKey', headers: { 'x-api-key': key } }
+      if (!contextOptions.claudeSignIn) return { ok: false, code: 'noKey' }
+      const login = await claudeCountLogin.apiAuth('claude')
+      return login && login.ok ? { ok: true, kind: 'oauth', headers: login.headers } : { ok: false }
+    }
+  }),
+  google: createGeminiCounter({
+    log,
+    auth: async () => {
+      const key = envKey('GEMINI_API_KEY') || envKey('GOOGLE_API_KEY')
+      if (key) return { ok: true, kind: 'apiKey', key }
+      try {
+        const login = await geminiCountSources.auth('gemini')
+        return login && login.headers ? { ok: true, kind: 'oauth', headers: login.headers } : { ok: false }
+      } catch {
+        return { ok: false }
+      }
+    }
+  }),
+  xai: createXaiCounter({ log, key: () => envKey('XAI_API_KEY') }),
+  meta: createResponsesCounter({ name: 'meta input_tokens', url: META_INPUT_TOKENS_URL, log, key: () => envKey('MODEL_API_KEY') }), // i18n-ignore
+  openai: createResponsesCounter({ name: 'openai input_tokens', url: OPENAI_INPUT_TOKENS_URL, log, key: () => envKey('OPENAI_API_KEY') }), // i18n-ignore
+  ollama: createOllamaCounter()
+}
+const contextCost = createContextCost({
+  userData: app.getPath('userData'),
+  counter: createContextCounter({
+    cache: createCountCache(join(app.getPath('userData'), 'context-cost', 'counts.json')),
+    worker: contextWorker,
+    apis: contextApis,
+    files: contextFiles
+  }),
+  worker: contextWorker,
+  files: contextFiles,
+  apis: contextApis,
+  listSkills: (q) => listSkills({ cwd: skillCwd(q && q.cwd) }),
+  listMcp: (cwd) => listMcp(skillCwd(cwd) || undefined),
+  testMcp: (ref, opts) => testMcp(ref, freshEnv(), undefined, opts),
+  agentModel: (q) => agentModel(q),
+  claudeDir: async () => {
+    const res = await accounts.sessionEnv('claude')
+    return (res && res.ok && res.env && res.env.CLAUDE_CONFIG_DIR) || null
+  },
+  env: () => freshEnv(),
+  log
+})
+// Every request says whether the Claude sign-in may count, and whether to
+// count over the network now (remote: the page was opened, or a click).
+const contextQuery = (q) => {
+  const o = q && typeof q === 'object' ? q : {}
+  contextOptions.claudeSignIn = o.claudeSignIn === true
+  const agents = Array.isArray(o.agents) ? o.agents.slice(0, 40) : undefined
+  return { ...o, agents, cwd: skillCwd(o.cwd), remote: o.remote === true }
+}
+ipcMain.handle(
+  'context:summary',
+  safe((q) => contextCost.summary(contextQuery(q)))
+)
+ipcMain.handle(
+  'context:skills',
+  safe((q) => contextCost.skills(contextQuery(q)))
+)
+ipcMain.handle(
+  'context:skillDetail',
+  safe((q) => contextCost.skillDetail(contextQuery(q)))
+)
+ipcMain.handle(
+  'context:mcpMeasures',
+  safe((q) => contextCost.mcpMeasures(contextQuery(q)))
+)
+ipcMain.handle(
+  'mcp:measure',
+  safe((q) => contextCost.measureMcp(contextQuery(q)))
+)
+ipcMain.handle(
+  'context:tokenizers',
+  safe(() => contextCost.tokenizers())
+)
+ipcMain.handle(
+  'context:downloadTokenizer',
+  safe((id) => contextCost.downloadTokenizer(String(id || '')))
+)
+ipcMain.handle(
+  'context:removeTokenizer',
+  safe((id) => contextCost.removeTokenizer(String(id || '')))
+)
+ipcMain.handle(
+  'context:retry',
+  safe(() => {
+    contextCost.retry()
+    return { ok: true }
   })
 )
 
