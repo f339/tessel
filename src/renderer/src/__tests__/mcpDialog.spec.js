@@ -1,152 +1,469 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import McpDialog from '../components/McpDialog.vue'
+import McpTeamConnections from '../components/mcp/McpTeamConnections.vue'
+import { MCP_CATALOG, catalogDocs } from '../mcpCatalog'
+
+const agentsOf = (ids) => ids.map((id) => ({ id, available: true }))
+const tabBtn = (w, name) => w.findAll('[role="tab"]').find((b) => b.text().startsWith(name))
+const row = (w, name) => w.find(`.sl-item[data-server="${name}"]`)
+const openRow = async (w, name) => {
+  await row(w, name).get('.sl-row').trigger('click')
+  return row(w, name)
+}
+const sub = (r, agent) => r.find(`.sl-sub[data-agent="${agent}"]`)
+const button = (w, text) => w.findAll('button').find((b) => b.text().trim() === text)
+const catalogItem = (w, id) => w.find(`.mcpc-item[data-entry="${id}"]`)
 
 describe('MCP servers dialog', () => {
   let previousApi
+  let wrapper
   afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
     window.shellApi = previousApi
   })
-
-  it('opens with every agent installed before its server lists arrive, then shows them', async () => {
+  const mountWith = (api, props = {}, provide = {}) => {
     previousApi = window.shellApi
+    window.shellApi = { checkTools: async () => ({}), ...api }
+    wrapper = mount(McpDialog, { props: { agents: agentsOf(['claude']), ...props }, attachTo: document.body, global: { provide } })
+    return wrapper
+  }
+
+  it('opens with every agent installed before its server lists arrive (skeleton rows), then shows them', async () => {
     let answer
-    window.shellApi = {
-      mcpList: () => new Promise((r) => (answer = r)),
-      checkTools: async () => ({})
-    }
-    const agents = ['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode', 'cline'].map((id) => ({ id, available: true }))
+    const w = mountWith(
+      { mcpList: () => new Promise((r) => (answer = r)) },
+      { agents: agentsOf(['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode', 'cline']) }
+    )
     // Drawn while the lists are still being read: must not throw.
-    const wrapper = mount(McpDialog, { props: { agents }, attachTo: document.body })
-    expect(wrapper.text()).toContain('Loading')
-    answer({
-      claude: [],
-      codex: [],
-      others: { cline: { servers: [{ name: 'tessel-team', type: 'stdio', target: 'node s.cjs' }] } }
-    })
+    expect(w.findAll('.sl-skeleton').length).toBeGreaterThan(0)
+    expect(w.text()).not.toContain('No MCP servers yet')
+    answer({ claude: [], codex: [], others: { cline: { servers: [{ name: 'tessel-team', type: 'stdio', target: 'node s.cjs' }] } } })
     await flushPromises()
-    expect(wrapper.text()).toContain('tessel-team')
-    wrapper.unmount()
+    expect(w.find('.sl-skeleton').exists()).toBe(false)
+    expect(row(w, 'tessel-team').exists()).toBe(true)
   })
 
   it('a failed check for node and uvx is no unhandled rejection, and flags nothing as missing', async () => {
-    previousApi = window.shellApi
-    window.shellApi = {
+    const w = mountWith({
       mcpList: async () => ({ claude: [], codex: [] }),
       checkTools: async () => {
         throw new Error('ipc closed')
       }
-    }
-    const wrapper = mount(McpDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    })
     await flushPromises()
-    expect(wrapper.text()).not.toMatch(/needs node|requires node/i)
-    wrapper.unmount()
+    await tabBtn(w, 'Catalog').trigger('click')
+    await catalogItem(w, 'fetch').get('.mcpc-row').trigger('click')
+    expect(w.text()).not.toMatch(/needs uv|needs node/i)
   })
 
-  it('lists the Antigravity CLI servers (its own mcp_config.json), one it turned off marked so, and adds to it', async () => {
-    previousApi = window.shellApi
-    const added = []
-    window.shellApi = {
-      mcpList: async () => ({
-        claude: [],
-        codex: [],
-        others: {
-          antigravity: {
-            servers: [
-              { name: 'tessel-team', scope: 'user', type: 'stdio', target: 'node s.cjs' },
-              { name: 'figma', scope: 'user', type: 'http', target: 'https://x/mcp', enabled: false }
-            ]
-          }
-        }
-      }),
-      checkTools: async () => ({}),
-      mcpAdd: async (spec) => {
-        added.push(spec.agent)
-        return { ok: true }
+  it('shows one row per server, never one per server and agent, with the icons of the agents that have it', async () => {
+    const s = (name, type = 'stdio') => ({ name, scope: 'user', type, target: type === 'stdio' ? `npx ${name}` : `https://${name}/mcp` })
+    const w = mountWith(
+      {
+        mcpList: async () => ({
+          claude: [s('context7', 'http'), s('playwright')],
+          codex: [s('context7'), s('playwright')],
+          others: { gemini: { servers: [s('playwright'), s('memory')] } }
+        })
       },
-      mcpTest: async () => ({ ok: true, status: 'connected', tools: [] })
-    }
-    const agents = ['claude', 'antigravity'].map((id) => ({ id, available: true }))
-    const wrapper = mount(McpDialog, { props: { agents }, attachTo: document.body })
+      { agents: agentsOf(['claude', 'codex', 'gemini']) }
+    )
     await flushPromises()
-    const row = (name) => wrapper.findAll('.mcp-server').find((r) => r.find('.mcp-name').text() === name)
-    expect(row('tessel-team').text()).toContain('Antigravity CLI')
-    expect(row('figma').text()).toContain('Turned off')
-    expect(row('tessel-team').text()).not.toContain('Turned off')
-    await wrapper.findAll('.launch-seg-btn').find((b) => b.text() === 'Catalog').trigger('click')
-    const card = () => wrapper.findAll('.mcp-entry').find((e) => e.text().includes('Context7'))
-    await card().find('.mcp-entry-head .exit-btn').trigger('click')
-    await card().find('form').trigger('submit')
-    await flushPromises()
-    expect(added).toEqual(['claude', 'antigravity'])
-    wrapper.unmount()
+    expect(w.findAll('.sl-list > .sl-item').map((r) => r.attributes('data-server'))).toEqual(['context7', 'memory', 'playwright'])
+    expect(row(w, 'playwright').findAll('.sl-icons svg').length).toBeGreaterThanOrEqual(3)
+    expect(row(w, 'playwright').get('.sl-icons').attributes('aria-label')).toContain('Gemini CLI')
+    // Agents disagree on the transport: both tags.
+    expect(row(w, 'context7').findAll('.mcpi-transport').map((x) => x.text())).toEqual(['http', 'stdio'])
+    expect(w.text()).toContain('3 servers')
+    // A filter by agent.
+    await w.find('.chip[data-agent="gemini"]').trigger('click')
+    expect(w.findAll('.sl-list > .sl-item').map((r) => r.attributes('data-server'))).toEqual(['memory', 'playwright'])
   })
 
-  it('adds to every chosen agent even when one fails, and shows Needs sign-in with Sign in instead of Added', async () => {
-    previousApi = window.shellApi
+  it("details: one line per agent with its scope, Test and Remove (asks first); the dot shows the last test", async () => {
+    const tested = []
+    const removed = []
+    const w = mountWith(
+      {
+        mcpList: async () => ({
+          claude: [{ name: 'ctx', scope: 'project', type: 'http', target: 'https://ctx/mcp' }],
+          codex: [{ name: 'ctx', scope: 'user', type: 'http', target: 'https://ctx/mcp', enabled: false }],
+          others: {}
+        }),
+        mcpTest: async ({ agent }) => {
+          tested.push(agent)
+          return agent === 'codex' ? { status: 'error', error: 'ECONNREFUSED raw' } : { status: 'connected', tools: ['a', 'b'] }
+        },
+        mcpRemove: async (spec) => {
+          removed.push(spec)
+          return { ok: true }
+        }
+      },
+      { agents: agentsOf(['claude', 'codex']) },
+      { askConfirm: async () => true }
+    )
+    await flushPromises()
+    expect(row(w, 'ctx').find('.mcpi-dot.none').exists()).toBe(true)
+    const r = await openRow(w, 'ctx')
+    expect(sub(r, 'claude').text()).toContain('This project (shared)')
+    expect(sub(r, 'codex').text()).toContain('Turned off')
+    await button(sub(r, 'claude'), 'Test').trigger('click')
+    await flushPromises()
+    expect(sub(r, 'claude').find('.tag-ok').text()).toBe('Connected · 2 tools')
+    expect(row(w, 'ctx').find('.mcpi-dot.ok').exists()).toBe(true)
+    // Test for every agent at once; a failure: red dot, the raw error behind Details.
+    await button(r.get('.sl-section-head'), 'Test').trigger('click')
+    await flushPromises()
+    expect(tested).toEqual(['claude', 'claude', 'codex'])
+    expect(row(w, 'ctx').find('.mcpi-dot.error').exists()).toBe(true)
+    expect(sub(r, 'codex').get('.tag-danger').text()).toBe('Failed')
+    expect(sub(r, 'codex').get('details summary').text()).toBe('Details')
+    expect(sub(r, 'codex').get('details').text()).toContain('ECONNREFUSED raw')
+    // Needs attention: the failing server.
+    expect(w.find('.mcpi-attention').text()).toContain('1')
+    await sub(r, 'codex').get('.exit-btn.danger').trigger('click')
+    await flushPromises()
+    expect(removed).toEqual([{ agent: 'codex', name: 'ctx', scope: 'user', cwd: null }])
+  })
+
+  it('"Add to…" is one menu with the installed agents that lack the server', async () => {
+    const copies = []
+    const w = mountWith(
+      {
+        mcpList: async () => ({
+          claude: [{ name: 'figma', scope: 'user', type: 'http', target: 'https://figma/mcp' }],
+          codex: [],
+          others: { gemini: { servers: [] }, cursor: { servers: [] }, opencode: { servers: [], error: 'Unexpected token' } }
+        }),
+        mcpCopy: async (spec) => {
+          copies.push(spec)
+          return { ok: true }
+        }
+      },
+      // Cursor is not installed, OpenCode's settings can't be read: not offered.
+      { agents: [...agentsOf(['claude', 'codex', 'gemini', 'opencode']), { id: 'cursor', available: false }] }
+    )
+    await flushPromises()
+    const r = await openRow(w, 'figma')
+    // No "Add to <agent>" button per agent any more.
+    expect(r.findAll('button').filter((b) => /^Add to [A-Z]/.test(b.text()))).toEqual([])
+    const menuBtn = r.get('[aria-haspopup="menu"]')
+    expect(menuBtn.text()).toContain('Add to…')
+    await menuBtn.trigger('click')
+    const items = r.findAll('[role="menuitem"]')
+    expect(items.map((i) => i.text())).toEqual(['Codex', 'Gemini CLI'])
+    await items[1].trigger('click')
+    await flushPromises()
+    expect(copies).toEqual([{ from: 'claude', to: 'gemini', name: 'figma', scope: 'user', cwd: null }])
+    expect(r.find('[role="menu"]').exists()).toBe(false)
+  })
+
+  it('shows env and header names only, their values masked', async () => {
+    const w = mountWith({
+      mcpList: async () => ({
+        claude: [{ name: 'brave', scope: 'user', type: 'stdio', target: 'npx brave', envKeys: ['BRAVE_API_KEY'] }],
+        codex: [],
+        others: { gemini: { servers: [{ name: 'brave', scope: 'user', type: 'stdio', target: 'npx brave', envKeys: ['BRAVE_API_KEY', 'REGION'] }] } }
+      })
+    }, { agents: agentsOf(['claude', 'gemini']) })
+    await flushPromises()
+    const r = await openRow(w, 'brave')
+    const secrets = r.findAll('.mcpi-secret')
+    expect(secrets.map((s) => s.get('code').text())).toEqual(['BRAVE_API_KEY', 'REGION'])
+    expect(secrets.every((s) => s.get('.mcpi-mask').text() === '••••••')).toBe(true)
+  })
+
+  it('Catalog: two panes, the chosen server on the right; Added ✓ on the ones every agent has; several added in one go', async () => {
+    const added = []
+    const have = { claude: [{ name: 'context7', scope: 'user', type: 'http', target: 'https://mcp.context7.com/mcp' }], codex: [{ name: 'context7', scope: 'user', type: 'http', target: 'x' }] }
+    const w = mountWith(
+      {
+        mcpList: async () => ({ claude: have.claude, codex: have.codex, others: {} }),
+        mcpAdd: async (spec) => {
+          added.push(`${spec.name}>${spec.agent}`)
+          have[spec.agent].push({ name: spec.name, scope: 'user', type: spec.transport, target: 'x' })
+          return { ok: true }
+        },
+        mcpTest: async () => ({ status: 'connected', tools: [] })
+      },
+      { agents: agentsOf(['claude', 'codex']) }
+    )
+    await flushPromises()
+    await tabBtn(w, 'Catalog').trigger('click')
+    expect(catalogItem(w, 'context7').text()).toContain('Added ✓')
+    expect(catalogItem(w, 'context7').get('[role="checkbox"]').attributes('disabled')).toBeDefined()
+    // Secondary buttons only: the one primary is the bar's Add.
+    expect(w.findAll('.exit-btn.primary')).toHaveLength(1)
+    await catalogItem(w, 'memory').get('.mcpc-row').trigger('click')
+    expect(w.get('.mcpc-detail h3').text()).toBe('Memory')
+    expect(w.get('.mcp-addbar-add').text()).toBe('Add Memory')
+    await catalogItem(w, 'memory').get('[role="checkbox"]').trigger('click')
+    await catalogItem(w, 'sequential-thinking').get('[role="checkbox"]').trigger('click')
+    expect(w.get('.mcp-addbar-add').text()).toBe('Add 2 servers')
+    // Codex off for this add.
+    await w.get('.mcp-addbar .chip[data-agent="codex"]').trigger('click')
+    await w.get('.mcp-addbar-add').trigger('click')
+    await flushPromises()
+    await flushPromises()
+    // In the catalog's order, to Claude Code only.
+    expect(added).toEqual(['memory>claude', 'sequential-thinking>claude'])
+    expect(w.get('.mcpd-message').text()).toContain('Restart running agent panes')
+    expect(w.findAll('.mcpc-check[aria-checked="true"]')).toHaveLength(0)
+  })
+
+  it('Catalog: a server missing an answer is shown with what it lacks, and nothing is added', async () => {
+    const added = []
+    const w = mountWith({ mcpList: async () => ({ claude: [], codex: [], others: {} }), mcpAdd: async (s) => (added.push(s), { ok: true }) })
+    await flushPromises()
+    await tabBtn(w, 'Catalog').trigger('click')
+    const brave = MCP_CATALOG.find((e) => e.id === 'brave-search')
+    await catalogItem(w, 'memory').get('[role="checkbox"]').trigger('click')
+    await catalogItem(w, 'brave-search').get('[role="checkbox"]').trigger('click')
+    await catalogItem(w, 'memory').get('.mcpc-row').trigger('click')
+    // Nothing flagged before Add.
+    expect(w.find('.mcpc-invalid').exists()).toBe(false)
+    await w.get('.mcp-addbar-add').trigger('click')
+    await flushPromises()
+    expect(added).toEqual([])
+    expect(w.get('.mcpc-detail h3').text()).toBe(brave.name)
+    expect(w.get('.mcpc-invalid').text()).toBe('Required')
+    expect(w.get('.mcp-addbar-error').text()).toBe(`${brave.name}: enter ${brave.inputs[0].label}.`)
+  })
+
+  it('Catalog: adds to every chosen agent even when one fails; Needs sign-in with Sign in; the raw error behind Details', async () => {
     const have = { claude: [], codex: [], gemini: [] }
     const added = []
-    window.shellApi = {
-      mcpList: async () => ({ claude: have.claude, codex: have.codex, others: { gemini: { servers: have.gemini } } }),
-      checkTools: async () => ({}),
-      mcpAdd: async (spec) => {
-        added.push(spec.agent)
-        if (spec.agent === 'claude') return { ok: false, error: 'boom' }
-        have[spec.agent].push({ name: spec.name, scope: 'user', type: 'http', target: spec.url })
-        return { ok: true }
+    const w = mountWith(
+      {
+        mcpList: async () => ({ claude: have.claude, codex: have.codex, others: { gemini: { servers: have.gemini } } }),
+        mcpAdd: async (spec) => {
+          added.push(spec.agent)
+          if (spec.agent === 'claude') return { ok: false, error: 'boom' }
+          have[spec.agent].push({ name: spec.name, scope: 'user', type: 'http', target: spec.url })
+          return { ok: true }
+        },
+        mcpTest: async ({ agent }) =>
+          agent === 'codex' ? { ok: false, status: 'auth', error: 'needs you to sign in' } : { ok: true, status: 'connected', tools: ['a'] }
       },
-      mcpTest: async ({ agent }) =>
-        agent === 'codex' ? { ok: false, status: 'auth', error: 'needs you to sign in' } : { ok: true, status: 'connected', tools: ['a'] }
-    }
-    const agents = ['claude', 'codex', 'gemini'].map((id) => ({ id, available: true }))
-    const wrapper = mount(McpDialog, { props: { agents, initialTab: 'installed' }, attachTo: document.body })
+      { agents: agentsOf(['claude', 'codex', 'gemini']) }
+    )
     await flushPromises()
-    await wrapper.findAll('.launch-seg-btn').find((b) => b.text() === 'Catalog').trigger('click')
-    const card = () => wrapper.findAll('.mcp-entry').find((e) => e.text().includes('Context7'))
-    await card().find('.mcp-entry-head .exit-btn').trigger('click')
-    await card().find('form').trigger('submit')
+    await tabBtn(w, 'Catalog').trigger('click')
+    await catalogItem(w, 'context7').get('.mcpc-row').trigger('click')
+    await w.get('.mcp-addbar-add').trigger('click')
     await flushPromises()
     await flushPromises()
     expect(added).toEqual(['claude', 'codex', 'gemini'])
-    const text = card().text()
-    expect(text).toContain('Claude Code: boom')
-    expect(text).toContain('Needs sign-in')
-    // Not "Added" while Claude Code lacks it.
-    expect(card().find('.tool-status.ok').exists()).toBe(false)
-    const rows = card().findAll('.mcp-add-results .mcp-agent')
-    expect(rows.map((r) => r.find('.mcp-status').text())).toEqual(['Failed', 'Needs sign-in', 'Added'])
-    await rows[1].find('button').trigger('click')
-    expect(wrapper.emitted('run')[0][0].command).toBe('codex mcp login context7')
-    wrapper.unmount()
+    // Not "Added ✓" while Claude Code lacks it.
+    expect(catalogItem(w, 'context7').text()).not.toContain('Added ✓')
+    const results = w.findAll('.mcpc-results .sl-sub')
+    expect(results.map((r) => r.get('.tag').text())).toEqual(['Failed', 'Needs sign-in', 'Added'])
+    expect(results[0].get('details').text()).toContain('boom')
+    await button(results[1], 'Sign in').trigger('click')
+    expect(w.emitted('run')[0][0].command).toBe('codex mcp login context7')
   })
 
-  it('as a window, Escape and the backdrop close it; embedded (a Settings page), nothing does', async () => {
-    previousApi = window.shellApi
-    window.shellApi = {
-      mcpList: async () => ({ claude: [{ name: 'context7', scope: 'user', type: 'http', target: 'https://x' }], codex: [], others: {} }),
-      checkTools: async () => ({})
-    }
-    const agents = [{ id: 'claude', available: true }]
-    const modal = mount(McpDialog, { props: { agents }, attachTo: document.body })
+  it('Catalog: lists the Antigravity CLI servers, one it turned off marked so, and adds to it', async () => {
+    const added = []
+    const w = mountWith(
+      {
+        mcpList: async () => ({
+          claude: [],
+          codex: [],
+          others: {
+            antigravity: {
+              servers: [
+                { name: 'tessel-team', scope: 'user', type: 'stdio', target: 'node s.cjs' },
+                { name: 'figma', scope: 'user', type: 'http', target: 'https://x/mcp', enabled: false }
+              ]
+            }
+          }
+        }),
+        mcpAdd: async (spec) => (added.push(spec.agent), { ok: true }),
+        mcpTest: async () => ({ ok: true, status: 'connected', tools: [] })
+      },
+      { agents: agentsOf(['claude', 'antigravity']) }
+    )
+    await flushPromises()
+    expect(row(w, 'figma').text()).toContain('Turned off')
+    expect(row(w, 'tessel-team').text()).not.toContain('Turned off')
+    const r = await openRow(w, 'tessel-team')
+    expect(sub(r, 'antigravity').text()).toContain('Antigravity CLI')
+    await tabBtn(w, 'Catalog').trigger('click')
+    await catalogItem(w, 'context7').get('.mcpc-row').trigger('click')
+    await w.get('.mcp-addbar-add').trigger('click')
+    await flushPromises()
+    expect(added).toEqual(['claude', 'antigravity'])
+  })
+
+  it('Custom: agent chips that wrap, not checkboxes; what is wrong shows once typed or on Add, never before', async () => {
+    const added = []
+    const w = mountWith({ mcpList: async () => ({ claude: [], codex: [], others: {} }), mcpAdd: async (s) => (added.push(s), { ok: true }) }, {
+      agents: agentsOf(['claude', 'codex', 'gemini', 'qwen', 'copilot', 'opencode', 'cline', 'kimi', 'cursor', 'antigravity', 'muse'])
+    })
+    await flushPromises()
+    await tabBtn(w, 'Custom').trigger('click')
+    expect(w.find('form input[type="checkbox"]').exists()).toBe(false)
+    const chips = w.findAll('.mcp-addbar-chips .chip')
+    expect(chips).toHaveLength(11)
+    expect(chips.every((c) => c.attributes('aria-pressed') === 'true')).toBe(true)
+    // Nothing flagged on the empty form.
+    expect(w.find('.mcpf-invalid').exists()).toBe(false)
+    const name = w.get('#mcpf-name')
+    await name.setValue('my server')
+    expect(w.get('.mcpf-invalid').text()).toContain('no spaces')
+    await name.setValue('my-server')
+    expect(w.find('.mcpf-invalid').exists()).toBe(false)
+    // A URL is judged when you leave it, not while you type it.
+    await button(w, 'HTTP').trigger('click')
+    const url = w.get('#mcpf-url')
+    await url.setValue('ftp')
+    expect(w.find('.mcpf-invalid').exists()).toBe(false)
+    await url.trigger('blur')
+    expect(w.get('.mcpf-invalid').text()).toBe('Start with http:// or https://')
+    // SSE: the agents without it can't be chosen.
+    await button(w, 'SSE').trigger('click')
+    expect(w.get('.mcp-addbar .chip[data-agent="codex"]').attributes('disabled')).toBeDefined()
+    // Back to a command: an empty one is said only on Add.
+    await button(w, 'Command').trigger('click')
+    expect(w.find('.mcpf-invalid').exists()).toBe(false)
+    await w.get('.mcp-addbar-add').trigger('click')
+    expect(w.get('.mcpf-invalid').text()).toBe('Enter the command that starts the server.')
+    expect(added).toEqual([])
+  })
+
+  it('Custom: variables are masked rows, tested before adding, then added to the chosen agents', async () => {
+    const added = []
+    const tried = []
+    const w = mountWith({
+      mcpList: async () => ({ claude: [], codex: [], others: {} }),
+      mcpAdd: async (s) => (added.push(s), { ok: true }),
+      mcpTestSpec: async (s) => (tried.push(s), { status: 'connected', tools: ['x', 'y'] }),
+      mcpTest: async () => ({ status: 'connected', tools: [] })
+    }, { agents: agentsOf(['claude', 'codex']) })
+    await flushPromises()
+    await tabBtn(w, 'Custom').trigger('click')
+    await w.get('#mcpf-name').setValue('mine')
+    await w.get('#mcpf-command').setValue('npx -y mine-mcp')
+    await button(w, 'Add a variable').trigger('click')
+    const [key, value] = w.findAll('.mcpkv-row input')
+    await key.setValue('API_KEY')
+    await value.setValue('s3cret')
+    expect(value.attributes('type')).toBe('password')
+    await w.get('.mcpkv-row [aria-pressed]').trigger('click')
+    expect(w.findAll('.mcpkv-row input')[1].attributes('type')).toBe('text')
+    await button(w, 'Test before adding').trigger('click')
+    await flushPromises()
+    expect(tried[0]).toMatchObject({ transport: 'stdio', commandLine: 'npx -y mine-mcp', env: 'API_KEY=s3cret' })
+    expect(w.get('.mcpf-tried').text()).toContain('Connected · 2 tools')
+    await w.get('.mcp-addbar .chip[data-agent="codex"]').trigger('click')
+    await w.get('.mcp-addbar-add').trigger('click')
+    await flushPromises()
+    expect(added.map((s) => [s.agent, s.name, s.env, s.scope])).toEqual([['claude', 'mine', 'API_KEY=s3cret', 'user']])
+    // Back on Installed, which shows its test.
+    expect(tabBtn(w, 'Installed').attributes('aria-selected')).toBe('true')
+  })
+
+  it('a failed read shows what went wrong with Retry (raw message behind Details); a failed tool check is harmless', async () => {
+    let fail = true
+    const w = mountWith({
+      checkTools: async () => {
+        throw new Error('no tools')
+      },
+      mcpList: async () => {
+        if (fail) throw new Error('EPERM raw')
+        return { claude: [{ name: 'ctx', scope: 'user', type: 'http', target: 'https://x' }], codex: [], others: {} }
+      }
+    })
+    await flushPromises()
+    expect(w.get('[data-test="panel-error-text"]').text()).toBe('The servers could not be read.')
+    expect(w.get('.mcpi-raw').text()).toContain('EPERM raw')
+    fail = false
+    await w.get('[data-test="panel-retry"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-test="panel-error"]').exists()).toBe(false)
+    expect(row(w, 'ctx').exists()).toBe(true)
+  })
+
+  it("an agent's unreadable settings: a warning with the raw message behind Details; empty: one sentence and Browse the catalog", async () => {
+    const w = mountWith(
+      { mcpList: async () => ({ claude: [], codex: [], codexError: 'Codex is not installed.', others: { cursor: { servers: [], error: 'Unexpected token } at 312' } } }) },
+      { agents: agentsOf(['claude', 'cursor']) }
+    )
+    await flushPromises()
+    // Codex is not installed here: no warning for it.
+    const warns = w.findAll('.mcpi-read-error')
+    expect(warns.map((x) => x.attributes('data-agent'))).toEqual(['cursor'])
+    expect(warns[0].get('.set-callout-text').text()).not.toContain('Unexpected')
+    expect(warns[0].get('details').text()).toContain('Unexpected token')
+    expect(w.get('.mcpi-empty').text()).toContain('No MCP servers yet')
+    await button(w, 'Browse the catalog').trigger('click')
+    expect(tabBtn(w, 'Catalog').attributes('aria-selected')).toBe('true')
+  })
+
+  it('as a window, Escape and the backdrop close it; embedded (a Settings page), nothing does; the team connections are in Orchestration', async () => {
+    const api = { mcpList: async () => ({ claude: [{ name: 'context7', scope: 'user', type: 'http', target: 'https://x' }], codex: [], others: {} }) }
+    const modal = mountWith(api)
     await flushPromises()
     expect(modal.find('.help-head').exists()).toBe(true)
     await modal.get('[role="dialog"]').trigger('keydown', { key: 'Escape' })
     await modal.trigger('pointerdown')
     expect(modal.emitted('close')).toHaveLength(2)
     modal.unmount()
+    wrapper = null
 
-    const page = mount(McpDialog, { props: { agents, embedded: true, initialTab: 'connections' }, attachTo: document.body })
+    // The old Team connections tab is gone: asked for, it opens Installed.
+    const page = mountWith(api, { embedded: true, initialTab: 'connections' })
     await flushPromises()
     for (const sel of ['.help-backdrop', '.help-card', '.help-head', '[role="dialog"]']) expect(page.find(sel).exists(), sel).toBe(false)
-    expect(page.find('.mcp-intro').exists()).toBe(true)
-    expect(page.get('.launch-seg-btn.on').text()).toBe('Team connections')
-    await page.findAll('.launch-seg-btn').find((b) => b.text().startsWith('Installed')).trigger('click')
+    expect(page.find('.mcp-connections').exists()).toBe(false)
+    expect(page.findAll('[role="tab"]').map((b) => b.text())).toEqual(['Installed1', 'Catalog', 'Custom'])
+    expect(tabBtn(page, 'Installed').attributes('aria-selected')).toBe('true')
     expect(page.text()).toContain('context7')
     await page.get('.mcp-embedded-body').trigger('keydown', { key: 'Escape' })
     await page.trigger('pointerdown')
     expect(page.emitted('close')).toBeUndefined()
     await page.get('.mcp-skills-link').trigger('click')
     expect(page.emitted('skills')).toHaveLength(1)
-    page.unmount()
+    await page.get('.mcp-orchestration-link').trigger('click')
+    expect(page.emitted('orchestration')).toHaveLength(1)
+    // Arrow keys move between the tabs.
+    await page.get('[role="tablist"]').trigger('keydown', { key: 'ArrowRight' })
+    expect(tabBtn(page, 'Catalog').attributes('aria-selected')).toBe('true')
+  })
+
+  it('the team connections stand alone (for Orchestration): each agent\'s hooks, Check again, Set up again', async () => {
+    let reads = 0
+    let setups = 0
+    previousApi = window.shellApi
+    window.shellApi = {
+      teamHooksStatus: async () => {
+        reads++
+        return { agents: [{ id: 'claude', hooks: 'installed', lastSignal: { at: Date.now() - 5000 }, inbox: true }, { id: 'codex', hooks: 'installed', approval: 'needs-approval' }] }
+      },
+      installTeamTools: async () => (setups++, { errors: ['Codex: config locked'] })
+    }
+    wrapper = mount(McpTeamConnections, { props: { agents: agentsOf(['claude', 'codex', 'gemini']) }, attachTo: document.body })
+    await flushPromises()
+    expect(reads).toBe(1)
+    const names = wrapper.findAll('.mcp-server .mcp-name').map((n) => n.text())
+    expect(names).toEqual(['Claude Code', 'Codex', 'No hooks yet'])
+    expect(wrapper.text()).toContain('Needs your approval')
+    await button(wrapper, 'Check again').trigger('click')
+    await button(wrapper, 'Set up again').trigger('click')
+    await flushPromises()
+    expect([reads, setups]).toEqual([3, 1])
+    expect(wrapper.get('.mcp-error').text()).toBe('Codex: config locked')
+  })
+
+  it("links each catalog server to its docs: its own, else its npm or PyPI package", () => {
+    const byId = (id) => MCP_CATALOG.find((e) => e.id === id)
+    expect(catalogDocs(byId('context7'))).toBe('https://github.com/upstash/context7')
+    expect(catalogDocs(byId('playwright'))).toBe('https://www.npmjs.com/package/@playwright/mcp')
+    expect(catalogDocs(byId('memory'))).toBe('https://www.npmjs.com/package/@modelcontextprotocol/server-memory')
+    expect(catalogDocs(byId('fetch'))).toBe('https://pypi.org/project/mcp-server-fetch/')
+    expect(MCP_CATALOG.every((e) => catalogDocs(e))).toBe(true)
   })
 })

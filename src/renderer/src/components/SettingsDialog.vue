@@ -9,7 +9,7 @@
 import { t } from '../i18n'
 import { ref, computed, watch, nextTick, onMounted, onUnmounted, onUpdated, provide } from 'vue'
 import { BarChart3 } from 'lucide-vue-next'
-import { PAGES, GROUPS, PAGE_TITLES_EN } from './settings/settingsPages'
+import { PAGES, GROUPS, PAGE_TITLES_EN, PAGE_ALIASES } from './settings/settingsPages'
 import { SETTINGS_SHELL } from './settings/settingsShell'
 import SettingsStats from './settings/SettingsStats.vue'
 import SettingsAgents from './settings/SettingsAgents.vue'
@@ -20,7 +20,6 @@ import SettingsOrchestration from './settings/SettingsOrchestration.vue'
 import SettingsVoice from './settings/SettingsVoice.vue'
 import SettingsGeneral from './settings/SettingsGeneral.vue'
 import SettingsAppearance from './settings/SettingsAppearance.vue'
-import SettingsText from './settings/SettingsText.vue'
 import SettingsTerminal from './settings/SettingsTerminal.vue'
 import SettingsNotifications from './settings/SettingsNotifications.vue'
 import SettingsEditor from './settings/SettingsEditor.vue'
@@ -56,15 +55,18 @@ const props = defineProps({
 
 const PAGE_KEY = 'tessel.settingsPage'
 
+// A page's id now, for an old one that moved (PAGE_ALIASES: 'text' is Terminal).
+const pageId = (id) => (PAGE_ALIASES[id] ? PAGE_ALIASES[id].page : id)
+
 function storedPage() {
   try {
-    const p = localStorage.getItem(PAGE_KEY)
+    const p = pageId(localStorage.getItem(PAGE_KEY))
     return PAGES[p] ? p : null
   } catch {
     return null
   }
 }
-const page = ref((PAGES[props.section] && props.section) || storedPage() || 'general')
+const page = ref((PAGES[pageId(props.section)] && pageId(props.section)) || storedPage() || 'general')
 const query = ref('')
 const searching = computed(() => !!query.value.trim())
 const matched = ref([]) // the pages with a match for the search
@@ -75,6 +77,7 @@ const searchEl = ref(null)
 const mcpTab = ref('installed')
 
 function go(id) {
+  id = pageId(id)
   if (!PAGES[id]) return
   if (id !== 'mcp') mcpTab.value = 'installed'
   page.value = id
@@ -90,9 +93,10 @@ watch(
   () => props.section,
   (s) => s && go(s)
 )
-// Opened on a part of a page (the usage menu's Where you're signed in…).
+// Opened on a part of a page (the usage menu's Where you're signed in…), or
+// on a page that moved into another (its old id scrolls to where it is now).
 function scrollToAnchor() {
-  const id = props.anchor
+  const id = props.anchor || PAGE_ALIASES[props.section]?.anchor
   if (!id || !/^[\w-]{1,60}$/.test(id)) return
   nextTick(() => {
     const el = mainEl.value && mainEl.value.querySelector(`#${id}`)
@@ -158,6 +162,18 @@ function applySearch() {
         }
       }
       if (any) hits.push(pg.dataset.page)
+    }
+    // A page that moved into a group (Text, now Terminal's Font): its old
+    // title, or an English name of it, shows that whole group.
+    for (const alias of Object.values(PAGE_ALIASES)) {
+      const group = alias.anchor && root.querySelector(`#${alias.anchor}`)
+      const pg = group && group.closest('.set-page')
+      if (!pg || ![alias.title, ...(alias.namesEn || [])].some((name) => has(name, ws))) continue
+      for (const el of [group, ...group.querySelectorAll('[data-sh]')]) {
+        el.hidden = false
+        el.removeAttribute('data-sh')
+      }
+      if (!hits.includes(pg.dataset.page)) hits.push(pg.dataset.page)
     }
   }
   if (hits.join() !== matched.value.join()) matched.value = hits
@@ -419,7 +435,6 @@ onUnmounted(() => {
         <SettingsOrchestration :agents="agents" />
         <SettingsGeneral />
         <SettingsAppearance />
-        <SettingsText />
         <SettingsTerminal :shells="shells" :default-shell="defaultShell" />
         <SettingsEditor />
         <SettingsBrowser />

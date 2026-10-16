@@ -23,15 +23,17 @@ export function tokens(value) {
   if (i === 1) return t('stats.format.millions', '{{n}}M', { n })
   return t('stats.format.thousands', '{{n}}k', { n })
 }
-export const money = (value) =>
-  Number.isFinite(value)
-    ? new Intl.NumberFormat(intlLocale(), {
-        style: 'currency',
-        currency: 'USD',
-        minimumFractionDigits: value < 0.01 ? 4 : 2,
-        maximumFractionDigits: value < 0.01 ? 4 : 2
-      }).format(value)
-    : na()
+// A cost under a cent keeps four decimals ($0.0042); nothing is $0.00.
+export const money = (value) => {
+  if (!Number.isFinite(value)) return na()
+  const digits = value > 0 && value < 0.01 ? 4 : 2
+  return new Intl.NumberFormat(intlLocale(), {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits
+  }).format(value)
+}
 export const percent = (value) =>
   Number.isFinite(value) ? new Intl.NumberFormat(intlLocale(), { style: 'percent', maximumFractionDigits: 0 }).format(value) : na()
 export function time(value) {

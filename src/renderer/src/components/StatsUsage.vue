@@ -5,7 +5,6 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { Check, ChevronDown } from 'lucide-vue-next'
 import BrandIcon from './BrandIcon.vue'
 import ResetHistory from './ResetHistory.vue'
-import UsageVisibility from './UsageVisibility.vue'
 import PanelState from './ui/PanelState.vue'
 import { settings } from '../settings'
 import { loadUsageProviders } from '../usageProviders'
@@ -31,7 +30,11 @@ const props = defineProps({
 const catalog = ref([])
 // Until the first look for installed agents answers.
 const detecting = ref(true)
+// A failed look: the sentence shown, and the raw message behind Details.
 const catalogError = ref('')
+const catalogDetail = ref('')
+// The providers with a local usage history (Claude, Codex, OpenCode), shown or not.
+const reportProviders = computed(() => catalog.value.filter((p) => p.report))
 const PROVIDERS = computed(() => [
   { id: 'overview', label: t('stats.overviewTab', 'Overview') },
   ...catalog.value
@@ -66,7 +69,11 @@ const overviewReports = reports
 const loading = ref({})
 const errors = ref({})
 const stats = ref(null)
+// Until the activity statistics answer (their skeleton cards), then a failed
+// read: the sentence shown, and the raw message behind Details.
+const statsLoading = ref(false)
 const statsError = ref('')
+const statsDetail = ref('')
 const range = ref(Object.fromEntries(USAGE_REPORT_PROVIDERS.map((id) => [id, '30d'])))
 const scope = ref(Object.fromEntries(USAGE_REPORT_PROVIDERS.map((id) => [id, 'tessel'])))
 const root = ref(null)
@@ -121,11 +128,13 @@ async function detectProviders() {
     if (disposed || request !== catalogRequest) return
     catalog.value = result
     catalogError.value = ''
+    catalogDetail.value = ''
     if (!PROVIDERS.value.some((p) => p.id === active.value)) active.value = 'overview'
-  } catch {
-    if (!disposed && request === catalogRequest)
-      catalogError.value = t('stats.catalogError', 'Could not detect installed usage providers. Refresh to retry.'
-      )
+  } catch (error) {
+    if (!disposed && request === catalogRequest) {
+      catalogError.value = t('stats.catalogFailed', 'Could not find which agents keep a usage history.')
+      catalogDetail.value = error?.message || ''
+    }
   } finally {
     if (!disposed && request === catalogRequest) detecting.value = false
   }
@@ -142,19 +151,21 @@ watch(
 async function loadStats() {
   if (!window.shellApi?.statsUsage?.summary || props.statsSummary) return
   const request = ++statsRequest
+  statsLoading.value = !stats.value
   try {
     const result = await window.shellApi.statsUsage.summary()
     if (disposed || request !== statsRequest) return
-    if (!result?.ok)
-      throw new Error(
-        result?.error || t('stats.activityError', 'Could not read activity statistics.')
-      )
+    if (!result?.ok) throw new Error(result?.error || '')
     stats.value = result
     statsError.value = ''
+    statsDetail.value = ''
   } catch (error) {
-    if (!disposed && request === statsRequest)
-      statsError.value =
-        error.message || t('stats.activityError', 'Could not read activity statistics.')
+    if (!disposed && request === statsRequest) {
+      statsError.value = t('stats.activityError', 'Could not read activity statistics.')
+      statsDetail.value = error?.message || ''
+    }
+  } finally {
+    if (!disposed && request === statsRequest) statsLoading.value = false
   }
 }
 async function loadProvider(id, { refresh = false } = {}) {
@@ -185,9 +196,11 @@ async function loadProvider(id, { refresh = false } = {}) {
     const raw =
       await window.shellApi[REPORTERS[id]](query)
     if (disposed || request !== requests.get(key)) return
-    if (!raw?.ok)
+    // Nothing recorded yet is an empty report, not a failure.
+    const report = raw?.ok === false && raw.code === 'none' ? { ok: true, generatedAt: Date.now() } : raw
+    if (!report?.ok)
       throw new Error(raw?.error || t('stats.providerError', 'Could not read {{id}} usage.', { id }))
-    target.value[id] = normalizeUsageReport(id, raw, { timezone, range: dates })
+    target.value[id] = normalizeUsageReport(id, report, { timezone, range: dates })
     queryKeys.set(key, signature)
   } catch (error) {
     if (!disposed && request === requests.get(key)) {
@@ -354,94 +367,113 @@ onBeforeUnmount(() => {
         ></p>
       </template>
     </section>
-    <p v-if="statsError" class="su-error" role="alert">{{ statsError }}</p>
-    <p v-if="catalogError" class="su-error" role="alert">
-      {{ catalogError }}
-      <button type="button" class="su-button" @click="refreshOverview">
-        {{ t('stats.retry', 'Retry') }}
-      </button>
-    </p>
-    <UsageVisibility :providers="catalog" />
-    <PanelState v-if="detecting && PROVIDERS.length === 1 && !catalogError" :text="t('stats.detecting', 'Looking for installed agents…')" :rows="1" />
-    <p v-else-if="PROVIDERS.length === 1 && !catalogError" class="su-muted">
-      {{
-        t('stats.noCollector', 'No installed agents with a local usage history collector. Subscription quotas are available in the Usage menu.'
-        )
-      }}
-    </p>
-    <header class="su-analytics-head">
-      <h3>{{ t('stats.analytics', 'Usage analytics') }}</h3>
-      <div class="su-provider-control" @keydown="selectionKey">
-        <button
-          type="button"
-          class="su-button su-provider-select"
-          aria-haspopup="menu"
-          :aria-expanded="selectionOpen"
-          :aria-label="t('stats.providerSelect', 'Usage analytics provider: {{name}}', { name: label })"
-          data-test="stats-provider-select"
-          @click="toggleSelection"
-        >
-          <StatsIcon v-if="active === 'overview'" /><BrandIcon
-            v-else
-            :kind="active"
-            :size="14"
-            :label="label"
-          /><span>{{ label }}</span
-          ><ChevronDown :size="14" aria-hidden="true" />
-        </button>
-        <div
-          v-if="selectionOpen"
-          class="su-provider-menu"
-          role="menu"
-          :aria-label="t('stats.providerMenu', 'Usage analytics provider')"
-        >
-          <button
-            v-for="provider in PROVIDERS"
-            :key="provider.id"
-            type="button"
-            role="menuitemradio"
-            :aria-checked="active === provider.id"
-            :data-test="'stats-provider-' + provider.id"
-            @click="chooseProvider(provider.id)"
-          >
-            <StatsIcon v-if="provider.id === 'overview'" /><BrandIcon
-              v-else
-              :kind="provider.id"
-              :size="14"
-              :label="provider.label"
-            /><span>{{ provider.label }}</span
-            ><Check v-if="active === provider.id" :size="14" aria-hidden="true" />
-          </button>
-        </div>
+    <!-- The activity statistics, while they load. -->
+    <section v-else-if="statsLoading" class="su-activity" role="status" :aria-label="t('stats.loadingActivity', 'Loading activity statistics…')">
+      <div class="su-cards su-cards-three" aria-hidden="true">
+        <div v-for="n in 3" :key="n" class="su-card su-skeleton"><span></span><strong></strong></div>
       </div>
-    </header>
-    <StatsUsageOverview
-      v-if="active === 'overview'"
-      :overview="overview"
-      :providers="providerRows"
-      :loading="overviewBusy"
-      @refresh="refreshOverview"
-      @enable="setEnabled($event, true)"
-      @provider="chooseProvider"
-    />
-    <StatsUsageProvider
-      v-else
-      :key="active"
-      :provider="active"
-      :label="label"
-      :model="current"
-      :supported="available(active)"
-      :enabled="enabled[active] === true"
-      :loading="!!loading['provider:' + active]"
-      :error="errors['provider:' + active] || ''"
-      :range="range[active] || '30d'"
-      :scope="scope[active] || 'all'"
-      @enable="setEnabled(active, $event)"
-      @refresh="loadProvider(active, { refresh: true })"
-      @filter="setFilter($event.kind, $event.value)"
-    />
+    </section>
+    <div v-if="statsError" class="set-callout warn" role="alert" data-test="stats-activity-error">
+      <span class="set-callout-text">{{ statsError }}</span>
+      <button type="button" class="exit-btn small" @click="loadStats">{{ t('stats.retry', 'Retry') }}</button>
+      <details v-if="statsDetail" class="set-more su-callout-more">
+        <summary>{{ t('stats.details', 'Details') }}</summary>
+        <p>{{ statsDetail }}</p>
+      </details>
+    </div>
+    <PanelState v-if="detecting" :text="t('stats.detecting', 'Looking for installed agents…')" :rows="3" />
+    <div v-else-if="catalogError" class="set-callout warn" role="alert" data-test="stats-catalog-error">
+      <span class="set-callout-text">{{ catalogError }}</span>
+      <button type="button" class="exit-btn small" @click="refreshOverview">{{ t('stats.retry', 'Retry') }}</button>
+      <details v-if="catalogDetail" class="set-more su-callout-more">
+        <summary>{{ t('stats.details', 'Details') }}</summary>
+        <p>{{ catalogDetail }}</p>
+      </details>
+    </div>
+    <div v-else-if="PROVIDERS.length === 1" class="su-empty" data-test="stats-no-collector">
+      <h4>{{ t('stats.noHistoryTitle', 'No usage history to show') }}</h4>
+      <p v-if="reportProviders.length">
+        {{ t('stats.allHidden', 'The providers that keep a usage history are turned off in Providers shown, above.') }}
+      </p>
+      <p v-else>
+        {{ t('stats.noCollector', 'None of your installed agents keeps a usage history Tessel can read. The limits of your plans are in the Usage menu.') }}
+      </p>
+    </div>
+    <template v-else>
+      <header class="su-analytics-head">
+        <h3>{{ t('stats.analytics', 'Usage analytics') }}</h3>
+        <div class="su-provider-control" @keydown="selectionKey">
+          <button
+            type="button"
+            class="su-button su-provider-select"
+            aria-haspopup="menu"
+            :aria-expanded="selectionOpen"
+            :aria-label="t('stats.providerSelect', 'Usage analytics provider: {{name}}', { name: label })"
+            data-test="stats-provider-select"
+            @click="toggleSelection"
+          >
+            <StatsIcon v-if="active === 'overview'" /><BrandIcon
+              v-else
+              :kind="active"
+              :size="14"
+              :label="label"
+            /><span>{{ label }}</span
+            ><ChevronDown :size="14" aria-hidden="true" />
+          </button>
+          <div
+            v-if="selectionOpen"
+            class="su-provider-menu"
+            role="menu"
+            :aria-label="t('stats.providerMenu', 'Usage analytics provider')"
+          >
+            <button
+              v-for="provider in PROVIDERS"
+              :key="provider.id"
+              type="button"
+              role="menuitemradio"
+              :aria-checked="active === provider.id"
+              :data-test="'stats-provider-' + provider.id"
+              @click="chooseProvider(provider.id)"
+            >
+              <StatsIcon v-if="provider.id === 'overview'" /><BrandIcon
+                v-else
+                :kind="provider.id"
+                :size="14"
+                :label="provider.label"
+              /><span>{{ provider.label }}</span
+              ><Check v-if="active === provider.id" :size="14" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </header>
+      <StatsUsageOverview
+        v-if="active === 'overview'"
+        :overview="overview"
+        :providers="providerRows"
+        :loading="overviewBusy"
+        @refresh="refreshOverview"
+        @enable="setEnabled($event, true)"
+        @provider="chooseProvider"
+      />
+      <StatsUsageProvider
+        v-else
+        :key="active"
+        :provider="active"
+        :label="label"
+        :model="current"
+        :supported="available(active)"
+        :enabled="enabled[active] === true"
+        :loading="!!loading['provider:' + active]"
+        :error="errors['provider:' + active] || ''"
+        :range="range[active] || '30d'"
+        :scope="scope[active] || 'all'"
+        @enable="setEnabled(active, $event)"
+        @refresh="loadProvider(active, { refresh: true })"
+        @filter="setFilter($event.kind, $event.value)"
+      />
+    </template>
     <ResetHistory
-      v-if="active === 'overview' || active === 'codex'"
+      v-if="!detecting && (active === 'overview' || active === 'codex')"
       :provider="active === 'codex' ? 'codex' : undefined"
     />
   </div>

@@ -1,4 +1,4 @@
-// Settings > Appearance, "Usage percentages":
+// Settings > Stats & Usage > Usage menu, "Usage percentages":
 // quota bars and numbers show the part used, or the part left.
 import { t } from './i18n'
 

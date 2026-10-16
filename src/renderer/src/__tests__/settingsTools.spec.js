@@ -24,7 +24,6 @@ const appSource = readFileSync(join(__dirname, '..', 'App.vue'), 'utf8').replace
 // What each row must do in App.vue (the palette's or toolbar's own call).
 const EXPECTED_ACTION = {
   tools: 'openTools()',
-  sessions: 'openSessions()',
   dashboard: "showSideTab('dashboard')",
   history: "showSideTab('history')",
   tasks: "showSideTab('tasks')",
@@ -138,9 +137,17 @@ describe('Settings > Windows and tools', { timeout: 30_000 }, () => {
 
   it('each row sits in its page and emits open-tool with its id', async () => {
     for (const [page, rows] of Object.entries(SETTINGS_TOOLS)) {
-      const group = wrapper.get(`.set-page[data-page="${page}"] [data-tools="${page}"]`)
-      expect(group.findAll('[data-open-tool]').map((b) => b.attributes('data-open-tool'))).toEqual(rows.map((r) => r.id))
+      // A page can show its rows in more than one group (General: Troubleshooting).
+      const groups = wrapper.findAll(`.set-page[data-page="${page}"] [data-tools="${page}"]`)
+      expect(groups.length).toBeGreaterThan(0)
+      const ids = groups.flatMap((g) => g.findAll('[data-open-tool]').map((b) => b.attributes('data-open-tool')))
+      expect([...ids].sort()).toEqual(rows.map((r) => r.id).sort())
     }
+    // General: logs and diagnostics under Troubleshooting, with the reset.
+    const trouble = wrapper.get('.set-page[data-page="general"] [data-group="troubleshooting"]')
+    expect(trouble.get('.set-group-title').text()).toBe('Troubleshooting')
+    expect(trouble.findAll('[data-open-tool]').map((b) => b.attributes('data-open-tool'))).toEqual(['logs', 'diagnostics'])
+    expect(trouble.find('[data-test="reset-settings"]').exists()).toBe(true)
     for (const id of SETTINGS_TOOL_IDS) await wrapper.get(`[data-open-tool="${id}"]`).trigger('click')
     expect(wrapper.emitted('open-tool').map((e) => e[0])).toEqual(SETTINGS_TOOL_IDS)
   })
@@ -306,7 +313,7 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     const page = embeddedIn('mcp')
     expect(calls.mcpList).toBeGreaterThan(0)
     expect(page.text()).toContain('context7')
-    expect(page.findAll('.launch-seg-btn').map((b) => b.text())).toEqual(expect.arrayContaining(['Catalog', 'Custom', 'Team connections']))
+    expect(page.findAll('[role="tab"]').map((b) => b.text())).toEqual(expect.arrayContaining(['Catalog', 'Custom']))
     const mcp = wrapper.findComponent(McpDialog)
     expect(mcp.props('cwd')).toBe('/p')
 
@@ -322,19 +329,36 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     embeddedIn('skills')
   })
 
-  it("Orchestration's Details opens the MCP servers page on Team connections", async () => {
+  it('the team connections link of MCP servers opens Orchestration', async () => {
+    wrapper = mountAt('mcp')
+    await flushPromises()
+    await wrapper.get('.set-page[data-page="mcp"] .mcp-orchestration-link').trigger('click')
+    await flushPromises()
+    expect(visiblePages(wrapper)).toEqual(['orchestration'])
+  })
+
+  it('Orchestration holds the team connections in its Agent hooks group (no jump to MCP servers)', async () => {
+    let reads = 0
+    window.shellApi.teamHooksStatus = async () => {
+      reads++
+      return { node: { found: true }, backups: [], agents: [{ id: 'claude', hooks: 'installed', approval: null, lastSignal: null }] }
+    }
     wrapper = mountAt('orchestration')
     await flushPromises()
-    const details = wrapper.get('.set-page[data-page="orchestration"]').findAll('button').find((b) => b.text() === 'Details')
-    await details.trigger('click')
+    const page = wrapper.get('.set-page[data-page="orchestration"]')
+    expect(page.findAll('button').some((b) => b.text() === 'Details')).toBe(false)
+    const hooks = page.get('[data-agent-hooks]')
+    // Folded under its row until asked for: the Team group shows each agent's state.
+    expect(hooks.find('.mcp-connections').exists()).toBe(false)
+    const show = hooks.get('[data-orch-connections]')
+    expect(show.attributes('aria-expanded')).toBe('false')
+    await show.trigger('click')
     await flushPromises()
-    expect(visiblePages(wrapper)).toEqual(['mcp'])
-    expect(wrapper.get('.set-page[data-page="mcp"] .launch-seg-btn.on').text()).toBe('Team connections')
-    // Another page, then back: on Installed again.
-    await wrapper.get('.set-nav-item[data-page="agents"]').trigger('click')
-    await wrapper.get('.set-nav-item[data-page="mcp"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.get('.set-page[data-page="mcp"] .launch-seg-btn.on').text()).toContain('Installed')
+    expect(show.attributes('aria-expanded')).toBe('true')
+    expect(hooks.find('.mcp-connections').exists()).toBe(true)
+    expect(hooks.text()).toContain('Claude Code')
+    expect(reads).toBe(2) // the page's own read, then the connections'
+    expect(visiblePages(wrapper)).toEqual(['orchestration'])
   })
 
   it('search finds both pages by name, without loading their windows', async () => {
@@ -384,9 +408,13 @@ describe('Settings: the sidebar and Source Control menu options', { timeout: 30_
     expect(settings.sidebarGroupBy).toBe('repo')
     expect(wrapper.find('#settings-project-order').exists()).toBe(true)
 
-    await wrapper.get('[data-card-property="ports"]').setValue(false)
+    // Card properties: toggle chips, pressed while shown.
+    const ports = wrapper.get('[data-card-property="ports"]')
+    expect(ports.attributes('aria-pressed')).toBe('true')
+    await ports.trigger('click')
     expect(settings.worktreeCardProperties).not.toContain('ports')
-    await wrapper.get('[data-card-property="ports"]').setValue(true)
+    expect(ports.attributes('aria-pressed')).toBe('false')
+    await ports.trigger('click')
     expect(settings.worktreeCardProperties).toContain('ports')
 
     await wrapper.findAll('[data-setting="agentActivityDisplayMode"] button')[1].trigger('click')

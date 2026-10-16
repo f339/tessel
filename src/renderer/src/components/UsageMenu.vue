@@ -928,7 +928,7 @@ function toggle() {
   }
 }
 
-// Settings > Appearance, "Usage percentages": used or remaining.
+// Settings > Stats & Usage, "Usage percentages": used or remaining.
 const shownPct = (used) => displayedUsagePercent(used, settings.usagePercentageDisplay)
 const pctLabel = (used) => usagePercentLabel(used, settings.usagePercentageDisplay)
 const emptyTitle = () => t('usage.menu.buttonTitleEmpty', "Usage of your agents' quotas")

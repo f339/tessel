@@ -26,9 +26,10 @@ const copy = () => t('settings.tools.copy', 'Copy')
 export const SETTINGS_TOOLS = {
   agents: [
     row('tools', () => t('app.cmd.installTools', 'Install tools'), () => t('settings.tools.toolsHint', 'Install agents, Git, Node.js and more, and add your own agents.'), open),
-    row('sessions', () => t('app.cmd.resumeSession', 'Resume a session'), () => t('app.cmd.resumeSessionHint', 'Reopen a past agent conversation'), open),
     row('dashboard', () => t('settings.tools.dashboard', 'Agent Dashboard'), () => t('app.cmd.agentDashboardHint', 'Every agent of every project at a glance'), show),
-    row('history', () => t('settings.tools.sessionHistory', 'Agent Session History'), () => t('app.cmd.sessionHistoryHint', 'Browse, search and resume past agent conversations'), show)
+    // Past conversations: the side panel's tab (the palette's Resume a past
+    // conversation opens the same list in a dialog).
+    row('history', () => t('settings.tools.sessionHistory', 'Past conversations'), () => t('app.cmd.sessionHistoryHint', 'Browse, search and resume past agent conversations'), show)
   ],
   orchestration: [
     row('tasks', () => t('settings.tools.taskBoard', 'Task board'), () => t('settings.tools.taskBoardHint', 'The cards of this workspace and who works on them (Ctrl+Shift+K).'), show),

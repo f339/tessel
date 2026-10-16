@@ -1,14 +1,12 @@
 {
   "sessionHistory": {
-    "title": "Historique des sessions d'agent",
-    "titleShort": "Agents",
+    "title": "Conversations passées",
+    "titleShort": "Historique",
     "indexedHistory": "Historique indexé",
-    "resumePastSessions": "Reprendre les sessions passées",
-    "refresh": "Actualiser l'historique des sessions",
-    "search": "Rechercher des sessions",
+    "refresh": "Actualiser les conversations passées",
+    "search": "Rechercher des conversations",
     "clearSearch": "Effacer la recherche",
     "scanning": "Analyse des sessions",
-    "loadFailed": "Les sessions n'ont pas pu être lues : {{error}}",
     "loadingMore": "Chargement de plus de sessions…",
     "showMore": "Afficher plus de sessions",
     "unknownLocation": "Emplacement inconnu",
@@ -17,7 +15,7 @@
     "logPath": "Chemin du log",
     "view": {
       "options": "Options d'affichage",
-      "aria": "Options d'affichage de l'historique des sessions",
+      "aria": "Options d'affichage des conversations passées",
       "agents": "Agents",
       "selectAll": "Tout sélectionner",
       "clear": "Effacer",
@@ -37,7 +35,7 @@
       "workspace": "Espace de travail",
       "project": "Projet",
       "all": "Tous",
-      "aria": "Portée de l'historique des sessions : {{scope}}",
+      "aria": "Portée des conversations passées : {{scope}}",
       "currentWorkspaceLower": "espace de travail actuel",
       "currentProjectLower": "projet actuel",
       "allSessionsLower": "toutes les sessions"
@@ -63,7 +61,7 @@
       "resultsAria": "Trier les résultats : {{sort}}"
     },
     "empty": {
-      "noSessions": "Aucune session d'agent trouvée",
+      "noSessions": "Aucune conversation passée trouvée",
       "noMatch": "Aucune session ne correspond aux filtres actuels",
       "noAgentsSelected": "Aucun agent sélectionné"
     },
@@ -89,15 +87,15 @@
       "continueInCliHint": "Démarrer une nouvelle conversation Antigravity CLI dans son dossier, à partir de la fin de cette conversation de l'IDE",
       "continueInCliNoFolderHint": "Son dossier est inconnu : démarrer une nouvelle conversation Antigravity CLI dans le dossier actuel, à partir de la fin de cette conversation de l'IDE",
       "ideOrigin": "IDE",
-      "jumpToOriginalPane": "Aller au panneau d'origine",
+      "jumpToOriginalPane": "Aller à son panneau",
       "hideDetails": "Masquer les détails",
       "showDetails": "Afficher les détails",
       "toggleDetails": "Détails de la session {{agent}}",
       "moreActions": "Plus d'actions",
-      "moreSessionActions": "Autres actions de session",
+      "moreSessionActions": "Plus d'actions pour cette conversation",
       "messageCount": "{{n}} msg",
       "openLog": "Ouvrir le log",
-      "revealLog": "Révéler le log",
+      "revealLog": "Afficher le log dans son dossier",
       "openWorkingDirectory": "Ouvrir le répertoire de travail",
       "copySessionId": "Copier l'ID de session",
       "copyLogPath": "Copier le chemin du log",
@@ -141,6 +139,21 @@
       "startFailed": "Impossible de démarrer Antigravity CLI pour cette conversation."
     },
     "remoteNotConnected": "Connectez-vous à {{host}} (ouvrez-y un terminal) pour voir ses sessions.",
-    "remoteFailed": "Les sessions de {{host}} n’ont pas pu être lues."
+    "remoteFailed": "Les sessions de {{host}} n’ont pas pu être lues.",
+    "loadFailedShort": "Les conversations n'ont pas pu être lues.",
+    "errorDetails": "Détails",
+    "index": {
+      "title": "Chercher dans ce qui a été dit",
+      "keep": "Garder : {{value}}",
+      "turnOff": "Désactiver la recherche de sessions",
+      "turnOn": "Activer la recherche de sessions…",
+      "clearLeft": "Effacer l'index restant ({{size}})"
+    },
+    "optin": {
+      "line": "Retrouvez une conversation par ce qui y a été dit : activez la recherche de sessions.",
+      "learnMore": "En savoir plus",
+      "notNow": "Pas maintenant"
+    },
+    "resumeWhereLeft": "Reprenez-en une là où elle s’est arrêtée"
   }
 }

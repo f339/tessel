@@ -436,6 +436,8 @@ const api = {
   mcpAdd: (spec) => ipcRenderer.invoke('mcp:add', spec),
   mcpRemove: (spec) => ipcRenderer.invoke('mcp:remove', spec),
   mcpTest: (ref) => ipcRenderer.invoke('mcp:test', ref),
+  // A custom server's form, tested before it is added (nothing written).
+  mcpTestSpec: (spec) => ipcRenderer.invoke('mcp:testSpec', spec),
   mcpCopy: (spec) => ipcRenderer.invoke('mcp:copy', spec),
   // Agent skills (src/main/skillsManager.js).
   skillsList: (cwd, opts) => ipcRenderer.invoke('skills:list', opts ? { ...opts, cwd } : cwd),

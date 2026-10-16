@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
 import { settings, resetSettings } from '../settings'
+import { MAX_WEBGL, claimWebgl, releaseWebgl, _webglHoldersForTests, _resetWebglForTests } from '../terminalWebgl'
 
 const fx = vi.hoisted(() => ({ terminals: [], webgl: [] }))
 vi.mock('@xterm/xterm', () => ({
@@ -106,6 +107,7 @@ describe('TerminalPane and the terminal settings', () => {
   beforeEach(() => {
     fx.terminals.length = 0
     fx.webgl.length = 0
+    _resetWebglForTests()
     resetSettings()
     previousApi = window.shellApi
     vi.stubGlobal(
@@ -144,6 +146,7 @@ describe('TerminalPane and the terminal settings', () => {
   afterEach(() => {
     wrapper?.unmount()
     wrapper = null
+    _resetWebglForTests()
     resetSettings()
     window.shellApi = previousApi
     vi.restoreAllMocks()
@@ -213,8 +216,11 @@ describe('TerminalPane and the terminal settings', () => {
     try {
       settings.gpuAcceleration = 'on'
       mountPane()
-      expect(fx.webgl).toHaveLength(1)
       const see = (isIntersecting) => observers[observers.length - 1].cb([{ isIntersecting }])
+      // None before the observer's first answer: on screen.
+      expect(fx.webgl).toHaveLength(0)
+      see(true)
+      expect(fx.webgl).toHaveLength(1)
       see(false) // its workspace hidden
       vi.advanceTimersByTime(29000)
       expect(fx.webgl[0].disposed).toBe(false)
@@ -237,6 +243,92 @@ describe('TerminalPane and the terminal settings', () => {
       document.documentElement.classList.remove('window-hidden')
       vi.useRealTimers()
     }
+  })
+
+  describe("WebGL at start and within the window's places", () => {
+    let observers
+    const see = (isIntersecting) => observers[observers.length - 1].cb([{ isIntersecting }])
+    beforeEach(() => {
+      observers = []
+      vi.stubGlobal(
+        'IntersectionObserver',
+        class {
+          constructor(cb) {
+            this.cb = cb
+            observers.push(this)
+          }
+          observe() {}
+          disconnect() {}
+        }
+      )
+      settings.gpuAcceleration = 'on'
+    })
+
+    it('a pane opened out of sight (a hidden project, a layout being restored) takes no WebGL context until shown', () => {
+      mountPane()
+      see(false)
+      expect(fx.webgl).toHaveLength(0)
+      expect(_webglHoldersForTests().holders).toBe(0)
+      see(true)
+      expect(fx.webgl).toHaveLength(1)
+      expect(term().addons).toContain(fx.webgl[0])
+      expect(_webglHoldersForTests().holders).toBe(1)
+    })
+
+    it('every place taken by panes on screen: the normal renderer, then WebGL once a place frees', async () => {
+      const others = Array.from({ length: MAX_WEBGL }, () => ({ onScreen: () => true, release() {}, retry() {} }))
+      for (const o of others) claimWebgl(o)
+      mountPane()
+      see(true)
+      expect(fx.webgl).toHaveLength(0)
+      releaseWebgl(others[0])
+      await Promise.resolve()
+      expect(fx.webgl).toHaveLength(1)
+      expect(_webglHoldersForTests()).toEqual({ holders: MAX_WEBGL, waiting: 0 })
+    })
+
+    it('a pane coming on screen takes the place of one out of sight at once', () => {
+      const others = Array.from({ length: MAX_WEBGL - 1 }, () => ({ onScreen: () => true, release() {}, retry() {} }))
+      for (const o of others) claimWebgl(o)
+      mountPane()
+      see(true)
+      expect(fx.webgl).toHaveLength(1)
+      see(false) // its project hidden: its context is kept for 30 s...
+      const newcomer = { onScreen: () => true, release: vi.fn(), retry() {} }
+      expect(claimWebgl(newcomer)).toBe(true) // ...unless a pane on screen needs it
+      expect(fx.webgl[0].disposed).toBe(true)
+      see(true)
+      expect(fx.webgl).toHaveLength(1) // every place taken by panes on screen now
+      expect(_webglHoldersForTests().waiting).toBe(1)
+    })
+
+    it('a lost context: the normal renderer at once (never the white canvas while xterm waits 3 s), WebGL again when shown next', () => {
+      vi.useFakeTimers()
+      try {
+        mountPane()
+        see(true)
+        expect(fx.webgl).toHaveLength(1)
+        term().textarea.dispatchEvent(new Event('webglcontextlost'))
+        expect(_webglHoldersForTests().holders).toBe(0)
+        vi.advanceTimersByTime(0)
+        expect(fx.webgl[0].disposed).toBe(true)
+        see(false)
+        see(true)
+        expect(fx.webgl).toHaveLength(2)
+        expect(fx.webgl[1].disposed).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a closed pane gives its place back', () => {
+      mountPane()
+      see(true)
+      expect(_webglHoldersForTests().holders).toBe(1)
+      wrapper.unmount()
+      wrapper = null
+      expect(_webglHoldersForTests().holders).toBe(0)
+    })
   })
 
   it('OSC 52 copies only while allowed', () => {

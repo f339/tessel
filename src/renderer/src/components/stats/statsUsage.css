@@ -900,3 +900,68 @@
   justify-content: center;
   text-align: center;
 }
+
+/* The selection line of a provider and its "About these numbers" tooltip
+   (the notes on the metrics, the cost and the source). */
+.su-selection {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.su-info {
+  position: relative;
+  display: inline-flex;
+}
+.stats-usage .su-info-btn {
+  color: var(--text-dim);
+}
+.stats-usage .su-info-btn:hover {
+  color: var(--text-strong);
+}
+.su-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: max-content;
+  max-width: min(360px, 70vw);
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 10px 28px #0004;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+}
+.su-tip[hidden] {
+  display: none;
+}
+.su-tip .su-source-note {
+  color: var(--text-dim);
+}
+
+/* A failed read: its raw message, behind Details, under the sentence. */
+.su-callout-more {
+  flex: 1 1 100%;
+}
+.stats-usage .su-callout-more > p,
+.su-provider-error .set-more > p {
+  margin: 4px 0 0;
+  color: var(--text-dim);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.su-provider-error {
+  margin-top: 6px;
+}
+.su-provider-error .tag {
+  margin-right: 4px;
+  vertical-align: 1px;
+}

@@ -267,3 +267,28 @@
     padding-left: 8px;
   }
 }
+
+/* Controls several pages share in a row (Appearance, Terminal, Stats & Usage):
+   a slider's value beside it, and a set of toggle chips (.chip) that wraps,
+   right-aligned like the other controls. */
+.set-range-value {
+  min-width: 44px;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.set-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 60%;
+}
+@container (max-width: 520px) {
+  .set-chips {
+    justify-content: flex-start;
+    max-width: none;
+  }
+}

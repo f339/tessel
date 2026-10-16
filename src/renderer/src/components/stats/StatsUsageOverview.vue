@@ -149,6 +149,14 @@ function statusText(provider) {
           )
         }}
       </div>
+      <!-- Read, but nothing recorded yet: one sentence, never a row of zeros. -->
+      <div v-else-if="!overview.hasData && !loading" class="su-empty" data-test="stats-overview-empty">
+        <h4>{{ t('stats.overview.emptyTitle', 'No usage recorded yet') }}</h4>
+        <p>{{ t('stats.overview.noData', 'The overview fills in once an agent session writes its token logs.') }}</p>
+      </div>
+      <div v-else-if="!overview.hasData" class="su-empty" role="status">
+        {{ t('stats.scanning', 'Scanning local usage logs...') }}
+      </div>
       <template v-else>
         <div class="su-cards su-cards-four">
           <StatsStatCard
@@ -172,13 +180,7 @@ function statusText(provider) {
             icon="cache"
           />
         </div>
-        <p v-if="!overview.hasData" class="su-empty">
-          {{
-            t('stats.overview.noData', 'No local Claude or Codex usage found yet. The overview will populate after the next agent session writes token logs.'
-            )
-          }}
-        </p>
-        <div v-else class="su-overview-charts">
+        <div class="su-overview-charts">
           <section class="su-panel su-inset">
             <header class="su-section-head">
               <div>
@@ -287,8 +289,14 @@ function statusText(provider) {
               {{ t('stats.overview.enable', 'Enable') }}
             </button>
           </header>
+          <p
+            v-if="provider.supported && provider.enabled && provider.report?.status === 'ready' && !provider.report.hasData"
+            class="su-muted"
+          >
+            {{ t('stats.overview.providerEmpty', 'No usage found yet.') }}
+          </p>
           <template
-            v-if="provider.supported && provider.enabled && provider.report?.status === 'ready'"
+            v-else-if="provider.supported && provider.enabled && provider.report?.status === 'ready'"
             ><p class="su-muted su-provider-top">
               {{ provider.report.topModel || t('stats.overview.noModel', 'No model yet')
               }}<span v-if="provider.report.topProject">
@@ -316,12 +324,18 @@ function statusText(provider) {
           <p v-else-if="!provider.enabled" class="su-muted">
             {{ t('stats.overview.off', 'Local usage analytics is off.') }}
           </p>
-          <p v-if="provider.error" class="su-error" role="alert">
-            {{ provider.error
-            }}<span v-if="provider.report?.hasData">
-              {{ t('stats.overview.lastScan', 'Showing the last successful scan.') }}</span
-            >
-          </p>
+          <!-- A failed read: a short sentence, the raw message behind Details. -->
+          <div v-if="provider.error" class="su-provider-error" role="alert">
+            <p class="su-muted">
+              <span class="tag tag-warn">{{ t('stats.overview.notRead', 'Not read') }}</span>
+              {{ t('stats.overview.readFailed', 'Tessel could not read this usage history.') }}
+              <span v-if="provider.report?.hasData">{{ t('stats.overview.lastScan', 'Showing the last successful scan.') }}</span>
+            </p>
+            <details class="set-more">
+              <summary>{{ t('stats.details', 'Details') }}</summary>
+              <p>{{ provider.error }}</p>
+            </details>
+          </div>
         </article>
       </div>
     </section>
