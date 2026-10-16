@@ -229,6 +229,47 @@ describe('left sidebar', () => {
     w.unmount()
   })
 
+  it('a shared project has "Who has access…" in its menu', async () => {
+    const items = () => [...document.querySelectorAll('.orca-menu [data-orca-menu-item]')]
+    const item = (label) => items().find((b) => b.textContent.trim() === label)
+    const w = mountSidebar({ liveShare: { sharing: true, shared: ['ws1'], guest: [] } })
+    await w.find('[aria-label="Project actions for Shop"]').trigger('click')
+    await flushPromises()
+    item('Who has access…').click()
+    expect(w.emitted('live-share-access')).toEqual([['ws1']])
+    await w.find('[aria-label="Project actions for Docs"]').trigger('click')
+    await flushPromises()
+    expect(item('Who has access…')).toBe(undefined)
+    w.unmount()
+  })
+
+  it('LIVE only on shared projects, with who is connected there (+N past 3), muted while nobody is', async () => {
+    const live = (over) => projects().map((p) => (p.id === 'ws1' ? { ...p, ...over } : p))
+    const w = mountSidebar({ projects: live({ live: 'host', liveGuests: [] }) })
+    const badges = () => w.findAll('[data-test="project-live"]')
+    // Only the shared project; nobody there: muted, and it says so.
+    expect(badges()).toHaveLength(1)
+    expect(badges()[0].classes()).toContain('muted')
+    expect(badges()[0].attributes('title')).toBe('You share this project in Live Share. Nobody is connected here yet.')
+    expect(w.find('[data-test="ls-avatars"]').exists()).toBe(false)
+    const people = ['Simpa', 'Eve', 'Bob', 'Ana', 'Lu'].map((name, i) => ({ id: `g${i}`, name }))
+    await w.setProps({ projects: live({ live: 'host', liveGuests: people }) })
+    expect(badges()[0].classes()).not.toContain('muted')
+    const avatars = w.find('[data-test="ls-avatars"]')
+    expect(avatars.findAll('.lsa-dot').map((d) => d.text())).toEqual(['SI', 'EV', 'BO', '+2'])
+    expect(avatars.attributes('title')).toBe('Connected here: Simpa, Eve, Bob, Ana, Lu')
+    expect(badges()[0].attributes('title')).toContain('Connected here: Simpa, Eve, Bob, Ana, Lu')
+    // A host's project in their session: LIVE, no avatars.
+    await w.setProps({ projects: live({ live: 'guest' }) })
+    expect(badges()[0].classes()).toContain('guest')
+    expect(badges()[0].classes()).not.toContain('muted')
+    expect(w.find('[data-test="ls-avatars"]').exists()).toBe(false)
+    // Not shared: nothing.
+    await w.setProps({ projects: projects() })
+    expect(badges()).toHaveLength(0)
+    w.unmount()
+  })
+
   it('a workspace card menu: copy path, delete a task copy; the primary one removes the project', async () => {
     const w = mountSidebar()
     await w.findAll('.wtc-surface')[1].trigger('contextmenu', { clientX: 20, clientY: 30 })

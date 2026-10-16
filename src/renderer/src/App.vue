@@ -67,7 +67,8 @@ import CookieImportDialog from './components/CookieImportDialog.vue'
 import LiveShareDialog from './components/LiveShareDialog.vue'
 import LiveShareAsk from './components/LiveShareAsk.vue'
 import { createLiveShareWindow, rightsText } from './liveShareWindow'
-import LiveShareBanner from './components/LiveShareBanner.vue'
+import LiveSharePill from './components/LiveSharePill.vue'
+import { guestsIn, personName, viaName, joinedGuests } from './liveShareAccess'
 import { toastText as cookieImportToast } from './browser/cookieImportText'
 import { askQuitRunning } from './quitConfirm'
 import ImageViewer from './components/ImageViewer.vue'
@@ -2430,6 +2431,10 @@ const liveShare = createLiveShareWindow({
   probeRunningWork,
   killPty: (id) => window.shellApi.killPty(id),
   hasAgent: (id) => !!agentById(id),
+  // The agents guests may ask for: the ones the "+" menu offers here.
+  agentList: () => launchableAgents.value.filter((a) => a.available !== false).map((a) => ({ id: a.id, name: a.name || a.id })),
+  agentName: (id) => (agentById(id) || {}).name || null,
+  activePaneId: () => activeId.value,
   layoutReady: () => layoutReady.value,
   // Panes of this computer left in a Live Share project when it ends: a
   // project of their own, so nothing running is lost.
@@ -2440,7 +2445,10 @@ const liveShare = createLiveShareWindow({
     workspaces.value.push(ws)
   }
 })
+// The Live Share dialog: open, and where it opens (its tab, its Share
+// section, a project's "Who has access…").
 const liveShareOpen = ref(false)
+const liveShareAt = reactive({ tab: 'share', section: 'overview', project: null })
 // The projects you can share (a Live Share project is someone else's).
 const shareableProjects = computed(() => workspaces.value.filter((w) => !w.liveShare).map((w) => ({ id: w.id, name: w.name })))
 // The projects you share, by name (a guest asking to join gets the ones you tick).
@@ -2451,59 +2459,96 @@ const sidebarLiveShare = computed(() => ({
   shared: liveShare.sharedIds(),
   guest: workspaces.value.filter((w) => w.liveShare).map((w) => w.id)
 }))
-// Live Share said above the panes (LiveShareBanner), with a coloured frame
-// around the project it is about: you share projects (host), or you are in
-// someone's session (guest). here: a project it is about is the one on screen.
-const liveBanner = computed(() => {
+const liveHostOn = computed(() => ['preparing', 'starting', 'checking', 'sharing'].includes(liveShare.state.host.state))
+const liveGuestOn = computed(() => ['joined', 'reconnecting'].includes(liveShare.state.guest.state))
+// A pane's name (what a guest is watching), for Live Share.
+function paneTitle(id) {
+  const leaf = id ? findLeaf(id) : null
+  return leaf ? leaf.paneName || leaf.title || leaf.shellName || '' : ''
+}
+// Live Share in the top bar (LiveSharePill): you share projects (host), or
+// you are in someone's session (guest).
+const livePill = computed(() => {
   const host = liveShare.state.host
-  if (['preparing', 'starting', 'checking', 'sharing'].includes(host.state)) {
+  if (liveHostOn.value) {
     const cur = currentWs.value
-    const here = !!cur && liveShare.isShared(cur.id)
+    const presence = host.presence || []
+    const at = (gid, key) => presence.filter((p) => (p.guests || []).some((g) => g.id === gid && g[key])).map((p) => paneTitle(p.id)).filter(Boolean)
     return {
       mode: 'host',
       starting: host.state !== 'sharing',
-      // Each project shared (on screen or not); one can be taken out while
-      // another stays.
-      projects: sharedProjectList.value.map((p) => ({ ...p, here: !!cur && p.id === cur.id })),
-      here,
-      // The project on screen, yours and not shared: it can be added.
-      canAdd: host.state === 'sharing' && !!cur && !liveShare.isGuestWs(cur) && !here,
-      guests: host.guests.filter((g) => g.state === 'joined').length,
-      waiting: liveShare.state.asks.length
+      guests: joinedGuests(host).map((g) => ({ id: g.id, name: personName(g), via: viaName(g.invite), watching: at(g.id, 'watching'), typing: at(g.id, 'typing') })),
+      waiting: liveShare.state.asks.filter((a) => a.kind === 'join').length,
+      projects: sharedProjectList.value.map((p) => ({ ...p, here: !!cur && p.id === cur.id, people: guestsIn(host, p.id).map((g) => ({ id: g.id, name: personName(g) })) })),
+      current: cur && !liveShare.isGuestWs(cur) ? { id: cur.id, name: cur.name, shared: liveShare.isShared(cur.id) } : null
     }
   }
   const guest = liveShare.state.guest
-  if (['joined', 'reconnecting'].includes(guest.state)) {
-    const session = workspaces.value.find((w) => liveShare.isGuestWs(w))
+  if (liveGuestOn.value) {
     return {
       mode: 'guest',
       reconnecting: guest.state !== 'joined',
       host: guest.host || '?',
-      sessionId: session ? session.id : null,
-      here: !!currentWs.value && liveShare.isGuestWs(currentWs.value),
-      rights: guest.state === 'joined' ? rightsText(guest.rights) : ''
+      rights: guest.state === 'joined' ? rightsText(guest.rights) : '',
+      code: guest.code || null,
+      projects: workspaces.value.filter((w) => liveShare.isGuestWs(w)).map((w) => ({ id: w.id, name: w.name, here: w.id === currentWsId.value }))
     }
   }
   return null
 })
-// The banner's way to a project: a shared one (host), or the session (guest).
-function liveBannerGoto(id) {
-  const b = liveBanner.value
-  const target = b && (b.mode === 'host' ? (typeof id === 'string' && liveShare.isShared(id) ? id : null) : b.sessionId)
-  if (target) selectWorkspace(target)
+// The thin line along the top of the project area: a project you share
+// (dimmer while nobody is in), or a host's project in their session; none
+// on a project that is not shared.
+const liveLine = computed(() => {
+  const cur = currentWs.value
+  if (!cur) return null
+  if (liveShare.isGuestWs(cur) && liveGuestOn.value) return 'guest'
+  if (liveHostOn.value && liveShare.isShared(cur.id)) return guestsIn(liveShare.state.host, cur.id).length ? 'host' : 'host idle'
+  return null
+})
+// The pill's ways: a project (yours or the host's), a project in or out of
+// the share, a section of the dialog, Stop (asked when someone is in), Leave.
+function livePillGoto(id) {
+  if (typeof id === 'string' && workspaces.value.some((w) => w.id === id)) selectWorkspace(id)
 }
-async function liveBannerLeave() {
+async function liveShareStop() {
+  const n = joinedGuests(liveShare.state.host).length
+  if (n) {
+    const ok = await askConfirm({
+      title: t('liveShare.stop.title', 'Stop Live Share?'),
+      text:
+        n === 1
+          ? t('liveShare.stop.text', '{{count}} person is disconnected, and every invitation code stops working. Trusted people stay trusted.', { count: 1 })
+          : t('liveShare.stop.text', '{{count}} people are disconnected, and every invitation code stops working. Trusted people stay trusted.', { count: n }),
+      confirmLabel: t('liveShare.stop.confirm', 'Stop sharing'),
+      danger: true
+    })
+    if (!ok) return
+  }
+  window.shellApi?.liveShare?.stop()
+}
+async function liveShareLeave() {
   const ok = await askConfirm({
-    title: t('liveShare.banner.leaveTitle', 'Leave the Live Share session?'),
-    text: t('liveShare.banner.leaveText', 'You stop seeing {{host}}’s panes. To come back, ask {{host}} for an invite code.', { host: liveShare.state.guest.host || '?' }),
-    confirmLabel: t('liveShare.banner.leave', 'Leave'),
+    title: t('liveShare.leave.title', 'Leave the Live Share session?'),
+    text: t('liveShare.leave.text', 'You stop seeing {{host}}’s panes. To come back, ask {{host}} for an invite code.', { host: liveShare.state.guest.host || '?' }),
+    confirmLabel: t('liveShare.leave.confirm', 'Leave'),
     danger: true
   })
   if (ok) liveShare.leave()
 }
-function openLiveShare() {
+// Opens the Live Share dialog: its Join tab, a Share section, or a project's
+// people.
+function openLiveShare(where = null) {
   liveShare.prepareShare()
+  const section = typeof where === 'string' ? where : 'overview'
+  liveShareAt.tab = section === 'join' || (section === 'overview' && liveShare.state.guest.state === 'joined' && !liveHostOn.value) ? 'join' : 'share'
+  liveShareAt.section = section === 'join' ? 'overview' : section
+  liveShareAt.project = null
   liveShareOpen.value = true
+}
+function openLiveShareAccess(projectId) {
+  openLiveShare('access')
+  liveShareAt.project = typeof projectId === 'string' ? projectId : null
 }
 onMounted(() => liveShare.init())
 // The accounts a session can start on (launchers, pane headers), and the panes
@@ -3042,8 +3087,10 @@ provide('panelCtx', {
   // its terminal, on your screen only), and its conversation, read only.
   liveShareView: (id, view) => liveShare.setGuestView(id, view),
   liveShareChatSource: (id) => liveShare.chatSource(id),
-  // Live Share, as the host: the guests reading a pane's conversation now.
+  // Live Share, as the host: the guests reading a pane's conversation now,
+  // and who watches, types in or reads each pane (LiveSharePresence).
   liveShareReaders: (id) => liveShare.readersOf(id),
+  liveSharePresence: (id) => liveShare.presenceOf(id),
   // A terminal agent's chat view (nothing restarts): what you write there,
   // and its agent's real end (back to the terminal).
   sendFromChatView: (id, text, callbacks) => sendFromChatView(id, text, callbacks),
@@ -4036,6 +4083,12 @@ const launchMenuAgents = computed(() => {
   const ws = (launcher.targetId && wsOfLeaf(launcher.targetId)) || currentWs.value
   const remote = !!(ws && ws.remote)
   return hostMenuAgents(launchableAgents.value, { remote, status: remote ? remoteAgentTools[ws.remote.hostId] || null : null })
+})
+// In a Live Share project: the host's shell and agents (null: this
+// computer's menu, or a host from before that list).
+const launchMenuHost = computed(() => {
+  const ws = (launcher.targetId && wsOfLeaf(launcher.targetId)) || currentWs.value
+  return liveShare.hostMenu(ws)
 })
 // Its account choice: for a project on this computer (a host has its own sign-in).
 const launchMenuLocal = computed(() => {
@@ -5823,8 +5876,14 @@ const sidebarProjects = computed(() =>
       worktrees: (gitKeyOf(w) && wsWorktrees[gitKeyOf(w)]) || [],
       ...(w.remote ? { remote: { host: remoteHostLabel(w.remote.hostId), path: w.remote.path, ...remoteHostWho(w.remote.hostId) } } : {}),
       ...(w.group ? { repoCount: w.group.repos.length } : {}),
-      // Live Share: the project you share ('host'), or the host's in their session ('guest').
-      ...(liveShare.isGuestWs(w) ? { live: 'guest' } : liveBanner.value && liveBanner.value.mode === 'host' && liveShare.isShared(w.id) ? { live: 'host' } : {})
+      // Live Share: the project you share ('host', with who is connected
+      // there), or the host's in their session ('guest'); nothing on a
+      // project that is not shared.
+      ...(liveShare.isGuestWs(w)
+        ? { live: 'guest' }
+        : liveHostOn.value && liveShare.isShared(w.id)
+          ? { live: 'host', liveGuests: guestsIn(liveShare.state.host, w.id).map((g) => ({ id: g.id, name: personName(g) })) }
+          : {})
     }
   })
 )
@@ -12348,18 +12407,24 @@ onBeforeUnmount(() => {
 
         <UsageMenu @details="openSettingsAt('stats')" @accounts="openSettingsAt('accounts')" />
         <NotificationsMenu @focus-pane="focusPane" />
+        <!-- Live Share: a pill while you share or are in a session (its
+             popover has the details), else the button that opens it. -->
+        <LiveSharePill
+          v-if="livePill"
+          :pill="livePill"
+          @open="openLiveShare"
+          @goto="livePillGoto"
+          @share="liveShare.setShared"
+          @stop="liveShareStop"
+          @leave="liveShareLeave"
+        />
         <button
+          v-else
           class="tb-icon"
-          :class="{ on: liveShare.state.host.state === 'sharing' || liveShare.state.guest.state === 'joined', 'live-on': liveShare.state.host.state === 'sharing' }"
-          :title="
-            liveShare.state.host.state === 'sharing'
-              ? t('liveShare.toolbar.sharing', 'Live Share: sharing your screen ({{count}} joined)', { count: liveShare.state.host.guests.filter((g) => g.state === 'joined').length })
-              : liveShare.state.guest.state === 'joined'
-                ? t('liveShare.toolbar.joined', 'Live Share: in {{host}}’s session', { host: liveShare.state.guest.host || '?' })
-                : t('liveShare.toolbar.title', 'Live Share: share your screen, or join someone’s')
-          "
+          data-test="live-share-button"
+          :title="t('liveShare.toolbar.title', 'Live Share: share your screen, or join someone’s')"
           :aria-label="t('liveShare.toolbar.label', 'Live Share')"
-          @click="openLiveShare"
+          @click="openLiveShare()"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <circle cx="6" cy="5.2" r="2.3" stroke="currentColor" stroke-width="1.3" />
@@ -12544,6 +12609,7 @@ onBeforeUnmount(() => {
         :now="clock"
         :live-share="sidebarLiveShare"
         @live-share-project="liveShare.setShared"
+        @live-share-access="openLiveShareAccess"
         @create-team="createTeam"
         @add-to-team="addToTeam"
         @rename-team="renameTeam"
@@ -12579,23 +12645,9 @@ onBeforeUnmount(() => {
         @port-copy="copyPort"
         @port-stop="stopPort"
       />
-      <div
-        class="workspace-main"
-        :class="{
-          'live-banner-on': !!liveBanner,
-          'live-frame-host': liveBanner && liveBanner.mode === 'host' && liveBanner.here,
-          'live-frame-guest': liveBanner && liveBanner.mode === 'guest' && liveBanner.here
-        }"
-      >
-        <LiveShareBanner
-          v-if="liveBanner"
-          :banner="liveBanner"
-          @manage="openLiveShare"
-          @goto="liveBannerGoto"
-          @leave="liveBannerLeave"
-          @remove="(id) => liveShare.setShared(id, false)"
-          @add="currentWs && liveShare.setShared(currentWs.id, true)"
-        />
+      <div class="workspace-main">
+        <!-- Live Share: a thin line along the top of a shared project. -->
+        <div v-if="liveLine" class="live-line" :class="liveLine" aria-hidden="true" data-test="live-line"></div>
         <div
           v-for="ws in workspaces"
           :key="ws.id"
@@ -12752,6 +12804,7 @@ onBeforeUnmount(() => {
       :worktree="worktreeState"
       :use-worktree="useWorktree"
       :account-choice="launchMenuLocal"
+      :host-menu="launchMenuHost"
       @worktree="(v) => (useWorktree = v)"
       @tools="openTools"
       :x="launcher.x"
@@ -12919,13 +12972,16 @@ onBeforeUnmount(() => {
     <LiveShareDialog
       v-if="liveShareOpen"
       :open="liveShareOpen"
-      :initial-tab="liveShare.state.guest.state === 'joined' ? 'join' : 'share'"
+      :initial-tab="liveShareAt.tab"
+      :initial-section="liveShareAt.section"
+      :focus-project="liveShareAt.project"
+      :pane-title="paneTitle"
       :projects="shareableProjects"
       :project-ids="liveShare.chosenIds()"
       @toggle-project="liveShare.setShared"
       @close="liveShareOpen = false"
     />
-    <LiveShareAsk :ask="liveShare.state.asks[0] || null" :projects="sharedProjectList" @answer="liveShare.answerAsk" />
+    <LiveShareAsk :ask="liveShare.state.asks[0] || null" :more="Math.max(0, liveShare.state.asks.length - 1)" :projects="sharedProjectList" @answer="liveShare.answerAsk" />
 
     <CookieImportDialog
       v-if="cookieImportOpen"

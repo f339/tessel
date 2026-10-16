@@ -12,6 +12,7 @@ import { getBuffer } from '../ptyStore'
 import { isFloatingToggleKey } from '../floatingTerminal'
 import BrandIcon from './BrandIcon.vue'
 import LiveShareReaders from './LiveShareReaders.vue'
+import LiveSharePresence from './LiveSharePresence.vue'
 import { settings, fontStack } from '../settings'
 import { terminalTheme } from '../themes'
 
@@ -3330,7 +3331,8 @@ const paneMenuBindings = computed(() => ({
           :parent-idle-since="turnEndedAt"
           @running="onSubRunning"
         />
-        <!-- Live Share host: guests reading this conversation now -->
+        <!-- Live Share host: guests watching, typing in, reading this pane now -->
+        <LiveSharePresence :pane-id="node.id" />
         <LiveShareReaders :pane-id="node.id" />
         <!-- chat view <-> terminal (the agent keeps running: nothing restarts) -->
         <button

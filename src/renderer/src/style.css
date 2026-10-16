@@ -985,6 +985,66 @@ body.popup-open .toolbar {
   white-space: nowrap;
 }
 
+/* Live Share host: who is at a pane now (LiveSharePresence), in its header
+   and on its sidebar row: an eye with initials (watching), three dots
+   (typing), a chat bubble (reading, the sidebar's form). */
+.ls-presence {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.ls-presence-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: color-mix(in srgb, #e5484d 16%, transparent);
+  color: #ff8a8a;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.ls-presence.compact .ls-presence-chip {
+  height: 16px;
+  padding: 0 5px;
+  font-size: 9.5px;
+}
+.ls-presence-chip.typing {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: #ffd37a;
+}
+.ls-typing-dots {
+  display: inline-flex;
+  gap: 2px;
+}
+.ls-typing-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: ls-typing 1s ease-in-out infinite;
+}
+.ls-typing-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.ls-typing-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes ls-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
 /* Live Share guest: what shows instead of a host's conversation or terminal
    that can't show here (LiveShareChatPane, TerminalPane's chat view). */
 .ls-guest-note {
@@ -1577,28 +1637,268 @@ body.popup-open .toolbar {
   top: 30px;
 }
 
-/* Live Share (LiveShareBanner): the panes start below its banner (then the
-   tabs above the panes, then the panes), and the project it is about has a
-   coloured frame (red: you share it; blue: the host's project, in their
-   session). The frame lets clicks through. */
-.workspace-main.live-banner-on > .ws-layer,
-.workspace-main.live-banner-on > .project-launcher {
-  top: 30px;
-}
-.workspace-main.live-banner-on > .project-launcher.under-tabs {
-  top: 60px;
-}
-.workspace-main.live-frame-host::after,
-.workspace-main.live-frame-guest::after {
-  content: '';
+/* Live Share: a thin line along the top of a shared project's area (red:
+   you share the project on screen; blue: a host's project, in their
+   session). Nothing on a project that is not shared. It lets clicks
+   through and takes no room from the panes. */
+.workspace-main > .live-line {
   position: absolute;
-  inset: 0;
+  inset: 0 0 auto 0;
   z-index: 7;
-  border: 2px solid var(--danger);
+  height: 3px;
+  background: var(--danger);
   pointer-events: none;
 }
-.workspace-main.live-frame-guest::after {
-  border-color: var(--accent);
+.workspace-main > .live-line.guest {
+  background: var(--accent);
+}
+.workspace-main > .live-line.idle {
+  background: color-mix(in srgb, var(--danger) 55%, transparent);
+}
+
+/* Live Share dialog: the fields and lists its sections share
+   (LiveShareDialog.vue, components/liveshare/*). */
+.ls-input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  box-sizing: border-box;
+}
+.ls-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.ls-input.ls-code {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 12px;
+}
+.confirm-btn.ls-small {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.confirm-btn.ls-small.danger:not(.primary) {
+  color: #ffb4b6;
+}
+.lsd-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.lsd-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+.lsd-intro {
+  flex: 1 1 260px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.lsd-empty {
+  margin: 0;
+  padding: 14px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: center;
+}
+.lsd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lsd-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.lsd-item.offline .lsd-name {
+  color: var(--text-dim);
+}
+.lsd-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+.lsd-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lsd-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+.lsd-badge.danger {
+  background: color-mix(in srgb, var(--danger) 24%, transparent);
+  color: #ffc9ca;
+}
+.lsd-badge.warn {
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  color: #ffe0a8;
+}
+.lsd-badge.accent,
+.lsd-badge.live {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: #cfe0ff;
+}
+.lsd-watch {
+  flex: none;
+  color: var(--text-dim);
+}
+.lsd-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.lsd-meta.warn > span:first-child {
+  color: var(--warn);
+}
+.lsd-warn-line {
+  margin: 0;
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.lsd-code-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.lsd-code-row .ls-input {
+  flex: 1 1 200px;
+  min-width: 0;
+  height: 26px;
+}
+.lsd-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.lsd-actions.start {
+  justify-content: flex-start;
+}
+.lsd-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+.lsd-confirm-text {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.lsd-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.lsd-check input {
+  flex: none;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.lsd-check span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.lsd-hint {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.lsd-grants {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 16px;
+  min-width: 0;
+}
+.lsd-grant {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.lsd-sub {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.lsd-rename {
+  display: flex;
+  flex: 1 1 240px;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.lsd-rename .ls-input {
+  flex: 1 1 140px;
+  min-width: 0;
+  height: 26px;
 }
 
 .ws-layer.hidden {
@@ -4917,12 +5217,6 @@ body.pane-dragging * {
 .tb-icon.on {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: #cfe0ff;
-}
-
-/* Sharing in Live Share: the button is red, as the banner above the panes. */
-.tb-icon.on.live-on {
-  background: color-mix(in srgb, var(--danger) 26%, transparent);
-  color: #ffd2d3;
 }
 
 .tb-icon.on.warn {
@@ -9874,7 +10168,22 @@ body.osb-project-dragging * {
   white-space: nowrap;
 }
 /* Live Share: LIVE after the project's name (red: you share it; blue: the
-   host's project, in their session). */
+   host's project, in their session), then who is connected there; muted
+   while nobody is. */
+.osb-live-wrap {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 5px;
+  margin-left: 6px;
+}
+.osb-live-wrap > .osb-live {
+  margin-left: 0;
+}
+.osb-live.muted {
+  background: var(--surface-3);
+  color: var(--text-dim);
+}
 .osb-live {
   flex-shrink: 0;
   margin-left: 6px;

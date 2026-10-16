@@ -41,6 +41,7 @@ import {
   ScreenShareOff
 } from 'lucide-vue-next'
 import OrcaMenu from './OrcaMenu.vue'
+import LsAvatars from './liveshare/LsAvatars.vue'
 import WorktreeCard from './sidebar/WorktreeCard.vue'
 import HiddenWorktreesDialog from './sidebar/HiddenWorktreesDialog.vue'
 import { settings } from '../settings'
@@ -76,7 +77,8 @@ const props = defineProps({
   paletteShortcut: { type: String, default: 'Ctrl+Shift+P' },
   // Live Share while you share: { sharing, shared: [project ids], guest:
   // [ids of Live Share projects (a host's)] }; a project's menu adds it to
-  // the share or takes it out.
+  // the share or takes it out, and shows who has access to it. (A project's
+  // `live` and `liveGuests` put LIVE and who is connected after its name.)
   liveShare: { type: Object, default: null }
 })
 
@@ -118,7 +120,9 @@ const emit = defineEmits([
   // or Alt+Up/Down on it): App puts its workspaces in that order.
   'reorder-projects',
   // (id, on): a project added to your Live Share or taken out of it.
-  'live-share-project'
+  'live-share-project',
+  // (id): who has access to that shared project (the Live Share dialog).
+  'live-share-access'
 ])
 
 // --- Options (persisted in settings, Orca's defaults) -------------------------
@@ -896,9 +900,18 @@ function projectActionItems(project) {
   ]
 }
 
+// LIVE's tooltip: a project you share (who is connected there, or nobody
+// yet), or a host's project in their session.
+function liveTitle(project) {
+  if (project.live !== 'host') return t('sidebar.project.liveGuest', 'A Live Share session: these panes run on the host’s computer')
+  const names = (project.liveGuests || []).map((g) => g.name).join(', ')
+  return names ? t('sidebar.project.liveHostWho', 'You share this project in Live Share. Connected here: {{names}}', { names }) : t('sidebar.project.liveHostNobody', 'You share this project in Live Share. Nobody is connected here yet.')
+}
+
 // While you share in Live Share: "Share in Live Share" or "Remove from Live
-// Share" for a project of yours (not a Live Share project: a host's). The
-// last project shared stays (Stop sharing ends the share).
+// Share" for a project of yours (not a Live Share project: a host's), and,
+// for a shared one, who has access to it. The last project shared stays
+// (Stop sharing ends the share).
 function liveShareItem(project) {
   const ls = props.liveShare
   if (!ls || !ls.sharing || (ls.guest || []).includes(project.id)) return []
@@ -916,6 +929,13 @@ function liveShareItem(project) {
   }
   const last = (ls.shared || []).length <= 1
   return [
+    {
+      type: 'item',
+      icon: Users,
+      label: t('liveShare.sidebar.access', 'Who has access…'),
+      title: t('liveShare.sidebar.accessHint', 'The people and invitations that see this project, and what they can do'),
+      onSelect: () => emit('live-share-access', project.id)
+    },
     {
       type: 'item',
       icon: ScreenShareOff,
@@ -1320,13 +1340,14 @@ defineExpose({
                   class="osb-section-host"
                   data-test="project-remote-host"
                   >{{ remoteHostLabel(r.project) }}</span
-                ><span
-                  v-if="r.project && r.project.live && editingId !== r.project.id"
-                  class="osb-live"
-                  :class="r.project.live"
-                  data-test="project-live"
-                  :title="r.project.live === 'host' ? t('sidebar.project.liveHost', 'You are sharing this project in Live Share') : t('sidebar.project.liveGuest', 'A Live Share session: these panes run on the host’s computer')"
-                  >{{ t('sidebar.project.liveBadge', 'LIVE') }}</span
+                ><span v-if="r.project && r.project.live && editingId !== r.project.id" class="osb-live-wrap"
+                  ><span
+                    class="osb-live"
+                    :class="[r.project.live, { muted: r.project.live === 'host' && !(r.project.liveGuests || []).length }]"
+                    data-test="project-live"
+                    :title="liveTitle(r.project)"
+                    >{{ t('sidebar.project.liveBadge', 'LIVE') }}</span
+                  ><LsAvatars v-if="r.project.live === 'host'" :people="r.project.liveGuests || []" :size="15" :lead="t('sidebar.project.liveWho', 'Connected here:')" /></span
                 >
               </div>
               <div class="osb-section-actions" data-repo-header-actions="" @click.stop>

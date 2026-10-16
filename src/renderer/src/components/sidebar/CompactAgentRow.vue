@@ -3,7 +3,8 @@
 // CompactAgentRow (sidebar/worktree-card-compact-agent-row.tsx; MIT,
 // Copyright (c) 2026 Lovecast Inc.): state glyph, agent icon, "prompt -
 // what it does", its age; the pane you are in is filled. Tessel adds the
-// pane number and its team marks (lead, unread team messages, tools down).
+// pane number and its team marks (lead, unread team messages, tools down),
+// and, while you share in Live Share, who is at it (LiveSharePresence).
 // A Claude Code or Codex row lists its conversation's sub-agents under it
 // (each with its type and model as small tags), folded by
 // a chevron in the card gutter like Orca's child agents.
@@ -13,6 +14,7 @@ import { teamNumber } from '../../teamNumber'
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ChevronRight } from 'lucide-vue-next'
 import BrandIcon from '../BrandIcon.vue'
+import LiveSharePresence from '../LiveSharePresence.vue'
 import AgentStateDot from './AgentStateDot.vue'
 import AgentHoverDetails from './AgentHoverDetails.vue'
 import HoverCardContent from '../hover/HoverCardContent.vue'
@@ -225,6 +227,8 @@ const workerOfLabel = computed(() =>
     <span v-if="row.teamUnread" class="car-tag">✉ {{ row.teamUnread }}</span>
     <span v-if="row.toolsDown" class="car-tag">⚠ {{ t('sidebar.agentRow.toolsDown', 'tools') }}</span>
 
+    <!-- Live Share (host): a guest watching, typing in or reading it now. -->
+    <LiveSharePresence compact :pane-id="row.id" />
     <span v-if="row.time" class="car-time" :class="{ focused: row.focused }">{{ row.time }}</span>
   </div>
   <!-- The task on its own line under the agent (the row keeps its space). -->
