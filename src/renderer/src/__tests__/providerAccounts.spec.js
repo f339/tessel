@@ -86,8 +86,11 @@ describe('provider account management', () => {
     state.providers[1].system = { id: null, label: 'System default', status: 'ready', email: 'me@example.test', organization: 'Home org', plan: 'max' }
     await render()
     const system = row('system', 'claude')
-    expect(system.text()).toContain('System default')
+    // Named by its address, tagged as the system sign-in.
+    expect(system.text()).not.toContain('System default')
+    expect(system.get('[data-test="account-system-tag"]').text()).toBe('System sign-in')
     expect(system.text()).toContain('me@example.test')
+    expect(section('claude').get('[data-test="provider-status"]').text()).toBe('New sessions: me@example.test · Signed in')
     expect(system.text()).toContain('Home org')
     expect(system.text()).toContain('max')
     expect(system.text()).toContain('Signed in')
