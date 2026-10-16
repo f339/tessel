@@ -3,6 +3,7 @@ import { settings } from '../settings'
 import { flushPromises, mount } from '@vue/test-utils'
 import { toBlob } from 'html-to-image'
 import StatsUsage from '../components/StatsUsage.vue'
+import { tokens } from '../components/stats/statsFormat'
 
 vi.mock('html-to-image', () => ({ toBlob: vi.fn() }))
 
@@ -149,7 +150,7 @@ describe('Orca Stats & usage port', () => {
       'Est. API-equivalent cost'
     ])
     expect(pane.text()).toContain('$0.0042')
-    expect(pane.text()).toContain('Tessel worktrees only')
+    expect(pane.text()).toContain('Tessel projects only')
     expect(pane.text()).toContain('Last 30 days')
     expect(pane.findAll('tbody tr')).toHaveLength(10)
     expect(pane.findAll('th').map((node) => node.text())).toEqual([
@@ -162,6 +163,33 @@ describe('Orca Stats & usage port', () => {
       'Cache'
     ])
     expect(wrapper.find('[data-test="stats-overview"]').exists()).toBe(false)
+  })
+
+  it('shows billions of tokens as billions, not thousands of millions', async () => {
+    const big = { input: 116290, output: 44060107, cacheRead: 18609426875, cacheWrite: 212792150 }
+    api.claudeUsageReport.mockImplementation(async (query) =>
+      report('claude', query, { totals: { ...report('claude').totals, ...big } })
+    )
+    await open({ initialProvider: 'claude' })
+    const values = wrapper
+      .findAll('[data-test="stats-pane-claude"] [data-test="stats-provider-cards"] .su-card-value')
+      .map((node) => node.text())
+    expect(values.slice(0, 4)).toEqual(['116.3k', '44.1M', '18.6B', '212.8M'])
+    // The unit is chosen after rounding: never "1,000.0M" or "1,000.0k".
+    expect([999, 999949, 999960, 999949999, 999990000].map(tokens)).toEqual(['999', '999.9k', '1.0M', '999.9M', '1.0B'])
+  })
+
+  it('sends where task copies go with the Tessel projects scope, so their folder counts', async () => {
+    settings.workspaceDir = 'D:\\worktrees'
+    try {
+      await open()
+      expect(api.claudeUsageReport.mock.calls[0][0]).toMatchObject({ workspaceDir: 'D:\\worktrees' })
+      await provider('claude')
+      await filter('scope', 'all')
+      expect(api.claudeUsageReport.mock.calls.at(-1)[0]).not.toHaveProperty('workspaceDir')
+    } finally {
+      settings.workspaceDir = ''
+    }
   })
 
   it('does not invent Codex cost or add cached/reasoning subsets twice in the daily chart', async () => {

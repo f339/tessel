@@ -12,7 +12,7 @@ import {
   usageDayFormatter,
   usageQueryRange,
   usageProjectKey,
-  matchesUsageRoots,
+  usageRootMatcher,
   usageScope
 } from './usageReportFilters'
 
@@ -272,6 +272,7 @@ export function createOpencodeUsageReport({
   return async function report(query = {}) {
     const time = now()
     const range = usageQueryRange(query, dayOf(time), days)
+    const projectIn = usageRootMatcher(range)
     const files = listOpencodeDatabases(dataDir, env)
     for (const f of [...cache.keys()]) if (!files.includes(f)) cache.delete(f)
     for (const f of files) {
@@ -316,7 +317,7 @@ export function createOpencodeUsageReport({
         (range.to && day > range.to) ||
         (range.cwd && usageProjectKey(e.cwd) !== usageProjectKey(range.cwd)) ||
         (range.model && model !== range.model) ||
-        !matchesUsageRoots(e.cwd, range.roots)
+        (projectIn && !projectIn(e.cwd))
       )
         continue
       add(totals, e)
@@ -325,7 +326,8 @@ export function createOpencodeUsageReport({
       if (!byModel.has(model)) byModel.set(model, { model, ...empty(), sessions: new Set() })
       add(byModel.get(model), e)
       byModel.get(model).sessions.add(e.sessionId)
-      const project = e.cwd || '(unknown folder)'
+      // Scoped to Tessel's projects: sub-folders and worktrees inside a project count as it.
+      const project = (projectIn && projectIn(e.cwd)) || e.cwd || '(unknown folder)'
       const key = usageProjectKey(project)
       if (!byProject.has(key))
         byProject.set(key, {

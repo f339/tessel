@@ -40,6 +40,175 @@ export function usageLocalDay(value = Date.now(), timezone = localZone()) {
   return `${parts.year}-${parts.month}-${parts.day}`
 }
 
+// A folder the local reports accept as a root: a drive, UNC or POSIX path.
+function localRoot(value) {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 4096 &&
+    !/[\x00-\x1f]/.test(value) &&
+    (/^[a-z]:[\\/]/i.test(value) || /^(?:\\\\|\/\/)[^\\/]+[\\/][^\\/]+/.test(value) || value.startsWith('/'))
+  )
+}
+// One spelling per folder: Windows paths without case or slash differences.
+function folderKey(path) {
+  const windows = /^[a-z]:[\\/]/i.test(path) || /^(?:\\\\|\/\/)/.test(path)
+  const key = windows ? path.replace(/\\/g, '/').toLowerCase() : path
+  return key.replace(/\/+$/, '') || '/'
+}
+const within = (path, folder) => {
+  const key = folderKey(path)
+  const base = folderKey(folder)
+  return key === base || key.startsWith(base === '/' ? '/' : `${base}/`)
+}
+
+// The local folders of a Tessel project: its folder, and for a folder
+// imported as a group, each of its repositories too (the group's own folder
+// stays: its agents start there by default; a repository, deeper, keeps its
+// own turns). None for a project on an SSH host (its history is not on this
+// computer).
+export function usageProjectFolders(workspace) {
+  if (!object(workspace) || workspace.remote) return []
+  const own = localRoot(workspace.cwd) ? [workspace.cwd] : []
+  if (object(workspace.group) && Array.isArray(workspace.group.repos))
+    return [...workspace.group.repos.map((repo) => (object(repo) ? repo.path : null)).filter(localRoot), ...own]
+  return own
+}
+
+// What the "Tessel projects" scope holds now, like Orca's worktree scope:
+// each project folder (a project of its own), and counted under it, its git
+// worktrees (`worktrees`: folder -> [{ path, isMain }]), the task copies
+// (`tasks`: [{ worktree: { path, root } }]) and the pane copies (`panes`:
+// [{ path, workspace }]). -> [{ path, project, main? }]
+export function usageScopeEntries({ workspaces = [], worktrees = {}, tasks = [], panes = [] } = {}) {
+  const entries = new Map() // folder key -> entry
+  const projects = []
+  const owner = new Map() // a git worktree's folder key -> its project
+  const add = (path, project, main = false) => {
+    if (!localRoot(path) || entries.has(folderKey(path))) return
+    entries.set(folderKey(path), { path, project, ...(main ? { main: true } : {}) })
+  }
+  for (const workspace of Array.isArray(workspaces) ? workspaces : [])
+    for (const folder of usageProjectFolders(workspace))
+      if (!entries.has(folderKey(folder))) {
+        projects.push(folder)
+        add(folder, folder)
+      }
+  const projectKeys = new Map(projects.map((folder) => [folderKey(folder), folder]))
+  for (const folder of projects) {
+    const listed = object(worktrees) ? worktrees[folder] : null
+    for (const copy of Array.isArray(listed) ? listed : [])
+      if (object(copy) && localRoot(copy.path)) {
+        if (!owner.has(folderKey(copy.path))) owner.set(folderKey(copy.path), folder)
+        add(copy.path, folder, copy.isMain === true)
+      }
+  }
+  // A copy's project: the one git lists it under, else its repository's,
+  // else the project whose copies folder (<project>.worktrees) or own folder holds it.
+  const projectOf = (path, root, candidates = projects, single = false) => {
+    const listed = owner.get(folderKey(path))
+    if (listed) return listed
+    if (localRoot(root)) {
+      const named = projectKeys.get(folderKey(root)) || owner.get(folderKey(root))
+      if (named) return named
+    }
+    // The deepest one: a copy inside a project nested in another is that one's.
+    const holder = candidates
+      .filter((folder) => within(path, `${folder}.worktrees`) || within(path, folder)) // i18n-ignore
+      .sort((a, b) => folderKey(b).length - folderKey(a).length)[0]
+    if (holder) return holder
+    if (single && candidates.length === 1) return candidates[0]
+    return localRoot(root) ? root : path
+  }
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    const copy = object(task) && object(task.worktree) ? task.worktree : null
+    if (copy && localRoot(copy.path)) add(copy.path, projectOf(copy.path, copy.root))
+  }
+  for (const pane of Array.isArray(panes) ? panes : [])
+    if (object(pane) && localRoot(pane.path)) {
+      const folders = usageProjectFolders(pane.workspace)
+      add(pane.path, projectOf(pane.path, null, folders.length ? folders : projects, folders.length > 0))
+    }
+  return [...entries.values()]
+}
+
+// The copies Tessel has seen, kept so that a copy merged and removed since
+// still counts under its project: { [folder key]: { path, project, at } },
+// at most USAGE_COPIES_MAX, the most recently seen.
+export const USAGE_COPIES_KEY = 'tessel:usage-copies'
+export const USAGE_COPIES_MAX = 1000
+const DAY = 86400000
+export function usageCopiesFrom(raw) {
+  const out = {}
+  if (!object(raw)) return out
+  for (const [key, copy] of Object.entries(raw))
+    if (
+      object(copy) &&
+      localRoot(copy.path) &&
+      localRoot(copy.project) &&
+      folderKey(copy.path) === key &&
+      Number.isFinite(copy.at)
+    )
+      out[key] = { path: copy.path, project: copy.project, at: copy.at }
+  return out
+}
+// -> the same object when nothing changed (nothing to save), else a new one.
+export function rememberUsageCopies(saved, entries, now = Date.now()) {
+  let next = null
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!object(entry) || folderKey(entry.project) === folderKey(entry.path)) continue
+    const key = folderKey(entry.path)
+    const had = saved[key]
+    if (had && had.project === entry.project && now - had.at < DAY) continue
+    next ??= { ...saved }
+    next[key] = { path: entry.path, project: entry.project, at: now }
+  }
+  if (!next) return saved
+  const keys = Object.keys(next)
+  if (keys.length > USAGE_COPIES_MAX)
+    for (const key of keys.sort((a, b) => next[b].at - next[a].at).slice(USAGE_COPIES_MAX)) delete next[key]
+  return next
+}
+export function loadUsageCopies(storage = globalThis.localStorage) {
+  try {
+    return usageCopiesFrom(JSON.parse(storage.getItem(USAGE_COPIES_KEY) || 'null'))
+  } catch {
+    return {}
+  }
+}
+export function saveUsageCopies(copies, storage = globalThis.localStorage) {
+  try {
+    storage.setItem(USAGE_COPIES_KEY, JSON.stringify(copies))
+  } catch {
+    // kept for this run only
+  }
+}
+
+// The roots the reports get: the entries of now, and the copies seen before
+// of a project still open. A project folder is sent as its path, a copy as
+// { path, project } (main: its repository's own checkout). Sorted, so the
+// same folders always make the same query.
+export function usageScopeRoots(entries = [], remembered = {}) {
+  const roots = new Map()
+  const projects = new Set()
+  for (const entry of Array.isArray(entries) ? entries : [])
+    if (object(entry) && localRoot(entry.path) && localRoot(entry.project)) {
+      if (folderKey(entry.project) === folderKey(entry.path)) projects.add(folderKey(entry.path))
+      if (!roots.has(folderKey(entry.path))) roots.set(folderKey(entry.path), entry)
+    }
+  for (const copy of Object.values(object(remembered) ? remembered : {}))
+    if (object(copy) && projects.has(folderKey(copy.project)) && !roots.has(folderKey(copy.path)))
+      roots.set(folderKey(copy.path), { path: copy.path, project: copy.project })
+  return [...roots.values()]
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+    .slice(0, 4096)
+    .map((entry) =>
+      folderKey(entry.project) === folderKey(entry.path)
+        ? entry.path
+        : { path: entry.path, project: entry.project, ...(entry.main ? { main: true } : {}) }
+    )
+}
+
 // Calendar arithmetic on date-only keys avoids 23/25-hour DST boundaries.
 function shiftDay(day, amount) {
   const date = new Date(`${day}T00:00:00Z`)
@@ -266,7 +435,7 @@ export function normalizeUsageReport(provider, raw, options = {}) {
     scope,
     scopeLabel:
       scope === 'tessel-worktrees'
-        ? t('usage.report.scopeTessel', 'Tessel worktrees only')
+        ? t('usage.report.scopeTessel', 'Tessel projects only')
         : provider === 'claude'
           ? t('usage.report.scopeClaude', 'Shared Claude history on this computer')
           : provider === 'opencode'

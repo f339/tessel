@@ -111,7 +111,21 @@ describe('account-aware session paths', () => {
     expect(managedKids.map((c) => [c.id, c.title, c.state])).toEqual([[kid, 'research (Boole)', 'running']])
     expect(await api.children({ agent: 'codex', sessionId: A, accountId: null })).toEqual([])
     expect(await api.children({ agent: 'codex', sessionId: A, accountId: 'missing' })).toEqual([])
-    expect(await api.children({ agent: 'gemini', sessionId: A })).toEqual([])
+    expect(await api.children({ agent: 'aider', sessionId: A })).toEqual([])
+  })
+  it("reads Gemini, Copilot and Kimi sub-agents in the pane's home (Gemini's in GEMINI_CLI_HOME when set)", async () => {
+    const at = new Date().toISOString()
+    const kid = '44444444-2222-4333-8444-555555555555'
+    put(join(home, '.gemini', 'tmp', 'proj', 'chats', A, `${kid}.jsonl`), [{ sessionId: kid, startTime: at, kind: 'subagent' }])
+    put(join(home, '.copilot', 'session-state', A, 'events.jsonl'), [{ type: 'subagent.started', timestamp: at, agentId: 'call_1', data: { toolCallId: 'call_1', agentName: 'explore' } }])
+    put(join(home, '.kimi-code', 'sessions', 'wd_proj', 'session_fixture', 'agents', 'main', 'wire.jsonl'), [{ type: 'subagent.spawned', time: Date.now(), subagentId: 'agent-1', subagentName: 'coder' }])
+    expect((await api.children({ agent: 'gemini', sessionId: A })).map((c) => c.id)).toEqual([kid])
+    expect((await api.children({ agent: 'copilot', sessionId: A })).map((c) => c.type)).toEqual(['explore'])
+    expect((await api.children({ agent: 'kimi', sessionId: 'session_fixture' })).map((c) => c.id)).toEqual(['agent-1'])
+    expect(await api.children({ agent: 'antigravity', sessionId: A })).toEqual([])
+    expect(await api.children({ agent: 'cursor', sessionId: A })).toEqual([])
+    const other = createAccountSessions({ accounts, home, env: { GEMINI_CLI_HOME: join(root, 'gemini-home') } })
+    expect(await other.children({ agent: 'gemini', sessionId: A })).toEqual([])
   })
   it('uses the configured Claude directory and refuses missing scoped accounts', async () => {
     put(join(claude, 'projects', 'fixture', `${C}.jsonl`), [

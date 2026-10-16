@@ -1,6 +1,7 @@
 <script setup>
 // The sub-agents a Claude Code pane's conversation started (its Task / Agent
-// tool; a Codex pane's spawn_agent threads), like Claude Code's own list:
+// tool; a Codex pane's spawn_agent threads, and the other CHILD_AGENTS' own),
+// like Claude Code's own list:
 // each one's kind (a tag), model, title, time and
 // tokens, running ones first. A compact indicator in the pane header (a
 // count, like Orca's); click for the list. The list opens in the page's top
@@ -21,7 +22,7 @@ const props = defineProps({
   // When the pane's agent ended its turn (idle), or null: its unfinished
   // sub-agents that wrote nothing since are not running (childActive).
   parentIdleSince: { type: Number, default: null },
-  // The list as the pane knows it ([{ id, title, type, model, state,
+  // The list as the pane knows it ([{ id, title, type, model, effort, state,
   // startedAt, endedAt, tokens, lastAt }]), or null to read the agent's files.
   items: { type: Array, default: null }
 })
@@ -245,7 +246,7 @@ function stateTitle(state) {
         <div v-for="c in rows" :key="c.id" class="agent-child" :class="c.state" role="listitem">
           <span class="agent-child-mark" :title="stateTitle(c.state)">{{ MARK[c.state] || '·' }}</span>
           <span v-if="c.type" class="agent-child-type" :title="t('pane.subAgents.typeTitle', 'Sub-agent type: {{type}}', { type: c.type })">{{ c.type }}</span>
-          <span v-if="c.model" class="agent-child-model" :title="t('pane.subAgents.modelTitle', 'Model: {{model}}', { model: c.model })">{{ modelLabel(c.model) }}</span>
+          <span v-if="c.model" class="agent-child-model" :title="c.effort ? t('pane.subAgents.modelEffortTitle', 'Model: {{model}}, effort: {{effort}}', { model: c.model, effort: c.effort }) : t('pane.subAgents.modelTitle', 'Model: {{model}}', { model: c.model })">{{ modelLabel(c.model) }}<template v-if="c.effort"> · {{ c.effort }}</template></span>
           <span class="agent-child-title" :title="c.title">{{ c.title || t('sidebar.agentRow.noTitle', '(no title)') }}</span>
           <span class="agent-child-stats">{{ childTime(c, now) }}<template v-if="formatTokens(c.tokens)"> · ↓ {{ tokensLabel(c.tokens) }}</template></span>
         </div>

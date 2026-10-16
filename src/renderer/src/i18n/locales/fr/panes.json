@@ -398,6 +398,7 @@
       "title": "Sous-agents",
       "typeTitle": "Type de sous-agent : {{type}}",
       "modelTitle": "Modèle : {{model}}",
+      "modelEffortTitle": "Modèle : {{model}}, effort : {{effort}}",
       "elapsedHours": "{{h}} h {{m}} min",
       "elapsedMinutes": "{{m}} min {{s}} s",
       "elapsedSeconds": "{{s}} s",

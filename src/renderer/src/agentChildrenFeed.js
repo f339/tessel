@@ -1,4 +1,4 @@
-// The sub-agents of a Claude Code or Codex conversation, polled once per conversation
+// The sub-agents of a conversation (agentChildrenView.js: CHILD_AGENTS), polled once per conversation
 // however many places show them (the sidebar's agent rows). Same data path
 // and guards as the pane header's AgentChildren.vue: window.shellApi
 // .agentChildren({ agent, sessionId, accountId }), an answer for another
@@ -55,7 +55,7 @@ function makeFeed(key, args, api, doc) {
 }
 
 // -> { state: { list, at }, refresh, release } or null when this pane has no
-// sub-agents to show (not Claude Code or Codex, no conversation yet).
+// sub-agents to show (an agent Tessel reads none of, no conversation yet).
 export function acquireChildren(args, { api = typeof window !== 'undefined' ? window.shellApi : null, doc = typeof document !== 'undefined' ? document : null } = {}) {
   const key = childrenKey(args || {})
   if (!key) return null
