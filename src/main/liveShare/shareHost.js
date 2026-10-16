@@ -717,8 +717,15 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     const e = access.effective(g.person)
     return e.projects.has(project) && sharedIds().has(project) && (right === 'view' || e.rights[right] === true)
   }
-  // A request still stands: not called off, still waited for, still allowed.
-  const stands = (g, entry) => !entry.cancelled && g.reqs.get(entry.id) === entry && stillMay(g, entry.project, entry.right)
+  // A change still holds every right it was asked with (the type right, say,
+  // that lets it write a file which runs things: shareScope.js).
+  function keepsRights(g, rights) {
+    const now = access.effective(g.person).rights
+    return Object.keys(rights).every((r) => rights[r] !== true || now[r] === true)
+  }
+  // A request still stands: not called off, still waited for, still allowed
+  // (a change: with all the rights it was asked with).
+  const stands = (g, entry) => !entry.cancelled && g.reqs.get(entry.id) === entry && stillMay(g, entry.project, entry.right) && (entry.kind !== 'write' || keepsRights(g, entry.rights))
   const failRes = (id, code) => ({ t: 'res', id, ok: false, code })
   function busyMore(g, n) {
     const hash = g.person.hash
@@ -738,10 +745,11 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     if (!stillMay(g, req.project, info.right)) return send(g, failRes(req.id, 'forbidden'))
     // Its budgets: in flight, then a minute's worth of its kind.
     if ((inFlight.get(g.person.hash) || 0) >= L.inFlight || !within(countsOf(g), RATE_LISTS[info.kind], L[info.kind])) return send(g, failRes(req.id, 'busy'))
-    const entry = { id: req.id, op: req.op, project: req.project, right: info.right, kind: info.kind, bulk: info.bulk, cancelled: false, message: null, size: 0 }
+    const rights = { ...access.effective(g.person).rights }
+    const entry = { id: req.id, op: req.op, project: req.project, right: info.right, kind: info.kind, bulk: info.bulk, rights, cancelled: false, message: null, size: 0 }
     const ctx = {
       guest: publicGuest(g),
-      rights: { ...g.rights },
+      rights: { ...rights },
       recheck: () => stands(g, entry),
       cancelled: () => entry.cancelled || g.reqs.get(entry.id) !== entry
     }
@@ -959,7 +967,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
   // subscriptions to a project it lost end.
   function revalidate(g) {
     for (const entry of [...g.reqs.values()]) {
-      if (stillMay(g, entry.project, entry.right)) continue
+      if (stillMay(g, entry.project, entry.right) && (entry.kind !== 'write' || keepsRights(g, entry.rights))) continue
       entry.cancelled = true
       g.reqs.delete(entry.id)
       send(g, failRes(entry.id, 'revoked'))

@@ -76,8 +76,8 @@ import ImageViewer from './components/ImageViewer.vue'
 import FileViewer from './components/FileViewer.vue'
 import { fileKind, isViewed } from '../../shared/fileKinds'
 import { remoteRoot, isRemotePath, parseRemotePath } from '../../shared/remotePath'
-import { isLsharePath } from '../../shared/liveSharePath'
-import { localOnlyText } from './liveShareGuestAccess'
+import { isLsharePath, lshareRoot } from '../../shared/liveSharePath'
+import { localOnlyText, lshareAccess } from './liveShareGuestAccess'
 import NotificationsMenu from './components/NotificationsMenu.vue'
 import FileFinder from './components/FileFinder.vue'
 import UsageMenu from './components/UsageMenu.vue'
@@ -137,7 +137,8 @@ import {
   getEditorPane,
   setEditorHooks,
   startDiskWatch,
-  autoSaveSettingsChanged
+  autoSaveSettingsChanged,
+  recheckSharedDocs
 } from './editor/documents'
 import { openTab, validSavedFiles, samePath, fileName, docPathOf, diffTabPath } from './editor/editorTabs'
 import { openEditorsOf } from './explorer/openEditors'
@@ -2442,6 +2443,16 @@ const liveShare = createLiveShareWindow({
   agentName: (id) => (agentById(id) || {}).name || null,
   activePaneId: () => activeId.value,
   layoutReady: () => layoutReady.value,
+  // This computer's board, for guests: read (each shared project's cards)
+  // and changed when a guest with the right asks (liveShareWindow.js checks).
+  taskBoard: {
+    tasks: () => boardTasks,
+    add: ({ title, wsId }) => addTask({ title, wsId }),
+    move: (id, column) => updateTask(id, { column }),
+    rename: (id, title) => updateTask(id, { title }),
+    remove: (id) => removeTask(id),
+    answer: (id, reply) => resolveDecision(id, reply)
+  },
   // Panes of this computer left in a Live Share project when it ends: a
   // project of their own, so nothing running is lost.
   adoptLeaves: (leaves) => {
@@ -2822,11 +2833,29 @@ const sideRoot = computed(() => {
   const ws = currentWs.value
   if (!ws) return null
   if (ws.remote) return remoteRoot(ws.remote.hostId, ws.remote.path)
+  // A Live Share host's project: its virtual root (lshare://…), which Files,
+  // Changes and the editor read from the host (main's guestFs.js).
+  if (ws.liveShare) return lshareRoot(ws.liveShare.project)
   // A worktree's grid on screen (paneViews.js): Files and Changes show that
   // copy, not the project folder.
   const active = ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
   if (active && viewKey(active, ws.cwd)) return leafViewPath(active)
   return ws.cwd
+})
+// A Live Share host gave the edit right in one of its projects: the files of
+// it open read-only are read again (editable now, unless the host says no).
+watch(
+  () => Object.keys(lshareAccess).filter((p) => lshareAccess[p].edit && lshareAccess[p].state === 'ok').join('\n'),
+  (now, before) => {
+    const had = new Set(String(before || '').split('\n'))
+    for (const project of now.split('\n')) if (project && !had.has(project)) recheckSharedDocs(project)
+  }
+)
+// The Tasks tab of a Live Share host's project: the host's board (a source,
+// liveShareWindow.js taskSource), never this computer's.
+const sideTaskSource = computed(() => {
+  const ws = currentWs.value
+  return ws && ws.liveShare ? liveShare.taskSource(ws.liveShare.project) : null
 })
 const sideRemote = computed(() => {
   const ws = currentWs.value
@@ -12808,6 +12837,7 @@ onBeforeUnmount(() => {
           :projects-ready="layoutReady"
           :now="clock"
           :root="sideRoot"
+          :task-source="sideTaskSource"
           :can-insert="canInsertPath"
           :agent-panes="agentPanes"
           :activity="activity"

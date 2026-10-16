@@ -169,7 +169,9 @@
       "openFailed": "La demande n'a pas pu être envoyée à {{host}} : la connexion est peut-être coupée.",
       "noAgent": "{{host}} n'a pas cet agent.",
       "trustFullJoined": "Liste des personnes de confiance pleine ({{max}}) : {{name}} est entré·e sans être une personne de confiance. Retirez quelqu'un des personnes de confiance pour lui faire confiance.",
-      "notTrustable": "{{name}} est entré·e sans être une personne de confiance : son Tessel est trop ancien pour ça (il doit être mis à jour)."
+      "notTrustable": "{{name}} est entré·e sans être une personne de confiance : son Tessel est trop ancien pour ça (il doit être mis à jour).",
+      "actionFlagged": "{{action}} (instructions d'un agent)",
+      "taskFailed": "{{host}} n'a pas fait ce changement : {{reason}}"
     },
     "toolbar": {
       "label": "Live Share",
@@ -469,6 +471,48 @@
     "presence": {
       "typing": "Tape ici en Live Share : {{names}}",
       "watching": "Regarde ce panneau en Live Share : {{names}}"
+    },
+    "action": {
+      "save": "{{name}} a enregistré {{path}}",
+      "create": "{{name}} a créé {{path}}",
+      "rename": "{{name}} a renommé {{path}} en {{to}}",
+      "trash": "{{name}} a mis {{path}} à la corbeille",
+      "notes": "{{name}} a enregistré les notes",
+      "stageOne": "{{name}} a indexé {{path}}",
+      "stage_one": "{{name}} a indexé {{count}} fichier",
+      "stage_other": "{{name}} a indexé {{count}} fichiers",
+      "unstageOne": "{{name}} a retiré {{path}} de l'index",
+      "unstage_one": "{{name}} a retiré {{count}} fichier de l'index",
+      "unstage_other": "{{name}} a retiré {{count}} fichiers de l'index",
+      "discardOne": "{{name}} a abandonné les modifications de {{path}}",
+      "discard_one": "{{name}} a abandonné les modifications de {{count}} fichier",
+      "discard_other": "{{name}} a abandonné les modifications de {{count}} fichiers",
+      "commit": "{{name}} a fait un commit « {{message}} »",
+      "taskAdd": "{{name}} a ajouté une tâche : {{title}}",
+      "taskMove": "{{name}} a déplacé « {{title}} » vers {{column}}",
+      "taskEdit": "{{name}} a renommé une tâche : {{title}}",
+      "taskRemove": "{{name}} a supprimé la tâche « {{title}} »",
+      "taskAnswer": "{{name}} a répondu à la question de « {{title}} »"
+    },
+    "taskFail": {
+      "rights": "vous ne pouvez plus gérer ses tâches.",
+      "missing": "cette tâche n'est plus sur son tableau.",
+      "notAllowed": "cette tâche ne peut plus être modifiée ainsi.",
+      "noProject": "vous n'avez plus accès à ce projet.",
+      "offline": "la connexion avec l'hôte est coupée.",
+      "outdated": "l'hôte doit mettre Tessel à jour.",
+      "busy": "trop de changements à la fois : patientez un instant.",
+      "failed": "cela n'a pas pu être fait."
+    },
+    "setting": {
+      "hideIgnored": "Masquer aux invités les fichiers ignorés et secrets",
+      "hideIgnoredHint": "Les fichiers ignorés par git et ceux qui ressemblent à des secrets (.env, clés, identifiants) restent hors des Fichiers, de la recherche et des Changements des invités. .git et .tessel sont toujours masqués."
+    },
+    "recent": {
+      "title": "Actions récentes des invités",
+      "none": "Aucun invité n'a encore rien modifié.",
+      "flaggedHint": "Ce fichier dit aux agents quoi faire : vérifiez la modification.",
+      "flagged": "Instructions d'agent"
     }
   }
 }

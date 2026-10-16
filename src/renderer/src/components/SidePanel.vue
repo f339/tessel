@@ -29,6 +29,7 @@ import { displayUrl } from '../../../shared/browserUrl'
 import TaskHistoryPanel from './TaskHistoryPanel.vue'
 import { SIDE_TABS } from '../sideTabs'
 import { statusMatters } from '../explorerChanges'
+import { isLsharePath } from '../../../shared/liveSharePath'
 import { Files, GitBranch, ListChecks, LayoutDashboard, Maximize2, Minimize2, Plus, Globe, X, ReceiptText, MessagesSquare } from 'lucide-vue-next'
 
 const props = defineProps({
@@ -41,6 +42,9 @@ const props = defineProps({
   openSessionIds: { type: Object, default: () => ({}) },
   // The Files tab's "Open Editors" (App: explorer/openEditors.js).
   openEditors: { type: Array, default: () => [] },
+  // The Tasks tab's board when it is not this computer's (a Live Share
+  // host's: taskBoardSource.js), else null.
+  taskSource: { type: Object, default: null },
   // A project on a remote host: { hostId, host, path }. Its root is then an
   // ssh://… path: Files and Changes read it over SSH (src/main/remoteFs.js),
   // under a small badge naming the host.
@@ -389,6 +393,7 @@ onBeforeUnmount(() => {
         v-show="current() === 'tasks'"
         :agent-panes="agentPanes"
         :workspace-id="workspaceId"
+        :source="taskSource"
         @new-task="emit('new-task')"
         @focus-pane="focusPane"
         @review="(id) => emit('review', id)"
@@ -405,7 +410,7 @@ onBeforeUnmount(() => {
       <SessionHistoryPanel
         v-if="shown.history"
         v-show="current() === 'history'"
-        :cwd="remote ? null : root"
+        :cwd="remote || isLsharePath(root) ? null : root"
         :remote="remote"
         :open-ids="openSessionIds"
         :active="current() === 'history'"

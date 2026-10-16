@@ -1003,7 +1003,8 @@
         "timeout": "Cloudflare n'a pas donné d'adresse de tunnel à temps. Réessayez.",
         "stopped": "cloudflared s'est arrêté avant de donner une adresse ({{detail}}).",
         "start": "cloudflared n'a pas pu démarrer ({{detail}})."
-      }
+      },
+      "lshareFolder": "Ce dossier est sur l'ordinateur d'un hôte Live Share : un terminal ne peut pas y démarrer ici."
     },
     "agyPlugins": {
       "notInstalled": "L'Antigravity CLI n'est pas installée.",

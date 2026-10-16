@@ -305,6 +305,41 @@ describe('Live Share: requests and subscriptions', () => {
     expect(made).toBe(false)
   })
 
+  it('a change asked with a right that is then taken away is not made, even with the op’s own right still on', async () => {
+    const t = fakeTessel({ 'ws-a': ['a1'] })
+    const conn = await share(t)
+    const alex = await join(conn, 'Alex')
+    const id = guestOf('Alex').id
+    host.setGrant(id, { rights: { edit: true, type: true } })
+    await until(() => alex.rights.length === 2)
+    let go
+    let made = false
+    t.answer = async (req, ctx) => {
+      expect(ctx.rights.type).toBe(true)
+      await new Promise((r) => (go = r))
+      if (!ctx.recheck()) return { ok: false, code: 'revoked' }
+      made = true
+      return { ok: true, data: {} }
+    }
+    // (A save of a file that runs things needs type too: shareScope.js.)
+    const save = alex.client.request('fs.write', 'ws-a', { path: '.claude/settings.json' })
+    await until(() => go)
+    host.change(id, { right: 'type', on: false })
+    await expect(save).resolves.toEqual({ ok: false, code: 'revoked' })
+    go()
+    await wait(50)
+    expect(made).toBe(false)
+    // A read is not called off by a right it did not need.
+    host.setGrant(id, { rights: { edit: true, type: true } })
+    let release
+    t.answer = () => new Promise((resolve) => (release = () => resolve({ ok: true, data: { read: 1 } })))
+    const read = alex.client.request('fs.stat', 'ws-a', { path: 'x' })
+    await until(() => release)
+    host.change(id, { right: 'type', on: false })
+    release()
+    await expect(read).resolves.toEqual({ ok: true, data: { read: 1 } })
+  })
+
   it('stops waiting for a request the guest gave up on (its change is not made)', async () => {
     const t = fakeTessel({ 'ws-a': ['a1'] })
     const conn = await share(t)

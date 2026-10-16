@@ -16,7 +16,7 @@ import { pathKey, fileName, autoSaveDelay, minimalEdit, mainEol } from './editor
 import { pickLanguage } from '../../../shared/editorLanguage'
 import { createSaveQueue } from './saveQueue'
 import { keepSavedVersion } from './localHistory'
-import { isLsharePath } from '../../../shared/liveSharePath'
+import { isLsharePath, parseLsharePath } from '../../../shared/liveSharePath'
 import { accessOf } from '../liveShareGuestAccess'
 import { t } from '../i18n'
 
@@ -53,6 +53,20 @@ export function isReadOnlyDoc(d) {
   if (!d || !isLsharePath(d.path)) return false
   const access = accessOf(d.path)
   return !!d.readOnly || !access || !access.edit || access.state !== 'ok'
+}
+// The host gave this guest the edit right in a project (or gave it back):
+// its files opened read-only before are read again, so those it may save now
+// become editable (a file that runs things stays read-only: the host says).
+export function recheckSharedDocs(project) {
+  for (const [key, d] of Object.entries(docs)) {
+    if (!d || !d.readOnly || d.loading || !isLsharePath(d.path)) continue
+    const loc = parseLsharePath(d.path)
+    const access = accessOf(d.path)
+    if (!loc || loc.project !== project || !access || !access.edit || access.state !== 'ok') continue
+    readFile(d.path)
+      .then((res) => absorbDisk(key, d, res))
+      .catch(() => {})
+  }
 }
 export function isDisconnectedDoc(d) {
   const access = d ? accessOf(d.path) : null
