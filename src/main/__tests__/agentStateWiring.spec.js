@@ -433,7 +433,7 @@ function wakeSandbox(over = {}) {
   const api = vm.runInNewContext(
     appSource.slice(lineStart, lineEnd) +
       appSource.slice(start, end) +
-      '\n;({ wakeIfNeeded, noteLaunchWake, pointerBlocked, launch: async (leaf, agent, opts, id, launch, accountId, agentModels) => {\n' +
+      '\n;({ wakeIfNeeded, noteLaunchWake, pointerBlocked, launch: async (leaf, agent, opts, id, launch, accountId, agentModels, hostAccount) => {\n' +
       appSource.slice(launchStart, launchEnd) +
       '\n} })',
     ctx
