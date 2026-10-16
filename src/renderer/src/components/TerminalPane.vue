@@ -90,6 +90,7 @@ import { readText as readScreenText, createShellIntegration, createTerminalAdapt
 import { terminalControl, terminalLog } from '../agentTerminal/agentTerminalState'
 import { nativeChatSessionChoiceLabel } from '../chat/orca/native-chat-session-option-labels'
 import { liveShareFit, liveShareOffset, LS_TEXT_SIZES } from '../liveShareFit'
+import { layoutDragging } from '../layoutDrag'
 
 const props = defineProps({
   node: { type: Object, required: true }
@@ -1786,10 +1787,32 @@ watch(liveShareViewOnly, (viewOnly) => {
   if (term) term.options.disableStdin = viewOnly
 })
 
+let idleFit = 0
+function cancelIdleFit() {
+  if (idleFit && typeof cancelIdleCallback === 'function') cancelIdleCallback(idleFit)
+  idleFit = 0
+}
 function scheduleFit() {
   if (fitTimer) clearTimeout(fitTimer)
+  cancelIdleFit()
   fitTimer = setTimeout(() => {
     fitTimer = 0
+    // The sidebar's or the right panel's edge is being dragged: fitted once,
+    // when it is let go (layoutDrag.js sends the layout change then).
+    if (layoutDragging()) return
+    // Out of sight (a hidden project, another tab): fitted when the window
+    // has a moment, within a second. Every project's terminals reflowing at
+    // once held the frames right after a sidebar was let go.
+    if (!onScreen && typeof requestIdleCallback === 'function') {
+      idleFit = requestIdleCallback(
+        () => {
+          idleFit = 0
+          doFit()
+        },
+        { timeout: 1000 }
+      )
+      return
+    }
     doFit()
   }, RESIZE_SETTLE_MS)
 }
@@ -3194,6 +3217,7 @@ onBeforeUnmount(() => {
   if (screenObserver) screenObserver.disconnect()
   clearTimeout(releaseTimer)
   if (fitTimer) clearTimeout(fitTimer)
+  cancelIdleFit()
   window.removeEventListener('resize', onLayoutChange)
   window.removeEventListener('terminal-layout-change', onLayoutChange)
   window.removeEventListener('pointerdown', onDocPointerDownMenu, true)

@@ -2284,12 +2284,26 @@ html.window-hidden .ws-layer {
   background: var(--accent);
 }
 
-/* While dragging, keep the resize cursor everywhere and stop text selection
-   or terminal hover effects from flickering. */
-body.ws-resizing,
-body.ws-resizing * {
-  cursor: col-resize !important;
-  user-select: none !important;
+/* While the sidebar's or the right panel's edge is dragged (layoutDrag.js):
+   one element over the whole window keeps the resize cursor everywhere and
+   takes the pointer from the panes and pages under it (no hover effects, no
+   text selection). A rule on every element under the body's class did the
+   same but restyled the whole window, about 100 ms, when it began and ended. */
+.layout-drag-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  cursor: col-resize;
+  user-select: none;
+  background: transparent;
+}
+
+/* Meanwhile the hidden projects' and tabs' panes are left as they are
+   (their layers are laid out like the one on screen, so every frame of the
+   drag laid out every project's terminals): laid out once, at the size the
+   drag ends at, before the terminals fit it. */
+body.ws-resizing .ws-layer.hidden .view-room {
+  content-visibility: hidden;
 }
 
 /* ================= New-pane split button + quick agents ================= */

@@ -1,5 +1,6 @@
 <script setup>
 import { sidebarMaxWidth } from './layoutLimits'
+import { beginLayoutDrag, frameFollower } from './layoutDrag'
 import { ensureAgentNames, renameAgentName, resolveAgentAddress, agentProgramLabel } from '../../shared/agentNames'
 import { ref, shallowRef, reactive, provide, watch, computed, nextTick, onMounted, onBeforeUnmount, toRaw } from 'vue'
 import SplitNode from './components/SplitNode.vue'
@@ -2725,6 +2726,11 @@ function clampTaskPanel(w) {
   return Math.round(Math.min(max, Math.max(TASK_PANEL_MIN, w)))
 }
 const taskPanelShown = computed(() => clampTaskPanel(taskPanelWidth.value))
+// The same style object until the width changes: while its edge is dragged
+// the panel's width is its own inline style (startTaskResize), and a new
+// object on any re-render of the window would put the old width back for a
+// frame.
+const taskPanelStyle = computed(() => ({ flexBasis: taskPanelShown.value + 'px' }))
 watch(taskPanelShown, () => window.dispatchEvent(new Event('terminal-layout-change')))
 let taskResizeLastDown = 0
 function startTaskResize(e) {
@@ -2741,30 +2747,34 @@ function startTaskResize(e) {
   const aside = e.currentTarget.parentElement
   const right = aside.getBoundingClientRect().right
   taskResizing.value = true
-  document.body.classList.add('ws-resizing')
   // The panel follows the pointer through its own style, once a frame; its
-  // width (which redraws Tessel's whole window) is set when it is let go.
-  // Setting it on every pointer move (up to 250 a second) redrew the window
-  // each time, and the page beside it lagged behind.
-  let pending = null
-  let frame = 0
-  const apply = () => {
-    frame = 0
-    if (pending == null) return
-    aside.style.flexBasis = `${pending}px`
-    window.dispatchEvent(new Event('terminal-layout-change'))
+  // width (which redraws Tessel's whole window) is set when it is let go,
+  // and the terminals fit their new size then (layoutDrag.js). Setting it
+  // on every pointer move (up to 250 a second) redrew the window each time,
+  // and the page beside it lagged behind; a page follows by its own
+  // ResizeObserver (BrowserPane.vue).
+  const endDrag = beginLayoutDrag()
+  const follow = frameFollower((px) => (aside.style.flexBasis = `${px}px`))
+  // Its tabs keep their width meanwhile, against the window's edge (cut, or
+  // with room beside them), and are laid out once at the new width: a board
+  // of a few hundred cards, a long conversation, a file tree or a page laid
+  // out again on every frame held the drag to some 20 frames a second.
+  const content = aside.querySelector(':scope > .side-panel')
+  const contentWidth = content ? content.getBoundingClientRect().width : 0
+  if (contentWidth > 0) {
+    content.style.width = `${contentWidth}px`
+    content.style.alignSelf = 'flex-end'
   }
-  const move = (ev) => {
-    pending = clampTaskPanel(right - ev.clientX)
-    if (!frame) frame = requestAnimationFrame(apply)
-  }
+  const move = (ev) => follow.set(clampTaskPanel(right - ev.clientX))
   const up = () => {
-    if (frame) cancelAnimationFrame(frame)
-    apply()
-    if (pending != null) taskPanelWidth.value = pending
+    const width = follow.finish()
+    if (contentWidth > 0) {
+      content.style.width = ''
+      content.style.alignSelf = ''
+    }
+    if (width != null) taskPanelWidth.value = width
     taskResizing.value = false
-    document.body.classList.remove('ws-resizing')
-    refitSoon()
+    nextTick(endDrag)
   }
   // Keeps the pointer even outside the window or over a browser page, so
   // letting go there still ends the resize (browser/webviewPassthrough.js).
@@ -5606,20 +5616,11 @@ function cycleWorkspace(step) {
   selectWorkspace(list[(i + step + list.length) % list.length].id)
 }
 
-// Live resize: the terminal area shrinks/grows with the sidebar, so ask panes
-// to refit (same event a divider drag sends).
-// Once a frame at most while it is dragged (a pointer moves up to 250 times
-// a second; each width redraws the window).
-let sidebarFrame = 0
-let sidebarPending = null
+// The sidebar's new width: once, when its edge is let go (it follows the
+// pointer by its own style meanwhile, WorkspaceSidebar.vue), or a reset.
+// Its resize-end then refits the panes.
 function resizeSidebar(w) {
-  sidebarPending = w
-  if (sidebarFrame) return
-  sidebarFrame = requestAnimationFrame(() => {
-    sidebarFrame = 0
-    sidebarWidth.value = sidebarPending
-    window.dispatchEvent(new Event('terminal-layout-change'))
-  })
+  sidebarWidth.value = w
 }
 
 function toggleSidebar() {
@@ -13096,7 +13097,7 @@ onBeforeUnmount(() => {
           'page-drop': paneDrag.active && paneDrag.browser && !paneDrag.fromSide,
           'page-drop-over': paneDrag.active && !!paneDrag.target && paneDrag.target.kind === 'side'
         }"
-        :style="{ flexBasis: taskPanelShown + 'px' }"
+        :style="taskPanelStyle"
       >
         <div
           class="task-resize"
