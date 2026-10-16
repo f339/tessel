@@ -10,6 +10,7 @@ import { paneEnv } from '../paneEnv'
 import { newTeamSecret, setTeamSecret, revokeTeamSecret, teamSecretOf, _resetTeamAuth } from '../teamAuth'
 import { wakeLaunchArgs, WAKE_LAUNCH_PROMPT } from '../../shared/orchestration'
 import { STATUS_PROVIDERS } from '../../shared/agentStateModel'
+import { trimBuffer } from '../ptyProtocol'
 import { claudeStartChoice, codexResumes, hasClaudeYoloFlag, rootSafeClaudeArgs } from '../../renderer/src/remoteAgentLaunch'
 // Claude Code and Codex panes: status from their hooks from launch.
 const managedAgentStatus = (leaf) => !!leaf.agentLaunchToken
@@ -72,6 +73,16 @@ function wire(hostRecords = new Map()) {
     host,
     ptyInfo,
     pendingData: new Map(),
+    // The output held while a re-attach answer goes out (covered by
+    // ptyAttachOrder.spec.js): inert here.
+    heldData: new Map(),
+    heldExits: new Map(),
+    holdData: () => {},
+    releaseData: () => {},
+    trimBuffer,
+    setTimeout,
+    clearTimeout,
+    PANE_HISTORY_CHARS: 200_000,
     agentStateStore: store,
     newTeamSecret,
     setTeamSecret,
@@ -168,7 +179,9 @@ it('a delayed exit cannot close the new execution registered for the same pane',
   const send = vi.fn()
   const start = main.indexOf('  onExit: (id, exitCode, signal, pid) => {')
   const end = main.indexOf('  onLost:', start)
-  const handler = vm.runInNewContext('({' + main.slice(start, end) + '})', {
+  // What it does (paneExited), and the notice handler itself.
+  const ended = main.slice(main.indexOf('function paneExited('), main.indexOf('// Live Share (liveShare.js)'))
+  const handler = vm.runInNewContext(ended + '\n;({' + main.slice(start, end) + '})', {
     ptyInfo,
     agentStateStore: { unregister },
     revokeTeamSecret: vi.fn(),
@@ -177,6 +190,8 @@ it('a delayed exit cannot close the new execution registered for the same pane',
     sshAskpass: { paneExited: vi.fn() },
     remoteAgentCheck: { paneExited: vi.fn() },
     flushData: vi.fn(),
+    heldData: new Set(),
+    heldExits: new Map(),
     liveShare: null,
     send,
     endedPtyPids: new Set(),

@@ -20,7 +20,7 @@ import * as pty from 'node-pty'
 import { createLogger } from './logger'
 import { Terminal as HeadlessTerminal } from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
-import { PROTOCOL } from './ptyProtocol'
+import { PROTOCOL, trimBuffer } from './ptyProtocol'
 import { buildInputModeReset } from '../shared/terminalModeReset'
 import { createSshHostBridge } from './ssh/sshHostBridge'
 import { createOutputSaver } from './outputSave'
@@ -305,7 +305,11 @@ function handle(sock, msg) {
       // scrollback: the lines of history that come with the screen (all of
       // them when not said; Live Share asks for none).
       const rows = Number.isInteger(msg.scrollback) && msg.scrollback >= 0 ? Math.min(msg.scrollback, SCROLLBACK) : SCROLLBACK
-      snapshot(p, rows).then((buffer) => {
+      // maxChars: only the end of it (what the window keeps of a pane), from
+      // a line start (never inside an escape sequence).
+      const maxChars = Number.isInteger(msg.maxChars) && msg.maxChars > 0 ? msg.maxChars : 0
+      snapshot(p, rows).then((text) => {
+        const buffer = maxChars ? trimBuffer(text, maxChars) : text
         reply({ ok: true, ...describePty(msg.id, p), buffer })
         p.holding--
         if (p.holding) return

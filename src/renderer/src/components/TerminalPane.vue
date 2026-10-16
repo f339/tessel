@@ -8,7 +8,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { getBuffer } from '../ptyStore'
+import { exitOf, getBuffer } from '../ptyStore'
 import { isFloatingToggleKey } from '../floatingTerminal'
 import BrandIcon from './BrandIcon.vue'
 import LiveShareReaders from './LiveShareReaders.vue'
@@ -61,6 +61,7 @@ import { antigravityListed, antigravityModelOnScreen } from '../../../shared/ant
 import { codexModelOnScreen } from '../../../shared/codexScreen'
 import { paneModels } from '../paneModels'
 import { modelsFor, refreshIfStale } from '../agentModels'
+import { afterStartup, isStartupFinished } from '../startupIdle'
 import { CLAUDE_PRICING } from '../../../shared/claudePricing'
 import { modelChoiceLabel, sessionPillLabel } from '../sessionOptionLabels'
 import { switchClaudeModel, typeCommand } from '../claudeModelSwitch'
@@ -226,11 +227,12 @@ onBeforeUnmount(() => {
 })
 // An agent pane asks for its model list (missing or a day old) once it
 // opens: its pickers (header, chat view, Settings) all list from it, not
-// only the pane menu's.
+// only the pane menu's. While Tessel starts, once it has started (asking
+// runs the agent's CLI: startupIdle.js).
 watch(
   () => (props.node.kind === 'agent' ? props.node.agentId : null),
   (agentId) => {
-    if (agentId) refreshIfStale(agentId)
+    if (agentId) afterStartup(() => refreshIfStale(agentId))
   },
   { immediate: true }
 )
@@ -802,11 +804,29 @@ onBeforeUnmount(() => {
   clearTimeout(pickRefresh)
   if (stopModelChanged) stopModelChanged()
 })
+// Its first read while Tessel starts waits for the pane to be mounted: read
+// at once when it is on screen, else once Tessel has started (each read is a
+// file read in the main process, which then answered the terminals'
+// re-attaches late: startupIdle.js).
+let firstModelRead = false
 watch(
   () => [props.node.kind, props.node.agentId, props.node.sessionId, props.node.detectedCommand],
-  () => refreshModel(),
+  (_now, before) => {
+    if (!before && !isStartupFinished()) {
+      firstModelRead = true
+      return
+    }
+    refreshModel()
+  },
   { immediate: true }
 )
+function readModelAtMount() {
+  if (!firstModelRead) return
+  firstModelRead = false
+  const hidden = !!(hostEl.value && hostEl.value.closest('.ws-layer.hidden'))
+  if (hidden && !isStartupFinished()) afterStartup(() => mounted && refreshModel())
+  else refreshModel()
+}
 
 // Hook observations own supported launches. Older panes and other providers
 // retain their explicitly estimated output-based display.
@@ -2900,6 +2920,16 @@ function showMouse() {
   hostEl.value.classList.remove('mouse-hidden')
 }
 
+// Its terminal ended.
+function paneEnded(code) {
+  // Put to sleep (Settings > Agents): not an end; the pane shows it asleep.
+  if (props.node.sleeping || !term) return
+  exited.value = true
+  activityMonitor.dispose()
+  exitCode.value = code
+  term.write(`\r\n\x1b[33m[${t('pane.exitedWithCode', 'process exited with code {{code}}', { code })}]\x1b[0m\r\n`)
+}
+
 // Focus follows mouse (Settings > Terminal): hovering a pane makes it the
 // active one, never while a button is held (a drag, a selection) nor when
 // Tessel is in the background or a menu is open.
@@ -3255,17 +3285,16 @@ onMounted(() => {
     // in place asks the host whether its own terminal still runs.
     if (!pid && (props.node.gen || props.node.restartedAt)) {
       const gen = props.node.gen
-      const a = await window.shellApi.attachPty(id).catch(() => null)
+      const a = await window.shellApi.attachPty(id, { probe: true }).catch(() => null)
       if (!mounted || props.node.gen !== gen || !term) return
       if (a && a.ok && !a.exited && (!a.pid || !props.node.pid || a.pid === props.node.pid)) return
     }
-    // Put to sleep (Settings > Agents): not an end; the pane shows it asleep.
-    if (props.node.sleeping) return
-    exited.value = true
-    activityMonitor.dispose()
-    exitCode.value = code
-    term.write(`\r\n\x1b[33m[${t('pane.exitedWithCode', 'process exited with code {{code}}', { code })}]\x1b[0m\r\n`)
+    paneEnded(code)
   })
+  // Its terminal ended before this pane was mounted (rebuilt at startup from
+  // an answer asked ahead, or mounted again): the end kept since (ptyStore.js).
+  const endedBefore = exitOf(props.node.id, props.node.pid, props.node.answeredAt)
+  if (endedBefore && !exited.value) paneEnded(endedBefore.exitCode)
 
   // Refit whenever the pane is resized (divider drag, window resize, splits).
   ro = new ResizeObserver(() => scheduleFit())
@@ -3335,6 +3364,7 @@ onMounted(() => {
   // Not under the floating terminal while it has the keyboard (typing would
   // reach a pane the user cannot see).
   if (isActive.value && !(ctx.floatingHasKeyboard && ctx.floatingHasKeyboard())) termFocus()
+  readModelAtMount()
 })
 
 watch(isActive, (a) => {

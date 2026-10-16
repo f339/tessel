@@ -132,6 +132,43 @@ describe('local agent status spool and snapshots', () => {
     expect(store.snapshot()[paneId].state).toBe('working')
   })
 
+  it('reads a waiting event once while it stays the same, again when it changes', async () => {
+    const store = make()
+    const waiting = put(event('UserPromptSubmit', { paneId: 'pane-later', id: 'later-1' }))
+    const opened = []
+    const original = fsp.open.bind(fsp)
+    vi.spyOn(fsp, 'open').mockImplementation((path, ...args) => {
+      opened.push(String(path))
+      return original(path, ...args)
+    })
+    const reads = () => opened.filter((p) => p === waiting).length
+    expect((await store.scan()).stats.deferred).toBe(1)
+    expect(reads()).toBe(1)
+    expect((await store.scan()).stats.deferred).toBe(1)
+    expect((await store.scan()).stats.deferred).toBe(1)
+    expect(reads()).toBe(1)
+    // Rewritten (another size): read again.
+    fs.writeFileSync(waiting, JSON.stringify(event('UserPromptSubmit', { paneId: 'pane-later', id: 'later-2', toolName: 'Bash' })))
+    fs.utimesSync(waiting, new Date(tick + 5), new Date(tick + 5))
+    expect((await store.scan()).stats.deferred).toBe(1)
+    expect(reads()).toBe(2)
+    // Its pane comes: the kept event is applied and removed.
+    await store.register(registered({ paneId: 'pane-later' }))
+    const applied = await store.scan()
+    expect(applied.stats).toMatchObject({ accepted: 1, removed: 1 })
+    expect(applied.states['pane-later'].state).toBe('working')
+    expect(fs.existsSync(waiting)).toBe(false)
+  })
+
+  it('a kept waiting event still expires', async () => {
+    const store = make()
+    const waiting = put(event('UserPromptSubmit', { paneId: 'pane-later' }))
+    expect((await store.scan()).stats.deferred).toBe(1)
+    tick += 25 * 60 * 60 * 1000
+    expect((await store.scan()).stats).toMatchObject({ rejected: 1, removed: 1 })
+    expect(fs.existsSync(waiting)).toBe(false)
+  })
+
   it('restores timestamps but never treats persisted or replayed evidence as a live observation', async () => {
     const first = make()
     await first.register(registered())

@@ -9,9 +9,16 @@
 // window when agents printed a lot.)
 
 import { ChunkBuffer } from '../../shared/chunkBuffer'
+import { PANE_HISTORY_CHARS } from '../../shared/paneHistory'
 
-const MAX = 200_000 // ~200 KB of recent output kept per pane
+const MAX = PANE_HISTORY_CHARS // ~200 KB of recent output kept per pane
 const buffers = new Map() // id -> ChunkBuffer
+// The last end of each pane's terminal (its process id, code and when it was
+// heard), from the start: a pane rebuilt or mounted after its terminal ended
+// (startup asks for its re-attach long before its pane exists) still learns
+// it ended.
+const exits = new Map() // id -> { pid, exitCode, at }
+const EXITS_MAX = 500
 let started = false
 
 function bufferFor(id) {
@@ -27,6 +34,25 @@ export function startCapture() {
   if (started || !window.shellApi) return
   started = true
   window.shellApi.onData(({ id, data }) => bufferFor(id).push(data))
+  if (window.shellApi.onExit)
+    window.shellApi.onExit((e) => {
+      if (!e || typeof e.id !== 'string') return
+      exits.delete(e.id)
+      exits.set(e.id, { pid: e.pid || null, exitCode: e.exitCode, at: performance.now() })
+      if (exits.size > EXITS_MAX) exits.delete(exits.keys().next().value)
+    })
+}
+
+// How the terminal with this process id ended, if it did since the start:
+// { exitCode } or null. Only that process: a pane restarted in place keeps
+// its id, and an older process's end is not the new one's. A terminal with
+// no process id (on an SSH host, over its shared connection): an end heard
+// after `since` (performance.now() when its answer came).
+export function exitOf(id, pid, since = null) {
+  const e = exits.get(id)
+  if (!e) return null
+  if (pid) return e.pid === pid ? { exitCode: e.exitCode } : null
+  return !e.pid && Number.isFinite(since) && e.at >= since ? { exitCode: e.exitCode } : null
 }
 
 // A pane's history from the terminal host (re-attach): it holds everything
@@ -44,6 +70,8 @@ export function getBuffer(id) {
   return b ? b.text() : ''
 }
 
+// The pane closed or its terminal replaced: its output and its end go.
 export function dropBuffer(id) {
   buffers.delete(id)
+  exits.delete(id)
 }

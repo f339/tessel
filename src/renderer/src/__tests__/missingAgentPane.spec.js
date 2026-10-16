@@ -64,6 +64,8 @@ function load({ shared = true, status = null, tree = null } = {}) {
     watch: () => {},
     newId: () => `pane-new${++paneNo}`,
     seedBuffer: () => {},
+    exitOf: () => null,
+    performance,
     validPaneSessionOptions: (o) => (o && o.model ? o : null),
     validSavedFiles: () => [],
     launchSessionValues: () => null,
@@ -123,7 +125,7 @@ function load({ shared = true, status = null, tree = null } = {}) {
   vm.createContext(ctx)
   vm.runInContext(
     slice('function serializeNode(node)', '// Rebuild a live tree') +
-      slice('async function deserializeNode(snap, cwd = null)', 'let persistReady') +
+      slice('async function deserializeNode(snap, cwd = null, attaching = null)', 'let persistReady') +
       slice('async function createLeaf(shellId, agent = null', 'function replaceNode(') +
       slice('const connectingLeaves = new Set()', '// Replace a pane with a fresh process') +
       slice('const REMOTE_CHECK_MS =', 'let offMissingAgentExit = null') +

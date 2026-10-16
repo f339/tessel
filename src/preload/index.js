@@ -35,7 +35,8 @@ const api = {
   tesselNeeds: () => ipcRenderer.invoke('tools:needs'),
   refreshPath: () => ipcRenderer.invoke('tools:refreshPath'),
   createPty: (opts) => ipcRenderer.invoke('pty:create', opts),
-  attachPty: (id) => ipcRenderer.invoke('pty:attach', id),
+  // opts.probe: only whether it still runs (nothing replayed).
+  attachPty: (id, opts) => ipcRenderer.invoke('pty:attach', id, opts && opts.probe === true ? { probe: true } : undefined),
   reconcilePtys: (ids) => ipcRenderer.invoke('pty:reconcile', ids),
   loadScrollback: () => ipcRenderer.invoke('scrollback:load'),
   writePty: (id, data) => ipcRenderer.send('pty:write', { id, data }),

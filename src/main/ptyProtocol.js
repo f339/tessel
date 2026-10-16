@@ -14,6 +14,8 @@ export function trimBuffer(text, max) {
   let cut = text.length - max
   const nl = text.indexOf('\n', cut)
   if (nl >= 0 && nl - cut < 4096) cut = nl + 1
+  // No line start near: at least never half of a character (a surrogate pair).
+  else if (cut < text.length && /[\uDC00-\uDFFF]/.test(text[cut])) cut++
   return text.slice(cut)
 }
 

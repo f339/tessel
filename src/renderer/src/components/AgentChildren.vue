@@ -14,6 +14,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { childTime, formatTokens, childrenSummary, childShownState } from '../agentChildrenView'
 import { listsChildren } from '../agentChildrenFeed'
+import { afterStartup } from '../startupIdle'
 import { modelLabel } from '../../../shared/modelLabel'
 import { t } from '../i18n'
 
@@ -214,7 +215,10 @@ function onLayout() {
   if (open.value) place()
 }
 onMounted(() => {
-  refresh().then(schedule)
+  // Read from the agent's files (in the main process): once Tessel has
+  // started (startupIdle.js). A list given by the pane, at once.
+  if (props.items || props.source) refresh().then(schedule)
+  else afterStartup(() => !disposed && refresh().then(schedule))
   document.addEventListener('mousedown', onDocDown, true)
   window.addEventListener('keydown', onKey)
   window.addEventListener('blur', onWinBlur)
