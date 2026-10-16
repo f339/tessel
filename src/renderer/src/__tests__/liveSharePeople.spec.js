@@ -147,6 +147,22 @@ describe('Live Share: People', () => {
   })
 })
 
+describe('Live Share: someone waiting for your answer', () => {
+  it('Let in… brings up their prompt (review-guest); Refuse turns them away', async () => {
+    const w = await openAt('people', sharing({ guests: [guest({ id: 'g2', name: 'Eve', state: 'waiting', code: '123 456' })] }))
+    const row = w.find('[data-test="ls-waiting-g2"]')
+    expect(row.text()).toContain('Waiting for your answer (code 123 456)')
+    await row.find('[data-test="ls-waiting-letin-g2"]').trigger('click')
+    expect(w.emitted('review-guest')).toEqual([['g2']])
+    expect(api.approve).not.toHaveBeenCalled()
+    await row.find('[data-test="ls-waiting-refuse-g2"]').trigger('click')
+    await flushPromises()
+    expect(api.approve).toHaveBeenCalledWith({ guestId: 'g2', yes: false, projects: [], rights: NO_RIGHTS, trust: false })
+    expect(w.find('[data-test="ls-host-notice"]').text()).toBe('Eve was turned away.')
+    w.unmount()
+  })
+})
+
 describe('Live Share: Trusted', () => {
   it('an empty state; trusted people edited while not sharing (offline), every project of this window offered', async () => {
     const empty = await openAt('trusted', { ...OFF_HOST })

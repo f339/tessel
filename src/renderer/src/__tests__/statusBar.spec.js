@@ -98,8 +98,12 @@ describe('status bar', () => {
     const pop = document.querySelector('.sb-resources')
     expect(pop.textContent).toContain('Resource Manager')
     expect(pop.textContent).toContain('1.44 GB')
-    expect(pop.textContent).toContain('Σ WS')
-    expect(pop.textContent).toContain('Σ Private')
+    // Memory and private in words (the measure, working set, in the tooltip).
+    expect(pop.textContent).not.toContain('WS')
+    expect(pop.textContent).toContain('1.44 GB memory')
+    expect(pop.textContent).toContain('1.10 GB private')
+    expect(pop.querySelector('.sb-res-col.mem').textContent.trim()).toBe('Memory')
+    expect(pop.querySelector('.sb-res-col.mem').getAttribute('title')).toMatch(/working set/)
     expect(pop.textContent).toContain('Shop / repo')
     pop.querySelector('.sb-res-row.session').click()
     expect(w.emitted('focus-pane')[0]).toEqual(['a'])
@@ -124,11 +128,13 @@ describe('status bar', () => {
     expect(spark.getAttribute('aria-hidden')).toBe('true')
     // Left of the CPU and memory columns.
     expect(spark.nextElementSibling.classList.contains('sb-res-cpu')).toBe(true)
-    // 1 GB then 2 GB: rising from the bottom left to the top right.
-    expect(spark.querySelector('polyline').getAttribute('points')).toBe('0.0,14.0 48.0,0.0')
-    // Tessel's own row: its total is flat, so a flat line along the bottom.
-    const app = pop.querySelector('.sb-res-app .sb-res-spark polyline')
-    expect(app.getAttribute('points')).toBe('0.0,14.0 48.0,14.0')
+    // 1 GB then 2 GB: rising, at the right end (two samples of the 30 the
+    // width holds: the history fills in leftward as it comes).
+    expect(spark.querySelector('polyline:not(.sb-res-spark-lead)').getAttribute('points')).toBe('46.3,14.0 48.0,0.0')
+    expect(spark.querySelector('.sb-res-spark-lead').getAttribute('points')).toBe('0.0,14.0 46.3,14.0')
+    // Tessel's own row: its total is flat, so a flat stub in the middle.
+    const app = pop.querySelector('.sb-res-app .sb-res-spark polyline:not(.sb-res-spark-lead)')
+    expect(app.getAttribute('points')).toBe('46.3,7.0 48.0,7.0')
     // Child rows (terminals, Main / Renderer) have none.
     expect(pop.querySelectorAll('.sb-res-row.session .sb-res-spark')).toHaveLength(0)
     pop.querySelector('.sb-res-app').click()
@@ -142,7 +148,7 @@ describe('status bar', () => {
     await w.findAll('.sb-trigger')[2].trigger('click')
     await flushPromises()
     const pop = document.querySelector('.sb-ports')
-    expect(pop.textContent).toContain('1 workspace · 1 external')
+    expect(pop.querySelector('[data-test="ports-counts"]').textContent).toBe('1 workspace port · 1 external')
     expect(pop.textContent).toContain('5173')
     expect(pop.textContent).not.toContain('svchost.exe')
     pop.querySelector('.sb-external-toggle').click()
@@ -154,6 +160,24 @@ describe('status bar', () => {
     document.querySelector('.sb-ports [aria-label="Go to Worktree"]').click()
     expect(w.emitted('activate-card')[0]).toEqual(['k1'])
     expect(w.emitted('refresh-ports')).toBeTruthy()
+  })
+
+  it('Ports popover: a refresh button, plural counts, and an empty state that says what shows up', async () => {
+    const w = mountBar({ portGroups: [], externalPorts: [] })
+    await w.findAll('.sb-trigger')[2].trigger('click')
+    await flushPromises()
+    const pop = document.querySelector('.sb-ports')
+    expect(pop.querySelector('[data-test="ports-counts"]').textContent).toBe('0 workspace ports · 0 external')
+    expect(pop.querySelector('[data-test="ports-empty"]').textContent).toContain('No workspace ports detected')
+    expect(pop.querySelector('[data-test="ports-empty"]').textContent).toContain('dev server')
+    const before = w.emitted('refresh-ports').length
+    pop.querySelector('[data-test="ports-refresh"]').click()
+    expect(w.emitted('refresh-ports')).toHaveLength(before + 1)
+    // While a scan runs: the button waits and spins, the list says so.
+    await w.setProps({ portsRefreshing: true })
+    expect(document.querySelector('[data-test="ports-refresh"]').disabled).toBe(true)
+    expect(document.querySelector('[data-test="ports-refresh"] svg').classList.contains('sb-spin')).toBe(true)
+    expect(document.querySelector('[data-test="ports-empty"]').textContent).toContain('Scanning')
   })
 
   it('right-click chooses the indicators (Remote Hosts, Resource Manager, Ports)', async () => {

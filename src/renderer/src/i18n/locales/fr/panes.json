@@ -15,7 +15,6 @@
     },
     "resources": {
       "memoryUnavailable": "mémoire indisponible",
-      "private": "Privée",
       "tooltip_one": "Gestionnaire de ressources - {{memory}} - {{count}} session de terminal",
       "tooltip_other": "Gestionnaire de ressources - {{memory}} - {{count}} sessions de terminal",
       "grouped": "Les sessions de terminal sont regroupées par espace de travail.",
@@ -36,22 +35,31 @@
       "terminals": "Terminaux",
       "main": "Principal",
       "renderer": "Rendu",
-      "other": "Autre"
+      "other": "Autre",
+      "memory": "Mémoire",
+      "memoryLower": "mémoire",
+      "privateLower": "privée"
     },
     "ports": {
       "ariaLabel_one": "Ports, {{count}} port d'espace de travail",
       "ariaLabel_other": "Ports, {{count}} ports d'espace de travail",
       "title_one": "Ports — {{count}} port d'espace de travail",
       "title_other": "Ports — {{count}} ports d'espace de travail",
-      "externalSuffix": " · {{count}} externe(s)",
       "name": "Ports",
-      "counts": "{{workspace}} espace de travail · {{external}} externe(s)",
       "unavailable": "Scan des ports indisponible sur cet ordinateur : {{reason}}",
       "goToWorktree": "Aller au worktree",
       "scanning": "Recherche des ports de l'espace de travail...",
       "none": "Aucun port d'espace de travail détecté",
       "external": "Ports externes",
-      "noExternal": "Aucun port externe détecté"
+      "noExternal": "Aucun port externe détecté",
+      "externalSuffix_one": " · {{count}} externe",
+      "externalSuffix_other": " · {{count}} externes",
+      "workspaceCount_one": "{{count}} port d'espace de travail",
+      "workspaceCount_other": "{{count}} ports d'espace de travail",
+      "externalCount_one": "{{count}} externe",
+      "externalCount_other": "{{count}} externes",
+      "refresh": "Chercher de nouveau",
+      "noneHint": "Un programme lancé dans l'un de vos terminaux qui écoute sur un port (un serveur de développement, par exemple) s'affiche ici."
     },
     "hosts": {
       "title": "Hôtes distants",
@@ -66,8 +74,7 @@
     "units": {
       "kb": "{{value}} Ko",
       "mb": "{{value}} Mo",
-      "gb": "{{value}} Go",
-      "percent": "{{value}} %"
+      "gb": "{{value}} Go"
     },
     "agentUpdate": {
       "one": "Mise à jour de {{name}}…",

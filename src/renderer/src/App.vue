@@ -1,5 +1,6 @@
 <script setup>
 import { sidebarMaxWidth } from './layoutLimits'
+import { beginLayoutDrag, frameFollower } from './layoutDrag'
 import { ensureAgentNames, renameAgentName, resolveAgentAddress, agentProgramLabel } from '../../shared/agentNames'
 import { ref, shallowRef, reactive, provide, watch, computed, nextTick, onMounted, onBeforeUnmount, toRaw } from 'vue'
 import SplitNode from './components/SplitNode.vue'
@@ -69,6 +70,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import CookieImportDialog from './components/CookieImportDialog.vue'
 import LiveShareDialog from './components/LiveShareDialog.vue'
 import LiveShareAsk from './components/LiveShareAsk.vue'
+import HelpDialog from './components/HelpDialog.vue'
 import { createLiveShareWindow, rightsText } from './liveShareWindow'
 import LiveSharePill from './components/LiveSharePill.vue'
 import { guestsIn, personName, viaName, joinedGuests, waitingGuests } from './liveShareAccess'
@@ -873,15 +875,10 @@ const worktreeState = reactive({ available: false, reason: null, checking: false
 const placement = ref('right')
 const launcher = reactive({ open: false, x: 0, y: 0, targetId: null })
 const helpOpen = ref(false)
-const helpCardEl = ref(null)
-// The help dialog takes keyboard focus (so Esc reaches it, not the terminal)
-// and hands it back to the active pane when it closes.
+// The help dialog takes keyboard focus (its search box, so Esc reaches it,
+// not the terminal) and hands it back to the active pane when it closes.
 watch(helpOpen, (open) => {
-  nextTick(() => {
-    if (open) {
-      if (helpCardEl.value) helpCardEl.value.focus()
-    } else focusActiveInput()
-  })
+  if (!open) nextTick(() => focusActiveInput())
 })
 
 // Small, non-blocking notices (errors, "agent is done", folder changes).
@@ -1143,72 +1140,6 @@ watch(
 const initError = ref('')
 const openMenu = ref(null) // toolbar dropdown: 'layout' | 'agents'
 
-// The help dialog's shortcuts, in the interface's language.
-const shortcuts = computed(() => [
-  {
-    title: t('app.help.panes', 'Panes'),
-    rows: [
-      ['Ctrl+Shift+T', t('app.help.newPane', 'New pane: the default agent, or the default shell')],
-      ['Ctrl+Shift+Space', t('app.help.launcher', 'Open a terminal or agent')],
-      ['Ctrl+Shift+P', t('app.help.palette', 'Command palette: find panes, workspaces, commands')],
-      ['Ctrl+Shift+J', t('app.help.finder', "Jump to a file of the workspace's project")],
-      ['Ctrl+Shift+E', t('app.help.splitRight', 'Split right')],
-      ['Ctrl+Shift+O', t('app.help.splitDown', 'Split down')],
-      ['Ctrl+Shift+W', t('app.help.closePane', 'Close pane')],
-      ['Ctrl+Shift+R', t('app.help.restartPane', 'Restart pane')],
-      ['Alt+Arrow', t('app.help.movePanes', 'Move between panes')],
-      ['Esc', t('app.help.restoreMax', 'Restore a maximized pane')],
-      ['Ctrl+`', t('app.help.floatingTerminal', 'Show or hide the floating terminal (the key left of 1)')]
-    ]
-  },
-  {
-    title: t('app.help.workspaces', 'Workspaces'),
-    rows: [
-      ['Ctrl+Shift+N', t('app.help.newWorkspace', 'New workspace')],
-      ['Ctrl+PageUp', t('app.help.prevWorkspace', 'Previous workspace')],
-      ['Ctrl+PageDown', t('app.help.nextWorkspace', 'Next workspace')]
-    ]
-  },
-  {
-    title: t('app.help.terminal', 'Terminal'),
-    rows: [
-      ['Ctrl+Shift+F', t('app.help.find', 'Find')],
-      ['Ctrl+Shift+C', t('app.help.copy', 'Copy')],
-      ['Ctrl+Shift+V', t('app.help.paste', 'Paste')],
-      ['Ctrl+=', t('app.help.bigger', 'Bigger text')],
-      ['Ctrl+-', t('app.help.smaller', 'Smaller text')],
-      ['Ctrl+0', t('app.help.resetSize', 'Reset text size')],
-      ['Shift+PageUp', t('app.help.scrollUp', 'Scroll up in the pane')],
-      ['Shift+PageDown', t('app.help.scrollDown', 'Scroll down in the pane')]
-    ]
-  },
-  {
-    title: t('app.help.editor', 'Editor'),
-    rows: [
-      ['Ctrl+S', t('app.help.save', 'Save the file')],
-      ['Ctrl+W', t('app.help.closeTab', 'Close the editor tab')],
-      ['Ctrl+F', t('app.help.findInFile', 'Find in the file')],
-      ['Ctrl+H', t('app.help.replace', 'Replace')],
-      ['Ctrl+G', t('app.help.goToLine', 'Go to line')],
-      ['Alt+Z', t('app.help.wordWrap', 'Word wrap on or off')],
-      ['F7 / Shift+F7', t('app.help.nextChange', 'Next / previous change (a diff)')],
-      ['Ctrl+Shift+A', t('app.help.reviewNote', 'Add Review Note (a diff: the selected lines)')]
-    ]
-  },
-  {
-    title: t('app.help.app', 'App'),
-    rows: [
-      ['Ctrl+Shift+B', t('app.help.broadcast', 'Broadcast typing to all panes')],
-      ['Alt+A', t('app.help.chatApproval', 'In a chat pane: go to the request waiting for your answer')],
-      ['Ctrl+Shift+K', t('app.help.taskBoard', 'Task board')],
-      ['Ctrl+Shift+X', t('app.help.fileExplorer', 'File explorer')],
-      ['Ctrl+Shift+G', t('app.help.sourceControl', 'Source Control (the git changes)')],
-      ['Ctrl+,', t('app.help.settings', 'Settings')],
-      ['Win+H', t('app.help.voice', 'Voice typing (Windows)')],
-      ['F1', t('app.help.thisHelp', 'This help')]
-    ]
-  }
-])
 const updateLabel = computed(() => t('app.toolbar.updateVersion', 'Update {{version}}', { version: updateStatus.value.version }))
 
 const gridOptions = [
@@ -2761,6 +2692,11 @@ function clampTaskPanel(w) {
   return Math.round(Math.min(max, Math.max(TASK_PANEL_MIN, w)))
 }
 const taskPanelShown = computed(() => clampTaskPanel(taskPanelWidth.value))
+// The same style object until the width changes: while its edge is dragged
+// the panel's width is its own inline style (startTaskResize), and a new
+// object on any re-render of the window would put the old width back for a
+// frame.
+const taskPanelStyle = computed(() => ({ flexBasis: taskPanelShown.value + 'px' }))
 watch(taskPanelShown, () => window.dispatchEvent(new Event('terminal-layout-change')))
 let taskResizeLastDown = 0
 function startTaskResize(e) {
@@ -2777,30 +2713,34 @@ function startTaskResize(e) {
   const aside = e.currentTarget.parentElement
   const right = aside.getBoundingClientRect().right
   taskResizing.value = true
-  document.body.classList.add('ws-resizing')
   // The panel follows the pointer through its own style, once a frame; its
-  // width (which redraws Tessel's whole window) is set when it is let go.
-  // Setting it on every pointer move (up to 250 a second) redrew the window
-  // each time, and the page beside it lagged behind.
-  let pending = null
-  let frame = 0
-  const apply = () => {
-    frame = 0
-    if (pending == null) return
-    aside.style.flexBasis = `${pending}px`
-    window.dispatchEvent(new Event('terminal-layout-change'))
+  // width (which redraws Tessel's whole window) is set when it is let go,
+  // and the terminals fit their new size then (layoutDrag.js). Setting it
+  // on every pointer move (up to 250 a second) redrew the window each time,
+  // and the page beside it lagged behind; a page follows by its own
+  // ResizeObserver (BrowserPane.vue).
+  const endDrag = beginLayoutDrag()
+  const follow = frameFollower((px) => (aside.style.flexBasis = `${px}px`))
+  // Its tabs keep their width meanwhile, against the window's edge (cut, or
+  // with room beside them), and are laid out once at the new width: a board
+  // of a few hundred cards, a long conversation, a file tree or a page laid
+  // out again on every frame held the drag to some 20 frames a second.
+  const content = aside.querySelector(':scope > .side-panel')
+  const contentWidth = content ? content.getBoundingClientRect().width : 0
+  if (contentWidth > 0) {
+    content.style.width = `${contentWidth}px`
+    content.style.alignSelf = 'flex-end'
   }
-  const move = (ev) => {
-    pending = clampTaskPanel(right - ev.clientX)
-    if (!frame) frame = requestAnimationFrame(apply)
-  }
+  const move = (ev) => follow.set(clampTaskPanel(right - ev.clientX))
   const up = () => {
-    if (frame) cancelAnimationFrame(frame)
-    apply()
-    if (pending != null) taskPanelWidth.value = pending
+    const width = follow.finish()
+    if (contentWidth > 0) {
+      content.style.width = ''
+      content.style.alignSelf = ''
+    }
+    if (width != null) taskPanelWidth.value = width
     taskResizing.value = false
-    document.body.classList.remove('ws-resizing')
-    refitSoon()
+    nextTick(endDrag)
   }
   // Keeps the pointer even outside the window or over a browser page, so
   // letting go there still ends the resize (browser/webviewPassthrough.js).
@@ -3622,6 +3562,7 @@ function buildCommands() {
     add('Tessel', t('app.cmd.checkUpdates', 'Check for updates'), checkForUpdates)
   }
   add('Tessel', t('app.cmd.openLogs', 'Open the logs folder'), openLogs)
+  add('Tessel', t('app.cmd.copyDiagnostics', 'Copy diagnostics'), copyDiagnostics)
 
   for (const w of workspaces.value) {
     if (w.id !== currentWsId.value) {
@@ -4413,6 +4354,7 @@ const settingsToolActions = {
   browser: () => openInBrowser({ newPane: true, focusAddress: true }),
   help: () => (helpOpen.value = true),
   logs: () => openLogs(),
+  diagnostics: () => copyDiagnostics(),
   resources: () => withStatusBar((bar) => bar.openResources())
 }
 function openFromSettings(id) {
@@ -5748,20 +5690,11 @@ function cycleWorkspace(step) {
   selectWorkspace(list[(i + step + list.length) % list.length].id)
 }
 
-// Live resize: the terminal area shrinks/grows with the sidebar, so ask panes
-// to refit (same event a divider drag sends).
-// Once a frame at most while it is dragged (a pointer moves up to 250 times
-// a second; each width redraws the window).
-let sidebarFrame = 0
-let sidebarPending = null
+// The sidebar's new width: once, when its edge is let go (it follows the
+// pointer by its own style meanwhile, WorkspaceSidebar.vue), or a reset.
+// Its resize-end then refits the panes.
 function resizeSidebar(w) {
-  sidebarPending = w
-  if (sidebarFrame) return
-  sidebarFrame = requestAnimationFrame(() => {
-    sidebarFrame = 0
-    sidebarWidth.value = sidebarPending
-    window.dispatchEvent(new Event('terminal-layout-change'))
-  })
+  sidebarWidth.value = w
 }
 
 function toggleSidebar() {
@@ -9311,14 +9244,16 @@ function inputShownEmpty(id) {
 // relaunched in place reports nothing before its next turn): Tessel does not
 // type into it on its own, it asks you once (a toast with a button), unless
 // Settings > Orchestration says to wake agents even without confirmation.
-function offerWake(leaf, count) {
+function offerWake(leaf, _count) {
   if (!settings.teamWakeUps || leaf.kind !== 'agent' || !leaf.teamTools) return
   const w = (wakeState[leaf.id] = wakeState[leaf.id] || { since: Date.now(), woken: false, gen: leaf.gen || 0 })
   if (w.offered || Date.now() - w.since < WAKE_AFTER_MS) return
   w.offered = true
   const launchToken = leaf.agentLaunchToken
   const sessionId = leaf.sessionId
-  const reminder = `[Tessel] You have ${count} new team message${count > 1 ? 's' : ''}: read ${count > 1 ? 'them' : 'it'} with team_inbox.` // i18n-ignore
+  // Typed: no count, no digit (a menu open in the agent took a "1" as its
+  // answer). The same words as teamDelivery's pointer.
+  const reminder = '[Tessel] You have new team messages: read them with team_inbox.' // i18n-ignore
   showToast(
     t('app.team.wakeOffer', '{{name}} has team messages waiting, but Tessel cannot confirm it is idle (it was just restarted), so it did not type anything.', {
       name: paneLabel(leaf)
@@ -13238,7 +13173,7 @@ onBeforeUnmount(() => {
           'page-drop': paneDrag.active && paneDrag.browser && !paneDrag.fromSide,
           'page-drop-over': paneDrag.active && !!paneDrag.target && paneDrag.target.kind === 'side'
         }"
-        :style="{ flexBasis: taskPanelShown + 'px' }"
+        :style="taskPanelStyle"
       >
         <div
           class="task-resize"
@@ -13419,6 +13354,7 @@ onBeforeUnmount(() => {
       :status="updateStatus"
       :panes="paneCount()"
       :installing="updateInstalling"
+      :release-url="updateReleaseUrl"
       @install="installUpdate"
       @close="updateOpen = false"
     />
@@ -13495,6 +13431,7 @@ onBeforeUnmount(() => {
       :projects="shareableProjects"
       :project-ids="liveShare.chosenIds()"
       @toggle-project="liveShare.setShared"
+      @review-guest="liveShare.showAsk"
       @close="liveShareOpen = false"
     />
     <LiveShareAsk :ask="liveShare.state.asks[0] || null" :more="Math.max(0, liveShare.state.asks.length - 1)" :projects="sharedProjectList" @answer="liveShare.answerAsk" />
@@ -13618,48 +13555,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="helpOpen" class="help-backdrop" @pointerdown.self="helpOpen = false">
-      <div
-        ref="helpCardEl"
-        class="help-card"
-        role="dialog"
-        :aria-label="t('app.help.title', 'Keyboard shortcuts')"
-        tabindex="-1"
-        @keydown.escape.prevent.stop="helpOpen = false"
-      >
-        <div class="help-head">
-          <span>{{ t('app.help.title', 'Keyboard shortcuts') }}</span>
-          <button class="tb-icon" :title="t('app.help.close', 'Close (Esc)')" @click="helpOpen = false">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path
-                d="M4 4l8 8M12 4l-8 8"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-              />
-            </svg>
-          </button>
-        </div>
-        <div class="help-grid">
-          <section v-for="group in shortcuts" :key="group.title">
-            <h3>{{ group.title }}</h3>
-            <div v-for="row in group.rows" :key="row[1]" class="help-row">
-              <span>{{ row[1] }}</span>
-              <span class="help-keys">
-                <kbd v-for="k in row[0].split(' ')" :key="k">{{ k }}</kbd>
-              </span>
-            </div>
-          </section>
-        </div>
-        <div class="help-logs">
-          <span class="set-hint">{{ t('app.help.logsHint', 'Something wrong? Logs help find the cause.') }}</span>
-          <button class="exit-btn" @click="openLogs">{{ t('app.help.openLogs', 'Open logs folder') }}</button>
-          <button class="exit-btn" @click="copyDiagnostics">{{ t('app.help.copyDiagnostics', 'Copy diagnostics') }}</button>
-        </div>
-        <p class="help-foot">
-          {{ t('app.help.foot', 'Drop files on a pane to paste their paths. Select text to copy it, right-click to paste. Shift+right-click a pane for more.') }}
-        </p>
-      </div>
-    </div>
+    <HelpDialog v-if="helpOpen" @close="helpOpen = false" />
   </div>
 </template>

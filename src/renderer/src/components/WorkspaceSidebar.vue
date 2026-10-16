@@ -8,6 +8,7 @@
 // with their live state; the pane you are in is highlighted. The sidebar only
 // renders and emits intents: App owns the state.
 import { sidebarMaxWidth } from '../layoutLimits'
+import { beginLayoutDrag, frameFollower } from '../layoutDrag'
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import {
   Activity,
@@ -383,9 +384,14 @@ function startResize(e) {
   lastDown = now
   const left = navEl.value ? navEl.value.getBoundingClientRect().left : 0
   resizing.value = true
-  document.body.classList.add('ws-resizing')
   let wantsCollapse = false
   const startWidth = props.width
+  // The sidebar follows the pointer through its own style, once a frame;
+  // its width is given to App once, when it is let go, and the terminals
+  // fit then (layoutDrag.js). Emitted on every frame, it re-rendered the
+  // window and every row here (projects, agents, tasks) as it went.
+  const endDrag = beginLayoutDrag()
+  const follow = frameFollower((px) => navEl.value && (navEl.value.style.flexBasis = `${px}px`))
   const move = (ev) => {
     const raw = ev.clientX - left
     if (props.collapsed) {
@@ -393,16 +399,17 @@ function startResize(e) {
       return
     }
     wantsCollapse = raw < COLLAPSE_BELOW
-    emit('resize', Math.round(Math.min(sidebarMaxWidth(), Math.max(MIN_WIDTH, raw))))
+    follow.set(Math.round(Math.min(sidebarMaxWidth(), Math.max(MIN_WIDTH, raw))))
   }
   const up = () => {
+    const width = follow.finish()
     resizing.value = false
-    document.body.classList.remove('ws-resizing')
     if (wantsCollapse && !props.collapsed) {
       emit('resize', startWidth)
       emit('toggle')
-    }
+    } else if (width != null) emit('resize', width)
     emit('resize-end')
+    nextTick(endDrag)
   }
   // Ends even when let go over a browser page or outside the window.
   trackPointerDrag(e, { onMove: move, onEnd: up })

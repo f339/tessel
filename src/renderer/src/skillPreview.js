@@ -55,7 +55,13 @@ function onElement(node) {
 
 // The instructions (the body, without its front matter) as safe HTML.
 export function renderSkillMarkdown(body) {
-  const html = md.render(String(body || ''))
+  return sanitizePreviewHtml(md.render(String(body || '')))
+}
+
+// Untrusted HTML (a skill's rendered markdown, an update's release notes from
+// GitHub) made safe to show: no script, style, form or media, no style or
+// class attribute, no image loaded, links with no referrer.
+export function sanitizePreviewHtml(html) {
   DOMPurify.addHook('afterSanitizeAttributes', onElement)
   try {
     return DOMPurify.sanitize(html, {

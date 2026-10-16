@@ -7,6 +7,9 @@ import { mount, flushPromises } from '@vue/test-utils'
 import LiveShareDialog from '../components/LiveShareDialog.vue'
 import { fakeApi, OFF_HOST, OFF_GUEST, invite, guest, sharing } from './liveShareFakes'
 import { NO_RIGHTS } from '../../../shared/liveShareRights'
+import { setMessages } from '../i18n'
+import frLiveShare from '../i18n/locales/fr/liveShare.json'
+import { inviteUses } from '../liveShareAccess'
 
 const PROJECTS = { projects: [{ id: 'ws-1', name: 'tessel' }, { id: 'ws-2', name: 'site' }], projectIds: ['ws-1'] }
 
@@ -58,6 +61,9 @@ describe('LiveShareDialog: before sharing', () => {
     await wrapper.find('[data-test="ls-invite-label"]').setValue('Team')
     await wrapper.find('[data-test="ls-invite-lifetime-day"] input').setValue(true)
     await wrapper.find('[data-test="ls-invite-uses"]').setValue('3')
+    // The rights as presets; each box behind Customize.
+    expect(wrapper.find('[data-test="ls-right-open-invite"]').exists()).toBe(false)
+    await wrapper.find('[data-test="ls-invite-customize"]').trigger('click')
     const openBox = wrapper.find('[data-test="ls-right-open-invite"] input')
     openBox.element.checked = true
     await openBox.trigger('change')
@@ -168,6 +174,42 @@ describe('LiveShareDialog: while sharing', () => {
     await host(sharing({ invites: [] }))
     expect(wrapper.find('[data-test="ls-no-invites"]').text()).toContain('No invitation left')
     wrapper.unmount()
+  })
+
+  it('the overview: real group labels, every Copy button the same width, one Stop sharing at a time', async () => {
+    const wrapper = await open(PROJECTS)
+    await host(sharing({ guests: [guest()], invites: [invite(), invite({ id: 'iv-bbbbbbbbbb', label: 'Design review', expiresAt: null })] }))
+    const labels = wrapper.findAll('[data-test="ls-overview"] .ls-label').map((x) => x.text())
+    expect(labels).toEqual(['Projects you share', 'Invitation codes', 'Guests', 'Recent guest actions'])
+    // Name and expiry in a head line; the code and its button under it.
+    for (const item of wrapper.findAll('.ls-first-item')) {
+      expect(item.find('.ls-first-head .ls-first-meta').exists()).toBe(true)
+      expect(item.element.lastElementChild.tagName).toBe('BUTTON')
+    }
+    await wrapper.find('[data-test="ls-stop"]').trigger('click')
+    expect(wrapper.find('[data-test="ls-stop-confirm"]').exists()).toBe(true)
+    expect(wrapper.findAll('button').filter((b) => b.text() === 'Stop sharing')).toHaveLength(1)
+    // The footer keeps only Close meanwhile (never Start sharing).
+    expect(wrapper.find('[data-test="ls-start"]').exists()).toBe(false)
+    expect(wrapper.findAll('.confirm-actions > button').map((b) => b.text())).toEqual(['Close'])
+    wrapper.unmount()
+  })
+
+  it('French: plural uses, the people let in, and times as French writes them', async () => {
+    setMessages('fr', frLiveShare)
+    try {
+      expect(inviteUses({ uses: 1, maxUses: 3 })).toBe('1 utilisation sur 3')
+      expect(inviteUses({ uses: 2, maxUses: 3 })).toBe('2 utilisations sur 3')
+      const at = new Date(2026, 9, 16, 6, 13).getTime()
+      const wrapper = await open(PROJECTS)
+      await host(sharing({ invites: [invite({ joined: 2 })], actions: [{ id: 'a1', at, kind: 'save', name: 'Chen', path: 'a.txt', project: 'ws-1' }] }))
+      expect(wrapper.find('[data-test="ls-recent-a1"] .ls-recent-time').text()).toBe('06 h 13')
+      await wrapper.find('[data-test="ls-section-invites"]').trigger('click')
+      expect(wrapper.text()).toContain('2 personnes entrées avec elle')
+      wrapper.unmount()
+    } finally {
+      setMessages('en', {})
+    }
   })
 
   it('Stop sharing asks first while someone is in, and not otherwise', async () => {

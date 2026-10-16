@@ -57,6 +57,7 @@ import { effectiveAgent, launchSignature, launchSessionValues, inYoloFolder, YOL
 import { getAgentSessionOptionCatalog, modelOptions, resolveSessionOptionDefaults, composedModelId, listedModelValues, valuesOnListedRow } from '../../../shared/agentSessionOptions'
 import { cursorContextOnScreen, cursorModelOnScreen, cursorPickerFilter, cursorPickerShown } from '../../../shared/cursorModels'
 import { antigravityListed, antigravityModelOnScreen } from '../../../shared/antigravityModels'
+import { codexModelOnScreen } from '../../../shared/codexScreen'
 import { paneModels } from '../paneModels'
 import { modelsFor, refreshIfStale } from '../agentModels'
 import { CLAUDE_PRICING } from '../../../shared/claudePricing'
@@ -90,6 +91,7 @@ import { readText as readScreenText, createShellIntegration, createTerminalAdapt
 import { terminalControl, terminalLog } from '../agentTerminal/agentTerminalState'
 import { nativeChatSessionChoiceLabel } from '../chat/orca/native-chat-session-option-labels'
 import { liveShareFit, liveShareOffset, LS_TEXT_SIZES } from '../liveShareFit'
+import { layoutDragging } from '../layoutDrag'
 
 const props = defineProps({
   node: { type: Object, required: true }
@@ -397,6 +399,17 @@ async function refreshModel() {
       if (seen) {
         delete n.modelChoice
         agentModel.value = { model: seen.model, name: seen.name, effort: seen.effort, source: 'screen' }
+        return
+      }
+    }
+    // Codex: the line under its input box names the model and effort it runs
+    // now ("GPT-6-Luna medium fast"), a /model or a "switch model?" answer
+    // included, before its rollout says so.
+    if (n.agentId === 'codex' && termNow()) {
+      const seen = codexModelOnScreen(screenText(12).split('\n'), modelsFor('codex'))
+      if (seen) {
+        delete n.modelChoice
+        agentModel.value = { model: seen.model, ...(seen.name ? { name: seen.name } : {}), effort: seen.effort, source: 'screen' }
         return
       }
     }
@@ -1855,10 +1868,32 @@ watch(liveShareViewOnly, (viewOnly) => {
   if (term) term.options.disableStdin = viewOnly
 })
 
+let idleFit = 0
+function cancelIdleFit() {
+  if (idleFit && typeof cancelIdleCallback === 'function') cancelIdleCallback(idleFit)
+  idleFit = 0
+}
 function scheduleFit() {
   if (fitTimer) clearTimeout(fitTimer)
+  cancelIdleFit()
   fitTimer = setTimeout(() => {
     fitTimer = 0
+    // The sidebar's or the right panel's edge is being dragged: fitted once,
+    // when it is let go (layoutDrag.js sends the layout change then).
+    if (layoutDragging()) return
+    // Out of sight (a hidden project, another tab): fitted when the window
+    // has a moment, within a second. Every project's terminals reflowing at
+    // once held the frames right after a sidebar was let go.
+    if (!onScreen && typeof requestIdleCallback === 'function') {
+      idleFit = requestIdleCallback(
+        () => {
+          idleFit = 0
+          doFit()
+        },
+        { timeout: 1000 }
+      )
+      return
+    }
     doFit()
   }, RESIZE_SETTLE_MS)
 }
@@ -3289,6 +3324,7 @@ onBeforeUnmount(() => {
   if (screenObserver) screenObserver.disconnect()
   clearTimeout(releaseTimer)
   if (fitTimer) clearTimeout(fitTimer)
+  cancelIdleFit()
   window.removeEventListener('resize', onLayoutChange)
   window.removeEventListener('terminal-layout-change', onLayoutChange)
   window.removeEventListener('pointerdown', onDocPointerDownMenu, true)

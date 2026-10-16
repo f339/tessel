@@ -505,6 +505,22 @@ export function createLiveShareWindow(deps) {
     else if (a.kind === 'open' && yes && openStands(a)) openForGuest(a.spec, a.name)
   }
 
+  // People's "Let in…" for a guest waiting for your answer: their ask comes
+  // first, so the prompt shows them (with the code to check and what their
+  // invitation offers). One this window lost is made again from main's
+  // status. -> whether that guest still waits.
+  function showAsk(guestId) {
+    let i = state.asks.findIndex((a) => a.kind === 'join' && a.guestId === guestId)
+    if (i < 0) {
+      const g = state.host.guests.find((x) => x.id === guestId && x.state === 'waiting')
+      if (!g) return false
+      onAsk({ guestId: g.id, name: g.name, code: g.code, invite: g.invite || null, offer: offerOf(g.invite), trustable: !!g.trustable })
+      i = state.asks.length - 1
+    }
+    if (i > 0) state.asks.unshift(...state.asks.splice(i, 1))
+    return true
+  }
+
   function closeForGuest(id, who) {
     const leaf = deps.findLeaf(id)
     if (!leaf) return
@@ -1656,6 +1672,7 @@ export function createLiveShareWindow(deps) {
     readersOf,
     presenceOf,
     answerAsk,
+    showAsk,
     hostMenu,
     taskSource,
     // Phase 2b, guest: the host's panes as their headers show them, a pane's

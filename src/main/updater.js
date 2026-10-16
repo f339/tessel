@@ -17,7 +17,9 @@ const FIRST_CHECK_MS = 15 * 1000
 // same hour (it was every four hours).
 const CHECK_EVERY_MS = 30 * 60 * 1000
 
-// GitHub gives release notes as HTML; the dialog shows plain text.
+// GitHub gives release notes as HTML: the dialog shows it (notesHtml,
+// sanitized there like a skill's preview), and this plain text where HTML
+// can't be shown.
 export function htmlToText(html) {
   return String(html)
     .replace(/<\s*br\s*\/?>/gi, '\n')
@@ -45,10 +47,11 @@ export function createUpdater({ log, send, beforeInstall, onInstallFailed }) {
     send('update:status', status)
   }
 
-  function notesText(notes) {
-    if (Array.isArray(notes)) notes = notes.map((n) => n.note || '').join('\n\n')
-    return htmlToText(typeof notes === 'string' ? notes : '')
+  function notesHtml(notes) {
+    if (Array.isArray(notes)) notes = notes.map((n) => n.note || '').join('\n')
+    return typeof notes === 'string' ? notes : ''
   }
+  const notesText = (notes) => htmlToText(notesHtml(notes))
 
   if (enabled) {
     autoUpdater.autoDownload = true
@@ -80,6 +83,7 @@ export function createUpdater({ log, send, beforeInstall, onInstallFailed }) {
         state: 'ready',
         version: info.version,
         notes: notesText(info.releaseNotes),
+        notesHtml: notesHtml(info.releaseNotes),
         date: info.releaseDate || null
       })
     })

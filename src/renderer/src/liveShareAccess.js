@@ -124,7 +124,8 @@ export function inviteExpiry(inv, now = Date.now()) {
 export function inviteUses(inv) {
   const uses = (inv && Number.isInteger(inv.uses) && inv.uses) || 0
   const max = (inv && Number.isInteger(inv.maxUses) && inv.maxUses) || 0
-  if (max > 0) return t('liveShare.invite.usesOf', '{{uses}} of {{max}} uses', { uses, max })
+  // count picks the French singular (1 utilisation sur 3).
+  if (max > 0) return t('liveShare.invite.usesOf', '{{uses}} of {{max}} uses', { uses, max, count: uses })
   return uses === 1 ? t('liveShare.invite.uses', '{{count}} use, no limit', { count: uses }) : t('liveShare.invite.uses', '{{count}} uses, no limit', { count: uses })
 }
 

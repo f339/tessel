@@ -9,7 +9,7 @@
 // An invitation people joined with: a change asks whether it is made for
 // them too (yes first for something taken away; for something given, you
 // choose), as in the invitation's own form.
-import { ref, computed, watch, nextTick, inject } from 'vue'
+import { ref, reactive, computed, watch, nextTick, inject, onUnmounted } from 'vue'
 import { ChevronRight, ShieldCheck } from 'lucide-vue-next'
 import RightsChecks from './RightsChecks.vue'
 import LsAvatars from './LsAvatars.vue'
@@ -91,6 +91,28 @@ const kindText = (row) => (row.kind === 'trusted' ? t('liveShare.access.trustedO
 const cellLabel = (name, what) => t('liveShare.access.cell', '{{name}}: {{what}}', { name, what })
 const projectTitle = computed(() => (project.value ? t('liveShare.access.projectTitle', 'Who has access to {{project}}', { project: project.value.name }) : ''))
 const empty = computed(() => !people.value.length && !invites.value.length)
+
+// The grid scrolls sideways when its rights don't fit the dialog: the names
+// stay put (sticky), and a fade says on which side there is more.
+const scroller = ref(null)
+const edges = reactive({ left: false, right: false })
+function measureEdges() {
+  const el = scroller.value
+  if (!el) return
+  edges.left = el.scrollLeft > 1
+  edges.right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1
+}
+let resizes = null
+watch(scroller, (el) => {
+  if (resizes) resizes.disconnect()
+  resizes = null
+  if (el && typeof ResizeObserver !== 'undefined') {
+    resizes = new ResizeObserver(measureEdges)
+    resizes.observe(el)
+  }
+  nextTick(measureEdges)
+})
+onUnmounted(() => resizes && resizes.disconnect())
 function changeView(event) {
   view.value = event.target.value
 }
@@ -123,7 +145,8 @@ function changeView(event) {
       <!-- The grid: people and invitations x shared projects, then rights. -->
       <template v-if="!project">
         <p v-if="empty" class="lsd-empty" data-test="ls-access-empty">{{ t('liveShare.access.empty', 'Nobody has access yet: make an invitation, or trust someone.') }}</p>
-        <div v-else class="lsx-scroll">
+        <div v-else class="lsx-scroll-wrap" :class="{ 'more-left': edges.left, 'more-right': edges.right }" data-test="ls-access-scroll">
+          <div ref="scroller" class="lsx-scroll" @scroll.passive="measureEdges">
           <table class="lsx-grid" data-test="ls-access-grid">
             <caption class="lsx-caption">{{ t('liveShare.access.caption', 'Who sees each shared project, and what they can do') }}</caption>
             <thead>
@@ -137,7 +160,7 @@ function changeView(event) {
             </thead>
             <tbody>
               <tr v-if="people.length" class="lsx-group">
-                <th :colspan="1 + shared.length + rights.length" scope="colgroup">{{ t('liveShare.section.people', 'People') }}</th>
+                <th :colspan="1 + shared.length + rights.length" scope="colgroup"><span class="lsx-group-label">{{ t('liveShare.section.people', 'People') }}</span></th>
               </tr>
               <tr v-for="row in people" :key="row.id" :data-test="'ls-access-row-' + row.id">
                 <th scope="row" class="lsx-who">
@@ -156,7 +179,7 @@ function changeView(event) {
                 </td>
               </tr>
               <tr v-if="invites.length" class="lsx-group">
-                <th :colspan="1 + shared.length + rights.length" scope="colgroup">{{ t('liveShare.section.invites', 'Invitations') }}</th>
+                <th :colspan="1 + shared.length + rights.length" scope="colgroup"><span class="lsx-group-label">{{ t('liveShare.section.invites', 'Invitations') }}</span></th>
               </tr>
               <tr v-for="inv in invites" :key="inv.id" :data-test="'ls-access-row-' + inv.id">
                 <th scope="row" class="lsx-who">
@@ -174,6 +197,7 @@ function changeView(event) {
               </tr>
             </tbody>
           </table>
+          </div>
         </div>
       </template>
 
@@ -227,11 +251,46 @@ function changeView(event) {
   height: 26px;
   padding: 0 6px;
 }
+.lsx-scroll-wrap {
+  position: relative;
+  min-width: 0;
+}
 .lsx-scroll {
   max-width: 100%;
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: 9px;
+}
+/* More to the right: a fade over the last columns. */
+.lsx-scroll-wrap::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  width: 36px;
+  border-radius: 0 9px 9px 0;
+  background: linear-gradient(to right, transparent, var(--surface));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+.lsx-scroll-wrap.more-right::after {
+  opacity: 1;
+}
+/* The names stay put; scrolled, a shadow shows columns went under them. */
+.lsx-grid .lsx-who {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+.more-left .lsx-grid .lsx-who {
+  box-shadow: 6px 0 8px -6px rgba(0, 0, 0, 0.6);
+}
+.lsx-group-label {
+  position: sticky;
+  left: 8px;
 }
 .lsx-grid {
   width: 100%;
