@@ -36,7 +36,10 @@
       "openHint": "Ouvrir {{url}} dans votre propre navigateur (aucune session de {{host}} ne l'accompagne)",
       "openLocal": "Cette adresse ne fonctionne que sur l'ordinateur ou le réseau de l'hôte.",
       "openNone": "Seules les adresses web (http et https) peuvent être ouvertes.",
-      "open": "Ouvrir cette adresse dans mon propre navigateur"
+      "open": "Ouvrir cette adresse dans mon propre navigateur",
+      "openAsk": "Ouvrir cette adresse dans votre navigateur ?",
+      "openAskText": "{{url}} vient de la page de {{host}}. Aucune session ni aucun cookie de {{host}} ne l'accompagne.",
+      "openConfirm": "Ouvrir"
     }
   },
   "conversations": {

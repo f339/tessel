@@ -26,7 +26,11 @@
 // (input.handle one event at a time), with sharePages' refusals and limits.
 // A new window a guest's click opens (browserGuest.js asks popupFrom) opens
 // in a new pane, in the browser's guest session (no logins of the host's),
-// a few a minute at most.
+// a few a minute at most; one that comes while the guest's input is being
+// dispatched or shortly after is the guest's (unsure: the guest's, the safe
+// side). While a guest uses a page, and a while after, the page gets no
+// clipboard permission (guestActive: a guest's "Copy" click never writes the
+// host's clipboard through it).
 //
 // Guest side: checkPageFrame / checkPageEvent check what a host sends before
 // the window gets it (a JPEG of the capped size, the address masked again).
@@ -36,8 +40,13 @@ import { leaseDebugger, debuggerHolders } from '../pageDebugger.js'
 export const PAGE_FEED = Object.freeze({
   // A guest this far behind gets no frame (the latest comes later).
   behindBytes: 512 * 1024,
-  // A click or a key this recent makes a new window the guest's.
-  popupMs: 1500,
+  // A new window while a guest's click or key is being dispatched, or this
+  // soon after it was (more than the browser's own 1.5 s from the input's
+  // arrival: an unsure one is the guest's), is the guest's.
+  popupMs: 2000,
+  // A page a guest used this recently (or holds input on): no clipboard
+  // permission (browserGuest.js guestInput).
+  clipboardMs: 30 * 1000,
   // Pages listed by the window, at most.
   listed: 64,
   // A guest's input messages waiting their turn, at most.
@@ -60,8 +69,19 @@ export function createPageFeed({ guestById, lease = leaseDebugger, holders = deb
   let listed = new Map()
   // stream (a guest's subscription, shareHost.js) -> { project, page, unwatch }
   const watching = new Map()
-  // webContents id -> { at, stream } of the last click or key a guest sent it.
+  // webContents id -> { busy (clicks or keys being dispatched), end (when
+  // the last one was), used (when any input was), stream } of a guest's input.
   const lastInput = new Map()
+  function inputOf(webContentsId, stream) {
+    let r = lastInput.get(webContentsId)
+    if (!r) {
+      r = { busy: 0, end: -Infinity, used: -Infinity, stream }
+      lastInput.set(webContentsId, r)
+      if (lastInput.size > 64) lastInput.delete(lastInput.keys().next().value)
+    }
+    r.stream = stream
+    return r
+  }
 
   const changed = () => {
     try {
@@ -100,15 +120,27 @@ export function createPageFeed({ guestById, lease = leaseDebugger, holders = deb
         code = 'forbidden'
         break
       }
-      // A click or a key: a window it opens is the guest's.
-      if (event && ((event.type === 'mouse' && (event.action === 'down' || event.action === 'up')) || event.type === 'key')) {
-        const p = listed.get(page)
-        if (p) {
-          lastInput.set(p.webContentsId, { at: clock(), stream })
-          if (lastInput.size > 64) lastInput.delete(lastInput.keys().next().value)
+      // A click or a key: a window it opens meanwhile, or right after, is
+      // the guest's.
+      const p = listed.get(page)
+      const mark = p ? inputOf(p.webContentsId, stream) : null
+      const gesture = !!event && ((event.type === 'mouse' && (event.action === 'down' || event.action === 'up')) || event.type === 'key' || event.type === 'text')
+      if (mark) {
+        mark.used = clock()
+        if (gesture) mark.busy++
+      }
+      let r
+      try {
+        r = await input.handle(stream.person, page, [event])
+      } finally {
+        if (mark) {
+          mark.used = clock()
+          if (gesture) {
+            mark.busy--
+            mark.end = clock()
+          }
         }
       }
-      const r = await input.handle(stream.person, page, [event])
       if (!r.ok) {
         code = r.code || 'failed'
         break
@@ -198,10 +230,17 @@ export function createPageFeed({ guestById, lease = leaseDebugger, holders = deb
     // its limit; past it, refused and the guest told).
     popupFrom(webContentsId) {
       const r = lastInput.get(webContentsId)
-      if (!r || clock() - r.at > PAGE_FEED.popupMs) return null
+      if (!r || (r.busy <= 0 && clock() - r.end > PAGE_FEED.popupMs)) return null
       const allowed = input.newPage(r.stream.person)
       if (!allowed) r.stream.send('page', { state: 'input', refused: [], notice: 'limit' })
       return { allowed }
+    },
+    // A guest uses this page now or did lately (its clipboard permission is
+    // refused meanwhile: browserGuest.js guestInput).
+    // (null: any page, when the browser cannot say which one asks.)
+    guestActive(webContentsId) {
+      const active = (r) => !!r && (r.busy > 0 || clock() - r.used <= PAGE_FEED.clipboardMs)
+      return webContentsId == null ? [...lastInput.values()].some(active) : active(lastInput.get(webContentsId))
     },
     // Watched pages: [{ id (pane), guests: [{ id, name }] }], for the host's
     // eye on each page.

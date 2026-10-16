@@ -13,7 +13,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'events'
 import { createPageFeed, checkPageFrame, checkPageEvent, PAGE_FEED } from '../liveShare/sharePageFeed'
-import { PAGE_LIMITS } from '../liveShare/sharePages'
+import { PAGE_LIMITS, refusedGuestKey, shownPageUrl } from '../liveShare/sharePages'
 import { externalPageUrl, localOnlyHost } from '../../shared/livePageUrl'
 
 function jpeg(w, h, bytes = 4000) {
@@ -269,6 +269,36 @@ describe('Live Share page feed: a guest using a page', () => {
     expect(typed).toEqual(letters.slice(0, PAGE_FEED.inputQueue))
   })
 
+  it('a new window while a guest click is dispatched is the guest’s (the safe side), and for a while after', async () => {
+    const { feed, allowed, guests } = setup()
+    const [g] = guests
+    feed.setPages([{ project: 'ws-1', paneId: 'pane-a', webContentsId: 11 }], allowed)
+    const s = stream()
+    feed.watchGuest(s, 'ws-1', 'pane-a', true)
+    // The page opens its window from inside the click's dispatch (before the
+    // dispatch answers): the guest's, and the page counts as used meanwhile.
+    const seen = []
+    const real = g.debugger.sendCommand.getMockImplementation()
+    g.debugger.sendCommand.mockImplementation(async (method, params) => {
+      if (method === 'Input.dispatchMouseEvent') seen.push({ popup: feed.popupFrom(11), active: feed.guestActive(11) })
+      return real(method, params)
+    })
+    expect(feed.guestActive(11)).toBe(false)
+    expect(feed.guestActive(null)).toBe(false)
+    await feed.input(s, 'ws-1', 'pane-a', [{ type: 'mouse', action: 'down', x: 0.5, y: 0.5, button: 'left' }], () => true)
+    expect(seen).toEqual([{ popup: { allowed: true }, active: true }])
+    // After the dispatch: still the guest's for popupMs, used for clipboardMs.
+    await tick(PAGE_FEED.popupMs - 100)
+    expect(feed.popupFrom(11)).toEqual({ allowed: true })
+    await tick(200)
+    expect(feed.popupFrom(11)).toBe(null)
+    expect(feed.guestActive(11)).toBe(true)
+    expect(feed.guestActive(null)).toBe(true)
+    expect(feed.guestActive(12)).toBe(false)
+    await tick(PAGE_FEED.clipboardMs)
+    expect(feed.guestActive(11)).toBe(false)
+  })
+
   it('a new window right after a guest click is the guest’s, a few a minute; the host’s own is not', async () => {
     const { feed, allowed } = setup()
     feed.setPages([{ project: 'ws-1', paneId: 'pane-a', webContentsId: 11 }], allowed)
@@ -283,6 +313,30 @@ describe('Live Share page feed: a guest using a page', () => {
     expect(s.last()).toEqual({ type: 'page', state: 'input', refused: [], notice: 'limit' })
     await tick(PAGE_FEED.popupMs + 10)
     expect(feed.popupFrom(11)).toBe(null)
+  })
+})
+
+describe('Live Share pages: the keys of the host window’s menu', () => {
+  it('refuses Alt with anything, Alt alone, F10 and the context menu key (the host window’s menu, File > Exit)', () => {
+    for (const combo of ['Alt+f', 'Alt+F', 'Alt+e', 'Alt+Space', 'Alt+1', 'Alt+Shift+x', 'Alt', 'F10', 'Shift+F10', 'ContextMenu', 'Meta'])
+      expect(refusedGuestKey(combo)).toBe(true)
+    for (const combo of ['a', 'F', 'Enter', 'Tab', 'Shift+Tab', 'ArrowDown', 'Backspace', 'Escape', 'Control+a', 'Control+z', 'F2'])
+      expect(refusedGuestKey(combo)).toBe(false)
+  })
+})
+
+describe('Live Share pages: tokens in the address', () => {
+  it('masks random-looking segments of 12 characters or more, split ones too, and what follows a code word', () => {
+    expect(shownPageUrl('https://a.example/s/AbCdEfGhIjKlMn')).toBe('https://a.example/s/••••')
+    expect(shownPageUrl('https://a.example/s/x7Kq-9pLm-Zr2T')).toBe('https://a.example/s/••••')
+    expect(shownPageUrl('https://a.example/d/qwrtzpsdfghjklmnb')).toBe('https://a.example/d/••••')
+    expect(shownPageUrl('https://a.example/f/report2024final7')).toBe('https://a.example/f/••••')
+    for (const word of ['reset', 'reset-password', 'verify', 'invite', 'invites', 'token', 'magic', 'share', 'auth', 'login', 'callback', 'confirm'])
+      expect(shownPageUrl(`https://a.example/${word}/hello`)).toBe(`https://a.example/${word}/••••`)
+    expect(shownPageUrl('https://a.example/auth/callback')).toBe('https://a.example/auth/••••')
+    // Words, slugs, CamelCase and numbers stay.
+    for (const keep of ['https://github.com/facebook/ReactNativeComponentsList', 'https://docs.example/getting-started/installation', 'https://blog.example/2024/05/my-long-article-title-here', 'https://mail.example/inbox/42', 'https://a.example/IMG_20240501_123456.jpg', 'https://a.example/shared'])
+      expect(shownPageUrl(keep)).toBe(keep)
   })
 })
 
@@ -320,6 +374,8 @@ describe('Live Share pages: open this address in my own browser', () => {
   })
   it('disabled for the host computer, its private ranges and local names', () => {
     for (const host of ['http://localhost:5173/', 'http://127.0.0.1/', 'http://10.1.2.3/', 'http://172.16.0.1/', 'http://172.31.255.1/', 'http://192.168.1.10/', 'http://169.254.1.1/', 'http://100.64.0.1/', 'http://0.0.0.0/', 'http://[::1]/', 'http://[fd00::1]/', 'http://[fe80::1]/', 'http://[::ffff:192.168.0.1]/', 'http://nas.local/', 'http://app.localhost/', 'http://intranet/', 'http://box.lan/', 'http://svc.internal/'])
+      expect(externalPageUrl(host)).toEqual({ ok: false, reason: 'local' })
+    for (const host of ['http://127.0.0.1.nip.io/', 'http://10-0-0-1.sslip.io/', 'http://localtest.me/', 'http://app.localtest.me/', 'http://lvh.me:3000/', 'http://localhost.direct/', 'http://[::7f00:1]/', 'http://[::127.0.0.1]/', 'http://[64:ff9b::7f00:1]/', 'http://localhost.localdomain/', 'http://x.test/', 'http://2130706433/', 'http://0x7f000001/'])
       expect(externalPageUrl(host)).toEqual({ ok: false, reason: 'local' })
     for (const host of ['https://example.com/', 'http://172.32.0.1/', 'http://8.8.8.8/', 'https://[2606:4700::1111]/']) expect(externalPageUrl(host).ok).toBe(true)
     expect(localOnlyHost('')).toBe(true)

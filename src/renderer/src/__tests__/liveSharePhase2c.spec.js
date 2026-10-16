@@ -16,6 +16,7 @@ import { createLiveShareWindow } from '../liveShareWindow'
 import { buildGuestTree } from '../liveShareLayout'
 import { pageGuests, notePageGuest, claimPage, destroyPage, createWebview, GUEST_PARTITION, MAIN_PARTITION, AGENT_PARTITION } from '../browser/pageHost'
 import { NO_RIGHTS } from '../../../shared/liveShareRights'
+import { sidePageFromLeaf, leafFromSidePage, saveSideBrowsers, restoreSideBrowsers } from '../browser/pageMove'
 import LiveSharePageView from '../components/LiveSharePageView.vue'
 import SessionHistoryPanel from '../components/SessionHistoryPanel.vue'
 import ConversationsPanel from '../components/ConversationsPanel.vue'
@@ -46,6 +47,29 @@ const flush = async () => {
     await nextTick()
   }
 }
+
+describe('a page moved through the side panel keeps its session and its hide', () => {
+  const makeLeaf = (url) => ({ type: 'leaf', kind: 'browser', id: 'pane-new', url: url || 'about:blank', openedBy: 'agent' })
+  it('the guest session, the agents\u2019 and "Hide this page from guests" go to the panel, are saved, and come back', () => {
+    const page = sidePageFromLeaf({ url: 'https://a.test/', title: 'A', guestSession: true, hiddenFromGuests: true }, 'web-1')
+    expect(page).toMatchObject({ id: 'web-1', guestSession: true, hiddenFromGuests: true })
+    const saved = restoreSideBrowsers(JSON.parse(JSON.stringify(saveSideBrowsers([page, sidePageFromLeaf({ url: 'https://b.test/', agentSession: true }, 'web-2')]))))
+    expect(saved[0]).toMatchObject({ guestSession: true, hiddenFromGuests: true })
+    expect(saved[1]).toMatchObject({ agentSession: true, hiddenFromGuests: false })
+    expect(saved[1].guestSession).toBeUndefined()
+    const back = leafFromSidePage(saved[0], makeLeaf)
+    expect(back).toMatchObject({ guestSession: true, hiddenFromGuests: true })
+    const agent = leafFromSidePage(saved[1], makeLeaf, { hiddenDefault: true })
+    expect(agent.agentSession).toBe(true)
+    // Known visible: stays visible, whatever the default.
+    expect(agent.hiddenFromGuests).toBeUndefined()
+  })
+  it('a panel page that never was a pane comes back hidden while its project is shared', () => {
+    const page = restoreSideBrowsers([{ id: 'web-3', url: 'https://c.test/' }])[0]
+    expect(leafFromSidePage(page, makeLeaf, { hiddenDefault: true }).hiddenFromGuests).toBe(true)
+    expect(leafFromSidePage(page, makeLeaf, { hiddenDefault: false }).hiddenFromGuests).toBeUndefined()
+  })
+})
 
 describe('the guest tree and the page host', () => {
   it('keeps the host browser panes only with "See my browser pages"', () => {
@@ -298,8 +322,9 @@ describe('Live Share phase 2c in the window, as a guest', () => {
 
 // --- The page view ------------------------------------------------------------------
 describe('LiveSharePageView.vue', () => {
-  let wrapper, src, info, frameCb, eventCb, ctx
+  let wrapper, src, info, frameCb, eventCb, ctx, askConfirm
   beforeEach(() => {
+    askConfirm = vi.fn(async () => true)
     info = reactive({ host: 'Cedric', joined: true, ended: false, outdated: false, canView: true, canUse: false, project: 'ws-1' })
     src = {
       info: () => info,
@@ -319,7 +344,7 @@ describe('LiveSharePageView.vue', () => {
   })
   const mountView = async () => {
     const node = reactive({ type: 'leaf', id: 'pane-ls1-web', backend: 'liveshare', liveShare: { page: true, host: 'Cedric', project: 'ws-1' } })
-    wrapper = mount(LiveSharePageView, { props: { node }, attachTo: document.body, global: { provide: { panelCtx: ctx } } })
+    wrapper = mount(LiveSharePageView, { props: { node }, attachTo: document.body, global: { provide: { panelCtx: ctx, askConfirm: (q) => askConfirm(q) } } })
     await flushPromises()
   }
   const frame = (seq, url = 'https://mail.example/inbox?…') => frameCb({ id: 'pane-ls1-web', seq, jpeg: new Uint8Array([0xff, 0xd8]), w: 1000, h: 700, meta: { title: 'Inbox', url } })
@@ -390,10 +415,17 @@ describe('LiveSharePageView.vue', () => {
     eventCb({ id: 'pane-ls1-web', state: 'input', refused: [], notice: 'limit' })
     await nextTick()
     expect(wrapper.find('[data-test="liveshare-page-notice"]').text()).toMatch(/limits how fast/)
-    // Open in your own browser: origin and path.
+    // Open in your own browser: origin and path, once the whole address was
+    // shown and you said yes.
     const open = wrapper.find('[data-test="liveshare-page-open"]')
     expect(open.attributes('disabled')).toBeUndefined()
+    askConfirm.mockResolvedValueOnce(false)
     await open.trigger('click')
+    await flushPromises()
+    expect(askConfirm).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('https://mail.example/inbox') }))
+    expect(window.shellApi.openExternal).not.toHaveBeenCalled()
+    await open.trigger('click')
+    await flushPromises()
     expect(window.shellApi.openExternal).toHaveBeenCalledWith('https://mail.example/inbox')
     frame(2, 'http://localhost:5173/app')
     await nextTick()

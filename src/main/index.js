@@ -3007,7 +3007,9 @@ const browserGuests = createBrowserGuests({
   onGuest: (guest) => agentBrowser.watchGuest(guest),
   // A new window from a Live Share guest's click in a shared page: a new
   // pane in the guest session, a few a minute (liveShare.js pagePopup).
-  guestPopup: (id) => (liveShare ? liveShare.pagePopup(id) : null)
+  guestPopup: (id) => (liveShare ? liveShare.pagePopup(id) : null),
+  // ...and no clipboard permission for a page a guest uses (or did lately).
+  guestInput: (id) => (liveShare ? liveShare.pageGuestInput(id) : false)
 })
 browserGuests.register(ipcMain)
 // Importing cookies from another browser into Tessel's browser session, so the

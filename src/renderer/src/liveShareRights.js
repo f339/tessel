@@ -59,9 +59,9 @@ const WORDS = {
     part: t('liveShare.rights.pagesViewPart', 'see its browser pages')
   }),
   pagesUse: () => ({
-    label: t('liveShare.right.pagesUse', 'Use my browser pages: they act in your browser with your logged-in sessions'),
+    label: t('liveShare.right.pagesUse', 'Use my browser pages: they act in your browser with your logged-in sessions and can reach your network'),
     short: t('liveShare.right.pagesUseShort', 'Use pages'),
-    hint: t('liveShare.right.pagesUseHint', 'They click and type in your pages as you, signed in wherever you are. Comes with “See my browser pages”.'),
+    hint: t('liveShare.right.pagesUseHint', 'They click and type in your pages as you, signed in wherever you are, and those pages reach what your computer reaches (localhost, your network, cloud metadata addresses). Comes with “See my browser pages”.'),
     part: t('liveShare.rights.pagesUsePart', 'use its browser pages')
   })
 }

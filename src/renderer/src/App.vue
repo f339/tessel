@@ -5171,7 +5171,8 @@ function moveSidePageToGrid(pageId, target) {
   }
   const anchorId = target.kind === 'pane' ? target.id : ws.activeId && findLeafIn(ws.tree, ws.activeId) ? ws.activeId : firstLeafId(ws.tree)
   const anchor = anchorId ? findLeafIn(ws.tree, anchorId) : null
-  const leaf = leafFromSidePage(page, (url) => makeBrowserLeaf(null, url))
+  // Hidden from guests when it never said, while that project is shared.
+  const leaf = leafFromSidePage(page, (url) => makeBrowserLeaf(null, url), { hiddenDefault: liveShare.isShared(ws.id) })
   keepView(leaf, anchor, ws)
   const next = placeLeaf(ws.tree, target, leaf, { anchorId, makeSplit })
   if (!next) return

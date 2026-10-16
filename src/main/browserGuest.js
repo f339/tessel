@@ -184,7 +184,11 @@ export function contextMenuItems(params = {}, nav = {}) {
 // guestPopup(webContentsId) -> null | { allowed }: a new window a page asks
 // for came from a Live Share guest's click (liveShare/sharePageFeed.js
 // popupFrom): it opens in a new pane in the guest session, if allowed.
-export function createBrowserGuests({ getWindow, send, log = null, screenshotDir, electron, openExternal = null, onGuest = null, agentSessionOnly = () => false, guestPopup = null }) {
+// guestInput(webContentsId | null) -> bool: a Live Share guest uses that page
+// now or did lately (null: any page): no clipboard permission for it then
+// (a guest's click on a page's "Copy" never writes the host's clipboard
+// through the permission; a page's own execCommand('copy') asks none).
+export function createBrowserGuests({ getWindow, send, log = null, screenshotDir, electron, openExternal = null, onGuest = null, agentSessionOnly = () => false, guestPopup = null, guestInput = null }) {
   const { webContents, clipboard, nativeImage, session: electronSession, Menu = null } = electron
   // guest id -> { cancel } while an element is being picked.
   const picking = new Map()
@@ -212,7 +216,7 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
     const ses = electronSession.fromPartition(partition)
     ourSessions.set(partition, ses)
     ses.setPermissionRequestHandler((wc, permission, callback, details) => {
-      const ok = GRANTED_PERMISSIONS.has(permission)
+      const ok = GRANTED_PERMISSIONS.has(permission) && !guestUsing(wc, permission)
       if (!ok && shouldTellDenied(wc, permission)) {
         send('browser:permissionDenied', {
           webContentsId: wc && !wc.isDestroyed() ? wc.id : null,
@@ -222,7 +226,7 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
       }
       callback(ok)
     })
-    ses.setPermissionCheckHandler((_wc, permission) => GRANTED_PERMISSIONS.has(permission))
+    ses.setPermissionCheckHandler((wc, permission) => GRANTED_PERMISSIONS.has(permission) && !guestUsing(wc, permission))
     // Screen sharing: never. null refuses it (an object without the video
     // asked for makes Electron throw a TypeError in the main process).
     if (typeof ses.setDisplayMediaRequestHandler === 'function') ses.setDisplayMediaRequestHandler((_req, callback) => callback(null))
@@ -237,6 +241,17 @@ export function createBrowserGuests({ getWindow, send, log = null, screenshotDir
       })
     })
     return ses
+  }
+
+  // A clipboard permission while a Live Share guest uses the page (or did
+  // lately; the browser not saying which page: any guest's use counts).
+  function guestUsing(wc, permission) {
+    if (!guestInput || !/^clipboard/i.test(String(permission))) return false
+    try {
+      return !!guestInput(wc && !wc.isDestroyed() ? wc.id : null)
+    } catch {
+      return true
+    }
   }
 
   const deniedAt = new Map()

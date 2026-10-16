@@ -2488,6 +2488,9 @@ export function registerLiveShare({
     // Host: a new window a browser page asks for, from a guest's click? (the
     // browser's popup rule, browserGuest.js guestPopup) -> null | { allowed }
     pagePopup: (webContentsId) => (sharing && sharing.server && pageFeed ? pageFeed.popupFrom(webContentsId) : null),
+    // Host: a guest uses that page now or did lately (no clipboard permission
+    // for it meanwhile, browserGuest.js guestInput).
+    pageGuestInput: (webContentsId) => (sharing && sharing.server && pageFeed ? pageFeed.guestActive(webContentsId) : false),
     // Guest panes (the host's, shown here).
     isGuestPane,
     guestAttach,

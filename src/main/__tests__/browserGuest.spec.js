@@ -89,7 +89,7 @@ function setup(opts = {}) {
   }
   const log = { warn: vi.fn() }
   const openExternal = vi.fn()
-  const bg = createBrowserGuests({ getWindow: () => win, send: (ch, payload) => sent.push([ch, payload]), log, screenshotDir: dir, electron, openExternal, agentSessionOnly: opts.agentSessionOnly, guestPopup: opts.guestPopup })
+  const bg = createBrowserGuests({ getWindow: () => win, send: (ch, payload) => sent.push([ch, payload]), log, screenshotDir: dir, electron, openExternal, agentSessionOnly: opts.agentSessionOnly, guestPopup: opts.guestPopup, guestInput: opts.guestInput })
   bg.attachToWindow(win)
   const handlers = {}
   bg.register({ handle: (ch, fn) => (handlers[ch] = fn) })
@@ -1139,5 +1139,29 @@ describe('Live Share: the guest session and the host’s own pages', () => {
     s.click(g)
     g.openHandler({ url: 'https://example.com/c' })
     expect(s.sent).toEqual([['browser:popup', { webContentsId: 7, url: 'https://example.com/c' }]])
+  })
+})
+
+describe('Live Share: no clipboard for a page a guest uses', () => {
+  it('refuses the clipboard permission (request and check) while a guest uses that page, grants it again after', () => {
+    const using = new Set([7])
+    const guestInput = vi.fn((id) => (id == null ? using.size > 0 : using.has(id)))
+    const s = setup({ guestInput })
+    s.bg.browserSession()
+    const page = (id) => ({ id, isDestroyed: () => false, getURL: () => 'https://page.test/x' })
+    const cb = vi.fn()
+    s.ses.request(page(7), 'clipboard-sanitized-write', cb, { requestingUrl: 'https://page.test/x' })
+    expect(cb).toHaveBeenCalledWith(false)
+    expect(s.ses.check(page(7), 'clipboard-sanitized-write')).toBe(false)
+    // Another page, and full screen on this one: as before.
+    expect(s.ses.check(page(8), 'clipboard-sanitized-write')).toBe(true)
+    expect(s.ses.check(page(7), 'fullscreen')).toBe(true)
+    // The browser not saying which page: any guest's use counts.
+    expect(s.ses.check(null, 'clipboard-sanitized-write')).toBe(false)
+    using.clear()
+    const again = vi.fn()
+    s.ses.request(page(7), 'clipboard-sanitized-write', again, {})
+    expect(again).toHaveBeenCalledWith(true)
+    expect(s.ses.check(null, 'clipboard-sanitized-write')).toBe(true)
   })
 })

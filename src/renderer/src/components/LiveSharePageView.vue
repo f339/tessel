@@ -9,7 +9,8 @@
 // host's Tessel refuses (the right button, the browser's own keys, too many
 // at once) is said. "Open this address in my own browser" opens its origin
 // and path in yours (http(s) only; not for an address of the host's
-// computer or network): none of the host's sessions comes with it.
+// computer or network), after you saw the whole address and said yes: none
+// of the host's sessions comes with it.
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ExternalLink, Globe, MousePointerClick } from 'lucide-vue-next'
 import { externalPageUrl } from '../../../shared/livePageUrl'
@@ -17,6 +18,7 @@ import { t } from '../i18n'
 
 const props = defineProps({ node: { type: Object, required: true } })
 const ctx = inject('panelCtx')
+const askConfirm = inject('askConfirm', null)
 
 const source = computed(() => (ctx.liveSharePageSource ? ctx.liveSharePageSource(props.node.id) : null))
 const info = computed(() => (source.value ? source.value.info() : null))
@@ -160,9 +162,18 @@ const externalTitle = computed(() => {
   if (external.value.reason === 'local') return t('liveShare.page.openLocal', 'This address only works on the host’s computer or network.')
   return t('liveShare.page.openNone', 'Only web addresses (http and https) can be opened.')
 })
-function openExternal() {
-  if (!external.value.ok || !window.shellApi || !window.shellApi.openExternal) return
-  window.shellApi.openExternal(external.value.url)
+async function openExternal() {
+  const target = external.value
+  if (!target.ok || !window.shellApi || !window.shellApi.openExternal) return
+  // The whole address first: it comes from the host's page.
+  const question = {
+    title: t('liveShare.page.openAsk', 'Open this address in your browser?'),
+    text: t('liveShare.page.openAskText', '{{url}} comes from {{host}}’s page. None of {{host}}’s sessions or cookies comes with it.', { url: target.url, host: host.value }),
+    confirmLabel: t('liveShare.page.openConfirm', 'Open')
+  }
+  const ok = askConfirm ? await askConfirm(question) : window.confirm(`${question.title} ${question.text}`)
+  if (ok !== true) return
+  window.shellApi.openExternal(target.url)
 }
 
 // --- Your input on it ("Use my browser pages") ---------------------------------------

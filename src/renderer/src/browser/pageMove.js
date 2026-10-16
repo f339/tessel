@@ -13,6 +13,13 @@
 // in the panel no agent may drive it (its id is gone from their lists and its
 // old view is destroyed, which ends the agent's hold on it in the main
 // process); back in the grid it is a new page, opened by no agent.
+//
+// The page's session goes with it (the agents' separate session, a Live
+// Share guest's in-memory one: never the user's own with its logins), and
+// so does "Hide this page from guests" (sessionFlags): kept in the panel's
+// page and with the layout, given back to the pane. A panel page that never
+// was a pane says nothing about it: hiddenDefault decides (App: hidden
+// while that project is shared, the safe side).
 
 import { clampZoom } from './browserPage'
 
@@ -68,22 +75,40 @@ function keptTitle(title, defaultTitle) {
 // A page's own zoom kept as it is; null (none set: Settings' default) stays null.
 const keptZoom = (zoom) => (Number.isFinite(zoom) ? clampZoom(zoom) : null)
 
+// What a page keeps across a move and a restart: its session (the agents',
+// a Live Share guest's) and whether guests may see it (a boolean once
+// known).
+export function sessionFlags(from) {
+  const out = {}
+  if (from && from.agentSession === true) out.agentSession = true
+  if (from && from.guestSession === true) out.guestSession = true
+  if (from && typeof from.hiddenFromGuests === 'boolean') out.hiddenFromGuests = from.hiddenFromGuests
+  return out
+}
+
 // A browser pane of the grid -> a side panel page ({ id, url, title, zoom }).
 // url: what the pane shows (BrowserPane keeps node.url up to date); a blank
 // page stays blank (the panel's + pages start with '').
 export function sidePageFromLeaf(leaf, id, { blankUrl = 'about:blank', defaultTitle = '' } = {}) {
   const url = typeof leaf.url === 'string' && leaf.url !== blankUrl ? leaf.url : ''
-  return { id, url, title: keptTitle(leaf.title, defaultTitle), zoom: keptZoom(leaf.zoom), ...(leaf.muted ? { muted: true } : {}) }
+  return { id, url, title: keptTitle(leaf.title, defaultTitle), zoom: keptZoom(leaf.zoom), ...(leaf.muted ? { muted: true } : {}), ...sessionFlags(leaf), hiddenFromGuests: leaf.hiddenFromGuests === true }
 }
 
 // A side panel page -> a browser pane: makeLeaf(url) builds it
 // (App's makeBrowserLeaf: a new id, its address checked again).
-export function leafFromSidePage(page, makeLeaf) {
+// hiddenDefault: hidden from guests when the page never said (it was never a
+// pane).
+export function leafFromSidePage(page, makeLeaf, { hiddenDefault = false } = {}) {
   const leaf = makeLeaf(page.url || undefined)
   const title = keptTitle(page.title, '')
   if (title) leaf.title = title
   leaf.zoom = keptZoom(page.zoom)
   if (page.muted) leaf.muted = true
+  const flags = sessionFlags(page)
+  if (flags.agentSession) leaf.agentSession = true
+  if (flags.guestSession) leaf.guestSession = true
+  if (typeof flags.hiddenFromGuests === 'boolean' ? flags.hiddenFromGuests : hiddenDefault) leaf.hiddenFromGuests = true
+  else delete leaf.hiddenFromGuests
   // Stays out of the agents' count of the pages they opened.
   delete leaf.openedBy
   return leaf
@@ -94,7 +119,7 @@ export const SIDE_BROWSER_ID = /^web-[a-z0-9]{1,16}$/
 
 // The side panel's pages to save.
 export function saveSideBrowsers(list) {
-  return (list || []).map((b) => ({ id: b.id, url: b.url || '', title: b.title || '', zoom: keptZoom(b.zoom) }))
+  return (list || []).map((b) => ({ id: b.id, url: b.url || '', title: b.title || '', zoom: keptZoom(b.zoom), ...sessionFlags(b) }))
 }
 
 // The saved pages -> the panel's pages (unknown or repeated ids dropped).
@@ -107,7 +132,8 @@ export function restoreSideBrowsers(list) {
       id: b.id,
       url: typeof b.url === 'string' ? b.url : '',
       title: typeof b.title === 'string' ? b.title : '',
-      zoom: keptZoom(b.zoom)
+      zoom: keptZoom(b.zoom),
+      ...sessionFlags(b)
     })
   }
   return out
