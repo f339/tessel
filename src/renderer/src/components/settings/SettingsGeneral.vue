@@ -55,7 +55,7 @@ const { page, searching, shown, emit } = useSettingsShell()
         <p class="set-hint set-card-text">{{ t('settings.general.workspaceIntro', 'Configure where new workspaces are created.') }}</p>
         <div class="set-row">
           <label class="set-label" for="settings-workspace-dir">
-            {{ t('settings.general.workspaceDir', 'Workspace Directory') }}
+            {{ t('settings.general.workspaceDir', 'Workspace directory') }}
             <span class="set-hint">{{ t('settings.general.workspaceDirHint', 'Root directory where workspace folders are created. Use a relative path (e.g. .tessel/worktrees) for a per-project location, or an absolute path for one shared folder. Empty: next to the project, in <project>.worktrees.') }}</span>
           </label>
           <div class="set-inline">
@@ -79,7 +79,7 @@ const { page, searching, shown, emit } = useSettingsShell()
         </div>
         <label class="set-row">
           <div class="set-label">
-            {{ t('settings.general.confirmDelete', 'Ask Before Deleting Workspaces') }}
+            {{ t('settings.general.confirmDelete', 'Ask before deleting workspaces') }}
             <span class="set-hint">{{ t('settings.general.confirmDeleteHint', 'Show a confirmation before deleting a workspace from the context menu. Unsaved files are always asked about.') }}</span>
           </div>
           <input v-model="settings.confirmDeleteWorkspace" type="checkbox" class="set-switch" />

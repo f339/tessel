@@ -181,41 +181,37 @@ export const PAGES = {
     lucide: Cable
   }
 }
+
+// The sidebar: what the AI does, the workspace it works in, the workflows
+// around it, what it used, and Tessel itself.
 export const GROUPS = [
   {
     id: 'ai',
     get title() {
-      return t('settings.groups.ai', 'AI capabilities')
+      return t('settings.groups.ai', 'AI')
     },
-    pages: ['agents', 'accounts', 'skills', 'mcp', 'orchestration', 'voice']
+    pages: ['agents', 'accounts', 'skills', 'mcp', 'orchestration']
   },
   {
-    id: 'configure',
+    id: 'workspace',
     get title() {
-      return t('settings.groups.configure', 'Configure')
+      return t('settings.groups.workspace', 'Workspace')
     },
-    pages: ['general', 'appearance', 'text', 'terminal', 'editor', 'browser', 'alerts']
+    pages: ['general', 'appearance', 'text', 'terminal', 'editor', 'browser', 'alerts', 'voice']
   },
   {
     id: 'workflows',
     get title() {
       return t('settings.groups.workflows', 'Workflows')
     },
-    pages: ['git', 'automations', 'quick-commands']
+    pages: ['git', 'automations', 'quick-commands', 'ssh']
   },
   {
-    id: 'interface',
+    id: 'insights',
     get title() {
-      return t('settings.groups.interface', 'Interface')
+      return t('settings.groups.insights', 'Insights')
     },
     pages: ['stats']
-  },
-  {
-    id: 'remote',
-    get title() {
-      return t('remote.group', 'Remote Hosts')
-    },
-    pages: ['ssh']
   },
   {
     id: 'about',

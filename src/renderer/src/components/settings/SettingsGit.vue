@@ -19,7 +19,7 @@ const scmView = computed(() => (settings.sourceControlViewMode === 'list' ? 'lis
 
 // Settings > Git & Source Control.
 const BRANCH_PREFIX_MODES = computed(() => [
-  { id: 'git-username', label: t('settings.git.prefixGitUsername', 'Git Username') },
+  { id: 'git-username', label: t('settings.git.prefixGitUsername', 'Git username') },
   { id: 'custom', label: t('settings.git.prefixCustom', 'Custom') },
   { id: 'none', label: t('settings.git.prefixNone', 'None') }
 ])
@@ -63,7 +63,7 @@ const branchPrefixFeedback = computed(() => {
       <div class="set-card">
         <div class="set-row set-row-wrap">
           <div id="settings-branch-prefix-label" class="set-label">
-            {{ t('settings.git.branchPrefix', 'Branch Prefix') }}
+            {{ t('settings.git.branchPrefix', 'Branch prefix') }}
             <span class="set-hint">{{ t('settings.git.branchPrefixHint', 'Choose whether branch names use your Git username, a custom prefix, or no prefix.') }}</span>
           </div>
           <div class="set-branch-prefix">
@@ -99,7 +99,7 @@ const branchPrefixFeedback = computed(() => {
         </div>
         <div class="set-row">
           <div id="settings-group-order-label" class="set-label">
-            {{ t('settings.git.groupOrder', 'Source Control Group Order') }}
+            {{ t('settings.git.groupOrder', 'Source Control group order') }}
             <span class="set-hint">{{ t('settings.git.groupOrderHint', 'Choose whether Changes, Staged Changes, or Untracked Files appear first in Source Control.') }}</span>
           </div>
           <div class="launch-seg set-seg set-seg-wide" role="group" aria-labelledby="settings-group-order-label">
@@ -118,7 +118,7 @@ const branchPrefixFeedback = computed(() => {
         </div>
         <div class="set-row">
           <div id="settings-scm-view-label" class="set-label">
-            {{ t('settings.git.viewMode', 'Source Control View') }}
+            {{ t('settings.git.viewMode', 'Source Control view') }}
             <span class="set-hint">{{ t('settings.git.viewModeHint', 'Show the changed files as a folder tree or as a flat list.') }}</span>
           </div>
           <div class="launch-seg set-seg" role="group" aria-labelledby="settings-scm-view-label" data-setting="sourceControlViewMode">

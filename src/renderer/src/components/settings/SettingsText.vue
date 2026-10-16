@@ -76,7 +76,7 @@ const CURSORS = computed(() => [
         </label>
         <div class="set-row">
           <label class="set-label" for="settings-cursor-opacity">
-            {{ t('settings.text.cursorOpacity', 'Cursor Opacity') }}
+            {{ t('settings.text.cursorOpacity', 'Cursor opacity') }}
             <span class="set-hint">{{ t('settings.text.cursorOpacityHint', 'Opacity of the terminal cursor. 0-1') }}</span>
           </label>
           <input
@@ -93,11 +93,11 @@ const CURSORS = computed(() => [
       </div>
     </div>
     <div class="set-group">
-      <h3 class="set-group-title">{{ t('settings.text.typography', 'Terminal Typography') }}</h3>
+      <h3 class="set-group-title">{{ t('settings.text.typography', 'Terminal typography') }}</h3>
       <div class="set-card">
         <div class="set-row">
           <label class="set-label" for="settings-font-weight">
-            {{ t('settings.text.fontWeight', 'Font Weight') }}
+            {{ t('settings.text.fontWeight', 'Font weight') }}
             <span class="set-hint">{{ t('settings.text.fontWeightHint', 'Controls the terminal text font weight. 100-900') }}</span>
           </label>
           <input
@@ -113,8 +113,8 @@ const CURSORS = computed(() => [
         </div>
         <div class="set-row">
           <label class="set-label" for="settings-font-weight-bold">
-            {{ t('settings.text.boldWeight', 'Bold Font Weight') }}
-            <span class="set-hint">{{ t('settings.text.boldWeightHint', 'Adjust independently from Font Weight. Some fonts map several values to one face, so lower Font Weight or choose another font if bold looks unchanged. 100-900') }}</span>
+            {{ t('settings.text.boldWeight', 'Bold font weight') }}
+            <span class="set-hint">{{ t('settings.text.boldWeightHint', 'Adjust independently from the font weight. Some fonts map several values to one face, so lower the font weight or choose another font if bold looks unchanged. 100-900') }}</span>
           </label>
           <input
             id="settings-font-weight-bold"
@@ -129,7 +129,7 @@ const CURSORS = computed(() => [
         </div>
         <div class="set-row">
           <label class="set-label" for="settings-line-height">
-            {{ t('settings.text.lineHeight', 'Line Height') }}
+            {{ t('settings.text.lineHeight', 'Line height') }}
             <span class="set-hint">{{ t('settings.text.lineHeightHint', 'Controls the terminal line height multiplier. 1-3') }}</span>
           </label>
           <input

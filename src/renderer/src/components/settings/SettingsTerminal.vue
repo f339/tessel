@@ -117,7 +117,7 @@ function resetScrollSpeed() {
         <p class="set-hint set-card-text">{{ t('settings.terminal.renderingIntro', 'Terminal renderer behavior for live panes and new panes.') }}</p>
         <div class="set-row">
           <div id="settings-gpu-label" class="set-label">
-            {{ t('settings.terminal.gpu', 'GPU Acceleration') }}
+            {{ t('settings.terminal.gpu', 'GPU acceleration') }}
             <span class="set-hint">{{ gpuHint }}</span>
           </div>
           <div class="launch-seg set-seg" role="group" aria-labelledby="settings-gpu-label">
@@ -136,7 +136,7 @@ function resetScrollSpeed() {
         </div>
         <div class="set-row">
           <div id="settings-contrast-label" class="set-label">
-            {{ t('settings.terminal.contrast', 'Color Contrast') }}
+            {{ t('settings.terminal.contrast', 'Color contrast') }}
             <span class="set-hint">{{ contrastHint }}</span>
           </div>
           <div class="launch-seg set-seg" role="group" aria-labelledby="settings-contrast-label">
@@ -214,12 +214,12 @@ function resetScrollSpeed() {
       </div>
     </div>
     <div class="set-group">
-      <h3 class="set-group-title">{{ t('settings.terminal.interaction', 'Terminal Interaction') }}</h3>
+      <h3 class="set-group-title">{{ t('settings.terminal.interaction', 'Terminal interaction') }}</h3>
       <div class="set-card">
         <p class="set-hint set-card-text">{{ t('settings.terminal.interactionIntro', 'Mouse and clipboard behavior for terminal panes.') }}</p>
         <div class="set-row">
           <div class="set-label">
-            {{ t('settings.terminal.scrollSpeed', 'Scroll Speed') }}
+            {{ t('settings.terminal.scrollSpeed', 'Scroll speed') }}
             <span class="set-hint">{{ t('settings.terminal.scrollSpeedHint', 'Adjust how wheel input feels in scrollback and in mouse-aware terminal apps.') }}</span>
           </div>
           <button class="exit-btn" type="button" @click="resetScrollSpeed">{{ t('settings.common.reset', 'Reset') }}</button>
@@ -282,21 +282,21 @@ function resetScrollSpeed() {
         </div>
         <label class="set-row">
           <div class="set-label">
-            {{ t('settings.terminal.focusFollowsMouse', 'Focus Follows Mouse') }}
+            {{ t('settings.terminal.focusFollowsMouse', 'Focus follows mouse') }}
             <span class="set-hint">{{ t('settings.terminal.focusFollowsMouseHint', 'Hovering a terminal pane activates it without needing to click.') }}</span>
           </div>
           <input v-model="settings.focusFollowsMouse" type="checkbox" class="set-switch" />
         </label>
         <label class="set-row">
           <div class="set-label">
-            {{ t('settings.terminal.trimGutter', 'Trim Gutter on Copy') }}
+            {{ t('settings.terminal.trimGutter', 'Trim gutter on copy') }}
             <span class="set-hint">{{ t('settings.terminal.trimGutterHint', 'Drop the left gutter agent output is painted behind, so copied text is not indented. Only the indent every selected line shares is removed.') }}</span>
           </div>
           <input v-model="settings.copyTrimsGutter" type="checkbox" class="set-switch" />
         </label>
         <label class="set-row">
           <div class="set-label">
-            {{ t('settings.terminal.osc52', 'Allow TUI Clipboard Writes (OSC 52)') }}
+            {{ t('settings.terminal.osc52', 'Allow TUI clipboard writes (OSC 52)') }}
             <span class="set-hint">{{ t('settings.terminal.osc52Hint', 'Let programs in the terminal (Zellij, tmux, Neovim, fzf, Grok, SSH) copy to your system clipboard.') }}</span>
           </div>
           <input v-model="settings.allowOsc52Clipboard" type="checkbox" class="set-switch" />
@@ -309,7 +309,7 @@ function resetScrollSpeed() {
         <p class="set-hint set-card-text">{{ t('settings.terminal.advancedIntro', 'Scrollback, word boundaries, and platform-specific terminal behaviors.') }}</p>
         <div class="set-row">
           <label class="set-label" for="settings-word-separators">
-            {{ t('settings.terminal.wordSeparators', 'Word Separators') }}
+            {{ t('settings.terminal.wordSeparators', 'Word separators') }}
             <span class="set-hint">{{ t('settings.terminal.wordSeparatorsHint', 'Characters treated as word boundaries for double-click selection.') }}</span>
           </label>
           <input

@@ -553,7 +553,11 @@ onMounted(async () => {
   refresh()
   loadHooks()
   if (window.shellApi.checkTools) {
-    Object.assign(haveCmd, (await window.shellApi.checkTools(['node', 'uvx'])) || {})
+    try {
+      Object.assign(haveCmd, (await window.shellApi.checkTools(['node', 'uvx'])) || {})
+    } catch {
+      // Unknown: no "needs node" warning (it shows only for a known false).
+    }
   }
 })
 </script>

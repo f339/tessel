@@ -161,9 +161,54 @@ function applySearch() {
     }
   }
   if (hits.join() !== matched.value.join()) matched.value = hits
+  showMatches(root, hits, ws)
 }
 watch(query, () => nextTick(applySearch))
 onUpdated(applySearch)
+
+// How many rows the search shows (a page found by its title counts its rows,
+// one at least), and its words highlighted in them. The highlight is a CSS
+// Custom Highlight (::highlight(settings-search) in style.css): nothing is
+// added to the pages, whose text Vue owns.
+const resultCount = ref(0)
+const resultText = computed(() =>
+  t('settings.search.count', resultCount.value === 1 ? '{{count}} result' : '{{count}} results', { count: resultCount.value })
+)
+const HIGHLIGHT = 'settings-search'
+const canHighlight = () => typeof CSS !== 'undefined' && !!CSS.highlights && typeof Highlight === 'function'
+function showMatches(root, hits, ws) {
+  let count = 0
+  const ranges = []
+  for (const pg of root.querySelectorAll('.set-page')) {
+    if (!hits.includes(pg.dataset.page)) continue
+    const rows = [...pg.querySelectorAll(ITEM)].filter((el) => {
+      const hidden = el.closest('[hidden]')
+      return (!hidden || hidden === pg) && !el.parentElement.closest(ITEM)
+    })
+    count += Math.max(1, rows.length)
+    if (!canHighlight()) continue
+    // Text the page shows: what the search (or the page) hid is skipped.
+    const walker = document.createTreeWalker(pg, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) =>
+        n.nodeType === Node.TEXT_NODE ? NodeFilter.FILTER_ACCEPT : n.hidden || n.tagName === 'STYLE' ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP
+    })
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const text = node.data.toLowerCase()
+      for (const w of ws) {
+        for (let i = text.indexOf(w); i >= 0; i = text.indexOf(w, i + w.length)) {
+          const range = new Range()
+          range.setStart(node, i)
+          range.setEnd(node, i + w.length)
+          ranges.push(range)
+        }
+      }
+    }
+  }
+  if (count !== resultCount.value) resultCount.value = count
+  if (!canHighlight()) return
+  if (ranges.length) CSS.highlights.set(HIGHLIGHT, new Highlight(...ranges))
+  else CSS.highlights.delete(HIGHLIGHT)
+}
 
 function onKeydown(e) {
   if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
@@ -278,6 +323,7 @@ onUnmounted(() => {
     sibling.removeAttribute('data-settings-inert')
   }
   if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
+  if (canHighlight()) CSS.highlights.delete(HIGHLIGHT)
 })
 </script>
 
@@ -364,25 +410,26 @@ onUnmounted(() => {
           role="status"
           v-text="t('settings.search.noMatch', 'No settings match “{{query}}”.', { query: query.trim() })"
         ></p>
+        <p v-else-if="searching" class="set-count" role="status">{{ resultText }}</p>
 
-        <SettingsStats :worktree-paths="worktreePaths" />
         <SettingsAgents :shells="shells" :agents="agents" :agent-updates="agentUpdates" :agent-update-jobs="agentUpdateJobs" :agent-update-queue="agentUpdateQueue" :agent-update-history="agentUpdateHistory" />
         <SettingsAccounts />
         <SettingsSkills :agents="agents" :project-cwd="projectCwd" />
         <SettingsMcp :agents="agents" :project-cwd="projectCwd" />
         <SettingsOrchestration :agents="agents" />
-        <SettingsVoice />
         <SettingsGeneral />
         <SettingsAppearance />
         <SettingsText />
         <SettingsTerminal :shells="shells" :default-shell="defaultShell" />
-        <SettingsNotifications />
         <SettingsEditor />
         <SettingsBrowser />
+        <SettingsNotifications />
+        <SettingsVoice />
         <SettingsGit />
         <SettingsAutomations />
         <SettingsQuickCommands />
         <SettingsSsh />
+        <SettingsStats :worktree-paths="worktreePaths" />
         <SettingsUpdates :update-status="updateStatus" />
       </div>
     </main>

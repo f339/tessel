@@ -256,10 +256,11 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     return el
   }
 
-  it('are pages of AI capabilities, after the accounts', () => {
+  it('are pages of the AI group, after the accounts', () => {
     wrapper = mountAt(null)
     const ai = wrapper.findAll('.set-nav-group')[0]
-    expect(ai.findAll('.set-nav-item').map((b) => b.attributes('data-page'))).toEqual(['agents', 'accounts', 'skills', 'mcp', 'orchestration', 'voice'])
+    expect(ai.get('.set-nav-head').text()).toBe('AI')
+    expect(ai.findAll('.set-nav-item').map((b) => b.attributes('data-page'))).toEqual(['agents', 'accounts', 'skills', 'mcp', 'orchestration'])
     expect(wrapper.get('.set-nav-item[data-page="skills"]').text()).toBe('Skills')
     expect(wrapper.get('.set-nav-item[data-page="mcp"]').text()).toBe('MCP servers')
     expect(wrapper.get('.set-nav-item[data-page="mcp"] svg path').attributes('d')).toBeTruthy()

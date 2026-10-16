@@ -29,6 +29,20 @@ describe('MCP servers dialog', () => {
     wrapper.unmount()
   })
 
+  it('a failed check for node and uvx is no unhandled rejection, and flags nothing as missing', async () => {
+    previousApi = window.shellApi
+    window.shellApi = {
+      mcpList: async () => ({ claude: [], codex: [] }),
+      checkTools: async () => {
+        throw new Error('ipc closed')
+      }
+    }
+    const wrapper = mount(McpDialog, { props: { agents: [{ id: 'claude', available: true }] }, attachTo: document.body })
+    await flushPromises()
+    expect(wrapper.text()).not.toMatch(/needs node|requires node/i)
+    wrapper.unmount()
+  })
+
   it('lists the Antigravity CLI servers (its own mcp_config.json), one it turned off marked so, and adds to it', async () => {
     previousApi = window.shellApi
     const added = []

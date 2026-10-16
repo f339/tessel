@@ -72,6 +72,9 @@ The search (in the shell) reads the rendered text of every page, so:
   title that matches shows the whole group; a page title (or its English
   title) shows the whole page.
 - `useSettingsShell()` runs the search again when the page re-renders.
+- The shell counts the rows it shows and highlights the words found in them
+  (a CSS Custom Highlight, `::highlight(settings-search)`): nothing is added
+  to a page's DOM, so no page needs to do anything for it.
 
 ## Shared classes
 
@@ -97,8 +100,8 @@ in a disclosure:
 native checkbox); 2 or 3 short choices `.launch-seg.set-seg`; more or longer
 ones `ThemedSelect`; numbers `.set-number` (unit and range in the hint, then
 `setNumber(key, $event)`); a path or command `.sl-path` with a title and a
-copy button. Page tabs are `.launch-seg` with `role="tablist"` and
-`aria-selected`.
+copy button; a command to try, in a hint, `code.set-code` (one line each).
+Page tabs are `.launch-seg` with `role="tablist"` and `aria-selected`.
 
 **Buttons.** `.exit-btn` (secondary, 28 px), `.exit-btn.small` (24 px, for
 lists and details), `.exit-btn.primary` (one per view at most),

@@ -123,6 +123,22 @@ describe('Settings pages', { timeout: 30_000 }, () => {
     expect(shown(wrapper.get('[aria-labelledby="settings-cursor-label"]').element)).toBe(true)
   })
 
+  it('the sidebar groups the pages; a search says how many rows it shows', async () => {
+    wrapper = mount(SettingsDialog, { attachTo: document.body })
+    expect(wrapper.findAll('.set-nav-head').map((h) => h.text())).toEqual(['AI', 'Workspace', 'Workflows', 'Insights', 'About'])
+    expect(wrapper.find('.set-count').exists()).toBe(false)
+    await wrapper.get('input[type="search"]').setValue('cursor opacity')
+    await settle()
+    expect(visiblePages(wrapper)).toEqual(['text'])
+    expect(wrapper.get('.set-count').text()).toBe('1 result')
+    await wrapper.get('input[type="search"]').setValue('font')
+    await settle()
+    expect(wrapper.get('.set-count').text()).toMatch(/^\d+ results$/)
+    await wrapper.get('input[type="search"]').setValue('zzqx')
+    await settle()
+    expect(wrapper.find('.set-count').exists()).toBe(false)
+  })
+
   it('Ctrl+F focuses the search; Escape there empties it before closing', async () => {
     wrapper = mount(SettingsDialog, { attachTo: document.body })
     const search = wrapper.get('input[type="search"]')

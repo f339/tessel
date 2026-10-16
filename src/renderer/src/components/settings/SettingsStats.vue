@@ -20,7 +20,7 @@ const { page, searching, shown, go } = useSettingsShell()
     <div class="set-group">
       <StatsUsage v-if="page === 'stats' && !searching" :worktree-paths="worktreePaths" />
       <div v-else class="set-row">
-        <div class="set-label">{{ t('settings.stats.analytics', 'Usage Analytics') }}
+        <div class="set-label">{{ t('settings.stats.analytics', 'Usage analytics') }}
           <span class="set-hint">{{ t('settings.stats.analyticsHint', 'Overview, Claude, Codex, tokens, costs, cache efficiency, daily usage, models, projects and sessions.') }}</span>
         </div>
         <button type="button" class="exit-btn" @click="go('stats')">{{ t('settings.stats.open', 'Open Stats & Usage') }}</button>

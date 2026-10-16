@@ -18,7 +18,9 @@
     "search": {
       "placeholder": "Rechercher dans les paramètres",
       "title": "Rechercher dans les paramètres (Ctrl+F)",
-      "noMatch": "Aucun paramètre ne correspond à « {{query}} »."
+      "noMatch": "Aucun paramètre ne correspond à « {{query}} ».",
+      "count_one": "{{count}} résultat",
+      "count_other": "{{count}} résultats"
     },
     "pages": {
       "stats": {
@@ -95,10 +97,10 @@
       }
     },
     "groups": {
-      "ai": "Capacités IA",
-      "configure": "Configurer",
+      "ai": "IA",
+      "workspace": "Espace de travail",
       "workflows": "Workflows",
-      "interface": "Interface",
+      "insights": "Analyses",
       "about": "À propos"
     },
     "common": {
@@ -804,8 +806,8 @@
       "removeFailed": "Impossible de retirer la commande « {{name}} » du PATH.",
       "refreshLabel": "Actualiser l'état de la commande",
       "refresh": "Actualiser",
-      "commandPath": "Chemin de la commande :",
-      "examples": "Dans un terminal : {{examples}}",
+      "commandPath": "Chemin de la commande",
+      "examplesLead": "Dans un terminal :",
       "showInExplorer": "Afficher dans l'Explorateur",
       "registerTitle": "Activer la commande « {{name}} » ?",
       "registerText": "Tessel va installer la commande à cet emplacement : {{path}}. Son dossier sera ajouté au PATH de votre compte Windows pour que vos terminaux la trouvent. Vous pourrez la retirer ici à tout moment.",

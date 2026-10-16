@@ -23,7 +23,7 @@ const usageRefreshLabel = (m) =>
 // as its Options menu (WorkspaceSidebar.vue).
 const SIDEBAR_SORT_OPTIONS = computed(() => [
   { id: 'name', label: t('sidebar.options.sortName', 'Name') },
-  { id: 'smart', label: t('sidebar.options.sortSmart', 'Agent Activity') },
+  { id: 'smart', label: t('sidebar.options.sortSmart', 'Agent activity') },
   { id: 'recent', label: t('sidebar.options.recent', 'Recent') },
   { id: 'repo', label: t('sidebar.options.project', 'Project') },
   { id: 'manual', label: t('sidebar.options.manual', 'Manual') }
@@ -47,7 +47,7 @@ function toggleCardProperty(id) {
 }
 const SIDEBAR_APPEARANCES = computed(() => [
   { id: 'default', label: t('settings.appearance.sidebarDefault', 'Default') },
-  { id: 'match-terminal', label: t('settings.appearance.sidebarMatchTerminal', 'Match Terminal') },
+  { id: 'match-terminal', label: t('settings.appearance.sidebarMatchTerminal', 'Match terminal') },
   { id: 'tinted', label: t('settings.appearance.sidebarTinted', 'Tinted') }
 ])
 const STATUS_BAR_TOGGLES = computed(() => [
@@ -134,7 +134,7 @@ function zoom(direction) {
         </div>
         <div class="set-row" data-setting="ui-zoom">
           <div class="set-label">
-            {{ t('settings.appearance.zoom', 'UI Zoom') }}
+            {{ t('settings.appearance.zoom', 'UI zoom') }}
             <span class="set-hint">{{ t('settings.appearance.zoomHint', 'Scale the entire application interface.') }}</span>
           </div>
           <div class="set-inline">
@@ -167,11 +167,11 @@ function zoom(direction) {
       </div>
     </div>
     <div class="set-group">
-      <h3 class="set-group-title">{{ t('settings.appearance.terminalPanes', 'Terminal Panes') }}</h3>
+      <h3 class="set-group-title">{{ t('settings.appearance.terminalPanes', 'Terminal panes') }}</h3>
       <div class="set-card">
         <div class="set-row">
           <label class="set-label" for="settings-inactive-opacity">
-            {{ t('settings.appearance.inactiveOpacity', 'Inactive Pane Opacity') }}
+            {{ t('settings.appearance.inactiveOpacity', 'Inactive pane opacity') }}
             <span class="set-hint">{{ t('settings.appearance.inactiveOpacityHint', 'Dim unfocused panes. 0-1') }}</span>
           </label>
           <input
@@ -187,7 +187,7 @@ function zoom(direction) {
         </div>
         <div class="set-row">
           <label class="set-label" for="settings-divider">
-            {{ t('settings.appearance.divider', 'Divider Thickness') }}
+            {{ t('settings.appearance.divider', 'Divider thickness') }}
             <span class="set-hint">{{ t('settings.appearance.dividerHint', 'Thickness of the pane divider line. px') }}</span>
           </label>
           <input
@@ -209,7 +209,7 @@ function zoom(direction) {
         <p class="set-hint set-card-text">{{ t('settings.appearance.windowIntro', 'Window appearance and background settings.') }}</p>
         <div class="set-row">
           <label class="set-label" for="settings-pad-x">
-            {{ t('settings.appearance.padX', 'Horizontal Padding') }}
+            {{ t('settings.appearance.padX', 'Horizontal padding') }}
             <span class="set-hint">{{ t('settings.appearance.padXHint', 'Horizontal padding around the terminal grid in pixels.') }}</span>
           </label>
           <input
@@ -225,7 +225,7 @@ function zoom(direction) {
         </div>
         <div class="set-row">
           <label class="set-label" for="settings-pad-y">
-            {{ t('settings.appearance.padY', 'Vertical Padding') }}
+            {{ t('settings.appearance.padY', 'Vertical padding') }}
             <span class="set-hint">{{ t('settings.appearance.padYHint', 'Vertical padding around the terminal grid in pixels.') }}</span>
           </label>
           <input
@@ -240,13 +240,13 @@ function zoom(direction) {
           />
         </div>
         <label class="set-row">
-          <div class="set-label">{{ t('settings.appearance.hideMouse', 'Hide Mouse While Typing') }}</div>
+          <div class="set-label">{{ t('settings.appearance.hideMouse', 'Hide mouse while typing') }}</div>
           <input v-model="settings.hideMouseWhileTyping" type="checkbox" class="set-switch" />
         </label>
       </div>
     </div>
     <div class="set-group">
-      <h3 class="set-group-title">{{ t('settings.appearance.windowSidebar', 'Window & Sidebar') }}</h3>
+      <h3 class="set-group-title">{{ t('settings.appearance.windowSidebar', 'Window & sidebar') }}</h3>
       <div class="set-card">
         <div class="set-row">
           <div id="settings-usage-pct-label" class="set-label">
@@ -291,14 +291,14 @@ function zoom(direction) {
         </div>
         <label class="set-row">
           <div class="set-label">
-            {{ t('settings.appearance.gitIgnored', 'Show Git-Ignored Files') }}
+            {{ t('settings.appearance.gitIgnored', 'Show Git-ignored files') }}
             <span class="set-hint">{{ t('settings.appearance.gitIgnoredHint', 'Files matched by .gitignore.') }}</span>
           </div>
           <input v-model="settings.showGitIgnoredFiles" type="checkbox" class="set-switch" />
         </label>
         <label class="set-row">
           <div class="set-label">
-            {{ t('settings.appearance.compactFolders', 'Compact Folders') }}
+            {{ t('settings.appearance.compactFolders', 'Compact folders') }}
             <span class="set-hint">{{
               t('settings.appearance.compactFoldersHint', 'In Files, a folder holding a single folder shares its row with it, like a/b/c.')
             }}</span>
@@ -308,7 +308,7 @@ function zoom(direction) {
         <!-- Orca's Appearance > Window & Sidebar (same section). -->
         <div class="set-row">
           <div id="settings-sidebar-appearance-label" class="set-label">
-            {{ t('settings.appearance.sidebar', 'Left Sidebar Appearance') }}
+            {{ t('settings.appearance.sidebar', 'Left sidebar appearance') }}
             <span class="set-hint">{{ t('settings.appearance.sidebarHint', 'Make the left sidebar match your terminal, stay default, or use a tint.') }}</span>
           </div>
           <div class="launch-seg set-seg" role="group" aria-labelledby="settings-sidebar-appearance-label">
@@ -327,14 +327,14 @@ function zoom(direction) {
         <template v-if="settings.leftSidebarAppearanceMode === 'tinted'">
           <label class="set-row">
             <div class="set-label">
-              {{ t('settings.appearance.tint', 'Sidebar Tint') }}
+              {{ t('settings.appearance.tint', 'Sidebar tint') }}
               <span class="set-hint">{{ t('settings.appearance.tintHint', 'The color mixed into the left sidebar surface.') }}</span>
             </div>
-            <input v-model="settings.leftSidebarTintColor" type="color" class="set-color" :aria-label="t('settings.appearance.tint', 'Sidebar Tint')" />
+            <input v-model="settings.leftSidebarTintColor" type="color" class="set-color" :aria-label="t('settings.appearance.tint', 'Sidebar tint')" />
           </label>
           <label class="set-row">
             <div class="set-label">
-              {{ t('settings.appearance.tintStrength', 'Tint Strength') }}
+              {{ t('settings.appearance.tintStrength', 'Tint strength') }}
               <span
                 class="set-hint"
                 v-text="t('settings.appearance.tintStrengthHint', 'Controls how strongly the tint is mixed into the sidebar. 0 to {{max}}', { max: MAX_LEFT_SIDEBAR_TINT_OPACITY })"
@@ -347,21 +347,21 @@ function zoom(direction) {
               :max="MAX_LEFT_SIDEBAR_TINT_OPACITY"
               step="0.01"
               :value="settings.leftSidebarTintOpacity"
-              :aria-label="t('settings.appearance.tintStrength', 'Tint Strength')"
+              :aria-label="t('settings.appearance.tintStrength', 'Tint strength')"
               @change="setTintOpacity"
             />
           </label>
         </template>
         <label class="set-row">
           <div class="set-label">
-            {{ t('settings.appearance.statusBarVisible', 'Show Status Bar') }}
+            {{ t('settings.appearance.statusBarVisible', 'Show status bar') }}
             <span class="set-hint">{{ t('settings.appearance.statusBarVisibleHint', 'The bar at the bottom of the window.') }}</span>
           </div>
           <input v-model="settings.statusBarVisible" type="checkbox" class="set-switch" />
         </label>
         <div class="set-row">
           <div class="set-label">
-            {{ t('settings.appearance.statusBar', 'Status Bar') }}
+            {{ t('settings.appearance.statusBar', 'Status bar') }}
             <span class="set-hint">{{ t('settings.appearance.statusBarHint', 'Choose which indicators appear in the status bar.') }}</span>
           </div>
         </div>
@@ -385,7 +385,7 @@ function zoom(direction) {
       <div class="set-card">
         <div class="set-row">
           <div id="settings-card-layout-label" class="set-label">
-            {{ t('settings.appearance.cardLayout', 'Workspace Card Layout') }}
+            {{ t('settings.appearance.cardLayout', 'Workspace card layout') }}
             <span class="set-hint">{{ t('settings.appearance.cardLayoutHint', 'Workspace cards can use compact or detailed layouts.') }}</span>
           </div>
           <div class="launch-seg set-seg" role="group" aria-labelledby="settings-card-layout-label">

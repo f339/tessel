@@ -622,7 +622,7 @@ function sortOptions() {
     { id: 'name', label: t('sidebar.options.sortName', 'Name') },
     {
       id: 'smart',
-      label: t('sidebar.options.sortSmart', 'Agent Activity'),
+      label: t('sidebar.options.sortSmart', 'Agent activity'),
       description: t('sidebar.options.sortSmartHint', 'Agents that need attention, then most recent activity.')
     },
     { id: 'recent', label: t('sidebar.options.recent', 'Recent') },

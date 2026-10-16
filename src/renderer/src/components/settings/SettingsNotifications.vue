@@ -31,7 +31,7 @@ function previewSound() {
       <div class="set-card">
         <label class="set-row">
           <div class="set-label">
-            {{ t('settings.alerts.enable', 'Enable Notifications') }}
+            {{ t('settings.alerts.enable', 'Enable notifications') }}
             <span class="set-hint">{{ t('settings.alerts.enableHint', 'Native system notifications for background events.') }}</span>
           </div>
           <input v-model="settings.notificationsEnabled" type="checkbox" class="set-switch" />
@@ -50,7 +50,7 @@ function previewSound() {
         </label>
         <label class="set-row" :class="{ 'set-disabled': !settings.notificationsEnabled }">
           <div class="set-label">
-            {{ t('settings.alerts.bell', 'Terminal Bell') }}
+            {{ t('settings.alerts.bell', 'Terminal bell') }}
             <span class="set-hint">{{ t('settings.alerts.bellHint', 'A background terminal emits a bell character.') }}</span>
           </div>
           <input
@@ -109,7 +109,7 @@ function previewSound() {
         </div>
         <label class="set-row" :class="{ 'set-disabled': !settings.notificationsEnabled }">
           <div class="set-label">
-            {{ t('settings.alerts.suppress', 'Suppress While Focused') }}
+            {{ t('settings.alerts.suppress', 'Suppress while focused') }}
             <span class="set-hint">{{ t('settings.alerts.suppressHint', 'Skip notifications when the triggering worktree is already visible.') }}</span>
           </div>
           <input
@@ -128,7 +128,7 @@ function previewSound() {
             :disabled="!settings.notificationsEnabled"
             @click="emit('test-notification')"
           >
-            {{ t('settings.alerts.test', 'Send Test Notification') }}
+            {{ t('settings.alerts.test', 'Send test notification') }}
           </button>
         </div>
       </div>

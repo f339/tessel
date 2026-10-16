@@ -20,7 +20,7 @@
   --danger: #e5484d;
   --text: #d6d9df;
   --text-strong: #f1f3f6;
-  --text-dim: #7f8795;
+  --text-dim: #8a92a0;
   --radius: 7px;
 }
 
@@ -2759,6 +2759,14 @@ kbd {
   filter: brightness(1.1);
 }
 
+/* Keyboard focus: the same 2 px accent ring as the Settings rows and
+   switches, on the buttons and segments that had none. */
+.exit-btn:focus-visible,
+.launch-seg-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* A smaller one, for lists and their details: its text stays on one line
    and it never shrinks (the group it is in moves to the next line). */
 .exit-btn.small {
@@ -3139,13 +3147,19 @@ kbd {
 }
 
 .set-side {
-  flex: 0 0 290px;
+  flex: 0 0 clamp(200px, 24vw, 290px);
   display: flex;
   flex-direction: column;
   padding: 14px 12px 18px;
   overflow-y: auto;
   background: var(--chrome);
   border-right: 1px solid var(--border);
+}
+
+/* Never squeezed in a short window: the sidebar scrolls instead (the
+   search box once shrank to a sliver under ~900 px of height). */
+.set-side > * {
+  flex-shrink: 0;
 }
 
 .set-back {
@@ -3301,6 +3315,18 @@ kbd {
   font-size: 13px;
 }
 
+/* How many rows the search shows, and its words in them. */
+.set-count {
+  margin: 0 0 16px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+::highlight(settings-search) {
+  background-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  color: var(--text-strong);
+}
+
 .set-group {
   margin-bottom: 22px;
 }
@@ -3325,6 +3351,7 @@ kbd {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface-2);
+  container-type: inline-size;
 }
 
 .set-card.set-card-pad {
@@ -3350,6 +3377,19 @@ kbd {
 
 .set-card .set-row > :not(.set-label) {
   flex: 0 0 auto;
+}
+
+/* A narrow card (a small window, a long French label): a control that no
+   longer fits beside its label goes under it (after the rules above,
+   which it overrides). */
+@container (max-width: 520px) {
+  .set-card .set-row {
+    flex-wrap: wrap;
+  }
+
+  .set-card .set-row > .set-label {
+    flex: 1 1 240px;
+  }
 }
 
 .set-card > .set-row:last-child,
@@ -3384,10 +3424,6 @@ kbd {
 }
 
 @media (max-width: 760px) {
-  .set-side {
-    flex-basis: 210px;
-  }
-
   .set-content {
     padding: 24px 20px 40px;
   }
@@ -3471,6 +3507,20 @@ label.set-row {
 
 .set-more > :not(summary) {
   margin: 4px 0 0;
+}
+
+/* A command in a hint: one line each, never cut in two. */
+.set-code {
+  display: inline-block;
+  margin: 2px 6px 0 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--text);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 17px;
+  white-space: nowrap;
 }
 
 /* A setting's risk, shown while it is on. */

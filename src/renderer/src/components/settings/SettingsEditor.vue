@@ -82,7 +82,7 @@ const OFF_ON = computed(() => [
         </label>
         <div class="set-row">
           <label class="set-label" for="settings-editor-font">
-            {{ t('settings.editor.font', 'Editor Font Family') }}
+            {{ t('settings.editor.font', 'Editor font family') }}
             <span class="set-hint">{{ t('settings.editor.fontHint', "Font used by file editors and diff views. Leave empty for VS Code's (Consolas).") }}</span>
           </label>
           <input
@@ -100,7 +100,7 @@ const OFF_ON = computed(() => [
         </div>
         <div class="set-row">
           <label class="set-label" for="settings-editor-font-size">
-            {{ t('settings.editor.fontSize', 'Editor Font Size') }}
+            {{ t('settings.editor.fontSize', 'Editor font size') }}
             <span class="set-hint">{{ t('settings.editor.fontSizeHint', 'In pixels (VS Code: 14)') }}</span>
           </label>
           <input
@@ -115,7 +115,7 @@ const OFF_ON = computed(() => [
         </div>
         <div class="set-row">
           <div id="settings-diff-ws-label" class="set-label">
-            {{ t('settings.editor.diffWhitespace', 'Diff Show Whitespace') }}
+            {{ t('settings.editor.diffWhitespace', 'Show whitespace in diffs') }}
             <span class="set-hint">{{ t('settings.editor.diffWhitespaceHint', 'Show leading and trailing whitespace differences in diffs.') }}</span>
           </div>
           <div class="launch-seg set-seg set-seg-small" role="group" aria-labelledby="settings-diff-ws-label">
@@ -134,7 +134,7 @@ const OFF_ON = computed(() => [
         </div>
         <div class="set-row">
           <div id="settings-diff-collapse-label" class="set-label">
-            {{ t('settings.editor.collapseUnchanged', 'Collapse Unchanged Regions') }}
+            {{ t('settings.editor.collapseUnchanged', 'Collapse unchanged regions') }}
             <span class="set-hint">{{ t('settings.editor.collapseUnchangedHint', 'Show only changed lines and a little surrounding context in a file diff, hiding the rest behind expandable bands.') }}</span>
           </div>
           <div class="launch-seg set-seg set-seg-small" role="group" aria-labelledby="settings-diff-collapse-label">
@@ -153,7 +153,7 @@ const OFF_ON = computed(() => [
         </div>
         <div class="set-row">
           <div id="settings-diff-wrap-label" class="set-label">
-            {{ t('settings.editor.diffWordWrap', 'Diff Word Wrap') }}
+            {{ t('settings.editor.diffWordWrap', 'Wrap lines in diffs') }}
             <span class="set-hint">{{ t('settings.editor.diffWordWrapHint', 'Wrap long lines in diff editors instead of requiring horizontal scrolling.') }}</span>
           </div>
           <div class="launch-seg set-seg set-seg-small" role="group" aria-labelledby="settings-diff-wrap-label">

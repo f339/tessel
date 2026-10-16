@@ -68,15 +68,15 @@ describe('sidebar and status bar settings', () => {
     const w = mount(SettingsDialog, { props: { section: 'appearance' } })
     const text = w.find('section[data-page="appearance"]').text()
     for (const s of [
-      'Window & Sidebar',
-      'Left Sidebar Appearance',
+      'Window & sidebar',
+      'Left sidebar appearance',
       'Make the left sidebar match your terminal, stay default, or use a tint.',
-      'Status Bar',
+      'Status bar',
       'Choose which indicators appear in the status bar.',
       'Remote Hosts',
       'Resource Manager',
       'Show live workspace ports. Click it for workspace-scoped ports and external listeners.',
-      'Workspace Card Layout',
+      'Workspace card layout',
       'Workspace cards can use compact or detailed layouts.'
     ])
       expect(text).toContain(s)
