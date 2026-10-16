@@ -350,7 +350,8 @@ export function stripTerminalReplies(data) {
 //                             unchecked); ctx: { guest (publicGuest's), rights
 //                             (the guest's now), recheck() (true while the
 //                             guest still may: called right before a change),
-//                             cancelled() }
+//                             cancelled(), spend('git') (one more git run of
+//                             the guest's budget: false when over it) }
 //   watch(topic, project, key, on) -> optional: the first guest subscribed
 //                             to that topic (on), or the last one left; its
 //                             news go out with push(topic, project, key, data)
@@ -751,7 +752,10 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       guest: publicGuest(g),
       rights: { ...rights },
       recheck: () => stands(g, entry),
-      cancelled: () => entry.cancelled || g.reqs.get(entry.id) !== entry
+      cancelled: () => entry.cancelled || g.reqs.get(entry.id) !== entry,
+      // The git work the request causes by itself: within the person's
+      // budget (false: over it, the request answers busy).
+      spend: (kind) => kind === 'git' && within(countsOf(g), 'reqGit', L.git)
     }
     const call = () => callbacks.request({ op: req.op, project: req.project, args: req.args }, ctx)
     const run = info.kind === 'heavy' ? heavy(req, ctx, call) : Promise.resolve().then(call)
@@ -1809,6 +1813,17 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     },
     // The subscriptions guests hold now ({ topic, project, key, guests }).
     watched: () => [...watchers].map(([k, set]) => ({ ...parseSubKey(k), guests: [...set] })),
+    // A topic the host's Tessel ends (a file now hidden): every guest's
+    // subscription to it ends (its watch is told, as when the last leaves).
+    endTopic(topic, project = null, key = null) {
+      const k = subKey(topic, project, key)
+      const set = watchers.get(k)
+      if (!set) return
+      for (const gid of [...set]) {
+        const g = guests.get(gid)
+        if (g) unsubscribe(g, k)
+      }
+    },
     // The panes whose conversation guests watch now, and who (guest ids).
     chatsWatched: () => [...chatWatchers].filter(([, set]) => set.size).map(([id, set]) => ({ id, guests: [...set] })),
     presence,

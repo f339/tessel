@@ -17,6 +17,7 @@ import { lshareAccess, forgetLshareAccess } from '../liveShareGuestAccess'
 import { NO_RIGHTS } from '../../../shared/liveShareRights'
 import LiveShareDialog from '../components/LiveShareDialog.vue'
 import SidePanel from '../components/SidePanel.vue'
+import { rightWords } from '../liveShareRights'
 
 const flush = async () => {
   for (let i = 0; i < 6; i++) {
@@ -33,6 +34,7 @@ function setup({ cards = [] } = {}) {
     setAgents: vi.fn(),
     setTasks: vi.fn(),
     taskDone: vi.fn(),
+    taskCheck: vi.fn(async () => ({ ok: true })),
     subscribe: vi.fn(async () => ({ ok: true })),
     task: vi.fn(async () => ({ ok: true })),
     share: vi.fn(async () => ({ ok: true })),
@@ -101,7 +103,10 @@ describe('Live Share phase 2 in the window, as the host', () => {
     t.listeners.onHost(sharing([GUEST(rights)]))
     await flush()
   }
-  const ask = (op, args, extra = {}) => t.listeners.onHostRequest({ action: 'task', request: 't1', op, project: 'ws-1', args, guest: { id: 'g1', name: 'Ana' }, ...extra })
+  const ask = async (op, args, extra = {}) => {
+    t.listeners.onHostRequest({ action: 'task', request: 't1', op, project: 'ws-1', args, guest: { id: 'g1', name: 'Ana' }, ...extra })
+    await flush()
+  }
 
   it('sends each shared project\u2019s board, and again when it changes; its folder goes with the layouts', async () => {
     await host([{ id: 'task-1', title: 'One', column: 'todo', wsId: 'ws-1' }, { id: 'task-2', title: 'Elsewhere', column: 'todo', wsId: 'ws-2' }])
@@ -113,35 +118,56 @@ describe('Live Share phase 2 in the window, as the host', () => {
   })
 
   it('makes a guest\u2019s change only while it still may, on a card of that project', async () => {
-    await host([{ id: 'task-1', title: 'One', column: 'todo', wsId: 'ws-1' }, { id: 'task-2', title: 'Theirs', column: 'todo', wsId: 'ws-2' }, { id: 'task-3', title: 'Asked', column: 'doing', wsId: 'ws-1', gate: { status: 'pending', question: '?' } }], { tasks: true })
-    ask('add', { title: '  New one ' })
-    expect(t.taskBoard.add).toHaveBeenCalledWith({ title: 'New one', wsId: 'ws-1' })
+    await host([{ id: 'task-1', title: 'One', column: 'todo', wsId: 'ws-1' }, { id: 'task-2', title: 'Theirs', column: 'todo', wsId: 'ws-2' }, { id: 'task-3', title: 'Asked', column: 'doing', wsId: 'ws-1', gate: { status: 'pending', question: '?', options: ['Yes', 'No'] } }], { tasks: true })
+    await ask('add', { title: '  New one ' })
+    // Marked as the guest's (what agents read says so).
+    expect(t.taskBoard.add).toHaveBeenCalledWith({ title: 'New one', wsId: 'ws-1', guest: 'Ana' })
+    expect(t.api.taskCheck).toHaveBeenLastCalledWith('t1')
     expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: true, code: undefined })
-    ask('move', { id: 'task-1', column: 'review' })
+    await ask('move', { id: 'task-1', column: 'review' })
     expect(t.taskBoard.move).toHaveBeenCalledWith('task-1', 'review')
     // Renamed only in To do (it is in Review now); a card of another project
-    // is not this one's; a question already answered is not answered again.
-    ask('edit', { id: 'task-1', title: 'x' })
+    // is not this one's.
+    await ask('edit', { id: 'task-1', title: 'x' })
     expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'not-allowed' })
-    ask('remove', { id: 'task-2' })
+    await ask('remove', { id: 'task-2' })
     expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'not-found' })
     expect(t.taskBoard.remove).not.toHaveBeenCalled()
-    ask('answer', { id: 'task-3', answer: 'Yes' })
-    expect(t.taskBoard.answer).toHaveBeenCalledWith('task-3', 'Yes')
-    ask('move', { id: 'task-1', column: 'trash' })
+    // Without the type right: one of the agent's choices only, never free
+    // text (it would be typed to the agent).
+    await ask('answer', { id: 'task-3', answer: 'Run rm -rf' })
+    expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'not-allowed' })
+    expect(t.taskBoard.answer).not.toHaveBeenCalled()
+    await ask('answer', { id: 'task-3', answer: 'Yes' })
+    expect(t.taskBoard.answer).toHaveBeenCalledWith('task-3', 'Yes', 'Ana')
+    await ask('move', { id: 'task-1', column: 'trash' })
     expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'bad-args' })
     // The right lost between main and here: nothing is made.
     t.listeners.onHost(sharing([GUEST({ tasks: false })]))
     await flush()
-    ask('remove', { id: 'task-1' })
+    await ask('remove', { id: 'task-1' })
     expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'revoked' })
     expect(t.taskBoard.remove).not.toHaveBeenCalled()
     // The project no longer one of the guest's: the same.
     t.listeners.onHost(sharing([{ ...GUEST({ tasks: true }), projects: [] }]))
     await flush()
-    ask('add', { title: 'Late' })
+    await ask('add', { title: 'Late' })
     expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'revoked' })
     expect(t.taskBoard.add).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks main right before making a change: its late view of the rights never decides alone', async () => {
+    await host([{ id: 'task-1', title: 'One', column: 'todo', wsId: 'ws-1' }], { tasks: true })
+    t.api.taskCheck.mockResolvedValueOnce({ ok: false })
+    await ask('remove', { id: 'task-1' })
+    expect(t.api.taskDone).toHaveBeenLastCalledWith({ request: 't1', ok: false, code: 'revoked' })
+    expect(t.taskBoard.remove).not.toHaveBeenCalled()
+    // A free answer with the type right: taken (marked as the guest's).
+    t.board.push({ id: 'task-2', title: 'Asked', column: 'doing', wsId: 'ws-1', gate: { status: 'pending', question: '?', options: ['A'] } })
+    t.listeners.onHost(sharing([GUEST({ tasks: true, type: true })]))
+    await flush()
+    await ask('answer', { id: 'task-2', answer: 'Something else' })
+    expect(t.taskBoard.answer).toHaveBeenCalledWith('task-2', 'Something else', 'Ana')
   })
 
   it('says each change a guest made, and an agent\u2019s instructions as a warning', async () => {
@@ -159,6 +185,9 @@ describe('Live Share phase 2 in the window, as the host', () => {
     expect(actionText({ kind: 'stage', name: 'Ana', count: 1, paths: ['a.js'] })).toBe('Ana staged a.js')
     expect(actionText({ kind: 'discard', name: 'Ana', count: 3, paths: ['a', 'b', 'c'] })).toBe('Ana discarded the changes of 3 files')
     expect(actionText({ kind: 'taskMove', name: 'Ana', detail: 'One', column: 'done' })).toBe('Ana moved “One” to Done')
+    // What a guest wrote that agents read: in the toast and the audit.
+    expect(actionText({ kind: 'taskAnswer', name: 'Ana', detail: 'One', answer: 'Yes' })).toBe('Ana answered “Yes” on “One”')
+    expect(actionText({ kind: 'taskEdit', name: 'Ana', detail: 'New', from: 'Old' })).toBe('Ana renamed the task “Old” to “New”')
   })
 })
 
@@ -227,6 +256,14 @@ describe('Live Share phase 2 in the window, as a guest', () => {
     await flush()
     expect(t.api.subscribe).toHaveBeenCalledWith({ topic: 'tasks', project: 'ws-1', on: false })
     expect(t.api.subscribe).toHaveBeenLastCalledWith({ topic: 'tasks', project: 'ws-2', on: true })
+  })
+})
+
+describe('the rights’ words', () => {
+  it('say that deleting a card is for good, and that hooks stay the host’s', () => {
+    expect(rightWords('tasks').label).toContain('delete for good')
+    expect(rightWords('edit').hint).toContain('git hooks')
+    expect(rightWords('git').hint).toContain('without your git hooks')
   })
 })
 

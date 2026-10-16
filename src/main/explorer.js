@@ -252,7 +252,10 @@ const relOf = (root, p) => relative(resolve(root), p)
 // not opened yet too: -> { ok, results: [{ name, path, rel, dir }], truncated }
 // `dir`: only below that folder of the project (the tree's root when it shows
 // one sparse folder); rel stays relative to the project.
-export async function searchNames({ root, dir, query, dotfiles = true, limit = SEARCH_LIMIT } = {}) {
+// skip(rel): a path ("/" separated, from root) left out before matching (a
+// Live Share guest's hidden files: never matched, never counted).
+const skipped = (skip, root, path) => typeof skip === 'function' && skip(relOf(root, path).split(sep).join('/'))
+export async function searchNames({ root, dir, query, dotfiles = true, limit = SEARCH_LIMIT, skip = null } = {}) {
   if (!inside(root, root)) return { ok: false, error: t('main.explorer.invalidFolder', 'Invalid folder.') }
   const start = dir ? inside(root, dir) : resolve(root)
   if (!start) return { ok: false, error: t('main.explorer.outside', 'Outside the project.') }
@@ -262,7 +265,7 @@ export async function searchNames({ root, dir, query, dotfiles = true, limit = S
   const results = []
   let truncated = false
   const stopped = await walk(start, { dotfiles }, (e) => {
-    if (!e.name.toLowerCase().includes(q)) return false
+    if (!e.name.toLowerCase().includes(q) || skipped(skip, root, e.path)) return false
     if (results.length >= limit) {
       truncated = true
       return true
@@ -285,7 +288,7 @@ export function clipLine(text, q) {
 // Content search by walking the project (no git): plain text,
 // case-insensitive; binaries (a NUL in the first 8 KB) and files over 2 MB
 // are skipped. -> { ok, results: [{ path, rel, line, text }], truncated }
-export async function searchContentWalk({ root, query, limit = SEARCH_LIMIT } = {}) {
+export async function searchContentWalk({ root, query, limit = SEARCH_LIMIT, skip = null } = {}) {
   if (!inside(root, root)) return { ok: false, error: t('main.explorer.invalidFolder', 'Invalid folder.') }
   limit = searchCap(limit)
   const q = String(query || '').toLowerCase()
@@ -293,7 +296,7 @@ export async function searchContentWalk({ root, query, limit = SEARCH_LIMIT } = 
   const results = []
   let truncated = false
   const stopped = await walk(root, {}, async (e) => {
-    if (!e.file) return false
+    if (!e.file || skipped(skip, root, e.path)) return false
     let buf
     try {
       const st = await fs.promises.stat(e.path)
@@ -440,13 +443,13 @@ export function grepReader(onRecord) {
 // not ignored ones), else the walk above. Its results follow the walk's rules
 // (no link or junction, 2 MB at most, no heavy folder); a git that fails is
 // said as an error, never as "no results".
-export async function searchContent({ root, query, limit = SEARCH_LIMIT } = {}) {
+export async function searchContent({ root, query, limit = SEARCH_LIMIT, skip = null } = {}) {
   if (!inside(root, root)) return { ok: false, error: t('main.explorer.invalidFolder', 'Invalid folder.') }
   limit = searchCap(limit)
   const q = String(query || '').toLowerCase()
   if (!q.trim()) return { ok: true, results: [], truncated: false }
   const top = await gitTop(root)
-  if (!top) return searchContentWalk({ root, query, limit })
+  if (!top) return searchContentWalk({ root, query, limit, skip })
   const allowed = grepFileCheck(root)
   return new Promise((done) => {
     const results = []
@@ -476,7 +479,7 @@ export async function searchContent({ root, query, limit = SEARCH_LIMIT } = {}) 
     }
     const reader = grepReader((rec) => {
       const r = parseGrepRecord(root, rec, q)
-      if (!r || !allowed(r.path)) return false
+      if (!r || !allowed(r.path) || skipped(skip, root, r.path)) return false
       if (results.length >= limit) return true
       results.push(r)
       return false
@@ -485,7 +488,7 @@ export async function searchContent({ root, query, limit = SEARCH_LIMIT } = {}) 
       child = spawn('git', grepArgs(root, query), { windowsHide: true })
     } catch {
       finished = true
-      return done(searchContentWalk({ root, query, limit }))
+      return done(searchContentWalk({ root, query, limit, skip }))
     }
     timer = setTimeout(() => finish({ ok: true, results, truncated: true }), 20000)
     child.stdout.on('data', (chunk) => {
@@ -500,7 +503,7 @@ export async function searchContent({ root, query, limit = SEARCH_LIMIT } = {}) 
       if (finished) return
       finished = true
       clearTimeout(timer)
-      done(searchContentWalk({ root, query, limit }))
+      done(searchContentWalk({ root, query, limit, skip }))
     })
     child.on('close', (code) => {
       if (finished) return

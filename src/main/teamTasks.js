@@ -82,6 +82,8 @@ export function publishTeamTasks({ dir, teamId, board, tasks } = {}) {
       column: t.column,
       assignee: typeof t.assignee === 'string' && validAddress(t.assignee) ? t.assignee : null,
       since: Number.isFinite(t.since) ? t.since : null,
+      // Added or renamed by a Live Share guest (its name).
+      ...(guestName(t.guest) ? { guest: guestName(t.guest) } : {}),
       // Orchestration: what it waits for, a decision asked, its report.
       ...orchestration(t)
     }))
@@ -136,6 +138,9 @@ export function forgetPublishedTasks({ dir, ids } = {}) {
   return { ok: true, changed }
 }
 
+// A Live Share guest's name as agents read it: plain, short.
+// eslint-disable-next-line no-control-regex -- control characters are what it removes
+const guestName = (v) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f"]/g, '').trim().slice(0, 40) : '')
 function orchestration(t) {
   const out = {}
   const deps = cleanIds(t.deps)
@@ -148,7 +153,8 @@ function orchestration(t) {
       question: g.question.slice(0, 500),
       options: Array.isArray(g.options) ? g.options.filter((o) => typeof o === 'string').slice(0, 6) : [],
       status: g.status,
-      ...(g.status === 'resolved' && typeof g.answer === 'string' ? { answer: g.answer.slice(0, 500) } : {})
+      ...(g.status === 'resolved' && typeof g.answer === 'string' ? { answer: g.answer.slice(0, 500) } : {}),
+      ...(g.status === 'resolved' && guestName(g.answeredBy) ? { answeredBy: guestName(g.answeredBy) } : {})
     }
   const r = t.report
   if (r && (r.outcome === 'succeeded' || r.outcome === 'failed') && typeof r.summary === 'string')
