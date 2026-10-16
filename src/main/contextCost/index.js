@@ -107,6 +107,9 @@ export function createContextCost({
   // (cwd, claudeDir) -> settings objects that may approve project servers
   // (mcpApproval.js approvalSources).
   mcpApprovals = (cwd, dir) => approvalSources({ cwd, home, claudeDir: dir }),
+  // A skill about to be added, as the main process holds it (skillsManager.js
+  // getPackage): { name, description, skillMd }.
+  getPackage = () => null,
   home = os.homedir(),
   env = () => process.env,
   request = globalThis.fetch,
@@ -317,6 +320,26 @@ export function createContextCost({
         const counterInfo = await resolveCounter(agent, modelOf(agent, cwd))
         const items = [{ key: 'upfront', kind: 'text', text: skillLine(skill) }]
         if (md && md.text) items.push({ key: 'full', kind: 'text', text: md.text })
+        const results = await counter.count(items, counterInfo, { remote, auth })
+        rows.push({ agent, model: counterInfo.model, counter: counterInfo, upfront: results.upfront || null, full: results.full || null })
+      }
+      return { rows }
+    },
+
+    // A skill about to be added (Skills > Add, its preview): for each agent
+    // chosen to get it, the up-front cost and its whole SKILL.md, from the
+    // package already held here (its text never comes from the window).
+    async skillPackage({ cwd = null, id, agents = null, remote = false, auth = null } = {}) {
+      const pkg = typeof id === 'string' ? getPackage(id) : null
+      if (!pkg) return { rows: [] }
+      const wanted = (Array.isArray(agents) && agents.length ? agents : ['claude', 'codex']).filter((a) => CONTEXT_AGENTS.includes(a)).slice(0, 10)
+      const skill = { name: String(pkg.name || ''), description: pkg.description ? String(pkg.description) : '' }
+      const md = typeof pkg.skillMd === 'string' ? pkg.skillMd.slice(0, 256 * 1024) : ''
+      const rows = []
+      for (const agent of wanted) {
+        const counterInfo = await resolveCounter(agent, modelOf(agent, cwd))
+        const items = [{ key: 'upfront', kind: 'text', text: skillLine(skill) }]
+        if (md) items.push({ key: 'full', kind: 'text', text: md })
         const results = await counter.count(items, counterInfo, { remote, auth })
         rows.push({ agent, model: counterInfo.model, counter: counterInfo, upfront: results.upfront || null, full: results.full || null })
       }

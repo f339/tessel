@@ -446,6 +446,7 @@ const api = {
     summary: (q) => ipcRenderer.invoke('context:summary', q),
     skills: (q) => ipcRenderer.invoke('context:skills', q),
     skillDetail: (q) => ipcRenderer.invoke('context:skillDetail', q),
+    skillPackage: (q) => ipcRenderer.invoke('context:skillPackage', q),
     mcpMeasures: (q) => ipcRenderer.invoke('context:mcpMeasures', q),
     tokenizers: () => ipcRenderer.invoke('context:tokenizers'),
     downloadTokenizer: (id) => ipcRenderer.invoke('context:downloadTokenizer', id),

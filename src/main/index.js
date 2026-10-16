@@ -132,7 +132,8 @@ import {
   removeSkill,
   isSkillPath,
   createSkillSources,
-  dropStaleSources
+  dropStaleSources,
+  getPackage
 } from './skillsManager'
 import { createSkillHistory } from './skillHistory'
 import { createProviderUsage } from './providerUsage'
@@ -2886,6 +2887,7 @@ const contextCost = createContextCost({
   testMcp: (ref, opts) => testMcp(ref, freshEnv(), undefined, opts),
   agentModel: (q) => agentModel(q),
   claudeDir: async () => (claudeSettingsDir = await claudeConfigDir()),
+  getPackage: (id) => getPackage(id),
   env: () => freshEnv(),
   log
 })
@@ -2909,6 +2911,10 @@ ipcMain.handle(
 ipcMain.handle(
   'context:skillDetail',
   safe((q) => contextCost.skillDetail(contextQuery(q)))
+)
+ipcMain.handle(
+  'context:skillPackage',
+  safe((q) => contextCost.skillPackage(contextQuery(q)))
 )
 ipcMain.handle(
   'context:mcpMeasures',

@@ -66,7 +66,8 @@
       "less": "Afficher moins",
       "more": "Afficher plus",
       "fewerFiles": "En afficher moins",
-      "allFiles": "Afficher les {{count}} fichiers"
+      "allFiles": "Afficher les {{count}} fichiers",
+      "cost": "Coût en contexte, pour les agents choisis pour la recevoir"
     },
     "remove": {
       "confirm": "Retirer la compétence « {{name}} » ?",
@@ -320,7 +321,8 @@
       "copyPath": "Copier le chemin",
       "copied": "Copié",
       "copyFailed": "Impossible de copier le chemin.",
-      "removeCopy": "Retirer cette copie"
+      "removeCopy": "Retirer cette copie",
+      "cost": "Coût en contexte"
     }
   }
 }

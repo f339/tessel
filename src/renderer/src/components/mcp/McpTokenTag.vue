@@ -32,7 +32,7 @@ const emit = defineEmits(['measured'])
 const askConfirm = inject('askConfirm', (o) => Promise.resolve(window.confirm(`${o.title}\n\n${o.message}`))) // i18n-ignore
 
 const scopeOf = computed(() => props.scope || 'user')
-const key = computed(() => (props.agent ? mcpKey(props.agent, scopeOf.value, props.server) : ''))
+const key = computed(() => (props.agent ? mcpKey(props.agent, scopeOf.value, props.server, props.cwd) : ''))
 const entry = computed(() => (key.value ? contextCounts.mcp[key.value] || null : null))
 const busy = computed(() => !!(key.value && contextCounts.measuring[key.value]))
 const error = ref('')

@@ -11,8 +11,8 @@ import { settings } from '../settings'
 let previousApi
 beforeEach(() => {
   previousApi = window.shellApi
-  contextCounts.skills = {}
-  contextCounts.skillsCwd = undefined
+  contextCounts.skillsByCwd = {}
+  contextCounts.skillsLoading = {}
   contextCounts.mcp = {}
   forgetMcpCounts()
 })
@@ -119,6 +119,50 @@ describe('McpTokenTag', () => {
     await w.find('button').trigger('click')
     await flushPromises()
     expect(w.text()).toContain('Command not found: npx')
+    w.unmount()
+  })
+})
+
+describe('switching projects while a count is on its way', () => {
+  const deferred = () => {
+    let resolve
+    const promise = new Promise((r) => (resolve = r))
+    return { promise, resolve }
+  }
+
+  it('skills: B is asked for and shows B’s counts, whatever A answers later', async () => {
+    const a = deferred()
+    const skills = vi.fn((q) => (q.cwd === '/A' ? a.promise : Promise.resolve({ '/B/.claude/skills/s/SKILL.md': { agent: 'claude', result: { tokens: 222, exact: true, source: 'local', tokenizer: 'o200k_base' } } })))
+    window.shellApi = { context: { skills } }
+    const w = mount(SkillTokenTag, { props: { skill: { skillFile: '/A/.claude/skills/s/SKILL.md' }, cwd: '/A' } })
+    await flushPromises()
+    await w.setProps({ skill: { skillFile: '/B/.claude/skills/s/SKILL.md' }, cwd: '/B' })
+    await flushPromises()
+    expect(skills.mock.calls.map((c) => c[0].cwd)).toEqual(['/A', '/B'])
+    expect(w.text()).toBe('222 tokens')
+    a.resolve({ '/B/.claude/skills/s/SKILL.md': { agent: 'claude', result: { tokens: 999, exact: true, source: 'local', tokenizer: 'o200k_base' } } })
+    await flushPromises()
+    expect(w.text()).toBe('222 tokens') // A's answer stays A's
+    w.unmount()
+  })
+
+  it('MCP: B’s project server is asked for and shows B’s count, never A’s', async () => {
+    const a = deferred()
+    const result = (tokens) => ({ 'claude:project:fs': { tools: 1, result: { tokens, exact: true, source: 'local', tokenizer: 'o200k_base' } } })
+    const mcpMeasures = vi.fn((q) => (q.cwd === '/A' ? a.promise : Promise.resolve(result(333))))
+    window.shellApi = { context: { mcpMeasures } }
+    const w = mount(McpTokenTag, { props: { server: 'fs', agent: 'claude', scope: 'project', cwd: '/A', variant: 'row' } })
+    await flushPromises()
+    await w.setProps({ cwd: '/B' })
+    await flushPromises()
+    expect(mcpMeasures.mock.calls.map((c) => c[0].cwd)).toEqual(['/A', '/B'])
+    expect(w.text()).toBe('333 tokens')
+    a.resolve(result(111))
+    await flushPromises()
+    expect(w.text()).toBe('333 tokens')
+    await w.setProps({ cwd: '/A' })
+    await flushPromises()
+    expect(w.text()).toBe('111 tokens') // A's own, under A
     w.unmount()
   })
 })

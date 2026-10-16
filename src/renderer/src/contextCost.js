@@ -136,74 +136,95 @@ export function counterText(counter) {
 }
 
 // ---------------------------------------------------------------- Shared counts
-// The Skills page's and MCP page's counts, read once for all their tags.
-export const contextCounts = reactive({ skills: {}, skillsCwd: undefined, skillsLoading: false, mcp: {}, measuring: {} })
-const pending = { skills: null }
+// The Skills page's and MCP page's counts, read once for all their tags, and
+// kept per project folder: a request for project A still running when the
+// page moves to project B never stands for B, and A's answer never shows in
+// B (its project skills and project servers are not B's).
+export const contextCounts = reactive({ skillsByCwd: {}, skillsLoading: {}, mcp: {}, measuring: {} })
 const api = () => (typeof window !== 'undefined' && window.shellApi && window.shellApi.context) || null
-export const mcpKey = (agent, scope, name) => `${agent}:${scope || 'user'}:${name}`
+export const cwdKey = (cwd) => (typeof cwd === 'string' ? cwd : '')
+// A server's measurement: by agent, scope and name, and by project folder
+// for a project or local server (a user server is the same everywhere).
+export const mcpKey = (agent, scope, name, cwd = null) => `${agent}:${scope || 'user'}:${name}${(scope || 'user') === 'user' ? '' : `@${cwdKey(cwd)}`}`
+
+// One skill's count, from its project's read.
+export const skillCount = (cwd, skillFile) => ((contextCounts.skillsByCwd[cwdKey(cwd)] || {})[skillFile] || null)
 
 // remote: count over the network now (the page is being looked at).
+const skillsPending = new Map() // cwd -> Promise
 export function loadSkillCounts(cwd = null, { force = false } = {}) {
   const ctx = api()
-  if (!ctx || !ctx.skills) return Promise.resolve(contextCounts.skills)
-  if (!force && contextCounts.skillsCwd === cwd && Object.keys(contextCounts.skills).length) return Promise.resolve(contextCounts.skills)
-  if (pending.skills && !force) return pending.skills
-  contextCounts.skillsLoading = true
-  pending.skills = ctx
+  const k = cwdKey(cwd)
+  if (!ctx || !ctx.skills) return Promise.resolve(contextCounts.skillsByCwd[k] || {})
+  if (!force && contextCounts.skillsByCwd[k]) return Promise.resolve(contextCounts.skillsByCwd[k])
+  if (skillsPending.has(k) && !force) return skillsPending.get(k)
+  contextCounts.skillsLoading[k] = true
+  const p = ctx
     .skills({ cwd, remote: true, ...signIns() })
     .then((res) => {
-      if (res && res.ok !== false) {
-        contextCounts.skills = res
-        contextCounts.skillsCwd = cwd
-      }
-      return contextCounts.skills
+      if (res && res.ok !== false) contextCounts.skillsByCwd = { ...contextCounts.skillsByCwd, [k]: res }
+      return contextCounts.skillsByCwd[k] || {}
     })
-    .catch(() => contextCounts.skills)
+    .catch(() => contextCounts.skillsByCwd[k] || {})
     .finally(() => {
-      contextCounts.skillsLoading = false
-      pending.skills = null
+      if (skillsPending.get(k) === p) {
+        skillsPending.delete(k)
+        delete contextCounts.skillsLoading[k]
+      }
     })
-  return pending.skills
+  skillsPending.set(k, p)
+  return p
 }
 
 // The kept measurement of each MCP server a tag shows (no server started,
 // no list read, no count API asked): the tags of one page are asked for
-// together, in one request, and each once per project folder.
-const mcpAsked = new Set() // `${cwd}|${key}` already asked
-let mcpBatch = null // { cwd, servers: [] } waiting for the next tick
+// together, one request per project folder, each server once per folder.
+const mcpAsked = new Set() // mcpKey(..., cwd) already asked
+const mcpBatches = new Map() // cwd -> { servers, done } waiting for the next tick
 export function loadMcpCount({ agent, scope = 'user', name, cwd = null }) {
   const ctx = api()
   if (!ctx || !ctx.mcpMeasures || !agent || !name) return Promise.resolve(null)
-  const key = mcpKey(agent, scope, name)
-  if (mcpAsked.has(`${cwd}|${key}`)) return Promise.resolve(contextCounts.mcp[key] || null)
-  mcpAsked.add(`${cwd}|${key}`)
-  if (!mcpBatch || mcpBatch.cwd !== cwd) {
-    const batch = { cwd, servers: [] }
-    mcpBatch = batch
+  const key = mcpKey(agent, scope, name, cwd)
+  const asked = `${cwdKey(cwd)}|${key}`
+  if (mcpAsked.has(asked)) return Promise.resolve(contextCounts.mcp[key] || null)
+  mcpAsked.add(asked)
+  const k = cwdKey(cwd)
+  let batch = mcpBatches.get(k)
+  if (!batch) {
+    batch = { servers: [] }
+    mcpBatches.set(k, batch)
+    const mine = batch
     batch.done = Promise.resolve().then(() => {
-      if (mcpBatch === batch) mcpBatch = null
+      if (mcpBatches.get(k) === mine) mcpBatches.delete(k)
       return ctx
-        .mcpMeasures({ cwd, servers: batch.servers, ...signIns() })
+        .mcpMeasures({ cwd, servers: mine.servers, ...signIns() })
         .then((res) => {
-          if (res && res.ok !== false) contextCounts.mcp = { ...contextCounts.mcp, ...res }
+          if (!res || res.ok === false) return
+          // The main process answers agent:scope:name; kept here by folder too.
+          const next = { ...contextCounts.mcp }
+          for (const s of mine.servers) {
+            const v = res[`${s.agent}:${s.scope}:${s.name}`]
+            if (v) next[mcpKey(s.agent, s.scope, s.name, cwd)] = v
+          }
+          contextCounts.mcp = next
         })
         .catch(() => {})
     })
   }
-  mcpBatch.servers.push({ agent, scope, name })
-  return mcpBatch.done.then(() => contextCounts.mcp[key] || null)
+  batch.servers.push({ agent, scope, name })
+  return batch.done.then(() => contextCounts.mcp[key] || null)
 }
 // Forget what was asked (a test, or a page that wants fresh kept counts).
 export function forgetMcpCounts() {
   mcpAsked.clear()
-  mcpBatch = null
+  mcpBatches.clear()
 }
 
 // Measure: starts the server (or connects to it), on this click only.
 // confirmed: the user saw the command of a project server Claude Code was
 // not allowed to start, and said yes (else code 'needsConfirm', target).
 export async function measureMcp({ agent, name, scope = 'user', cwd = null, model = null, confirmed = false }) {
-  const key = mcpKey(agent, scope, name)
+  const key = mcpKey(agent, scope, name, cwd)
   contextCounts.measuring[key] = true
   try {
     const res = await window.shellApi.mcpMeasure({ agent, name, scope, cwd, model, confirmed, ...signIns() })

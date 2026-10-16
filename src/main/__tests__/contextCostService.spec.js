@@ -238,3 +238,15 @@ describe('a server whose command changed since its measurement', () => {
     expect((await svc.summary({ cwd: project, agents: [{ id: 'claude' }], remote: true })).agents[0].items.find((i) => i.label === 'fs').note).toBe('notMeasured')
   })
 })
+
+describe('a skill about to be added', () => {
+  it('is counted from the package the main process holds, for the agents chosen', async () => {
+    const pkg = { name: 'pdf', description: 'Fill PDF forms', skillMd: '---\nname: pdf\n---\nUse pdftk to fill forms.' }
+    const { svc } = service({ getPackage: (id) => (id === 'p1' ? pkg : null) })
+    const res = await svc.skillPackage({ id: 'p1', agents: ['codex', 'nope'] })
+    expect(res.rows).toHaveLength(1)
+    expect(res.rows[0]).toMatchObject({ agent: 'codex', upfront: { tokens: 5, exact: true }, full: { exact: true } })
+    expect(res.rows[0].full.tokens).toBeGreaterThan(res.rows[0].upfront.tokens)
+    expect(await svc.skillPackage({ id: 'gone' })).toEqual({ rows: [] })
+  })
+})

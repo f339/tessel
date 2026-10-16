@@ -30,6 +30,7 @@
 // The work is done in the main process (src/main/skillsManager.js).
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount, inject } from 'vue'
 import BrandIcon from './BrandIcon.vue'
+import SkillTokenTag from './context/SkillTokenTag.vue'
 import { t, intlLocale } from '../i18n'
 import { isRemotePath } from '../../../shared/remotePath'
 import { splitFrontmatter, renderSkillMarkdown } from '../skillPreview'
@@ -1520,6 +1521,7 @@ onMounted(async () => {
                 <span class="sl-row-desc" :title="g.description || undefined">{{ g.description || t('skills.installed.noDescription', 'No description.') }}</span>
               </span>
               <span class="sl-row-meta">
+                <SkillTokenTag :skill="g" :cwd="project" />
                 <span v-if="g.agents.length" class="sl-icons" role="img" :aria-label="seenByNames(g.agents)" :title="seenByNames(g.agents)">
                   <BrandIcon v-for="a in g.agents" :key="a" :kind="a" :size="14" />
                 </span>
@@ -1533,6 +1535,10 @@ onMounted(async () => {
             <!-- Its details: the whole description, then each copy. -->
             <div v-if="openKey === g.key" :id="detailsId(g)" class="sl-details" role="region" :aria-labelledby="rowId(g)">
               <p class="sl-details-desc">{{ g.description || t('skills.installed.noDescription', 'No description.') }}</p>
+              <div class="sl-section-head">
+                <span>{{ t('skills.details.cost', 'Context cost') }}</span>
+              </div>
+              <SkillTokenTag :skill="g" :cwd="project" detailed class="skills-cost" />
               <div class="sl-section-head">
                 <span>{{ t('skills.details.where', 'Where it is installed') }}</span>
                 <button v-if="g.removable.length > 1" type="button" class="exit-btn small danger" :disabled="!!busy" @click="removeAll(g)">
@@ -2077,6 +2083,10 @@ onMounted(async () => {
                 >
                   {{ filesLabel(preview) }}
                 </button>
+              </div>
+              <div class="skills-pv-cost">
+                <span class="set-hint">{{ t('skills.preview.cost', 'Context cost, for the agents chosen to get it') }}</span>
+                <SkillTokenTag :package-id="preview.id" :agents="chosenAgents" :cwd="project" />
               </div>
               <div v-if="filesOpen" :id="uid + '-files'" class="skills-files-box">
                 <table class="skills-files">
@@ -2639,6 +2649,15 @@ onMounted(async () => {
 .skills-cand .sl-row-name {
   flex: 0 1 auto;
   min-width: 0;
+}
+.skills-cost {
+  margin: 2px 0 8px;
+}
+.skills-pv-cost {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 4px;
 }
 .skills-row-size {
   flex: 0 0 auto;
