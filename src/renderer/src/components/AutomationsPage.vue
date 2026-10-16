@@ -604,6 +604,11 @@ function select(a) {
 .au-reason {
   max-width: 360px;
 }
+/* A date stays on one line (the reason column wraps instead). */
+.au-runs th:nth-child(3),
+.au-runs td:nth-child(3) {
+  white-space: nowrap;
+}
 .au-links {
   white-space: nowrap;
 }
