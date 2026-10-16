@@ -16,6 +16,8 @@
 //     edit?(id, { title }),
 //     remove?(id),
 //     answer?(id, answer),   a question the agent asked (team_task_gate)
+//     review?(id),           a card in Review with its own copy: its
+//                            branch's changes, read only
 //   }
 //
 // The source can be reactive: a mutator taken away (set to null) hides its

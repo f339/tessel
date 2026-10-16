@@ -45,6 +45,9 @@ const props = defineProps({
   // The Tasks tab's board when it is not this computer's (a Live Share
   // host's: taskBoardSource.js), else null.
   taskSource: { type: Object, default: null },
+  // The Task history tab's records when they are not this computer's (a
+  // Live Share host's: TaskHistoryPanel.vue's source), else null.
+  historySource: { type: Object, default: null },
   // A project on a remote host: { hostId, host, path }. Its root is then an
   // ssh://… path: Files and Changes read it over SSH (src/main/remoteFs.js),
   // under a small badge naming the host.
@@ -405,6 +408,7 @@ onBeforeUnmount(() => {
         :now="now"
         :active="current() === 'taskHistory'"
         :workspace-id="workspaceId"
+        :source="historySource"
         @focus-pane="focusPane"
       />
       <SessionHistoryPanel

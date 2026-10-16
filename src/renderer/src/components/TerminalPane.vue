@@ -122,6 +122,17 @@ const shownAgentId = computed(() => {
 })
 const showsAgent = computed(() => !!shownAgentId.value)
 const guestAgent = computed(() => showsAgent.value && !isAgent.value)
+// A Live Share host's pane: what the host's own header shows of it (its
+// agent's model and effort, its state, its team and task copy), as the
+// host's Tessel sends it (liveShareWindow.js paneAgent). Display only.
+const guestInfo = computed(() => (props.node.backend === 'liveshare' && ctx.liveSharePaneAgent ? ctx.liveSharePaneAgent(props.node.id) : null))
+const guestRuns = computed(() => !!guestInfo.value && guestInfo.value.kind !== 'shell')
+// Its state as the host's header says it (sidebarModel.js paneDotState's words).
+const GUEST_DOTS = { working: 'working', monitoring: 'monitoring', approval: 'waiting', limited: 'blocked', waiting: 'done', unknown: 'unverifiable', stopped: 'interrupted', interrupted: 'interrupted' }
+const guestDot = computed(() => (!guestRuns.value ? null : guestInfo.value.sleeping ? 'sleeping' : GUEST_DOTS[guestInfo.value.state] || 'idle'))
+const guestIconClass = computed(() => ({ working: 'busy', monitoring: 'monitoring', waiting: 'attention', done: 'attention', unverifiable: 'unknown' })[guestDot.value] || 'idle')
+// Its sub-agents, read on the host (their sessions stay there).
+const guestChildrenSource = computed(() => (guestRuns.value && guestInfo.value.children && ctx.liveShareChildrenSource ? ctx.liveShareChildrenSource(props.node.id) : null))
 // The account a Claude Code or Codex pane runs on, when that agent has more
 // than one (on an SSH host it is the host's own sign-in: not shown).
 const accountInfo = computed(() => (isAgent.value && !props.node.remoteHostId ? paneAccount(props.node.agentId, props.node.accountId) : null))
@@ -463,6 +474,8 @@ const modelBusyReason = computed(() =>
 // launch choice), with its effort whenever it is known (medium included:
 // the user wants to see it).
 const headerModelText = computed(() => {
+  // A Live Share host's pane: the model and effort its own header shows.
+  if (guestRuns.value) return guestInfo.value.model || ''
   const m = agentModel.value
   if (!isAgent.value || !m || !m.model) return ''
   const name = m.name || modelLabel(m.model)
@@ -1288,7 +1301,8 @@ function restartToApply() {
 }
 
 const needsYou = computed(() => !!attention[props.node.id])
-const limit = computed(() => limits[props.node.id] || null)
+// (A Live Share host's pane: its limit as the host's header says it.)
+const limit = computed(() => limits[props.node.id] || (guestRuns.value && guestInfo.value.state === 'limited' ? { reset: guestInfo.value.reset || '' } : null))
 
 const asksApproval = computed(() => !!approvals[props.node.id])
 // The chat's approval card reads its screen again when it shows one (above).
@@ -1344,6 +1358,7 @@ function applyTitle() {
 const badge = computed(() => {
   if (props.node.sleeping) return 'asleep'
   if (exited.value) return 'exited'
+  if (guestRuns.value) return guestBadge.value
   if (!isAgent.value) return null
   // A question it asks you is not an approval.
   if (asksApproval.value) return chatWaiting.value.input ? 'question' : 'approval'
@@ -1360,6 +1375,14 @@ const badge = computed(() => {
   if (cache.value) return 'cache'
   if (needsYou.value) return 'needs'
   return null
+})
+
+// A Live Share host's pane: the one badge its host's header shows.
+const guestBadge = computed(() => {
+  const h = guestInfo.value
+  if (!guestRuns.value) return null
+  if (h.sleeping) return 'asleep'
+  return { approval: 'approval', limited: 'limit', working: 'working', monitoring: 'monitoring', unknown: 'unknown', waiting: 'needs' }[h.state] || null
 })
 
 // What the header no longer shows, in one place, for screen readers (the
@@ -1435,6 +1458,7 @@ const agentName = computed(() => {
 const headerState = computed(() => {
   if (props.node.sleeping) return { dot: 'sleeping', label: t('sidebar.status.sleeping', 'Sleeping') }
   if (exited.value) return { dot: 'failed', label: t('pane.hover.exited', 'Exited') }
+  if (guestDot.value) return { dot: guestDot.value, label: guestDot.value === 'sleeping' ? t('sidebar.status.sleeping', 'Sleeping') : agentStateLabel(guestDot.value) }
   if (!isAgent.value) return null
   if (asksApproval.value) return { dot: 'waiting', label: t('sidebar.row.asksApproval', 'Asks your approval') }
   if (limit.value) return { dot: 'blocked', label: limitTitle.value }
@@ -1454,15 +1478,15 @@ const hoverInfo = computed(() => {
     agentName: agentName.value,
     iconKind: showsAgent.value ? shownAgentId.value : n.shellId,
     accent: showsAgent.value ? n.accent : null,
-    model: agent ? modelText.value : '',
+    model: agent ? modelText.value : guestRuns.value ? guestInfo.value.model || '' : '',
     account: accountInfo.value ? accountInfo.value.title : '',
     conversation: autoTitle.value,
-    branch: n.worktree ? n.worktree.branch : '',
+    branch: n.worktree ? n.worktree.branch : guestInfo.value && guestInfo.value.copy ? guestInfo.value.copy.branch : '',
     state: headerState.value,
     stateDetail: live && !asksApproval.value && !limit.value ? statusSource.value : '',
     warn: stuck.value && track.value ? track.value.reason : agent && n.rootNoYolo ? rootNoYoloTitle() : '',
     yolo: agent && n.launchYolo ? yoloTitle() : '',
-    team: team.value ? { name: team.value.name, lead: isLead.value } : null,
+    team: team.value ? { name: team.value.name, lead: isLead.value } : guestInfo.value && guestInfo.value.team ? { name: guestInfo.value.team.name, lead: !!guestInfo.value.team.lead } : null,
     num: n.num || 0,
     session: agent ? n.sessionId || '' : '',
     id: agent ? n.id : ''
@@ -3251,7 +3275,7 @@ const paneMenuBindings = computed(() => ({
         <span v-if="team" class="pane-team-num" :class="{ lead: isLead }" data-test="pane-team-num" aria-hidden="true">{{ teamNumber(team.name) }}</span>
         <span
           class="pane-icon"
-          :class="isAgent ? ['agent', agentStatus === 'busy' ? 'busy' : backgroundRunning ? 'monitoring' : needsYou ? 'attention' : subRunning > 0 ? 'busy' : agentStatus, { yolo: node.launchYolo }] : guestAgent ? ['agent'] : null"
+          :class="isAgent ? ['agent', agentStatus === 'busy' ? 'busy' : backgroundRunning ? 'monitoring' : needsYou ? 'attention' : subRunning > 0 ? 'busy' : agentStatus, { yolo: node.launchYolo }] : guestRuns ? ['agent', guestIconClass] : guestAgent ? ['agent'] : null"
           :style="showsAgent ? { '--accent': node.accent } : null"
           :data-agent="shownAgentId || undefined"
           :aria-label="agentName"
@@ -3263,7 +3287,7 @@ const paneMenuBindings = computed(() => ({
             :label="showsAgent ? node.title : null"
             :size="15"
           />
-          <span v-if="isAgent" class="pane-status-dot"></span>
+          <span v-if="isAgent || guestRuns" class="pane-status-dot"></span>
         </span>
         <input
           v-if="editingTitle"
@@ -3400,6 +3424,8 @@ const paneMenuBindings = computed(() => ({
           :parent-idle-since="turnEndedAt"
           @running="onSubRunning"
         />
+        <!-- Live Share guest: a host's agent pane's sub-agents, read on the host -->
+        <AgentChildren v-else-if="guestChildrenSource" :agent-id="shownAgentId || guestInfo.agentId" :source="guestChildrenSource" />
         <!-- Live Share host: guests watching, typing in, reading this pane now -->
         <LiveSharePresence :pane-id="node.id" />
         <LiveShareReaders :pane-id="node.id" />

@@ -16,6 +16,7 @@ import WorkspaceSidebar from './components/WorkspaceSidebar.vue'
 import WorktreeCleanupDialog from './components/sidebar/WorktreeCleanupDialog.vue'
 import StatusBar from './components/StatusBar.vue'
 import { buildProjectCards, cardTargetPane, portProbes, orderWorkspaces } from './sidebarModel'
+import { listsChildren } from './agentChildrenFeed'
 import { createProjectWorktrees } from './projectWorktrees'
 import { prAgentTargets } from './prAgentTargets'
 import { withWorktreePath } from './prAgentPrompts'
@@ -2451,8 +2452,17 @@ const liveShare = createLiveShareWindow({
     move: (id, column) => updateTask(id, { column }),
     rename: (id, title) => updateTask(id, { title }),
     remove: (id) => removeTask(id),
-    answer: (id, reply) => resolveDecision(id, reply)
+    answer: (id, reply) => resolveDecision(id, reply),
+    // A card with its own copy (a guest's ✕): your usual delete, which asks
+    // you first and deletes that copy and its branch with it.
+    removeWithCopy: (id, who) => deleteTask(id, { askedBy: who })
   },
+  // Each shared project's panes as their headers show them, its finished
+  // tasks, and whether the Task history tab is on screen (a guest's: the
+  // host's history is read while it is).
+  paneAgents: (wsId) => liveSharePaneRows(wsId),
+  historyRecords: () => taskHistory,
+  historyShown: () => taskPanelOpen.value && sideTab.value === 'taskHistory',
   // Panes of this computer left in a Live Share project when it ends: a
   // project of their own, so nothing running is lost.
   adoptLeaves: (leaves) => {
@@ -2857,6 +2867,14 @@ const sideTaskSource = computed(() => {
   const ws = currentWs.value
   return ws && ws.liveShare ? liveShare.taskSource(ws.liveShare.project) : null
 })
+// Its Task history tab: the host's finished tasks (costs in dollars only
+// with "See my usage").
+const sideHistorySource = computed(() => {
+  const ws = currentWs.value
+  return ws && ws.liveShare ? liveShare.historySource(ws.liveShare.project) : null
+})
+// A host's task branch opened from its board's Review: read only.
+const guestReview = computed(() => liveShare.reviewSource())
 const sideRemote = computed(() => {
   const ws = currentWs.value
   return ws && ws.remote ? { hostId: ws.remote.hostId, host: remoteHostLabel(ws.remote.hostId), path: ws.remote.path } : null
@@ -3130,6 +3148,10 @@ provide('panelCtx', {
   // ...and the text size of a host's terminal in its pane (on your screen only).
   liveShareTextSize: (id, size) => liveShare.setGuestTextSize(id, size),
   liveShareChatSource: (id) => liveShare.chatSource(id),
+  // ...a host pane's model, effort and state as its header shows them on the
+  // host, and its sub-agents (asked of the host).
+  liveSharePaneAgent: (id) => liveShare.paneAgent(id),
+  liveShareChildrenSource: (id) => liveShare.childrenSource(id),
   // Live Share, as the host: the guests reading a pane's conversation now,
   // and who watches, types in or reads each pane (LiveSharePresence).
   liveShareReaders: (id) => liveShare.readersOf(id),
@@ -5910,6 +5932,66 @@ watch(
   { immediate: true }
 )
 
+// A Live Share host's pane in its guest's sidebar and Dashboard: what the
+// host's header shows of it (liveShareWindow.js paneAgent), never this
+// computer's state of it. Its team is the host's (by name: its id means
+// nothing here), its task copy by branch; nothing here can sleep it.
+function hostPaneRow(h) {
+  const agent = h.kind === 'agent' || h.kind === 'chat'
+  return {
+    kind: agent ? h.kind : 'shell',
+    agentId: h.agentId || null,
+    state: agent ? h.state || 'ready' : 'ready',
+    sleeping: !!h.sleeping,
+    ...(h.kind === 'chat' ? { chatStatus: null, model: null, effort: null, headerModel: h.model || null } : {}),
+    attention: !!h.attention,
+    reset: h.reset || '',
+    held: false,
+    typingHold: false,
+    teamUnread: 0,
+    toolsDown: false,
+    team: null,
+    teamName: h.team ? h.team.name : null,
+    lead: !!(h.team && h.team.lead),
+    workerOf: null,
+    task: agent ? h.task || null : null,
+    track: null,
+    pid: null,
+    copyBranch: h.copy ? h.copy.branch : '',
+    since: h.since || 0,
+    sessionId: null,
+    liveShare: true
+  }
+}
+// The same panes the other way round: a shared project's panes as this
+// computer's headers show them, for its guests (liveShareWindow.js
+// paneAgents; main keeps where each agent's conversation is, and sends
+// guests the rest).
+function liveSharePaneRows(wsId) {
+  const p = sidebarProjects.value.find((x) => x.id === wsId)
+  if (!p) return []
+  return p.panes
+    .filter((x) => !x.liveShare)
+    .map((x) => {
+      const agent = x.kind === 'agent' || x.kind === 'chat'
+      const team = x.team ? teamById(x.team) : null
+      return {
+        id: x.id,
+        kind: agent ? x.kind : 'shell',
+        agentId: x.agentId,
+        model: agent ? x.headerModel || paneModels[x.id] || '' : '',
+        state: agent ? x.state : null,
+        sleeping: !!x.sleeping,
+        since: x.since || 0,
+        task: x.task || '',
+        attention: !!x.attention,
+        reset: x.reset || '',
+        team: team ? { name: team.name || '', lead: !!x.lead } : null,
+        copy: x.copyPath ? { branch: x.copyBranch || '' } : null,
+        children: x.kind === 'agent' && x.sessionId && listsChildren(x.agentId) ? { agent: x.agentId, sessionId: x.sessionId, ...(x.accountId !== undefined ? { accountId: x.accountId } : {}) } : null
+      }
+    })
+}
 const sidebarProjects = computed(() =>
   workspaces.value.map((w) => {
     const panes = []
@@ -5919,6 +6001,8 @@ const sidebarProjects = computed(() =>
       const chat = leaf.kind === 'chat'
       const task = taskOfPane(leaf.id)
       const tracked = trackedState[leaf.id]
+      // A Live Share host's pane: the host's own view of it.
+      const host = leaf.backend === 'liveshare' ? liveShare.paneAgent(leaf.id) : null
       panes.push({
         id: leaf.id,
         num: leaf.num || 0, paneName: leaf.paneName, agentLabel: programLabel(leaf),
@@ -5954,7 +6038,8 @@ const sidebarProjects = computed(() =>
         sessionId: leaf.sessionId || null,
         // An agent on an SSH host (its conversation file is there).
         remoteHostId: leaf.remoteHostId || null,
-        ...(leaf.accountId !== undefined ? { accountId: leaf.accountId } : {})
+        ...(leaf.accountId !== undefined ? { accountId: leaf.accountId } : {}),
+        ...(host ? hostPaneRow(host) : {})
       })
     })
     const copies = boardTasks
@@ -7297,22 +7382,26 @@ function onWorktreesCleaned() {
 // ✕ on a card: asked first. A task working in its own copy of the project
 // also has that copy and branch deleted (with its agent closed), so nothing
 // is left behind with no way to merge it; the dialog says what is lost.
-async function deleteTask(taskId) {
+// askedBy: a Live Share guest's name, when the guest asked for it (said
+// first; the card must still be there once you answer).
+async function deleteTask(taskId, { askedBy = null } = {}) {
   const task = boardTasks.find((t) => t.id === taskId)
   if (!task) return
   const wt = task.worktree && !task.mergedAt ? task.worktree : null
   const leaf = task.paneId ? findLeaf(task.paneId) : null
+  const text = wt
+    ? leaf
+      ? t('app.task.deleteCopyAgent', '{{name}} closes, and its copy ({{path}}) and branch {{branch}} are deleted with any work not merged yet. To keep the work, open Review and merge it first. This cannot be undone.', { name: leaf.paneName || leaf.title, path: wt.path, branch: wt.branch })
+      : t('app.task.deleteCopy', 'its copy ({{path}}) and branch {{branch}} are deleted with any work not merged yet. To keep the work, open Review and merge it first. This cannot be undone.', { path: wt.path, branch: wt.branch })
+    : t('app.task.deleteCard', 'The card is removed from the board.')
   const ok = await askConfirm({
     title: t('app.task.deleteTitle', 'Delete "{{title}}"?', { title: task.title }),
-    text: wt
-      ? leaf
-        ? t('app.task.deleteCopyAgent', '{{name}} closes, and its copy ({{path}}) and branch {{branch}} are deleted with any work not merged yet. To keep the work, open Review and merge it first. This cannot be undone.', { name: leaf.paneName || leaf.title, path: wt.path, branch: wt.branch })
-        : t('app.task.deleteCopy', 'its copy ({{path}}) and branch {{branch}} are deleted with any work not merged yet. To keep the work, open Review and merge it first. This cannot be undone.', { path: wt.path, branch: wt.branch })
-      : t('app.task.deleteCard', 'The card is removed from the board.'),
+    text: askedBy ? `${t('app.task.guestAsksDelete', '{{name}} asks to delete this task (Live Share).', { name: askedBy })} ${text}` : text,
     confirmLabel: t('app.common.delete', 'Delete'),
     danger: !!wt
   })
   if (!ok) return
+  if (askedBy && !boardTasks.some((x) => x.id === task.id)) return
   if (wt) {
     const rm = await removeTaskCopy(task, true)
     if (!rm || !rm.ok) {
@@ -12499,7 +12588,7 @@ onBeforeUnmount(() => {
 
         <span class="toolbar-sep"></span>
 
-        <UsageMenu @details="openSettingsAt('stats')" @accounts="openSettingsAt('accounts')" />
+        <UsageMenu :host-usage="liveShare.hostUsage()" :host-name="liveShare.state.guest.host || ''" @details="openSettingsAt('stats')" @accounts="openSettingsAt('accounts')" />
         <NotificationsMenu @focus-pane="focusPane" />
         <!-- Live Share: a pill while you share or are in a session (its
              popover has the details), else the button that opens it. -->
@@ -12838,6 +12927,7 @@ onBeforeUnmount(() => {
           :now="clock"
           :root="sideRoot"
           :task-source="sideTaskSource"
+          :history-source="sideHistorySource"
           :can-insert="canInsertPath"
           :agent-panes="agentPanes"
           :activity="activity"
@@ -13110,6 +13200,15 @@ onBeforeUnmount(() => {
       :agent-label="reviewAgentLabel"
       :actions="reviewActions"
       @close="reviewTaskId = null"
+    />
+    <!-- A Live Share host's task branch: read only (the host merges). -->
+    <ReviewPanel
+      v-else-if="guestReview"
+      :key="'ls:' + guestReview.task.id"
+      :task="guestReview.task"
+      :source="guestReview"
+      :actions="{}"
+      @close="liveShare.closeReview()"
     />
 
     <NotesPanel

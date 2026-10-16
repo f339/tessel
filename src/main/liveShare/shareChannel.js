@@ -31,9 +31,11 @@
 import { isProjectId } from './shareGrant.js'
 import { cleanRel } from '../../shared/liveSharePath'
 
-// The feature each op area needs (an op is `<area>.<verb>`). Next phases
-// add theirs here: agents.* (panes2), sessions.* and history.* (history).
-export const OP_AREAS = Object.freeze({ fs: 'files', notes: 'files', scm: 'scm', tasks: 'tasks' })
+// The feature each op area needs (an op is `<area>.<verb>`): phase 2b's
+// agents.* (panes2: a pane's sub-agents), history.* (history: the task
+// history, a file's Local History) and review.* (history: a task branch's
+// changes). Phase 2c adds sessions.* (history).
+export const OP_AREAS = Object.freeze({ fs: 'files', notes: 'files', scm: 'scm', tasks: 'tasks', agents: 'panes2', history: 'history', review: 'history' })
 
 // Topics a guest subscribes to:
 // - feature: what both sides must speak;
@@ -47,13 +49,17 @@ export const OP_AREAS = Object.freeze({ fs: 'files', notes: 'files', scm: 'scm',
 // fs: files of the project changed ({ paths: [rel] | null }: null when too
 // many); scm: its git state changed (a hint to read the status again); file:
 // a file open in the guest's editor changed ({ exists, size, mtimeMs, sig });
-// tasks: the project's task board ({ tasks }). Next phases add agents and
-// usage (keep), page.
+// tasks: the project's task board ({ tasks }); agents: what the project's
+// panes run and how they are (model, state, task: sharePanels.js, at most
+// once a second); usage: the host's usage (host-wide, with the usage right:
+// shareUsage.js). Phase 2c adds page.
 export const TOPICS = Object.freeze({
   fs: Object.freeze({ feature: 'files', project: true, key: null, right: null, max: 16, keep: false }),
   scm: Object.freeze({ feature: 'scm', project: true, key: null, right: null, max: 16, keep: false }),
   file: Object.freeze({ feature: 'files', project: true, key: 'rel', right: null, max: 64, keep: false }),
-  tasks: Object.freeze({ feature: 'tasks', project: true, key: null, right: null, max: 16, keep: true })
+  tasks: Object.freeze({ feature: 'tasks', project: true, key: null, right: null, max: 16, keep: true }),
+  agents: Object.freeze({ feature: 'panes2', project: true, key: null, right: null, max: 16, keep: true }),
+  usage: Object.freeze({ feature: 'usage', project: false, key: null, right: 'usage', max: 1, keep: true })
 })
 
 // What one guest may cost the host (shareHost.js), counted per person so a

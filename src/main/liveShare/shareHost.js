@@ -350,10 +350,15 @@ export function stripTerminalReplies(data) {
 //                             unchecked); ctx: { guest (publicGuest's), rights
 //                             (the guest's now), recheck() (true while the
 //                             guest still may: called right before a change),
-//                             cancelled() }
+//                             cancelled(), uses(right) (the answer shows what
+//                             that right lets see: it leaves only while the
+//                             guest still has it) }
 //   watch(topic, project, key, on) -> optional: the first guest subscribed
 //                             to that topic (on), or the last one left; its
 //                             news go out with push(topic, project, key, data)
+//   offers(feature)        -> optional (with request): true for each of phase
+//                             2b's features the host offers ('panes2',
+//                             'usage', 'history'); without it, none
 // projects()' items may have chats: [{ id, title, agentId, accent,
 // terminal }] (shareChat.js cleanChatPanes), sent only to guests with the
 // 'chat' feature.
@@ -396,7 +401,10 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
   const knownChanged = () => callbacks.onKnownChanged?.()
   // What this host speaks beyond the protocol version.
   const serves = callbacks.opInfo && callbacks.request
-  const FEATURE_NEEDS = { chat: callbacks.chatWatch, agents: callbacks.agents, presence: callbacks.onPresence, files: serves, scm: serves, tasks: serves }
+  // Phase 2b's features: only those the host says it offers (callbacks.offers:
+  // its usage needs the readings it has, say).
+  const offered = (f) => (serves && typeof callbacks.offers === 'function' && callbacks.offers(f) === true ? serves : null)
+  const FEATURE_NEEDS = { chat: callbacks.chatWatch, agents: callbacks.agents, presence: callbacks.onPresence, files: serves, scm: serves, tasks: serves, panes2: offered('panes2'), usage: offered('usage'), history: offered('history') }
   const hostFeatures = SHARE_FEATURES.filter((f) => typeof FEATURE_NEEDS[f] === 'function')
   // Conversations watched: pane id -> Set of guest ids; the last one read
   // (sent at once to a guest that starts watching), and when one last went out.
@@ -717,15 +725,24 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     const e = access.effective(g.person)
     return e.projects.has(project) && sharedIds().has(project) && (right === 'view' || e.rights[right] === true)
   }
+  // A host-wide right (the usage right: the host's usage, whatever the
+  // project): connected and in, the right still on.
+  function stillMayAll(g, right) {
+    if (guests.get(g.id) !== g || g.state !== 'joined' || !g.person || !access.person(g.person.hash)) return false
+    return access.effective(g.person).rights[right] === true
+  }
   // A change still holds every right it was asked with (the type right, say,
   // that lets it write a file which runs things: shareScope.js).
   function keepsRights(g, rights) {
     const now = access.effective(g.person).rights
     return Object.keys(rights).every((r) => rights[r] !== true || now[r] === true)
   }
-  // A request still stands: not called off, still waited for, still allowed
-  // (a change: with all the rights it was asked with).
-  const stands = (g, entry) => !entry.cancelled && g.reqs.get(entry.id) === entry && stillMay(g, entry.project, entry.right) && (entry.kind !== 'write' || keepsRights(g, entry.rights))
+  // A request still allowed (a change: with all the rights it was asked
+  // with; an answer that shows what a right lets see, like the costs in
+  // dollars of the task history: with that right, ctx.uses).
+  const reqAllowed = (g, entry) => stillMay(g, entry.project, entry.right) && (entry.kind !== 'write' || keepsRights(g, entry.rights)) && entry.also.every((r) => stillMay(g, entry.project, r))
+  // A request still stands: not called off, still waited for, still allowed.
+  const stands = (g, entry) => !entry.cancelled && g.reqs.get(entry.id) === entry && reqAllowed(g, entry)
   const failRes = (id, code) => ({ t: 'res', id, ok: false, code })
   function busyMore(g, n) {
     const hash = g.person.hash
@@ -746,28 +763,40 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     // Its budgets: in flight, then a minute's worth of its kind.
     if ((inFlight.get(g.person.hash) || 0) >= L.inFlight || !within(countsOf(g), RATE_LISTS[info.kind], L[info.kind])) return send(g, failRes(req.id, 'busy'))
     const rights = { ...access.effective(g.person).rights }
-    const entry = { id: req.id, op: req.op, project: req.project, right: info.right, kind: info.kind, bulk: info.bulk, rights, cancelled: false, message: null, size: 0 }
+    const entry = { id: req.id, op: req.op, project: req.project, right: info.right, kind: info.kind, bulk: info.bulk, rights, also: [], cancelled: false, message: null, size: 0 }
+    // The rights the answer shows what they let see (ctx.uses), for every
+    // request sharing this run (a heavy one asked again while it runs).
+    const shared = { uses: new Set() }
     const ctx = {
       guest: publicGuest(g),
       rights: { ...rights },
       recheck: () => stands(g, entry),
-      cancelled: () => entry.cancelled || g.reqs.get(entry.id) !== entry
+      cancelled: () => entry.cancelled || g.reqs.get(entry.id) !== entry,
+      // The answer shows what this right lets see: it leaves only while the
+      // guest still has it (else 'revoked': asked again, it comes without).
+      uses: (right) => {
+        if (!isRightId(right)) return
+        shared.uses.add(right)
+        if (!entry.also.includes(right)) entry.also.push(right)
+      }
     }
     const call = () => callbacks.request({ op: req.op, project: req.project, args: req.args }, ctx)
-    const run = info.kind === 'heavy' ? heavy(req, ctx, call) : Promise.resolve().then(call)
+    const run = info.kind === 'heavy' ? heavy(req, ctx, call, shared) : { promise: Promise.resolve().then(call), shared }
     if (!run) return send(g, failRes(req.id, 'busy'))
     g.reqs.set(req.id, entry)
     busyMore(g, 1)
-    run.then(
-      (result) => finish(g, entry, result),
-      () => finish(g, entry, { ok: false, code: 'failed' })
-    )
+    const done = (result) => {
+      for (const r of run.shared.uses) if (!entry.also.includes(r)) entry.also.push(r)
+      finish(g, entry, result)
+    }
+    run.promise.then(done, () => done({ ok: false, code: 'failed' }))
   }
 
   // A heavy request: one at a time per project, and the same one (the same
   // op, project, arguments and rights) asked again while it waits or runs
-  // shares its answer. null when too many wait on that project.
-  function heavy(req, ctx, call) {
+  // shares its answer (and what it shows: shared.uses). -> { promise,
+  // shared } | null when too many wait on that project.
+  function heavy(req, ctx, call, shared) {
     let key
     try {
       key = JSON.stringify([req.op, req.project, req.args, ctx.rights])
@@ -775,7 +804,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       return null
     }
     const same = heavyRuns.get(key)
-    if (same) return same.promise
+    if (same) return same
     const waiting = [...heavyRuns.values()].filter((r) => r.project === req.project).length
     if (waiting >= HEAVY_WAITING) return null
     const prev = heavyTails.get(req.project) || Promise.resolve()
@@ -785,12 +814,13 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       () => {}
     )
     heavyTails.set(req.project, tail)
-    heavyRuns.set(key, { promise, project: req.project })
+    const run = { promise, project: req.project, shared }
+    heavyRuns.set(key, run)
     tail.then(() => {
       heavyRuns.delete(key)
       if (heavyTails.get(req.project) === tail) heavyTails.delete(req.project)
     })
-    return promise
+    return run
   }
 
   // The host's answer, as it leaves: still asked for, the project and the
@@ -888,6 +918,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     if (!s.on) return unsubscribe(g, k)
     if (g.subs.has(k)) return
     if (s.project && !(g.projects.has(s.project) && stillMay(g, s.project, s.spec.right || 'view'))) return
+    if (!s.project && s.spec.right && !stillMayAll(g, s.spec.right)) return
     if (g.subs.size >= L.subs || [...g.subs.values()].filter((x) => x.topic === s.topic).length >= s.spec.max) return
     g.subs.set(k, { topic: s.topic, project: s.project, key: s.key, seq: 0 })
     let set = watchers.get(k)
@@ -919,10 +950,12 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     }
   }
   // A subscription still good: its feature, its project still the guest's
-  // and shared, its right.
+  // and shared, its right (a host-wide topic's: the person's).
   const subLive = (g, sub) => {
     const spec = Object.hasOwn(TOPICS, sub.topic) ? TOPICS[sub.topic] : null
-    return !!spec && g.features.has(spec.feature) && (!sub.project || (g.projects.has(sub.project) && stillMay(g, sub.project, spec.right || 'view')))
+    if (!spec || !g.features.has(spec.feature)) return false
+    if (!sub.project) return !spec.right || stillMayAll(g, spec.right)
+    return g.projects.has(sub.project) && stillMay(g, sub.project, spec.right || 'view')
   }
   // News of one subscription to one guest: the latest only while its
   // connection is behind ('fs' news gather their paths).
@@ -967,7 +1000,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
   // subscriptions to a project it lost end.
   function revalidate(g) {
     for (const entry of [...g.reqs.values()]) {
-      if (stillMay(g, entry.project, entry.right) && (entry.kind !== 'write' || keepsRights(g, entry.rights))) continue
+      if (reqAllowed(g, entry)) continue
       entry.cancelled = true
       g.reqs.delete(entry.id)
       send(g, failRes(entry.id, 'revoked'))

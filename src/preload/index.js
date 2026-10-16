@@ -729,6 +729,12 @@ const api = {
     taskDone: ({ request, ok, code } = {}) => ipcRenderer.send('liveShare:taskDone', { request, ok: ok === true, code }),
     subscribe: ({ topic, project, on } = {}) => ipcRenderer.invoke('liveShare:subscribe', { topic, project, on: !!on }),
     task: ({ op, project, args } = {}) => ipcRenderer.invoke('liveShare:task', { op, project, args }),
+    // Phase 2b. Host: the shared projects' panes as their headers show them,
+    // and their finished tasks. Guest: a panel's request to the host (a
+    // pane's sub-agents, the task history, a task branch's review).
+    setPaneAgents: (list) => ipcRenderer.send('liveShare:paneAgents', list),
+    setHistory: (list) => ipcRenderer.send('liveShare:history', list),
+    request: ({ op, project, args } = {}) => ipcRenderer.invoke('liveShare:request', { op, project, args }),
     onPush: (cb) => subscribe('liveShare:push', cb),
     onGuestAction: (cb) => subscribe('liveShare:guestAction', cb),
     // Guest: a host's agent pane's conversation watched here (read only),

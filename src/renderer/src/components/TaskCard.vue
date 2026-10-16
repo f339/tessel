@@ -136,6 +136,9 @@ const assignedPane = computed(
 // for review or is done, the agent that did it is shown, not changeable (the
 // review merges or discards that agent's copy).
 const canAssign = computed(() => !props.source && (props.task.column === 'todo' || props.task.column === 'doing'))
+// Review: this computer's cards in Review; a source's (a Live Share host's)
+// only with its own copy, read only, when the source offers it.
+const canReview = computed(() => props.task.column === 'review' && (!props.source || (typeof props.source.review === 'function' && !!props.task.worktree)))
 // "Show agent": while it works on it or waits for review.
 const canShowAgent = computed(
   () => !!assignedPane.value && (props.task.column === 'doing' || props.task.column === 'review')
@@ -370,7 +373,7 @@ function paneLabel(pane) {
     </div>
 
     <!-- Bottom line: when, then what can be done now. -->
-    <div v-if="timing || canShowAgent || (task.column === 'review' && !source)" class="task-card-foot">
+    <div v-if="timing || canShowAgent || canReview" class="task-card-foot">
       <span v-if="timing" class="task-timing" data-test="task-timing" :title="timingTitle">{{ timing }}</span>
       <span class="task-card-actions">
         <button
@@ -383,11 +386,11 @@ function paneLabel(pane) {
           {{ t('tasks.card.showAgent', 'Show agent') }}
         </button>
         <button
-          v-if="task.column === 'review' && !source"
+          v-if="canReview"
           class="task-btn task-review-btn"
-          :title="t('tasks.card.reviewHint', 'See the changes, then merge, ask for changes or discard')"
+          :title="source ? t('tasks.card.reviewHostHint', 'See the changes on the host (read only)') : t('tasks.card.reviewHint', 'See the changes, then merge, ask for changes or discard')"
           data-test="review-task"
-          @click="emit('review', task.id)"
+          @click="source ? source.review(task.id) : emit('review', task.id)"
         >
           {{ t('tasks.card.review', 'Review') }}
         </button>

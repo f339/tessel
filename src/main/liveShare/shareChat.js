@@ -31,11 +31,14 @@
 // host's panes it has on screen, for the host's eyes only), shareHost.js;
 // and phase 2's 'files' (a shared project's files, editor and notes), 'scm'
 // (its git changes) and 'tasks' (its task board), through the requests and
-// subscriptions of shareChannel.js.
+// subscriptions of shareChannel.js; phase 2b's 'panes2' (what each shared
+// pane runs and how it is, its sub-agents), 'usage' (the host's usage, with
+// the right) and 'history' (the task history, a file's Local History, a task
+// branch's changes).
 
 import { KNOWN_HARNESS_TAG_NAMES } from '../../shared/harnessInjectedTurns.js'
 
-export const SHARE_FEATURES = Object.freeze(['chat', 'agents', 'presence', 'files', 'scm', 'tasks'])
+export const SHARE_FEATURES = Object.freeze(['chat', 'agents', 'presence', 'files', 'scm', 'tasks', 'panes2', 'usage', 'history'])
 export const cleanFeatures = (list) => (Array.isArray(list) ? [...new Set(list.filter((f) => typeof f === 'string' && SHARE_FEATURES.includes(f)))] : [])
 
 export const CHAT_LIMITS = Object.freeze({

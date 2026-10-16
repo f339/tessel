@@ -3,6 +3,9 @@
 // changed (files, commits, the diff of each file), whether it can merge into
 // the branch it came from, then Merge, Request changes or Discard. Git work
 // happens in the main process (src/main/review.js); App.vue does the actions.
+// Given a source (a Live Share host's task: liveShareWindow.js reviewSource),
+// it shows what the host reads of the branch, read only: merging, discarding,
+// committing, pushing and asking for changes stay the host's.
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { parseUnifiedDiff } from '../../../shared/diff'
 import { reviewMessage, commentLocation } from '../../../shared/reviewComments'
@@ -15,8 +18,12 @@ const props = defineProps({
   // Functions from App.vue: requestChanges(text), resolveConflicts(info),
   // merge(info, { cleanup }) -> Promise<bool>, discard(info) -> Promise<bool>,
   // markDone(), focusAgent().
-  actions: { type: Object, required: true }
+  actions: { type: Object, required: true },
+  // A Live Share host's task: { host, info() -> Promise<info>, diff(file) ->
+  // Promise<{ ok, text, truncated } | { ok: false, error }> }, or null.
+  source: { type: Object, default: null }
 })
+const readOnly = computed(() => !!props.source)
 const emit = defineEmits(['close'])
 
 const wt = computed(() => props.task.worktree || null)
@@ -52,7 +59,7 @@ function lineRef(l) {
   return l.kind === 'del' ? { line: l.old, side: 'old' } : { line: l.new, side: 'new' }
 }
 function startComment(l) {
-  if (!diff.value || l.kind === 'hunk') return
+  if (readOnly.value || !diff.value || l.kind === 'hunk') return
   const at = lineRef(l)
   if (!at.line) return
   draft.value = { file: diff.value.file, ...at, code: l.text, text: '' }
@@ -85,12 +92,12 @@ const commentCount = computed(() => comments.length)
 // answer can never land after a newer one.
 let refreshing = false
 async function refresh() {
-  if (!args.value || refreshing) return
+  if ((!args.value && !props.source) || refreshing) return
   refreshing = true
   loading.value = true
   let next
   try {
-    next = await window.shellApi.review.info(args.value)
+    next = props.source ? await props.source.info() : await window.shellApi.review.info(args.value)
   } catch (err) {
     next = { ok: false, error: err.message }
   } finally {
@@ -119,12 +126,12 @@ function sig(f) {
 }
 
 async function loadDiff(file) {
-  if (!file || !args.value) {
+  if (!file || (!args.value && !props.source)) {
     diff.value = null
     return
   }
   diffLoading.value = true
-  const res = await window.shellApi.review.diff({ ...args.value, file })
+  const res = props.source ? await props.source.diff(file) : await window.shellApi.review.diff({ ...args.value, file })
   diffLoading.value = false
   if (selected.value !== file) return
   diff.value = res && res.ok
@@ -313,6 +320,9 @@ function withCommentsText() {
     ? t('review.withComments', 'With your {{count}} comments on lines, each tied to its file and line.', { count })
     : t('review.withComment', 'With your {{count}} comment on lines, each tied to its file and line.', { count })
 }
+function readOnlyText() {
+  return t('review.hostReadOnly', 'Read only: only {{host}} can merge, discard or ask for changes.', { host: (props.source && props.source.host) || '?' })
+}
 function mergeLabel() {
   return busy.value === 'merge'
     ? t('review.merging', 'Merging…')
@@ -332,8 +342,9 @@ onMounted(() => {
   window.addEventListener('keydown', onKey)
   if (cardEl.value) cardEl.value.focus()
   refresh()
-  // The agent may still commit (after "Request changes", or late work).
-  poll = setInterval(() => !busy.value && refresh(), 5000)
+  // The agent may still commit (after "Request changes", or late work). A
+  // host's task is asked of the host less often (its budget is shared).
+  poll = setInterval(() => !busy.value && refresh(), props.source ? 20000 : 5000)
 })
 onBeforeUnmount(() => {
   clearInterval(poll)
@@ -373,7 +384,7 @@ function commentsStore(taskId) {
         </span>
         <span class="notes-tools">
           <span v-if="loading" class="notes-status">{{ t('review.checking', 'Checking…') }}</span>
-          <button class="confirm-btn" :disabled="!agentLabel" :title="t('review.showAgentHint', 'Go to the agent\'s terminal')" @click="actions.focusAgent()">
+          <button v-if="!readOnly" class="confirm-btn" :disabled="!agentLabel" :title="t('review.showAgentHint', 'Go to the agent\'s terminal')" @click="actions.focusAgent()">
             {{ t('review.showAgent', 'Show agent') }}
           </button>
           <button class="tb-icon" :title="t('review.closeEsc', 'Close (Esc)')" :aria-label="t('review.close', 'Close')" @click="emit('close')">
@@ -411,7 +422,7 @@ function commentsStore(taskId) {
             <span>{{ c.text }}</span>
           </li>
         </ul>
-        <div v-if="info && info.ok && info.uncommitted.length" class="rv-commit-bar">
+        <div v-if="info && info.ok && info.uncommitted.length && !readOnly" class="rv-commit-bar">
           <template v-if="commitOpen">
             <input
               v-model="commitMsg"
@@ -431,7 +442,7 @@ function commentsStore(taskId) {
         <p v-if="notice" class="rv-notice" :class="notice.kind" role="status">{{ notice.text }}</p>
         <div v-if="info && info.ok && info.conflicts.length" class="notes-conflict" role="alert">
           <span>{{ t('review.conflictsBlock', "The branch cannot merge until the conflicts are resolved in the agent's copy.") }}</span>
-          <button class="confirm-btn" :disabled="!agentLabel" @click="actions.resolveConflicts(info)">
+          <button v-if="!readOnly" class="confirm-btn" :disabled="!agentLabel" @click="actions.resolveConflicts(info)">
             {{ t('review.askResolve', 'Ask the agent to resolve') }}
           </button>
         </div>
@@ -543,7 +554,7 @@ function commentsStore(taskId) {
         </div>
       </template>
 
-      <div v-if="feedbackOpen" class="rv-feedback">
+      <div v-if="feedbackOpen && !readOnly" class="rv-feedback">
         <textarea
           ref="feedbackEl"
           v-model="feedback"
@@ -563,7 +574,11 @@ function commentsStore(taskId) {
         </div>
       </div>
 
-      <div class="rv-foot">
+      <!-- A host's task: read only. -->
+      <div v-if="readOnly" class="rv-foot">
+        <span class="act-dim" data-test="rv-read-only">{{ readOnlyText() }}</span>
+      </div>
+      <div v-else class="rv-foot">
         <button v-if="wt" class="confirm-btn danger" :disabled="!!busy" @click="discard">
           {{ busy === 'discard' ? t('review.discarding', 'Discarding…') : t('review.discard', 'Discard…') }}
         </button>

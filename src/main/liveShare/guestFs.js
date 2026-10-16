@@ -423,6 +423,31 @@ export function createGuestFs({ request } = {}) {
     return call('notes.save', loc.project, { text: body, baseMtime: Number.isFinite(baseMtime) ? baseMtime : null }, (d) => ({ path: pathOf(loc.project, NOTES), mtime: numOr(d.mtime) }))
   }
 
+  // --- Local History (phase 2b: the host's saves of a file, its Timeline) -----
+  // The localHistory:list / read calls for a host's file: { path } -> { ok,
+  // entries: [{ id, source, timestamp }] } (newest first) and { path, id } ->
+  // { ok, text }, as this computer's Local History answers.
+  const LOCAL_ID = /^[a-z0-9]{6,32}$/
+  function localHistoryList({ path } = {}) {
+    const loc = parseLsharePath(path)
+    if (!loc || !loc.rel) return Promise.resolve(outside())
+    return call('history.local', loc.project, { path: loc.rel }, (d) => {
+      if (!Array.isArray(d.entries) || d.entries.length > L.localEntries) return null
+      const entries = []
+      for (const e of d.entries) {
+        if (!isObj(e) || !LOCAL_ID.test(String(e.id)) || !Number.isFinite(e.timestamp)) return null
+        entries.push({ id: e.id, source: e.source === 'save' ? 'save' : 'other', timestamp: e.timestamp })
+      }
+      return { entries }
+    })
+  }
+  function localHistoryRead({ path, id } = {}) {
+    const loc = parseLsharePath(path)
+    if (!loc || !loc.rel) return Promise.resolve(outside())
+    if (typeof id !== 'string' || !LOCAL_ID.test(id)) return Promise.resolve(failure('not-found'))
+    return call('history.localRead', loc.project, { path: loc.rel, id }, (d) => (typeof d.text === 'string' && textWithin(d.text, L.textBytes) ? { text: d.text } : null))
+  }
+
   // --- Changes -----------------------------------------------------------------------
   // Paths the Changes view gives (from the project, or virtual) -> wire
   // paths of `project`, or null when one is not.
@@ -641,6 +666,9 @@ export function createGuestFs({ request } = {}) {
     // notes
     loadNotes,
     saveNotes,
+    // Local History (the Timeline)
+    localHistoryList,
+    localHistoryRead,
     scm,
     localOnly
   }

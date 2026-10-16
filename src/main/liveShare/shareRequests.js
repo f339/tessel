@@ -1,5 +1,6 @@
 // Live Share phase 2: the host's answers to a guest's requests on a shared
-// project's files, notes and git changes.
+// project's files, notes and git changes; with phase 2b, a file's Local
+// History (its Timeline) and a task branch's changes (the review, read only).
 //
 // A guest's Files, editor and Changes views send requests ({ op, project,
 // args }, src/shared/liveSharePath.js for the paths); the host's Live Share
@@ -31,11 +32,13 @@
 // handle() -> { ok: true, data } | { ok: false, code, detail? }: what the
 // host's 'res' message carries.
 import fs from 'fs'
+import { join } from 'path'
 import { t } from '../i18n'
 import * as explorer from '../explorer'
 import * as sourceControl from '../sourceControl'
 import { looksBinary, hashOf, signatureOf, writeForEdit, headContent } from '../editorFiles'
 import { listProjectFiles } from '../fileOpen'
+import { reviewInfo, reviewDiff } from '../review'
 import { fileKind, extOf, IMAGE_MIME } from '../../shared/fileKinds'
 import { cleanRel, segmentOk, isShareProjectId, LSHARE_LIMITS as L } from '../../shared/liveSharePath'
 import { guestText, cleanRoots, maskSecrets } from './shareChat'
@@ -939,6 +942,169 @@ op('scm.commit', {
   }
 })
 
+// --- Local History (phase 2b: the explorer's Timeline) ---------------------------
+// The versions the host's editor kept of a file at its saves (localHistory.js,
+// ctx.localHistory). Its records are named by the file's path as the host's
+// editor had it: the project's folder as the window gives it, then the path
+// (its real path too, for a file opened through a link).
+const LOCAL_ID = /^[a-z0-9]{6,32}$/
+function localKeys(env, r) {
+  const keys = []
+  for (const k of [join(env.info.root, ...r.rel.split('/')), r.real, r.entry]) if (typeof k === 'string' && k && !keys.some((x) => lower(x) === lower(k))) keys.push(k)
+  return keys
+}
+op('history.local', {
+  args: { path: A.path },
+  async run(a, env) {
+    const lh = env.ctx.localHistory
+    if (!lh || typeof lh.list !== 'function') return fail('unavailable')
+    // A file deleted since still has its versions.
+    const r = await env.resolve(a.path, { mustExist: 'any' })
+    if (!r.ok) return fail(r.code)
+    if (r.exists && !r.isFile) return fail('not-file')
+    for (const key of localKeys(env, r)) {
+      const res = await lh.list({ path: key })
+      const list = res && res.ok && Array.isArray(res.entries) ? res.entries : []
+      if (!list.length) continue
+      const entries = list
+        .filter((e) => e && LOCAL_ID.test(String(e.id)) && Number.isFinite(e.timestamp))
+        .slice(0, L.localEntries)
+        .map((e) => ({ id: e.id, source: e.source === 'save' ? 'save' : 'other', timestamp: e.timestamp }))
+      return done({ entries, rel: a.path })
+    }
+    return done({ entries: [], rel: a.path })
+  }
+})
+op('history.localRead', {
+  bulk: true,
+  keep: ['text'],
+  args: { path: A.path, id: (v) => (typeof v === 'string' && LOCAL_ID.test(v) ? OK(v) : BAD) },
+  async run(a, env) {
+    const lh = env.ctx.localHistory
+    if (!lh || typeof lh.read !== 'function') return fail('unavailable')
+    const r = await env.resolve(a.path, { mustExist: 'any' })
+    if (!r.ok) return fail(r.code)
+    if (r.exists && !r.isFile) return fail('not-file')
+    for (const key of localKeys(env, r)) {
+      const res = await lh.read({ path: key, id: a.id })
+      if (!res || !res.ok || typeof res.text !== 'string') continue
+      if (Buffer.byteLength(res.text, 'utf8') > L.textBytes) return fail('too-large')
+      return done({ text: res.text })
+    }
+    return fail('not-found')
+  }
+})
+
+// --- A task branch's changes (phase 2b: the review, read only) -------------------
+// A card of the project's board with its own copy (ctx.taskCopy(project, id)
+// -> { path, branch, target }, the host's window's: never sent), read with
+// review.js from the project's folder. What the guest gets is inside the
+// project only, relative to it, the hidden files counted, never named; no
+// author emails, no merge, discard, commit or push (the host's alone).
+async function taskPlace(env, a) {
+  const copy = typeof env.ctx.taskCopy === 'function' ? env.ctx.taskCopy(env.project, a.task) : null
+  if (!copy) return { failed: fail('not-found') }
+  return { copy, args: { root: env.info.root, path: copy.path, branch: copy.branch, target: copy.target } }
+}
+// The repository's top (review.js' repo) -> the project's place below it.
+function placeFromTop(env, top) {
+  if (typeof top !== 'string' || !top) return null
+  try {
+    const topReal = fs.realpathSync.native(top)
+    const prefix = relFrom(topReal, env.info.real)
+    if (prefix === null) return null
+    env.hostPaths.push(top, topReal)
+    return { prefix }
+  } catch {
+    return null
+  }
+}
+// Paths from the repository's top -> the ones a guest may name, and how
+// many it may not.
+async function visibleFromTop(env, place, list) {
+  const named = []
+  let hidden = 0
+  for (const p of Array.isArray(list) ? list : []) {
+    if (typeof p !== 'string' || !underRoot(place, p)) continue
+    const rel = fromTop(place, p)
+    if (!rel || hiddenByName(rel, env.settings)) hidden++
+    else named.push(rel)
+  }
+  const off = named.length ? await env.scope.hiddenOf(env.info, named, env.settings) : new Set()
+  return { rels: named.filter((r) => !off.has(r)), hidden: hidden + named.filter((r) => off.has(r)).length }
+}
+op('review.info', {
+  kind: 'heavy',
+  serial: true,
+  args: { task: (v) => (typeof v === 'string' && /^[\w.-]{1,100}$/.test(v) ? OK(v) : BAD) },
+  async run(a, env) {
+    const t0 = await taskPlace(env, a)
+    if (t0.failed) return t0.failed
+    const res = await reviewInfo(t0.args)
+    if (!res || !res.ok) return fail('not-found')
+    const place = placeFromTop(env, res.repo)
+    if (!place) return fail('failed')
+    const shown = await visibleFromTop(env, place, (res.files || []).map((f) => f && f.path))
+    const byRel = new Map((res.files || []).filter((f) => f && typeof f.path === 'string').map((f) => [fromTop(place, f.path), f]))
+    const files = []
+    let truncated = false
+    for (const rel of shown.rels) {
+      if (files.length >= L.scmEntries) {
+        truncated = true
+        break
+      }
+      const f = byRel.get(rel)
+      files.push({
+        path: rel,
+        status: /^[AMDUX]$/.test(f.status) ? f.status : 'M',
+        added: num(f.added) ?? 0,
+        removed: num(f.removed) ?? 0,
+        binary: !!f.binary,
+        ...(typeof f.blob === 'string' && /^[0-9a-f]{7,64}$/.test(f.blob) ? { blob: f.blob } : {})
+      })
+    }
+    const conflicts = await visibleFromTop(env, place, res.conflicts)
+    const uncommitted = await visibleFromTop(env, place, res.uncommitted)
+    return done({
+      branch: clip(res.branch, 200),
+      target: clip(res.target, 200),
+      head: sourceControl.isCommitId(res.head) ? res.head : null,
+      files,
+      hidden: shown.hidden,
+      truncated,
+      commits: (Array.isArray(res.commits) ? res.commits : []).slice(0, L.historyLimit).filter((c) => c && sourceControl.isCommitId(c.sha)).map((c) => ({ sha: c.sha, author: clip(c.author, 200), time: num(c.time) ?? 0, subject: clip(c.subject, 1000), body: clip(c.body, L.message) })),
+      conflicts: conflicts.rels.slice(0, L.scmEntries),
+      uncommitted: uncommitted.rels.slice(0, L.scmEntries),
+      mergeCheck: res.mergeCheck === 'failed' ? 'failed' : 'done',
+      behind: num(res.behind) ?? 0,
+      copyExists: !!res.copyExists
+    })
+  }
+})
+op('review.diff', {
+  bulk: true,
+  serial: true,
+  keep: ['text'],
+  maxBytes: 3 * 1024 * 1024,
+  args: { task: (v) => (typeof v === 'string' && /^[\w.-]{1,100}$/.test(v) ? OK(v) : BAD), file: A.path },
+  async run(a, env) {
+    const t0 = await taskPlace(env, a)
+    if (t0.failed) return t0.failed
+    if (hiddenByName(a.file, env.settings) || (await env.scope.hiddenOf(env.info, [a.file], env.settings)).size) return fail('not-found')
+    const top = await sourceControl.repoOf(env.info.real)
+    const place = top && top.top ? placeFromTop(env, top.top) : null
+    if (!place) return fail(top && top.notRepo ? 'not-repo' : 'failed')
+    const res = await reviewDiff({ ...t0.args, file: toTop(place, a.file) })
+    if (!res || !res.ok || typeof res.text !== 'string') return fail('failed')
+    // Only the changes: git's header names the file from the repository's
+    // top (the folders above the project).
+    const at = res.text.search(/^@@ /m)
+    const text = at >= 0 ? res.text.slice(at) : /^Binary files .* differ$/m.test(res.text) ? 'Binary files differ' : ''
+    if (Buffer.byteLength(text, 'utf8') > L.diffBytes) return done({ text: text.slice(0, L.diffBytes), truncated: true, rel: a.file })
+    return done({ text, truncated: !!res.truncated, rel: a.file })
+  }
+})
+
 // What the host's server needs to know of each op (its budgets): { right,
 // kind, bulk }.
 export const SHARE_OPS = Object.freeze(Object.fromEntries(Object.entries(OPS).map(([k, v]) => [k, Object.freeze({ right: v.right, kind: v.kind, bulk: v.bulk })])))
@@ -953,7 +1119,9 @@ function rootOf(roots, project) {
 
 // createShareRequests({ scope?, log? }) -> { handle(req, ctx), scope }
 // req: { op, project, args } as the guest sent it.
-// ctx: { roots, rights, settings, trashItem?, recheck? }: the host's.
+// ctx: { roots, rights, settings, trashItem?, recheck?, localHistory? (the
+// editor's Local History: list, read), taskCopy? ((project, task id) -> the
+// card's copy { path, branch, target } | null) }: the host's.
 export function createShareRequests({ scope = createShareScope(), log = null } = {}) {
   const chains = new Map() // project's real folder -> the git work queued on it
   function serial(key, fn) {
@@ -985,6 +1153,7 @@ export function createShareRequests({ scope = createShareScope(), log = null } =
     const settings = ctx.settings && typeof ctx.settings === 'object' ? ctx.settings : {}
     const env = {
       info,
+      project,
       rights,
       settings,
       ctx,

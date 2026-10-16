@@ -54,6 +54,18 @@
 // window's usual explorer:changed and editor:changed, and a board as
 // liveShare:push.
 //
+// Phase 2b (liveShare/sharePanels.js): the guest's headers, sidebar and
+// Dashboard show what each of the host's panes runs and how it is (model and
+// effort, state, task, its team, its task copy): the host's window sends them
+// (liveShare:paneAgents), its guests get a copy at most once a second per
+// project ('agents'). A guest's header lists a pane's sub-agents (read here
+// from the pane's conversation, which stays here), its Tasks history tab the
+// project's finished tasks (liveShare:history from the window; the costs in
+// dollars only with the usage right), its Timeline the host's Local History
+// of a file, and its review a task branch's changes (shareRequests.js). A
+// guest with the usage right sees the host's usage (liveShare/shareUsage.js:
+// readings the host already has, never one taken for it).
+//
 // Conversations (liveShare/shareChat.js): a guest can look at a host's agent
 // pane as a chat, read only, on its own screen (the host's pane, its mode,
 // its terminal and its agent never change). The host's window says which of
@@ -88,7 +100,8 @@ import { createShareRequests, SHARE_OPS } from './liveShare/shareRequests.js'
 import { createShareScope, hiddenByName, relFrom, DEFAULT_SHARE_SETTINGS } from './liveShare/shareScope.js'
 import { cleanRoots } from './liveShare/shareChat.js'
 import { createGuestFs } from './liveShare/guestFs.js'
-import { TASK_OPS, taskArgs, guestTasks, checkTasks } from './liveShare/shareTasks.js'
+import { TASK_OPS, taskArgs, guestTasks, checkTasks, isTaskId } from './liveShare/shareTasks.js'
+import { PANEL_OPS, HISTORY_LIMITS, guestPanes, createAgentsFeed, guestChildren, checkPanes, checkChildren, hostHistory, guestHistory, checkHistory, needsFigures, checkUsage, hostTaskCopies, checkReviewInfo, checkReviewDiff } from './liveShare/sharePanels.js'
 import { parseLsharePath, lshareRoot, lsharePath, cleanRel } from '../shared/liveSharePath'
 import { watchProject as watchProjectFolder } from './explorer'
 import { createFileWatcher } from './editorFiles'
@@ -135,8 +148,9 @@ const ACTION_KINDS = Object.freeze({
   'tasks.remove': 'taskRemove',
   'tasks.answer': 'taskAnswer'
 })
-// The topics a guest's window may follow itself (the others are main's).
-const WINDOW_TOPICS = new Set(['tasks'])
+// The topics a guest's window may follow itself (the others are main's), or
+// ask main the last news of (agents, usage: main follows them itself).
+const WINDOW_TOPICS = new Set(['tasks', 'agents', 'usage'])
 
 // A shared project's folder as the host's window gives it: a local absolute
 // path (never sent anywhere), or null.
@@ -326,6 +340,11 @@ const KEEP_FRESH_MS = 60000
 // trashItem(path): the Recycle Bin (Electron's shell; without it a guest's
 // delete is refused). watchProject(root, fn) and makeFileWatcher(onChange):
 // the folder and file watches for guests (explorer.js, editorFiles.js).
+// Phase 2b: usage (liveShare/shareUsage.js createShareUsage: the host's usage
+// for guests with the right; without it, none is offered); agentChildren(q)
+// (accountSessions.children: an agent pane's sub-agents); cardCosts(ids)
+// (jobCost.js forCards: a finished task's figures); localHistory (the
+// editor's Local History: list, read).
 export function registerLiveShare({
   ipcMain,
   send,
@@ -343,7 +362,11 @@ export function registerLiveShare({
   requestLimits = {},
   trashItem = null,
   watchProject = watchProjectFolder,
-  makeFileWatcher = (onChange) => createFileWatcher(onChange)
+  makeFileWatcher = (onChange) => createFileWatcher(onChange),
+  usage = null,
+  agentChildren = null,
+  cardCosts = null,
+  localHistory = null
 }) {
   const info = (msg) => log?.info?.('liveshare', msg)
   const warn = (msg) => (log?.warn ? log.warn('liveshare', msg) : info(msg))
@@ -566,7 +589,7 @@ export function registerLiveShare({
   // Files, notes and git (shareRequests.js), with the project's folder, the
   // guest's rights and the share's settings; a change is in the audit.
   async function fileRequest(req, ctx) {
-    const res = await requests.handle(req, { roots, rights: ctx.rights, settings: shareSettings, trashItem, recheck: ctx.recheck })
+    const res = await requests.handle(req, { roots, rights: ctx.rights, settings: shareSettings, trashItem, recheck: ctx.recheck, localHistory, taskCopy: (project, id) => taskCopies.get(project)?.get(id) || null })
     if (res && res.ok && channelOps.get(req.op)?.kind === 'write') noteAction(ctx.guest, req)
     return res
   }
@@ -742,6 +765,90 @@ export function registerLiveShare({
       clearTimeout(r.timer)
       r.resolve({ ok: false, code })
     }
+  }
+
+  // --- Phase 2b: panes, sub-agents, usage, task history (sharePanels.js) -------
+  // Each shared project's panes as the window sends them (liveShare:
+  // paneAgents): the guests' copy goes out at most once a second ('agents'),
+  // made again when the layouts change (a pane that came or went); where each
+  // agent's sub-agents are read stays here. Its finished tasks' records
+  // (liveShare:history) and its cards' own copies (from liveShare:tasks, for
+  // the review) too. The host's usage goes to guests with the usage right
+  // ('usage', shareUsage.js: never a reading taken for them).
+  const agentsFeed = createAgentsFeed({ push: (project, data) => sharing?.server?.push('agents', project, null, data) })
+  let rawPanes = new Map() // project -> the window's panes
+  let paneChildren = new Map() // project -> Map(pane id -> { agent, sessionId, accountId })
+  let histories = new Map() // project -> records (hostHistory)
+  let historyCosts = new Map() // project -> { at, costs }: figures read here
+  let taskCopies = new Map() // project -> Map(card id -> { path, branch, target })
+  let usageOff = null
+  addOps(PANEL_OPS, (req, ctx, s) => (req.op === 'agents.children' ? childrenRequest(req, ctx, s) : historyRequest(req, ctx)))
+  channelTopics.set('agents', (s, project, key, on) => on && agentsFeed.sendNow(project))
+  channelTopics.set('usage', (s, project, key, on) => {
+    usageOff?.()
+    usageOff = on && usage ? usage.subscribe((data) => sharing === s && s.server?.push('usage', null, null, data)) : null
+  })
+  // A pane guests of that project see: one of its terminals, or a pane of it
+  // with a conversation.
+  const paneShared = (s, project, id) => homes(s).get(id) === project || chatHomes(s).get(id) === project
+  function panesChanged() {
+    const s = sharing
+    if (!s || !s.server) return
+    for (const [project, list] of rawPanes) {
+      const { panes, children } = guestPanes(list, projectRoots(project), (id) => paneShared(s, project, id))
+      paneChildren.set(project, children)
+      agentsFeed.set(project, { panes })
+    }
+  }
+  // A pane's sub-agents: only a pane of that project the guest sees, read
+  // from where the window said its conversation is.
+  async function childrenRequest(req, ctx, s) {
+    const pane = req.args && typeof req.args.pane === 'string' && /^[\w-]{1,80}$/.test(req.args.pane) ? req.args.pane : null
+    if (!pane) return { ok: false, code: 'bad-args' }
+    const spec = paneChildren.get(req.project)?.get(pane)
+    if (!spec || sharing !== s || !paneShared(s, req.project, pane) || typeof agentChildren !== 'function') return { ok: false, code: 'not-found' }
+    let list
+    try {
+      list = await agentChildren({ agent: spec.agent, sessionId: spec.sessionId, ...(spec.accountId !== undefined ? { accountId: spec.accountId } : {}) })
+    } catch {
+      return { ok: false, code: 'failed' }
+    }
+    return { ok: true, data: { items: guestChildren(list, projectRoots(req.project)) } }
+  }
+  // The project's task history: times and tokens; the costs in dollars only
+  // for a guest with the usage right (its answer then leaves only while it
+  // still has it). Figures the window has not read yet are read here, at most
+  // once every 30 s per project.
+  async function historyRequest(req, ctx) {
+    const records = histories.get(req.project) || []
+    const usd = !!(ctx.rights && ctx.rights.usage === true)
+    if (usd) ctx.uses?.('usage')
+    let costs = null
+    const todo = records.filter(needsFigures).map((r) => r.id)
+    if (todo.length && typeof cardCosts === 'function') {
+      const kept = historyCosts.get(req.project)
+      if (kept && Date.now() - kept.at < HISTORY_LIMITS.costTtlMs) costs = kept.costs
+      else {
+        try {
+          costs = await cardCosts(todo)
+        } catch {
+          costs = null
+        }
+        costs = costs && typeof costs === 'object' ? costs : null
+        historyCosts.set(req.project, { at: Date.now(), costs })
+      }
+    }
+    return { ok: true, data: guestHistory(records, { roots: projectRoots(req.project), usd, costs }) }
+  }
+  function endPanels() {
+    agentsFeed.reset()
+    usageOff?.()
+    usageOff = null
+    rawPanes = new Map()
+    paneChildren = new Map()
+    histories = new Map()
+    historyCosts = new Map()
+    taskCopies = new Map()
   }
 
   // --- What guests changed (the audit) ---------------------------------------
@@ -981,6 +1088,9 @@ export function registerLiveShare({
           return o ? o.run(req, ctx, s) : { ok: false, code: 'bad-op' }
         },
         watch: (topic, project, key, on) => channelTopics.get(topic)?.(s, project, key, on),
+        // Phase 2b: the panes and the history always; the usage when there
+        // are readings to give.
+        offers: (feature) => (feature === 'usage' ? !!usage : feature === 'panes2' || feature === 'history'),
         write: (id, data) => host.send('write', { id, data }),
         agents: () => hostAgents,
         openPane: (spec, guest) => requestOpen('open', spec, guest),
@@ -1042,6 +1152,7 @@ export function registerLiveShare({
     closeAllFeeds()
     stopWatches()
     endTaskRequests('revoked')
+    endPanels()
     layouts = new Map()
     chatSources = new Map()
     roots = new Map()
@@ -1333,6 +1444,18 @@ export function registerLiveShare({
   function resubscribe(g) {
     for (const s of g.subs.values()) g.client.subscribe(s.topic, s.project, s.key, true)
   }
+  // The host's usage: followed while this guest has the right (the host
+  // refuses it without); the right taken away, what came goes.
+  function syncUsage(g) {
+    const want = g.features.has('usage') && !!(g.rights && g.rights.usage === true)
+    const has = g.subs.has(subKey('usage', null, null))
+    if (want && !has) guestSubscribe('usage', null, null, true)
+    else if (!want && has) guestSubscribe('usage', null, null, false)
+    if (!want && g.usage) {
+      g.usage = null
+      send('liveShare:push', { topic: 'usage', project: null, data: null })
+    }
+  }
   function dropSubsOf(g) {
     const keep = new Set(g.projects.map((p) => p.id))
     for (const [k, s] of [...g.subs]) {
@@ -1382,7 +1505,24 @@ export function registerLiveShare({
   // .git, which the window reads as "status again"), editor:changed for an
   // open file, liveShare:push for a board.
   function onGuestPush(g, topic, project, key, data) {
+    // The host's usage (host-wide): only while this guest has the right.
+    if (topic === 'usage') {
+      if (!g.subs.has(subKey('usage', null, null)) || !(g.rights && g.rights.usage === true)) return
+      const usage = checkUsage(data)
+      if (!usage) return
+      g.usage = usage
+      return send('liveShare:push', { topic: 'usage', project: null, data: usage })
+    }
     if (!g.projects.some((p) => p.id === project) || !g.subs.has(subKey(topic, project, key))) return
+    // A project's panes as the host's headers show them, with this window's
+    // pane ids (the same as its terminals' and chats').
+    if (topic === 'agents') {
+      const panes = checkPanes(data && data.panes)
+      if (!panes) return
+      for (const p of panes) p.id = guestPaneId(g.session, p.id)
+      g.paneAgents.set(project, panes)
+      return send('liveShare:push', { topic: 'agents', project, data: { panes } })
+    }
     const root = lshareRoot(project)
     if (topic === 'fs') {
       const list = data && Array.isArray(data.paths) ? data.paths : null
@@ -1548,6 +1688,10 @@ export function registerLiveShare({
     // What it follows of a project it no longer sees: let go.
     dropSubsOf(g)
     for (const id of [...g.boards.keys()]) if (!projects.some((p) => p.id === id)) g.boards.delete(id)
+    for (const id of [...g.paneAgents.keys()]) if (!projects.some((p) => p.id === id)) g.paneAgents.delete(id)
+    // Each project's panes as the host's headers show them: followed for
+    // every project (the sidebar and the Dashboard list them all).
+    if (g.features.has('panes2')) for (const p of projects) guestSubscribe('agents', p.id, null, true)
     if (g.state === 'joined') {
       for (const id of g.chatWanted) {
         if (g.chatAsked.has(id)) continue
@@ -1618,11 +1762,15 @@ export function registerLiveShare({
           // While reconnecting, the handshake's steps are not shown.
           if (g.state === 'reconnecting' && state !== 'joined') return
           g.state = state
+          // The host's usage, followed with the right (once in: the request
+          // goes now).
+          if (state === 'joined') syncUsage(g)
           pushGuest()
         },
         onRights: (rights) => {
           if (joined !== g || g.client !== client || !rights) return
           g.rights = cleanRights(rights)
+          if (g.state === 'joined') syncUsage(g)
           pushGuest()
         },
         onFeatures: (list) => {
@@ -1752,6 +1900,10 @@ export function registerLiveShare({
       subs: new Map(),
       watchedRoot: null,
       boards: new Map(),
+      // Phase 2b: each project's panes as the host's headers show them (this
+      // window's pane ids), and the host's usage (with the right).
+      paneAgents: new Map(),
+      usage: null,
       reason: null,
       client: null,
       rights: null,
@@ -1908,6 +2060,8 @@ export function registerLiveShare({
     if ([...before].some(([id, project]) => after.get(id) !== project) || [...chatsBefore].some(([id, project]) => chatsAfter.get(id) !== project)) changedNow()
     else screenChanged()
     refreshFeeds()
+    // The panes guests see may have changed: their copy is made again.
+    panesChanged()
   })
   // A project added to the share or taken out: { id, shared }.
   ipcMain.handle('liveShare:share', (_evt, { id, shared } = {}) => setShared(id, !!shared))
@@ -1931,6 +2085,8 @@ export function registerLiveShare({
     const keep = new Set(s.projects || [])
     for (const item of (Array.isArray(list) ? list : []).slice(0, MAX_PROJECTS)) {
       if (!item || !keep.has(item.project)) continue
+      // Its cards' own copies, for the review (host-only).
+      taskCopies.set(item.project, hostTaskCopies(item.tasks))
       const tasks = guestTasks(item.tasks, projectRoots(item.project))
       const json = JSON.stringify(tasks)
       if (boards.get(item.project)?.json === json) continue
@@ -1938,6 +2094,32 @@ export function registerLiveShare({
       s.server.push('tasks', item.project, null, { tasks })
     }
     for (const id of [...boards.keys()]) if (!keep.has(id)) boards.delete(id)
+    for (const id of [...taskCopies.keys()]) if (!keep.has(id)) taskCopies.delete(id)
+  })
+  // Phase 2b. The window's panes of the projects shared, as their headers
+  // and the Dashboard show them: [{ project, panes }] (sharePanels.js: the
+  // guests' copy, at most once a second per project).
+  ipcMain.on('liveShare:paneAgents', (_evt, list) => {
+    const s = sharing
+    if (!s || !s.server) return
+    const keep = new Set(s.projects || [])
+    for (const item of (Array.isArray(list) ? list : []).slice(0, MAX_PROJECTS)) if (item && keep.has(item.project) && Array.isArray(item.panes)) rawPanes.set(item.project, item.panes)
+    for (const id of [...rawPanes.keys()]) if (!keep.has(id)) rawPanes.delete(id)
+    for (const id of agentsFeed.projects()) {
+      if (keep.has(id)) continue
+      agentsFeed.drop(id)
+      paneChildren.delete(id)
+    }
+    panesChanged()
+  })
+  // The window's finished tasks of the projects shared: [{ project, records }]
+  // (taskHistory.js records; asked for with 'history.list').
+  ipcMain.on('liveShare:history', (_evt, list) => {
+    const s = sharing
+    if (!s || !s.server) return
+    const keep = new Set(s.projects || [])
+    for (const item of (Array.isArray(list) ? list : []).slice(0, MAX_PROJECTS)) if (item && keep.has(item.project)) histories.set(item.project, hostHistory(item.records))
+    for (const id of [...histories.keys()]) if (!keep.has(id)) histories.delete(id)
   })
   // The window's answer to a guest's change of a board: { request, ok, code }.
   ipcMain.on('liveShare:taskDone', (_evt, { request, ok, code } = {}) => {
@@ -1945,7 +2127,9 @@ export function registerLiveShare({
     if (!r) return
     taskRequests.delete(request)
     clearTimeout(r.timer)
-    r.resolve(ok === true ? { ok: true, data: {} } : { ok: false, code: ['not-found', 'not-allowed', 'revoked', 'forbidden', 'bad-args'].includes(code) ? code : 'failed' })
+    // 'confirm': a card with its own copy, whose delete the host is asked
+    // to confirm (its copy and branch go with it).
+    r.resolve(ok === true ? { ok: true, data: {} } : { ok: false, code: ['not-found', 'not-allowed', 'revoked', 'forbidden', 'bad-args', 'confirm'].includes(code) ? code : 'failed' })
   })
   // Access, one change at a time, against what the subject has now (two
   // clicks in a row never undo each other): one project or one right of a
@@ -2074,7 +2258,16 @@ export function registerLiveShare({
   // Guest: a topic of the host's followed by this window (a board) or no
   // longer: { topic, project, on }.
   ipcMain.handle('liveShare:subscribe', (_evt, { topic, project, on } = {}) => {
-    if (!WINDOW_TOPICS.has(topic) || typeof project !== 'string') return { ok: false }
+    if (!WINDOW_TOPICS.has(topic)) return { ok: false }
+    // Followed by main itself (every project's panes, the usage with the
+    // right): the last news that came.
+    if (topic === 'agents' || topic === 'usage') {
+      const g = joined
+      if (!g || (topic === 'agents' && !g.projects.some((p) => p.id === project))) return { ok: false }
+      const data = topic === 'usage' ? g.usage : g.paneAgents.has(project) ? { panes: g.paneAgents.get(project) } : null
+      return { ok: true, ...(data ? { data } : {}), outdated: !g.features.has(TOPICS[topic].feature) && g.state === 'joined' }
+    }
+    if (typeof project !== 'string') return { ok: false }
     const g = joined
     if (!g || (on && !g.projects.some((p) => p.id === project))) return { ok: false }
     const ok = guestSubscribe(topic, project, null, !!on)
@@ -2095,6 +2288,57 @@ export function registerLiveShare({
     } catch {
       return { ok: false, code: 'offline' }
     }
+  })
+  // Guest: what the window's panels ask the host (phase 2b: a pane's
+  // sub-agents, the project's task history, a task branch's review): { op,
+  // project, args } -> the host's answer, checked here (sharePanels.js) |
+  // { ok: false, code } ('bad-op': the host's Tessel is too old for it;
+  // 'offline'). Pane ids are this window's (the host's never leave here).
+  const WINDOW_OPS = {
+    'agents.children': {
+      args: (g, a) => {
+        const local = typeof a.pane === 'string' ? g.byLocal.get(a.pane) || g.chatByLocal.get(a.pane) : null
+        return local ? { pane: local.remoteId } : null
+      },
+      check: (g, d) => {
+        const items = checkChildren(d && d.items)
+        return items ? { items } : null
+      }
+    },
+    'history.list': {
+      args: () => ({}),
+      check: (g, d) => {
+        const h = checkHistory(d)
+        if (!h) return null
+        // The pane that did it, when this window shows it.
+        for (const r of h.records) r.paneId = r.paneId && g.panes.has(r.paneId) ? g.panes.get(r.paneId).localId : null
+        return h
+      }
+    },
+    'review.info': {
+      args: (g, a) => (isTaskId(a.task) ? { task: a.task } : null),
+      check: (g, d) => checkReviewInfo(d)
+    },
+    'review.diff': {
+      args: (g, a) => (isTaskId(a.task) && typeof a.file === 'string' && a.file && cleanRel(a.file) === a.file ? { task: a.task, file: a.file } : null),
+      check: (g, d) => checkReviewDiff(d)
+    }
+  }
+  ipcMain.handle('liveShare:request', async (_evt, { op, project, args } = {}) => {
+    const spec = typeof op === 'string' && Object.hasOwn(WINDOW_OPS, op) ? WINDOW_OPS[op] : null
+    const g = joined
+    if (!spec || !g || typeof project !== 'string') return { ok: false, code: 'bad-args' }
+    const clean = spec.args(g, args && typeof args === 'object' ? args : {})
+    if (!clean) return { ok: false, code: 'bad-args' }
+    let res
+    try {
+      res = await guestRequest(op, project, clean)
+    } catch {
+      return { ok: false, code: 'offline' }
+    }
+    if (!res || res.ok !== true) return { ok: false, code: res && typeof res.code === 'string' && /^[a-z][a-z-]{0,39}$/.test(res.code) ? res.code : 'failed' }
+    const data = spec.check(g, res.data)
+    return data ? { ok: true, data } : { ok: false, code: 'bad-answer' }
   })
   // A terminal or an agent of the host's (one it lists) opened on the host,
   // in one of its projects this guest sees: at once with the right; without

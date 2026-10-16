@@ -47,6 +47,7 @@ import { isRemotePath } from '../shared/remotePath'
 import { isLsharePath } from '../shared/liveSharePath'
 import { lshareArg, pickFs, localOnlyFor } from './liveShare/guestRouting'
 import { createGuestFs } from './liveShare/guestFs'
+import { createShareUsage } from './liveShare/shareUsage'
 import { STATUS_PROVIDERS } from '../shared/agentStateModel'
 import { prepareAgentStateHooks } from './agentStateSetup'
 import { assessNeeds } from './tesselNeeds'
@@ -2055,6 +2056,11 @@ ipcMain.handle('accounts:discardClaudeSwitch', async () => {
   }
 })
 ipcMain.handle('accounts:list', safe(() => accounts.list()))
+// Live Share's copy of the host's usage (liveShare/shareUsage.js): the
+// provider results below, their cache, and the local Codex readings (at most
+// once a minute; accountUsage is made further down, read only once a guest
+// follows it).
+const shareUsage = createShareUsage({ localUsage: () => accountUsage.usage(), log })
 // Usage refresh: at startup, every 2 min (Settings) while the window is in use,
 // on focus when older than 5 min, and from the chats' own rate-limit reports
 // (usagePoller.js); results are pushed on providerUsage:update.
@@ -2071,6 +2077,11 @@ registerProviderUsage({
   onLiveIngest: (ingest) => {
     usageLiveIngest = ingest
   },
+  // Live Share: the host's usage for guests with the right, from these same
+  // results and the refresh's cache (liveShare/shareUsage.js): never a
+  // provider call of its own.
+  onResult: (result) => shareUsage.onResult(result),
+  onCache: (read) => shareUsage.setCache(read),
   // Settings > AI provider accounts: Gemini, OpenCode Go and MiniMax usage
   // credentials, encrypted with the OS (providerCredentials.js).
   credentials: createProviderCredentials({ dir: join(app.getPath('userData'), 'provider-credentials'), safeStorage })
@@ -2194,9 +2205,11 @@ ipcMain.handle('scm:commitFiles', safe((q) => scmFor(q).scmCommitFiles(q || {}))
 ipcMain.handle('scm:fileHistory', safe((q) => scmFor(q).scmFileHistory(q || {})))
 ipcMain.handle('scm:commitInfo', safe((q) => scmFor(q).scmCommitInfo(q || {})))
 const localHistory = createLocalHistory({ dir: join(app.getPath('userData'), 'History') })
-ipcMain.handle('localHistory:add', safe((q) => localHistory.add(q || {})))
-ipcMain.handle('localHistory:list', safe((q) => localHistory.list(q || {})))
-ipcMain.handle('localHistory:read', safe((q) => localHistory.read(q || {})))
+ipcMain.handle('localHistory:add', safe((q) => (isLsharePath(q && q.path) ? { ok: false } : localHistory.add(q || {}))))
+// A Live Share host's file (lshare://…): its Local History is the host's
+// (liveShare/guestFs.js); this computer keeps none of it.
+ipcMain.handle('localHistory:list', safe((q) => (isLsharePath(q && q.path) ? guestFs().localHistoryList(q) : localHistory.list(q || {}))))
+ipcMain.handle('localHistory:read', safe((q) => (isLsharePath(q && q.path) ? guestFs().localHistoryRead(q) : localHistory.read(q || {}))))
 // A commit message written by an agent from the staged diff (Orca's Generate).
 // The agents run on this machine: not for a remote project yet.
 const commitMessageGeneration = createCommitMessageGeneration({ scm, runHeadless, cancelHeadless })
@@ -3595,6 +3608,12 @@ liveShare = registerLiveShare({
   log,
   // A guest's delete on this computer goes to the Recycle Bin.
   trashItem: (p) => shell.trashItem(p),
+  // Phase 2b: the host's usage (with the right), a pane's sub-agents, a
+  // finished task's figures, the editor's Local History, for guests.
+  usage: shareUsage,
+  agentChildren: (q) => accountSessions.children(q),
+  cardCosts: (ids) => jobCost.forCards(ids),
+  localHistory,
   // Taken back once this is the only Tessel running (below).
   resume: false,
   // The conversations guests watch (read only): a reader of their own, never
