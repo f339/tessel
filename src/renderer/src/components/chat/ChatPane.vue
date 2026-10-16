@@ -36,8 +36,9 @@ import { modelLabel } from '../../../../shared/modelLabel'
 import { modelsFor } from '../../agentModels'
 import { nativeChatSessionChoiceLabel } from '../../chat/orca/native-chat-session-option-labels.js'
 import { t } from '../../i18n'
-import { paneAccount } from '../../accountChoices'
-import { hostPaneAccount } from '../../hostAccounts'
+import { paneAccount, accountSubscription } from '../../accountChoices'
+import { hostEntry, hostPaneAccount } from '../../hostAccounts'
+import { planInfo, paneWarnText } from '../../claudePlan'
 import { isRemotePath, parseRemotePath } from '../../../../shared/remotePath'
 import HoverCardContent from '../hover/HoverCardContent.vue'
 import { useHoverCard } from '../hover/useHoverCard'
@@ -151,6 +152,14 @@ const hoverState = computed(() => {
   if (backgroundRunning.value) return { dot: 'monitoring', label: agentStateLabel('monitoring') }
   return { dot: 'idle', label: agentStateLabel('idle') }
 })
+// Its Claude account has no subscription (or a payment issue): said in its
+// hover card, as a terminal pane's (claudePlan.js).
+const accountWarn = computed(() => {
+  if (agentId.value !== 'claude') return ''
+  const remote = isRemotePath(props.node.cwd) ? parseRemotePath(props.node.cwd) : null
+  const sub = remote ? (hostEntry(remote.hostId, 'claude', props.node.hostAccount) || {}).sub : accountSubscription('claude', props.node.accountId)
+  return paneWarnText(planInfo(sub))
+})
 const hoverInfo = computed(() => ({
   heading: title.value,
   agentName: agentName.value,
@@ -160,6 +169,7 @@ const hoverInfo = computed(() => ({
   // The account it runs on: on this PC when its agent has more than one; on
   // an SSH host, the one the agent there is signed in with (hostAccounts.js).
   account: (isRemotePath(props.node.cwd) ? hostPaneAccount((parseRemotePath(props.node.cwd) || {}).hostId, agentId.value, props.node.hostAccount)?.title : paneAccount(agentId.value, props.node.accountId)?.title) || '',
+  accountWarn: accountWarn.value,
   conversation: props.node.autoTitle || '',
   branch: props.node.worktree ? props.node.worktree.branch : '',
   state: hoverState.value,

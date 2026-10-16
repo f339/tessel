@@ -13,13 +13,17 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { entryState, FOLDER_AGENTS, OVERRIDES } from './remoteAgent/remoteAccounts'
+import { cleanSubscription } from '../shared/claudeSubscription'
 
 const PLACE = /^(pc|wsl:[\w.-]{1,64}|ssh:[\w-]{1,80})$/
 const LOCAL_SIGNINS = ['gemini', 'grok', 'cursor']
 const text = (v, max = 200) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null)
 
-// One row of a place, the same shape wherever it was read.
+// One row of a place, the same shape wherever it was read. sub: a Claude
+// account's subscription as Anthropic last reported it (claudePlanCheck.js
+// on this PC, the host's own check on an SSH host or a WSL distro).
 function row(e) {
+  const sub = e.agent === 'claude' ? cleanSubscription(e.sub || e.subscription) : null
   return {
     agent: e.agent,
     scope: e.scope,
@@ -33,6 +37,7 @@ function row(e) {
     lastSeen: Number.isFinite(e.lastSeen) ? e.lastSeen : null,
     removable: !!e.removable,
     signOut: !!e.signOut,
+    ...(sub ? { sub } : {}),
     ...(Array.isArray(e.override) && e.override.length ? { override: e.override.filter((o) => OVERRIDES.includes(o)) } : {})
   }
 }
@@ -64,11 +69,11 @@ export function pcAccountRows(list) {
   for (const p of (list && Array.isArray(list.providers) && list.providers) || []) {
     if (!p || p.error || !FOLDER_AGENTS.includes(p.provider)) continue
     const s = p.system
-    if (s && (s.status === 'ready' || s.email)) out.push(row({ agent: p.provider, scope: 'system', id: null, email: s.email, org: s.organization, plan: s.plan, state: STATUS[s.status] || 'unknown' }))
+    if (s && (s.status === 'ready' || s.email)) out.push(row({ agent: p.provider, scope: 'system', id: null, email: s.email, org: s.organization, plan: s.plan, subscription: s.subscription, state: STATUS[s.status] || 'unknown' }))
     for (const a of p.accounts || []) {
       if (!a || typeof a.id !== 'string') continue
       const at = Date.parse(a.lastLoginAt || '')
-      out.push(row({ agent: p.provider, scope: 'tessel', id: a.id, email: a.email, org: a.organization, plan: a.plan, state: STATUS[a.status] || 'unknown', lastSeen: Number.isFinite(at) ? at : null }))
+      out.push(row({ agent: p.provider, scope: 'tessel', id: a.id, email: a.email, org: a.organization, plan: a.plan, subscription: a.subscription, state: STATUS[a.status] || 'unknown', lastSeen: Number.isFinite(at) ? at : null }))
     }
   }
   return out
@@ -95,8 +100,12 @@ export async function copilotRows({ home }) {
 // connectedQuietly; remoteAccounts: remoteAccounts.js; wsl: wslAccounts.js.
 // confirmStart(name) -> true when you said yes to starting a stopped WSL
 // distro (a dialog in main).
-export function createSignedInPlaces({ accounts, localSignIn = async () => null, localOthers = async () => [], hosts, connected = () => false, remoteAccounts, wsl = null, confirmStart = async () => false, now = Date.now, wslTtlMs = 60_000 } = {}) {
+export function createSignedInPlaces({ accounts, localSignIn = async () => null, localOthers = async () => [], hosts, connected = () => false, remoteAccounts, wsl = null, confirmStart = async () => false, now = Date.now, wslTtlMs = 60_000, planEveryMs = 4 * 60 * 60_000 } = {}) {
   const wslScans = new Map() // name -> { at, place }
+  // name -> { at, dirs: Map(folder -> { sub, account }) }: its Claude
+  // logins' subscriptions, asked by the distro itself (wsl.plans) at a
+  // check when the last is older than planEveryMs, or on a refresh.
+  const wslPlans = new Map()
   // name -> { claude, codex, overrides }: what a distro's login shell said
   // (asked at its first check in this run, and when you ask for a refresh).
   const wslLogins = new Map()
@@ -198,7 +207,13 @@ export function createSignedInPlaces({ accounts, localSignIn = async () => null,
       const target = targets().find((h) => h.id === hostId)
       if (!target) return { ok: false }
       if (!isConnected(hostId)) return { ok: true, place: { ...sshPlace(target, remoteAccounts.cached(hostId), 'not-connected') } }
-      const value = await remoteAccounts.detect(hostId, { fresh, relogin })
+      let value = await remoteAccounts.detect(hostId, { fresh, relogin })
+      // A refresh you asked for: its Claude subscriptions checked now too
+      // (the host asks Anthropic itself; at most once a minute).
+      if (relogin && value && value.ok && typeof remoteAccounts.planCheck === 'function') {
+        await Promise.resolve(remoteAccounts.planCheck(hostId, { force: true })).catch(() => null)
+        value = remoteAccounts.cached(hostId) || value
+      }
       return { ok: true, place: sshPlace(target, value, value && value.ok ? 'ready' : value && value.notConnected ? 'not-connected' : 'error') }
     }
     const name = id.slice(4)
@@ -210,12 +225,35 @@ export function createSignedInPlaces({ accounts, localSignIn = async () => null,
     const res = await wsl.scan(name, { start, dirs: known })
     if (res && res.ok && !known) wslLogins.set(name, { claude: res.loginEnv ? res.loginEnv.claude : null, codex: res.loginEnv ? res.loginEnv.codex : null, overrides: res.envOverrides || {} })
     const login = wslLogins.get(name)
+    if (res && res.ok) await wslPlanCheck(name, login, relogin)
     const place = res && res.ok
-      ? { id, kind: 'wsl', distro: name, label: name, state: 'ready', at: now(), entries: hostRows(res.entries, { envOverrides: login && login.overrides }), ...(res.os ? { os: text(res.os, 40) } : {}) }
+      ? { id, kind: 'wsl', distro: name, label: name, state: 'ready', at: now(), entries: hostRows(withWslPlans(name, res.entries), { envOverrides: login && login.overrides }), ...(res.os ? { os: text(res.os, 40) } : {}) }
       : { id, kind: 'wsl', distro: name, label: name, state: res && res.stopped ? 'stopped' : 'error', at: null, entries: [] }
     if (res && res.ok) wslScans.set(name, { at: now(), place })
     else if (res && res.stopped) wslScans.delete(name)
     return { ok: true, place }
+  }
+
+  async function wslPlanCheck(name, login, force) {
+    if (!wsl || typeof wsl.plans !== 'function') return
+    const known = wslPlans.get(name)
+    if (known && !force && now() - known.at < planEveryMs) return
+    const next = { at: now(), dirs: known ? known.dirs : new Map() }
+    wslPlans.set(name, next)
+    try {
+      const res = await wsl.plans(name, { claude: login ? login.claude : null })
+      // Never refreshed: a login not checked now keeps its last result.
+      for (const e of (res && res.ok && res.entries) || []) if (e.sub) next.dirs.set(e.dir, { sub: e.sub, account: e.account })
+    } catch {
+      /* the last results stay */
+    }
+  }
+  function withWslPlans(name, entries) {
+    const known = wslPlans.get(name)
+    return (entries || []).map((e) => {
+      const kept = e.agent === 'claude' && known ? known.dirs.get(e.dir) : null
+      return kept && !(kept.account && e.account && kept.account !== e.account) ? { ...e, sub: kept.sub } : e
+    })
   }
 
   return { places, scan }

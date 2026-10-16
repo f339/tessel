@@ -98,6 +98,28 @@ describe('provider account management', () => {
     expect(system.text()).toContain('New sessions')
   })
 
+  it('a Claude account Anthropic reports with no subscription: "Free" and "No subscription", not the login file’s "max"; the row says it first', async () => {
+    const at = Date.now() - 60_000
+    state.providers[1].system = { id: null, label: 'System default', status: 'ready', email: 'me@example.test', plan: 'max', subscription: { organization_type: 'claude_free', subscription_status: 'canceled', has_claude_max: false, has_claude_pro: false, checkedAt: at } }
+    state.providers[1].accounts[0] = { ...state.providers[1].accounts[0], plan: 'max', subscription: { organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_20x', subscription_status: 'active', has_claude_max: true, checkedAt: at } }
+    let changed = null
+    api.onPlansChanged = vi.fn((cb) => ((changed = cb), () => {}))
+    await render()
+    const system = row('system', 'claude')
+    expect(system.get('[data-test="account-plan"]').text()).toBe('Free')
+    expect(system.get('[data-test="account-plan-warn"]').text()).toBe('No subscription')
+    expect(system.get('[data-test="account-plan"]').attributes('title')).toContain('checked')
+    expect(system.text()).not.toContain('max')
+    expect(row('saved-1', 'claude').get('[data-test="account-plan"]').text()).toBe('Max 20x')
+    expect(row('saved-1', 'claude').find('[data-test="account-plan-warn"]').exists()).toBe(false)
+    expect(section('claude').get('[data-test="provider-status"]').text()).toBe('New sessions: me@example.test · No subscription')
+    // A check that changed something: the rows read again.
+    const calls = api.list.mock.calls.length
+    changed()
+    await flushPromises()
+    expect(api.list.mock.calls.length).toBe(calls + 1)
+  })
+
   it('says a Claude default changes only new sessions', async () => {
     await render()
     await row('saved-1', 'claude').get('.account-select').trigger('click')

@@ -5,16 +5,28 @@
 // added account that is signed in; otherwise nothing is shown or asked.
 import { reactive } from 'vue'
 import { t } from './i18n'
+import { planInfo } from './claudePlan'
 
 export const ACCOUNT_AGENTS = ['claude', 'codex']
 const state = reactive({ providers: {} })
 let pending = null
 // App: the agent panes open now ({ agentId, accountId }), for the removal warning.
 let openPanes = () => []
+let plansHooked = false
 
 export function refreshAccountChoices() {
   const api = typeof window !== 'undefined' && window.shellApi && window.shellApi.accounts
   if (!api || !api.list) return Promise.resolve()
+  // A Claude account's subscription checked again (main's claudePlanCheck.js):
+  // the headers follow it.
+  if (!plansHooked && typeof api.onPlansChanged === 'function') {
+    plansHooked = true
+    try {
+      api.onPlansChanged(() => refreshAccountChoices())
+    } catch {
+      /* read again at the next refresh */
+    }
+  }
   if (pending) return pending
   pending = Promise.resolve()
     .then(() => api.list())
@@ -89,19 +101,38 @@ export function defaultAccountChoice(agentId) {
   return hit ? hit.id : undefined
 }
 
-// The account a pane runs on, for its header: { name, title } or null when
-// the agent has a single account (nothing worth showing) or it is not known.
+// A Claude account's subscription as Anthropic last reported it (main's
+// claudePlanCheck.js), or null. accountId: an added account's id, or null
+// (or undefined, as "Used by" counts it) for the system's sign-in.
+export function accountSubscription(agentId, accountId) {
+  const p = ACCOUNT_AGENTS.includes(agentId) ? state.providers[agentId] : null
+  if (!p) return null
+  const id = accountId ?? null
+  const row = id === null ? p.system : (p.accounts || []).find((a) => a.id === id)
+  return (row && row.subscription) || null
+}
+// A header's name and title with the account's subscription: its warning
+// beside the name ("name · No subscription"), its plan in the title.
+function withPlan(base, agentId, accountId) {
+  const info = planInfo(accountSubscription(agentId, accountId))
+  if (!info) return base
+  return { name: info.warn ? `${base.name} · ${info.warnText}` : base.name, title: [base.title, info.title].filter(Boolean).join(' · '), plan: info }
+}
+
+// The account a pane runs on, for its header: { name, title, plan? } or null
+// when the agent has a single account (nothing worth showing) or it is not
+// known.
 export function paneAccount(agentId, accountId) {
   if (accountId === undefined) return null
   const choices = accountChoices(agentId)
   if (!choices.length) return null
   const hit = choices.find((c) => c.id === accountId)
-  if (hit) return { name: hit.name, title: hit.title }
+  if (hit) return withPlan({ name: hit.name, title: hit.title }, agentId, accountId)
   // Signed out or removed since: still named if it is known.
   const known = (state.providers[agentId]?.accounts || []).find((a) => a.id === accountId)
   if (!known) return null
   const name = shortAccount(known.email) || known.label || t('accounts.choice.account', 'Account')
-  return { name, title: known.email || name }
+  return withPlan({ name, title: known.email || name }, agentId, accountId)
 }
 
 export function setOpenPanesSource(fn) {

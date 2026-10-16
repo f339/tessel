@@ -43,7 +43,8 @@ import {
 import { promptShowsPlaceholder } from '../promptCheck'
 import { detectTaskDone } from '../agentLimit'
 import { modelLabel } from '../../../shared/modelLabel'
-import { paneAccount, accountChoices } from '../accountChoices'
+import { paneAccount, accountChoices, accountSubscription } from '../accountChoices'
+import { planInfo, paneWarnText } from '../claudePlan'
 import { HOST_ACCOUNT_AGENTS, hostAccountChoices, hostEntry, hostPaneAccount, isDefaultHostAccount, recheckAfterTurn, refreshHostAccounts, unwatchHostAccounts, watchHostAccounts } from '../hostAccounts'
 import { modelFromScreen, modelFromSwitchLine } from '../../../shared/screenModel'
 import { findFileRefs } from '../../../shared/fileLinks'
@@ -162,6 +163,20 @@ function accountNotesOf(withCheckHint) {
   if (withCheckHint && (info.unknown || info.signedIn === false)) lines.push(t('pane.account.checkAgainHint', 'Pane menu > Check account again'))
   return lines
 }
+// The subscription of the Claude account it runs on, as Anthropic last
+// reported it (claudePlan.js): a pane on an account with no subscription (or
+// a payment issue) says so, quietly: its account chip's name, or a small tag
+// when the header shows no chip, and a line in its hover card.
+const accountPlan = computed(() => {
+  const n = props.node
+  if (!isAgent.value || n.agentId !== 'claude') return null
+  if (n.remoteHostId) {
+    const e = hostEntry(n.remoteHostId, 'claude', n.hostAccount)
+    return e && e.sub ? planInfo(e.sub) : null
+  }
+  return planInfo(accountSubscription('claude', n.accountId))
+})
+const planWarn = computed(() => (accountPlan.value && accountPlan.value.attention ? { short: accountPlan.value.warnText, text: paneWarnText(accountPlan.value), title: [paneWarnText(accountPlan.value), accountPlan.value.title].join('\n') } : null))
 const accountTitle = computed(() => (accountInfo.value ? [accountInfo.value.title, ...accountNotesOf(true)].join('\n') : ''))
 const accountChipLabel = computed(() => (accountInfo.value ? t('pane.account.chip', 'Account: {{account}}', { account: accountTitle.value }) : ''))
 // An agent on an SSH host follows its accounts there: read when it opens and
@@ -1563,7 +1578,7 @@ const headerHover = useHoverCard({
     ctxMenu.visible ||
     (typeof document !== 'undefined' && document.body.classList.contains('pane-dragging')),
   // Badges that keep their own one-line tooltip close the card.
-  ignore: '.pane-approval, .pane-limit, .pane-unsent, .pane-stuck, .pane-apply, .pane-cache, .exit-tag[title], input'
+  ignore: '.pane-approval, .pane-limit, .pane-plan-warn, .pane-unsent, .pane-stuck, .pane-apply, .pane-cache, .exit-tag[title], input'
 })
 // The agent's own name (the pane can be renamed), or the shell's.
 const agentName = computed(() => {
@@ -1606,6 +1621,7 @@ const hoverInfo = computed(() => {
     // On an SSH host: its notes and Check again (Restart on… is the menu's).
     accountNotes: accountNotesOf(!canCheckHostAccount.value),
     accountCheck: canCheckHostAccount.value,
+    accountWarn: planWarn.value ? planWarn.value.text : '',
     conversation: autoTitle.value,
     branch: n.worktree ? n.worktree.branch : guestInfo.value && guestInfo.value.copy ? guestInfo.value.copy.branch : '',
     state: headerState.value,
@@ -3612,11 +3628,13 @@ const paneMenuBindings = computed(() => ({
         <span
           v-if="accountInfo"
           class="pane-model-chip static pane-account-chip"
+          :class="{ warn: !!planWarn }"
           data-test="pane-account-chip"
-          :title="accountChipLabel"
+          :title="planWarn ? `${accountChipLabel}\n${planWarn.text}` : accountChipLabel"
           :aria-label="accountChipLabel"
           >{{ accountInfo.name }}</span
         >
+        <span v-else-if="planWarn" class="pane-plan-warn" data-test="pane-plan-warn" :title="planWarn.title" :aria-label="planWarn.title">{{ planWarn.short }}</span>
         <!-- One badge: the most urgent state (all of them are in the … menu). -->
         <span v-if="badge === 'asleep'" class="exit-tag" data-test="pane-badge" :title="t('pane.badge.asleepHint', 'Asleep: open the pane to wake it')">{{ t('pane.badge.asleep', 'asleep') }}</span>
         <span v-else-if="badge === 'exited'" class="exit-tag" data-test="pane-badge">{{ t('pane.badge.exited', 'exited') }}</span>

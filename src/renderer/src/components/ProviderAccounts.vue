@@ -6,6 +6,7 @@ import ProviderAccountRow from './ProviderAccountRow.vue'
 import PanelState from './ui/PanelState.vue'
 import { t, intlLocale } from '../i18n'
 import { applyAccountList, panesOnAccount } from '../accountChoices'
+import { planInfo } from '../claudePlan'
 
 const emit = defineEmits(['changed'])
 const providers = ref([])
@@ -87,18 +88,32 @@ function current(provider) {
   const list = rows(provider)
   return list.find((account) => selected(provider, account)) || list[0] || null
 }
+// A Claude account's subscription as Anthropic last reported it
+// (claudePlan.js), or null (not checked yet, or another provider).
+function planOf(account) {
+  return account && account.subscription ? planInfo(account.subscription) : null
+}
+// Its plan as shown: the checked one, else what its login file says.
+function planText(account) {
+  const info = planOf(account)
+  return info ? info.plan || '' : account.plan || ''
+}
 function rowStatus(provider) {
   if (provider.error || provider.placeholder) return t('settings.accounts.row.readFailed', 'Accounts could not be read')
   const account = current(provider)
   if (!account) return t('settings.accounts.row.none', 'No account yet')
+  const info = planOf(account)
   return t('settings.accounts.row.newSessions', 'New sessions: {{account}} · {{status}}', {
     account: accountName(account),
-    status: statusLabel(account.status)
+    // The account new sessions use has no subscription: that first.
+    status: account.status === 'ready' && info?.attention ? info.warnText : statusLabel(account.status)
   })
 }
 function rowTone(provider) {
   if (provider.error || provider.placeholder) return 'warn'
-  const status = current(provider)?.status
+  const account = current(provider)
+  const status = account?.status
+  if (status === 'ready' && planOf(account)?.attention) return 'warn'
   return status === 'ready' ? 'ok' : status === 'missing' ? 'warn' : 'dim'
 }
 // Open its details by themselves only when something needs the person.
@@ -106,6 +121,7 @@ function rowAttention(provider) {
   return (
     !!provider.error ||
     current(provider)?.status === 'missing' ||
+    !!planOf(current(provider))?.attention ||
     jobs.value[provider.provider]?.state === 'error'
   )
 }
@@ -288,6 +304,8 @@ async function pollJobs() {
           completed = true
           notice.value = t('settings.accounts.saved', '{{name}} account saved. Select it below to use it.', { name: names[provider] })
           notifyChanged(provider)
+          // Its subscription is checked now (its login file's plan may be old).
+          if (provider === 'claude') window.shellApi.accounts?.checkPlans?.({ force: true })?.catch?.(() => {})
         }
       } catch (err) {
         if (alive) jobErrors.value[provider] = message(err)
@@ -334,10 +352,21 @@ async function copyLogin(job) {
     if (alive) jobErrors.value[job.provider] = message(err, t('settings.accounts.copyFailed', 'Could not copy the sign-in link.'))
   }
 }
-onMounted(load)
+// A Claude account's subscription checked again (main's claudePlanCheck.js):
+// the rows read again.
+let stopPlans = null
+onMounted(() => {
+  load()
+  try {
+    stopPlans = window.shellApi?.accounts?.onPlansChanged?.(() => load()) || null
+  } catch {
+    stopPlans = null
+  }
+})
 onBeforeUnmount(() => {
   alive = false
   clearTimeout(pollTimer)
+  if (typeof stopPlans === 'function') stopPlans()
 })
 </script>
 
@@ -526,7 +555,9 @@ onBeforeUnmount(() => {
               <span class="account-meta"
                 ><span v-if="account.email && account.email !== accountName(account)">{{ account.email }}</span
                 ><span v-if="account.organization">{{ account.organization }}</span
-                ><span v-if="account.plan">{{ account.plan }}</span
+                ><span v-if="planText(account)" data-test="account-plan" :title="planOf(account)?.title">{{ planText(account) }}</span
+                ><span v-if="planOf(account)?.warnText" class="account-plan-warn" data-test="account-plan-warn" :title="planOf(account).title">{{ planOf(account).warnText }}</span
+                ><span v-if="planOf(account)?.trialText" data-test="account-plan-trial">{{ planOf(account).trialText }}</span
                 ><span class="account-status" :class="account.status">{{ statusLabel(account.status) }}</span
                 ><span
                   v-if="lastLogin(account.lastLoginAt)"
@@ -763,6 +794,11 @@ onBeforeUnmount(() => {
 }
 .account-status.missing {
   color: var(--warn);
+}
+/* No subscription, or a payment issue (claudePlan.js). */
+.account-plan-warn {
+  color: var(--warn);
+  font-weight: 600;
 }
 .account-actions {
   display: flex;

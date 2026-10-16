@@ -5,7 +5,7 @@
 // distro that is not running is not started by a scan nobody asked for:
 // it is listed as stopped, and checked only when you ask (start: true).
 import { spawn } from 'child_process'
-import { ACCOUNTS_SHELL, parseAccounts, shellQuote } from './remoteAgent/remoteAccounts'
+import { ACCOUNTS_SHELL, parseAccounts, parsePlans, shellQuote } from './remoteAgent/remoteAccounts'
 
 export const DISTRO = /^[\w.-]{1,64}$/
 // A folder put back in the script as an argument (single-quoted, a quote
@@ -34,7 +34,7 @@ export function distroNames(buf) {
   ].slice(0, 20)
 }
 
-export function createWslAccounts({ wslExe, spawnImpl = spawn, exists = () => true, timeoutMs = 15_000, listTimeoutMs = 5_000 } = {}) {
+export function createWslAccounts({ wslExe, spawnImpl = spawn, exists = () => true, timeoutMs = 15_000, listTimeoutMs = 5_000, planTimeoutMs = 60_000 } = {}) {
   function runOnce(args, { input = null, ms, cap = MAX_OUT }) {
     return new Promise((resolve) => {
       let child
@@ -121,5 +121,19 @@ export function createWslAccounts({ wslExe, spawnImpl = spawn, exists = () => tr
     return { ok: true, ...parseAccounts(res.out.toString('utf8')) }
   }
 
-  return { list, scan, available }
+  // Its Claude logins' subscriptions, asked by the distro itself (curl in
+  // __t_acctplan: the login never leaves it), only while it runs. claude:
+  // the login shell's CLAUDE_CONFIG_DIR its first check found.
+  // -> { ok: true, home, unavailable, entries } | { ok: false, stopped? }
+  async function plans(name, { claude = null } = {}) {
+    if (!available() || typeof name !== 'string' || !DISTRO.test(name)) return { ok: false }
+    const now = await runOnce(['-l', '--running', '-q'], { ms: listTimeoutMs, cap: 64 * 1024 })
+    if (!now.ok || !distroNames(now.out).includes(name)) return { ok: false, stopped: true }
+    const call = typeof claude === 'string' && SAFE_ARG.test(claude) ? `__t_acctplan dirs ${shellQuote(claude)}` : '__t_acctplan'
+    const res = await runOnce(['-d', name, '-e', 'sh', '-s'], { input: `${ACCOUNTS_SHELL}\n${call}\n`, ms: planTimeoutMs, cap: 64 * 1024 })
+    if (!res.ok) return { ok: false }
+    return { ok: true, ...parsePlans(res.out.toString('utf8')) }
+  }
+
+  return { list, scan, plans, available }
 }

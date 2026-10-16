@@ -757,6 +757,35 @@ body.popup-open .toolbar {
   }
 }
 
+/* Its Claude account has no subscription (claudePlan.js): the chip's name
+   says it in the warning colour, or this tag when there is no chip. Kept
+   longer than the chip as the header narrows. */
+.pane-account-chip.warn {
+  max-width: 200px;
+  background: color-mix(in srgb, var(--warn, #d29922) 16%, transparent);
+  color: var(--warn, #d29922);
+}
+
+.pane-plan-warn {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 140px;
+  overflow: hidden;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--warn, #d29922) 18%, transparent);
+  color: var(--warn, #d29922);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container (max-width: 300px) {
+  .pane-plan-warn {
+    display: none;
+  }
+}
+
 /* Working / unknown: the dot on the logo shows it; the words stay for screen readers. */
 .pane-working.pane-badge-sr {
   position: absolute;

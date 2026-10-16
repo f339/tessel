@@ -137,6 +137,7 @@ import {
 } from './skillsManager'
 import { createSkillHistory } from './skillHistory'
 import { createProviderUsage } from './providerUsage'
+import { createClaudePlanCheck } from './claudePlanCheck'
 import { createCountWorker } from './contextCost/workerClient'
 import { createHfTokenizers } from './contextCost/hfTokenizers'
 import { createAnthropicCounter } from './contextCost/anthropic'
@@ -2016,6 +2017,18 @@ const accounts = createProviderAccounts({
   claude: claudeAccounts,
   codex: createCodexAccounts(accountOptions)
 })
+// Each Claude account's subscription as Anthropic reports it now
+// (claudePlanCheck.js, made once the usage reader is): what the window is
+// shown of the accounts carries it, so a canceled plan is not shown as the
+// one the login file still names.
+let claudePlans = null
+const shownAccounts = {
+  ...accounts,
+  list: async () => {
+    const list = await accounts.list()
+    return claudePlans ? claudePlans.decorate(list) : list
+  }
+}
 // The agents' accounts on SSH hosts (remoteAgent/remoteAccounts.js): who
 // each one is signed in with there (identity fields only), and the folders
 // Tessel makes there for one account each, so a pane on the host runs on
@@ -2044,6 +2057,9 @@ const remoteAccounts = createRemoteAccounts({
     remoteShims.forget(hostId)
     return remoteShims.ensure(hostId)
   },
+  // A host's Claude subscriptions checked (the host asks Anthropic itself):
+  // the window reads the accounts again.
+  onPlans: () => send('claudePlans:changed', {}),
   log
 })
 // The panes still running on a login that is about to be removed or signed
@@ -2176,7 +2192,7 @@ ipcMain.handle('remoteAccounts:copyPolicy', (_evt, agent) => copyRemotePolicy(ag
 // "Where you're signed in" (signedInPlaces.js): this PC, its WSL distros,
 // the saved SSH hosts (each checked on its own, never a sign-in).
 const signedInPlaces = createSignedInPlaces({
-  accounts,
+  accounts: shownAccounts,
   localSignIn: (() => {
     const sources = createUsageProviderSources({})
     return (provider) => sources.signIn(provider)
@@ -2271,7 +2287,7 @@ ipcMain.handle('accounts:discardClaudeSwitch', async () => {
     return { ok: false, error: err && err.message, stopped }
   }
 })
-ipcMain.handle('accounts:list', safe(() => accounts.list()))
+ipcMain.handle('accounts:list', safe(() => shownAccounts.list()))
 // Live Share's copy of the host's usage (liveShare/shareUsage.js): the
 // provider results below, their cache, and the local Codex readings (at most
 // once a minute; accountUsage is made further down, read only once a guest
@@ -2284,7 +2300,7 @@ const providerCredentials = createProviderCredentials({ dir: join(app.getPath('u
 // Usage refresh: at startup, every 2 min (Settings) while the window is in use,
 // on focus when older than 5 min, and from the chats' own rate-limit reports
 // (usagePoller.js); results are pushed on providerUsage:update.
-registerProviderUsage({
+const providerUsage = registerProviderUsage({
   ipcMain,
   accounts,
   userData: app.getPath('userData'),
@@ -2302,8 +2318,23 @@ registerProviderUsage({
   // provider call of its own.
   onResult: (result) => shareUsage.onResult(result),
   onCache: (read) => shareUsage.setCache(read),
-  credentials: providerCredentials
+  credentials: providerCredentials,
+  livePlan: (accountId) => claudePlans?.planOf(accountId),
+  onNoSubscription: (accountId) => claudePlans?.noSubscription(accountId)
 })
+// Checked a couple of minutes after startup, then every few hours; when
+// Settings > AI provider accounts opens; at once when Claude's usage is
+// refused for want of a subscription. A change is pushed to the window.
+claudePlans = createClaudePlanCheck({
+  file: join(app.getPath('userData'), 'claude-plans.json'),
+  accounts,
+  usage: providerUsage,
+  log,
+  onChange: () => send('claudePlans:changed', {})
+})
+app.whenReady().then(() => claudePlans.start())
+app.on('will-quit', () => claudePlans.stop())
+ipcMain.handle('accounts:checkPlans', safe((opts) => claudePlans.checkAll({ force: !!(opts && opts.force === true) })))
 ipcMain.handle('accounts:loginStatus', safe((id) => accounts.loginStatus(id)))
 ipcMain.handle('accounts:launchEnv', safe((query) => typeof query === 'string'
   ? accounts.launchEnv(query) : accounts.launchEnv(query?.provider, query?.accountId)))

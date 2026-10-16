@@ -19,8 +19,13 @@ export function accountKey(e) {
   return who ? `${e.agent}|${who}` : null
 }
 
-// places -> { groups: [{ key, agent, email, login, plan, org, rows: [{ place, entry }] }], unnamed: [{ place, entry }] }
-// A folder nobody signed in to yet is no account: left to its place.
+// The newer of two subscriptions (a Claude account checked on this PC and on
+// a host: the last check says it).
+const newerSub = (a, b) => (!a ? b || null : !b ? a : (b.checkedAt || 0) > (a.checkedAt || 0) ? b : a)
+
+// places -> { groups: [{ key, agent, email, login, plan, sub, org, rows: [{ place, entry }] }], unnamed: [{ place, entry }] }
+// A folder nobody signed in to yet is no account: left to its place. sub:
+// its subscription as Anthropic last reported it (a Claude account).
 export function groupAccounts(places) {
   const groups = new Map()
   const unnamed = []
@@ -34,10 +39,11 @@ export function groupAccounts(places) {
       }
       let g = groups.get(key)
       if (!g) {
-        g = { key, agent: entry.agent, email: entry.email || null, login: entry.login || null, plan: null, org: null, rows: [] }
+        g = { key, agent: entry.agent, email: entry.email || null, login: entry.login || null, plan: null, sub: null, org: null, rows: [] }
         groups.set(key, g)
       }
       if (!g.plan && entry.plan) g.plan = entry.plan
+      if (entry.sub) g.sub = newerSub(g.sub, entry.sub)
       if (!g.org && entry.org) g.org = entry.org
       if (!g.email && entry.email) g.email = entry.email
       g.rows.push({ place, entry })
@@ -66,13 +72,13 @@ export function groupByProvider(places) {
   }
   for (const g of groups) {
     if (!g.email && !g.login) unnamed.push(...g.rows)
-    else providerOf(g.agent).accounts.push({ key: g.key, agent: g.agent, email: g.email, login: g.login, plan: g.plan, org: g.org, unknown: false, chips: g.rows })
+    else providerOf(g.agent).accounts.push({ key: g.key, agent: g.agent, email: g.email, login: g.login, plan: g.plan, sub: g.sub, org: g.org, unknown: false, chips: g.rows })
   }
   for (const row of unnamed) {
     const p = providerOf(row.entry.agent)
     let u = p.accounts.find((a) => a.unknown)
     if (!u) {
-      u = { key: `${row.entry.agent}|?`, agent: row.entry.agent, email: null, login: null, plan: null, org: null, unknown: true, chips: [] }
+      u = { key: `${row.entry.agent}|?`, agent: row.entry.agent, email: null, login: null, plan: null, sub: null, org: null, unknown: true, chips: [] }
       p.accounts.push(u)
     }
     if (!u.plan && row.entry.plan) u.plan = row.entry.plan

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import LaunchMenu from '../components/LaunchMenu.vue'
 import ProjectLauncher from '../components/ProjectLauncher.vue'
-import { accountChoices, choicesFrom, paneAccount, refreshAccountChoices, shortAccount } from '../accountChoices'
+import { accountChoices, accountSubscription, choicesFrom, paneAccount, refreshAccountChoices, shortAccount } from '../accountChoices'
 
 const claude = (extra = {}) => ({
   provider: 'claude',
@@ -61,6 +61,22 @@ describe('the accounts to choose from', () => {
     expect(paneAccount('codex', null)).toBeNull()
     await accounts([claude({ accounts: [] })])
     expect(paneAccount('claude', null)).toBeNull()
+  })
+
+  it('a pane on an account Anthropic reports with no subscription says it beside the name; the plan is in its title', async () => {
+    const at = Date.now() - 60_000
+    const canceled = { organization_type: 'claude_free', subscription_status: 'canceled', has_claude_max: false, has_claude_pro: false, checkedAt: at }
+    const max20 = { organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_20x', subscription_status: 'active', has_claude_max: true, checkedAt: at }
+    const base = claude()
+    await accounts([claude({ system: { ...base.system, plan: 'max', subscription: canceled }, accounts: [{ ...base.accounts[0], subscription: max20 }, base.accounts[1]] })])
+    expect(paneAccount('claude', null).name).toBe('me · No subscription')
+    expect(paneAccount('claude', null).title).toContain('Free · No subscription')
+    expect(paneAccount('claude', 'acc-1').name).toBe('work.person')
+    expect(paneAccount('claude', 'acc-1').title).toContain('Max 20x')
+    // Its plan never in another account's header; undefined counts as the system's.
+    expect(paneAccount('claude', 'acc-2')).toEqual({ name: 'old', title: 'old@corp.test' })
+    expect(accountSubscription('claude', undefined)).toMatchObject({ organization_type: 'claude_free' })
+    expect(accountSubscription('codex', null)).toBeNull()
   })
 })
 

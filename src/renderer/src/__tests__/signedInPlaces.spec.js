@@ -277,3 +277,112 @@ describe('signedInPlaces: by provider, panes, places to check', () => {
     expect(r.all).toHaveLength(5)
   })
 })
+
+// A Claude account's subscription as Anthropic last reported it
+// (claudePlanCheck.js): the plan it shows, and the panes on an account with
+// no subscription said at the top, with Switch panes… to move them. The
+// fields are shaped like the profile endpoint's (fixture accounts only).
+const T = Date.parse('2026-10-16T12:00:00Z')
+const SUBS = {
+  canceled: { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', seat_tier: null, billing_type: 'none', subscription_status: 'canceled', has_claude_max: false, has_claude_pro: false, claude_code_trial_ends_at: null, checkedAt: T },
+  max20: { organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_20x', seat_tier: null, billing_type: 'stripe_subscription', subscription_status: 'active', has_claude_max: true, has_claude_pro: false, claude_code_trial_ends_at: null, checkedAt: T },
+  pastDue: { organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_5x', seat_tier: null, billing_type: 'stripe_subscription', subscription_status: 'past_due', has_claude_max: true, has_claude_pro: false, claude_code_trial_ends_at: null, checkedAt: T }
+}
+describe('Where you’re signed in: the plan Anthropic reports', () => {
+  let previous, panes, w, listeners
+  const pcWith = (systemSub, addedSub) => ({
+    id: 'pc',
+    kind: 'pc',
+    state: 'ready',
+    entries: [
+      // The login file still says "max" for the canceled one.
+      { agent: 'claude', scope: 'system', id: null, email: 'canceled.fixture@example.invalid', plan: 'max', ...(systemSub ? { sub: systemSub } : {}), state: 'signed-in' },
+      { agent: 'claude', scope: 'tessel', id: 'acc-2', email: 'active.fixture@example.invalid', plan: 'max', ...(addedSub ? { sub: addedSub } : {}), state: 'signed-in' }
+    ]
+  })
+  function setup(place) {
+    previous = window.shellApi
+    listeners = []
+    window.shellApi = {
+      signedIn: { places: vi.fn(async () => ({ ok: true, places: [place] })), scan: vi.fn(async () => ({ ok: false })) },
+      accounts: { onPlansChanged: vi.fn((cb) => (listeners.push(cb), () => {})) }
+    }
+    const list = [1, 2, 3, 4, 5].map((n) => ({ id: `p${n}`, name: `Pane ${n}`, agentId: 'claude', accountId: n % 2 ? null : undefined }))
+    list.push({ id: 'p6', name: 'Pane 6', agentId: 'claude', accountId: 'acc-2' })
+    panes = { list: () => list, switchTo: vi.fn(async () => true) }
+  }
+  afterEach(() => {
+    w?.unmount()
+    w = null
+    document.body.innerHTML = ''
+    window.shellApi = previous
+  })
+  const open = async () => {
+    w = mount(SignedInPlaces, { global: { provide: { accountPanes: panes } }, attachTo: document.body })
+    await flushPromises()
+    return w
+  }
+
+  it('a canceled Max: "No subscription", not "Max"; 5 panes on it said at the top; Switch panes… moves them to the account with an active plan', async () => {
+    setup(pcWith(SUBS.canceled, SUBS.max20))
+    await open()
+    // By email: active.fixture first.
+    const [active, canceled] = w.findAll('[data-test="signed-in-account"]')
+    const tag = canceled.get('[data-test="signed-in-plan"]')
+    expect(tag.text()).toBe('No subscription')
+    expect(tag.classes()).toContain('warn')
+    expect(tag.attributes('title')).toContain('Free')
+    expect(canceled.text()).not.toContain('Max')
+    expect(canceled.get('[data-test="signed-in-used"]').text()).toBe('Used by 5 panes')
+    expect(canceled.get('[data-test="signed-in-used"]').classes()).toContain('warn')
+    // No Switch panes… toward it (the 1 pane elsewhere would go to an account with none).
+    expect(canceled.find('[data-test="signed-in-switch-open"]').exists()).toBe(false)
+    expect(active.get('[data-test="signed-in-plan"]').text()).toBe('Max 20x')
+    expect(active.find('[data-test="signed-in-plan-warn"]').exists()).toBe(false)
+    const notice = w.get('[data-test="signed-in-no-sub"]')
+    expect(notice.text()).toContain('5 panes use an account with no subscription')
+    expect(notice.attributes('title')).toContain('canceled.fixture@example.invalid')
+    await notice.get('[data-test="signed-in-no-sub-switch"]').trigger('click')
+    const panel = w.get('[data-test="signed-in-switch-panel"]')
+    expect(panel.text()).toContain('active.fixture@example.invalid')
+    const boxes = panel.findAll('[data-test="signed-in-switch-pane"]')
+    expect(boxes.map((b) => [b.attributes('value'), b.element.checked])).toEqual([['p1', true], ['p2', true], ['p3', true], ['p4', true], ['p5', true]])
+    await panel.get('[data-test="signed-in-switch-go"]').trigger('click')
+    await flushPromises()
+    expect(panes.switchTo.mock.calls).toEqual([['p1', 'acc-2'], ['p2', 'acc-2'], ['p3', 'acc-2'], ['p4', 'acc-2'], ['p5', 'acc-2']])
+    // A check that changes something: the places read again.
+    expect(listeners).toHaveLength(1)
+    listeners[0]()
+    await flushPromises()
+    expect(window.shellApi.signedIn.places).toHaveBeenCalledTimes(2)
+  })
+
+  it('an active Max 20x: its plan, no notice; not checked yet: the login file’s plan as before', async () => {
+    setup(pcWith(SUBS.max20, null))
+    await open()
+    const [added, system] = w.findAll('[data-test="signed-in-account"]')
+    expect(system.get('[data-test="signed-in-plan"]').text()).toBe('Max 20x')
+    expect(added.get('[data-test="signed-in-plan"]').text()).toBe('Max')
+    expect(w.find('[data-test="signed-in-no-sub"]').exists()).toBe(false)
+  })
+
+  it('past due: its plan and "Payment issue"; the notice says so; with no other account, no Switch button but what to do', async () => {
+    setup({ id: 'pc', kind: 'pc', state: 'ready', entries: [{ agent: 'claude', scope: 'system', id: null, email: 'late.fixture@example.invalid', plan: 'max', sub: SUBS.pastDue, state: 'signed-in' }] })
+    await open()
+    const account = w.get('[data-test="signed-in-account"]')
+    expect(account.get('[data-test="signed-in-plan"]').text()).toBe('Max 5x')
+    expect(account.get('[data-test="signed-in-plan-warn"]').text()).toBe('Payment issue')
+    const notice = w.get('[data-test="signed-in-no-sub"]')
+    expect(notice.text()).toContain('5 panes use an account with a payment issue')
+    expect(notice.text()).toContain('Add an account with a subscription to move them.')
+    expect(notice.find('[data-test="signed-in-no-sub-switch"]').exists()).toBe(false)
+  })
+
+  it('an account on a host checked there and here: the newer check wins', () => {
+    const host = { id: 'ssh:ssh-1', kind: 'ssh', hostId: 'ssh-1', label: 'linux-box', state: 'ready', entries: [{ agent: 'claude', scope: 'default', email: 'canceled.fixture@example.invalid', sub: { ...SUBS.max20, checkedAt: T - 86400_000 }, state: 'signed-in' }] }
+    const [claude] = groupByProvider([pcWith(SUBS.canceled, null), host])
+    const account = claude.accounts.find((a) => a.email === 'canceled.fixture@example.invalid')
+    expect(account.chips).toHaveLength(2)
+    expect(account.sub).toMatchObject({ organization_type: 'claude_free' })
+  })
+})

@@ -113,6 +113,29 @@ describe('Claude usage flyout details', () => {
     expect(flyout.find('[data-test="usage-locked"]').exists()).toBe(false)
   })
 
+  it('a usage read refused for want of a subscription: "No subscription", never an error or Sign in again', async () => {
+    reading = { ok: false, provider: 'claude', accountId: null, code: 'no-subscription', error: 'This Claude account has no subscription: Anthropic gives it no usage limits to show.', plan: 'Free' }
+    const flyout = await openClaude()
+    const row = wrapper.get('[data-test="usage-row-claude"]')
+    expect(row.get('.usage-plan').text()).toContain('No subscription')
+    expect(row.get('.usage-no-data').text()).toBe('No usage limits')
+    expect(flyout.find('[role="alert"]').exists()).toBe(false)
+    expect(flyout.find('[data-test="usage-provider-sign-in"]').exists()).toBe(false)
+    expect(flyout.get('[data-test="usage-no-subscription"]').text()).toContain('no subscription')
+  })
+
+  it('the plan Anthropic reports for the selected account wins over its login file’s', async () => {
+    reading = { ...claudeReading(), plan: 'Max 20x' }
+    window.shellApi.accounts = {
+      list: vi.fn(async () => ({
+        ok: true,
+        providers: [{ provider: 'claude', selectedId: null, system: { id: null, status: 'ready', plan: 'max', subscription: { organization_type: 'claude_free', subscription_status: 'canceled', has_claude_max: false, checkedAt: epoch } }, accounts: [] }]
+      }))
+    }
+    await openClaude()
+    expect(wrapper.get('[data-test="usage-row-claude"]').get('.usage-plan').text()).toContain('No subscription')
+  })
+
   it("shows Claude's plan beside its name, like Codex's, also when its usage could not be read", async () => {
     reading = { ...claudeReading(), plan: 'Max 20x' }
     await openClaude()

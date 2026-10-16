@@ -1059,6 +1059,16 @@
       "account": "Compte",
       "systemTitle": "La connexion du système : {{email}}",
       "systemHint": "La connexion du système"
+    },
+    "plan": {
+      "checkedNow": "vérifié à l’instant",
+      "checked": "vérifié {{when}}",
+      "none": "Sans abonnement",
+      "canceled": "Abonnement annulé",
+      "payment": "Problème de paiement",
+      "trial": "Essai jusqu’au {{date}}",
+      "paneWarnPayment": "Ce panneau tourne sur un compte Claude qui a un problème de paiement. Pour le déplacer : Paramètres > Comptes de fournisseurs d’IA > Où vous êtes connecté > Basculer des panneaux…",
+      "paneWarnNone": "Ce panneau tourne sur un compte Claude sans abonnement. Pour le déplacer : Paramètres > Comptes de fournisseurs d’IA > Où vous êtes connecté > Basculer des panneaux…"
     }
   },
   "signedIn": {
@@ -1147,6 +1157,14 @@
       "unknown": "non vérifié",
       "out": "déconnecté",
       "missing": "connexion requise"
-    }
+    },
+    "paymentPanesOne": "1 panneau utilise un compte qui a un problème de paiement",
+    "paymentPanes_one": "{{count}} panneau utilise un compte qui a un problème de paiement",
+    "paymentPanes_other": "{{count}} panneaux utilisent un compte qui a un problème de paiement",
+    "noSubPanesOne": "1 panneau utilise un compte sans abonnement",
+    "noSubPanes_one": "{{count}} panneau utilise un compte sans abonnement",
+    "noSubPanes_other": "{{count}} panneaux utilisent un compte sans abonnement",
+    "noSubAccounts": "Comptes : {{names}}",
+    "noSubAdd": "Ajoutez un compte avec un abonnement pour les y déplacer."
   }
 }

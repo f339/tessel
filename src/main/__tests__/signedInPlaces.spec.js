@@ -266,3 +266,83 @@ describe('wslAccounts', () => {
     expect(spawnImpl).not.toHaveBeenCalled()
   })
 })
+
+// A Claude account's subscription as Anthropic reports it (this PC:
+// claudePlanCheck.js through accounts.list(); a host or a WSL distro: its
+// own check), carried on each row, its fields checked again.
+describe('the subscription of each Claude sign-in', () => {
+  const CANCELED = { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', billing_type: 'none', subscription_status: 'canceled', has_claude_max: false, has_claude_pro: false, checkedAt: 5000 }
+  it('this PC and a host: kept on the row as checked, nothing else from it; never on another agent', () => {
+    const list = structuredClone(accountsList)
+    list.providers[0].system.subscription = { ...CANCELED, payment_auth_hosted_invoice_url: 'https://invoice.example.invalid/x', email: 'x@example.invalid' }
+    const [system, added] = pcAccountRows(list)
+    expect(system.sub).toEqual({ ...CANCELED, seat_tier: null, claude_code_trial_ends_at: null })
+    expect(JSON.stringify(system)).not.toMatch(/invoice|example\.invalid/)
+    expect(added.sub).toBeUndefined()
+    const rows = hostRows([{ ...hostEntries[0], sub: CANCELED }, { ...hostEntries[2], sub: CANCELED }, { ...hostEntries[1], sub: { checkedAt: 5 } }])
+    expect(rows[0].sub).toMatchObject({ organization_type: 'claude_free' })
+    expect(rows[1].sub).toBeUndefined()
+    expect(rows[2].sub).toBeUndefined()
+  })
+
+  it('an SSH host: a refresh you ask for checks its subscriptions too, and shows the result', async () => {
+    const remoteAccounts = {
+      detect: vi.fn(async (hostId) => ({ ok: true, hostId, at: 5, entries: hostEntries })),
+      planCheck: vi.fn(async () => ({ ok: true, checked: 1 })),
+      cached: vi.fn(() => ({ ok: true, hostId: 'ssh-a', at: 6, entries: [{ ...hostEntries[0], sub: CANCELED }, ...hostEntries.slice(1)] }))
+    }
+    const places = createSignedInPlaces({ accounts: { list: async () => accountsList }, hosts: { list: () => [{ id: 'ssh-a', label: 'alpha' }] }, connected: () => true, remoteAccounts, now: () => 100 })
+    const plain = await places.scan('ssh:ssh-a')
+    expect(remoteAccounts.planCheck).not.toHaveBeenCalled()
+    expect(plain.place.entries[0].sub).toBeUndefined()
+    const asked = await places.scan('ssh:ssh-a', { fresh: true, relogin: true })
+    expect(remoteAccounts.planCheck).toHaveBeenCalledWith('ssh-a', { force: true })
+    expect(asked.place.entries[0].sub).toMatchObject({ organization_type: 'claude_free' })
+  })
+
+  it('a WSL distro: checked by the distro itself at its first check, then every few hours or on a refresh; a later failure keeps the result', async () => {
+    let clock = 100
+    let answer = { ok: true, entries: [{ scope: 'default', id: null, dir: '/home/u/.claude', check: 'ok', account: null, sub: CANCELED }] }
+    const wsl = {
+      list: vi.fn(async () => ({ ok: true, distros: [{ name: 'Ubuntu', running: true }] })),
+      scan: vi.fn(async () => ({ ok: true, os: 'Linux', loginEnv: { claude: '/opt/c', codex: null }, entries: hostEntries.slice(0, 1) })),
+      plans: vi.fn(async () => answer)
+    }
+    const places = createSignedInPlaces({ accounts: { list: async () => accountsList }, hosts: { list: () => [] }, remoteAccounts: { cached: () => null }, wsl, now: () => clock, wslTtlMs: 0 })
+    await places.places()
+    const first = await places.scan('wsl:Ubuntu')
+    expect(wsl.plans).toHaveBeenCalledWith('Ubuntu', { claude: '/opt/c' })
+    expect(first.place.entries[0].sub).toMatchObject({ organization_type: 'claude_free' })
+    clock += 60_000
+    await places.scan('wsl:Ubuntu', { fresh: true })
+    expect(wsl.plans).toHaveBeenCalledTimes(1)
+    answer = { ok: true, entries: [{ scope: 'default', id: null, dir: '/home/u/.claude', check: 'expired', account: null, sub: null }] }
+    const again = await places.scan('wsl:Ubuntu', { fresh: true, relogin: true })
+    expect(wsl.plans).toHaveBeenCalledTimes(2)
+    expect(again.place.entries[0].sub).toMatchObject({ organization_type: 'claude_free', checkedAt: 5000 })
+  })
+
+  it('wslAccounts.plans: the check runs in the distro, its script on stdin, the login shell’s folder passed back quoted', async () => {
+    const calls = []
+    const spawnImpl = (file, args) => {
+      const child = new EventEmitter()
+      child.stdout = new EventEmitter()
+      const input = []
+      child.stdin = { on() {}, write: (d) => input.push(String(d)), end() {} }
+      child.kill = vi.fn()
+      calls.push({ args, input })
+      setTimeout(() => {
+        child.stdout.emit('data', args[0] === '-l' ? Buffer.from('\uFEFFUbuntu\r\n', 'utf16le') : Buffer.from('@h Linux /home/u\n@a claude default - - /home/u/.claude\nv subcheck ok\nv sub_organization_type claude_max\nv sub_rate_limit_tier default_claude_max_20x\n'))
+        child.emit('close', 0)
+      }, 1)
+      return child
+    }
+    const wsl = createWslAccounts({ wslExe: 'wsl.exe', spawnImpl })
+    const res = await wsl.plans('Ubuntu', { claude: "/opt/it's" })
+    expect(res).toMatchObject({ ok: true, entries: [{ scope: 'default', check: 'ok', sub: { organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_20x' } }] })
+    const run = calls.find((c) => c.args[0] === '-d')
+    expect(run.args).toEqual(['-d', 'Ubuntu', '-e', 'sh', '-s'])
+    expect(run.input.join('')).toContain("__t_acctplan dirs '/opt/it'\\''s'\n")
+    expect(await wsl.plans('bad name')).toEqual({ ok: false })
+  })
+})

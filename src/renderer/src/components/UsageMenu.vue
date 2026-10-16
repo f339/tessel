@@ -21,6 +21,7 @@ import { displayedUsagePercent, usagePercentLabel } from '../usagePercent'
 import { loadUsageProviders } from '../usageProviders'
 import { cleanHostUsage, latestUpdate } from '../hostUsage'
 import { t, intlLocale } from '../i18n'
+import { planInfo } from '../claudePlan'
 
 const props = defineProps({
   // A Live Share host's usage, as its Tessel sent it (hostUsage.js), or null.
@@ -58,6 +59,11 @@ const providerErrors = ref({})
 const providerErrorCodes = ref({})
 const SIGN_IN_CODES = ['auth', 'expired']
 const RETRY_CODES = ['network', 'server', 'response', 'timeout', 'redirect', 'upstream']
+// provider -> the account whose usage was refused for want of a
+// subscription (Claude's 403 permission_error): said as "No subscription",
+// never as an error.
+const providerNoSub = ref({})
+const noSub = (id) => Object.hasOwn(providerNoSub.value, id) && providerNoSub.value[id] === selectedAccount(id)
 const providerBusy = ref({})
 const resetConfirm = ref(null)
 const resetBusy = ref(false)
@@ -160,6 +166,7 @@ function invalidateProvider(id) {
   delete providerReadings.value[id]
   delete providerErrors.value[id]
   delete providerErrorCodes.value[id]
+  delete providerNoSub.value[id]
   providerBusy.value[id] = false
   resetConfirm.value = null
 }
@@ -185,6 +192,12 @@ async function readProvider(id) {
     if (!alive || request !== providerRequests.get(id) || accountId !== selectedAccount(id)) return
     // Its plan (from its login) even when its usage could not be read.
     if (typeof result?.plan === 'string') providerPlans.value[id] = { accountId, plan: result.plan }
+    if (result?.code === 'no-subscription') {
+      providerNoSub.value[id] = accountId
+      delete providerReadings.value[id]
+      return
+    }
+    delete providerNoSub.value[id]
     if (!result?.ok) {
       // A provider you opened stays, with its reason (Antigravity without its
       // CLI signed in), instead of vanishing under the pointer.
@@ -253,6 +266,15 @@ async function pushed(result) {
   if (accountsReadFailed.value || providerAccounts(id)?.error) return
   providerRequests.set(id, (providerRequests.get(id) || 0) + 1)
   if (typeof result.plan === 'string') providerPlans.value[id] = { accountId, plan: result.plan }
+  if (result.code === 'no-subscription') {
+    providerErrors.value[id] = ''
+    delete providerErrorCodes.value[id]
+    providerNoSub.value[id] = accountId
+    delete providerReadings.value[id]
+    now.value = Date.now()
+    return
+  }
+  delete providerNoSub.value[id]
   if (result.ok && result.kept) {
     // A recent reading kept through a failed refresh: shown as last known.
     providerErrors.value[id] = typeof result.error === 'string' ? result.error : ''
@@ -436,6 +458,11 @@ function planLabel(agent) {
   const selected = provider?.selectedId
     ? provider.accounts?.find((account) => account.id === provider.selectedId)
     : provider?.system
+  // Claude: the subscription Anthropic last reported (claudePlan.js) wins
+  // over the plan its login file names; a refused usage read says it too.
+  const checked = agent.id === 'claude' && matching ? planInfo(selected?.subscription) : null
+  if (checked?.short) return checked.short
+  if (noSub(agent.id)) return t('usage.menu.noSubscription', 'No subscription')
   const known = providerPlans.value[agent.id]
   const plan =
     agent.plan ||
@@ -1090,6 +1117,8 @@ function hostStatusText(p) {
             <span v-else-if="!windows(a).length" class="usage-no-data">{{
               providerBusy[a.id]
                 ? t('usage.menu.loading', 'Loading usage…')
+                : noSub(a.id)
+                  ? t('usage.menu.noLimits', 'No usage limits')
                 : a.unlimited
                   ? t('usage.menu.unlimited', 'Unlimited')
                   : providerErrorCodes[a.id] === 'unsupported'
@@ -1121,7 +1150,7 @@ function hostStatusText(p) {
             </svg>
           </button>
           <div v-if="mode === 'detailed'" class="usage-provider-detail">
-            <p v-if="!windows(a).length" class="usage-none">{{ unavailableText(a) }}</p>
+            <p v-if="!windows(a).length" class="usage-none">{{ noSub(a.id) ? t('usage.menu.noSubscriptionHint', 'This Claude account has no subscription, so Anthropic shows no usage limits for it.') : unavailableText(a) }}</p>
             <div
               v-for="w in windows(a)"
               :key="w.label"
@@ -1280,6 +1309,9 @@ function hostStatusText(p) {
           role="status"
         >
           {{ t('usage.menu.readingProvider', 'Reading provider usage...') }}
+        </p>
+        <p v-else-if="noSub(detailAgent.id) && !windows(detailAgent).length" class="usage-none" data-test="usage-no-subscription">
+          {{ t('usage.menu.noSubscriptionHint', 'This Claude account has no subscription, so Anthropic shows no usage limits for it.') }}
         </p>
         <!-- Not the same error again under the red one. -->
         <p

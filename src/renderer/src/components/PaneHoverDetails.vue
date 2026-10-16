@@ -66,6 +66,8 @@ const startDetail = computed(() => (start.value ? groupsText(start.value.groups)
         <span v-text="accountLine"></span>
       </div>
       <div v-for="(note, i) in info.accountNotes || []" :key="`n${i}`" class="hc-detail hc-account-note" data-hover-account-note="" v-text="note"></div>
+      <!-- Its Claude account has no subscription (or a payment issue). -->
+      <div v-if="info.accountWarn" class="hc-warn hc-account-warn" data-hover-account-warn="" v-text="info.accountWarn"></div>
       <div v-if="info.accountCheck" class="hc-account-actions">
         <button type="button" class="hc-link" data-test="hover-check-account" @click="$emit('check-account')">
           {{ t('pane.account.checkAgain', 'Check again') }}

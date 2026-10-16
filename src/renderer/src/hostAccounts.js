@@ -14,6 +14,7 @@ import { reactive } from 'vue'
 import { t } from './i18n'
 import { shortAccount } from './accountChoices'
 import { settings } from './settings'
+import { planInfo } from './claudePlan'
 
 // The agents Tessel can run on an account folder of a host.
 export const HOST_ACCOUNT_AGENTS = ['claude', 'codex']
@@ -282,14 +283,18 @@ export function overrideText(list) {
 // (Claude Code writes it once it has fetched its profile).
 export function entryLabel(e, hostLabel = '', envOverrides = null) {
   if (!e) return null
-  const plan = planName(e.plan) || (e.method === 'apikey' ? t('hostAccounts.apiKey', 'API key') : '')
+  // A Claude login whose subscription the host checked (__t_acctplan): what
+  // Anthropic reports wins over its login file's plan.
+  const sub = e.agent === 'claude' ? planInfo(e.sub) : null
+  const plan = (sub && sub.short) || planName(e.plan) || (e.method === 'apikey' ? t('hostAccounts.apiKey', 'API key') : '')
+  const planLong = (sub && sub.title) || e.planName || plan
   const who = e.email || (e.login ? `@${e.login}` : '') || (Array.isArray(e.providers) && e.providers.length ? e.providers.map((p) => p.name).join(', ') : '')
   const signedIn = e.state === 'signed-in'
   const override = [...new Set([...(Array.isArray(e.override) ? e.override : []), ...(envOverrides && Array.isArray(envOverrides[e.agent]) ? envOverrides[e.agent] : [])])]
   if (!who && signedIn) {
     // Signed in (its login is there), the account not named yet: its plan.
     const name = (plan || t('hostAccounts.signedInShort', 'signed in')) + (override.length || e.linked ? ' ⚠' : '')
-    const what = [e.planName || plan, hostLabel ? t('hostAccounts.onHostShort', 'on {{host}}', { host: hostLabel }) : ''].filter(Boolean).join(' ')
+    const what = [planLong, hostLabel ? t('hostAccounts.onHostShort', 'on {{host}}', { host: hostLabel }) : ''].filter(Boolean).join(' ')
     let title = t('hostAccounts.unknownAccount', '{{what}}: signed in, account unknown (its email is not known yet). Check again once the agent has answered.', { what: what || t('hostAccounts.signedInShort', 'signed in') })
     if (override.length) title += `\n${t('hostAccounts.overrideNote', 'Note: {{what}} set on the host is used instead of this sign-in (settings.json or the login shell).', { what: overrideText(override) })}`
     if (e.linked) title += `\n${t('hostAccounts.linkedNote', 'Its sign-in file is a link to another folder (made outside Tessel): agents are not started on it.')}`
@@ -302,12 +307,12 @@ export function entryLabel(e, hostLabel = '', envOverrides = null) {
   }
   const short = e.email ? shortAccount(e.email) : who
   const name = [short, plan].filter(Boolean).join(' · ') + (override.length || e.linked ? ' ⚠' : '')
-  const parts = [who, e.planName || plan, e.org && e.org !== who ? e.org : ''].filter(Boolean).join(' · ')
+  const parts = [who, planLong, e.org && e.org !== who ? e.org : ''].filter(Boolean).join(' · ')
   const where = hostLabel ? t('hostAccounts.onHost', '{{account}}, on {{host}}', { account: parts, host: hostLabel }) : parts
   let title = signedIn ? where : t('hostAccounts.signedOut', '{{account}} (signed out there)', { account: where })
   if (override.length) title += `\n${t('hostAccounts.overrideNote', 'Note: {{what}} set on the host is used instead of this sign-in (settings.json or the login shell).', { what: overrideText(override) })}`
   if (e.linked) title += `\n${t('hostAccounts.linkedNote', 'Its sign-in file is a link to another folder (made outside Tessel): agents are not started on it.')}`
-  return { name, title, signedIn, override }
+  return { name, title, signedIn, override, ...(sub ? { plan: sub } : {}) }
 }
 
 // The account a pane on a host runs on, for its header. null when unknown.

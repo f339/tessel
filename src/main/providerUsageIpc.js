@@ -117,12 +117,16 @@ export function registerProviderUsage({
   onResult = null,
   // Live Share: receives the function that returns the cached readings
   // (no provider call): { hidden, entries: { [provider]: poller entry } }.
-  onCache = null
+  onCache = null,
+  // claudePlanCheck.js: the plan Anthropic reported for a Claude account,
+  // and the account whose usage was refused for want of a subscription.
+  livePlan = null,
+  onNoSubscription = null
 }) {
   const history = userData
     ? createResetHistory({ file: join(userData, 'reset-history.json'), log })
     : null
-  const usage = service || createProviderUsage({ accounts, history, log })
+  const usage = service || createProviderUsage({ accounts, history, log, livePlan, onNoSubscription })
   const extra = createExtraProviderUsage({
     listAgents,
     credentials,

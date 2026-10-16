@@ -97,7 +97,10 @@
       "weekShareHint": "La part de chaque produit dans votre usage, pas la part de votre limite.",
       "reset": "Réinitialiser",
       "signedIn": "Où vous êtes connecté…",
-      "signedInHint": "Chaque endroit où Tessel voit vos comptes connectés : ce PC, WSL et vos hôtes SSH"
+      "signedInHint": "Chaque endroit où Tessel voit vos comptes connectés : ce PC, WSL et vos hôtes SSH",
+      "noSubscription": "Sans abonnement",
+      "noLimits": "Aucune limite d’utilisation",
+      "noSubscriptionHint": "Ce compte Claude n’a pas d’abonnement : Anthropic n’affiche donc aucune limite d’utilisation pour lui."
     },
     "time": {
       "minutes": "{{m}} min",

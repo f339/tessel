@@ -9,7 +9,9 @@
 // background ("checking…"), never with a sign-in. The places not read yet
 // fold into one quiet line. Only machines Tessel knows: the providers do not
 // list other devices. Laid out like Settings > Skills (rows, chips, a detail
-// panel on click).
+// panel on click). A Claude account's plan is the one Anthropic last
+// reported (claudePlan.js), not its login file's; panes on an account with
+// no subscription are said at the top, with Switch panes… to move them.
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Check, ChevronRight } from 'lucide-vue-next'
 import BrandIcon from './BrandIcon.vue'
@@ -18,6 +20,7 @@ import { t } from '../i18n'
 import { agentLabel, timeAgo } from '../sessionHistory'
 import { groupByProvider, panesOnLogin, panesUsing, placesToCheck, shownOrg, switchCandidates, switchTarget } from '../signedInPlaces'
 import { planName, applyHostAccounts, overrideText, isDefaultHostAccount, setDefaultHostAccount, HOST_ACCOUNT_AGENTS } from '../hostAccounts'
+import { planInfo } from '../claudePlan'
 
 const panesApi = inject('accountPanes', null)
 const places = ref([])
@@ -160,6 +163,59 @@ function usedByText(a) {
   const n = usedBy(a).length
   return n === 1 ? t('signedIn.usedByOne', 'Used by 1 pane') : t('signedIn.usedBy', 'Used by {{count}} panes', { count: n })
 }
+// Its subscription as Anthropic last reported it (a Claude account), or null.
+function planOf(a) {
+  void now.value
+  return a && a.agent === 'claude' ? planInfo(a.sub, now.value) : null
+}
+// A sign-in's plan in words: the checked one, else its login file's.
+function entryPlanText(entry) {
+  const info = entry.agent === 'claude' ? planInfo(entry.sub, now.value) : null
+  return info ? info.title : planName(entry.plan)
+}
+
+// --- Panes on an account with no subscription (a notice at the top) ---------
+// The accounts that need it (no subscription, or a payment issue, no trial
+// running) with panes on them; the panes once each; and where they can go:
+// another account of that agent whose subscription is active (checked), else
+// one not known to lack one, that can take at least one of them.
+const attention = computed(() => {
+  const all = providers.value.flatMap((p) => p.accounts)
+  const bad = all.filter((a) => !a.unknown && planOf(a)?.attention && usedBy(a).length)
+  if (!bad.length) return null
+  const panesOnBad = new Map()
+  for (const a of bad) for (const pane of usedBy(a)) panesOnBad.set(pane.id, pane)
+  const takes = (a) => switchGroups(a).some((g) => g.items.some((i) => panesOnBad.has(i.pane.id)))
+  const others = all.filter((a) => !a.unknown && a.agent === bad[0].agent && !bad.includes(a) && takes(a))
+  const target = others.find((a) => planOf(a) && !planOf(a).warn) || others.find((a) => !planOf(a)?.warn) || null
+  return {
+    count: panesOnBad.size,
+    ids: [...panesOnBad.keys()],
+    payment: bad.every((a) => planOf(a).warn === 'payment'),
+    names: bad.map(accountName).join(', '),
+    target
+  }
+})
+const attentionText = computed(() => {
+  const n = attention.value
+  if (!n) return ''
+  if (n.payment) return n.count === 1 ? t('signedIn.paymentPanesOne', '1 pane uses an account with a payment issue') : t('signedIn.paymentPanes', '{{count}} panes use an account with a payment issue', { count: n.count })
+  return n.count === 1 ? t('signedIn.noSubPanesOne', '1 pane uses an account with no subscription') : t('signedIn.noSubPanes', '{{count}} panes use an account with no subscription', { count: n.count })
+})
+// Switch panes… from the notice: the target account's panel, open, with the
+// panes on the account without subscription already ticked.
+function switchFromNotice() {
+  const n = attention.value
+  if (!n || !n.target) return
+  switchOpen.value = n.target.key
+  const ticked = {}
+  for (const g of switchGroups(n.target)) for (const i of g.items) if (n.ids.includes(i.pane.id)) ticked[i.pane.id] = true
+  picked.value = ticked
+  nextTick(() => {
+    const panel = document.querySelector('[data-test="signed-in-switch-panel"]')
+    if (panel && panel.scrollIntoView) panel.scrollIntoView({ block: 'nearest' })
+  })
+}
 // Its places' Check again, at once (an unknown account: its name may be
 // there by now).
 function recheckAccount(a) {
@@ -194,7 +250,7 @@ function chipTitle(row) {
   return [
     placeName(row.place),
     scopeText(row.place, row.entry),
-    planName(row.entry.plan),
+    entryPlanText(row.entry),
     stateText(row.entry),
     overrideLine(row.entry),
     seen(row.entry),
@@ -259,7 +315,7 @@ const chipItems = computed(() => {
   const m = chipMenu.value
   if (!m) return []
   const row = m.row
-  const items = [{ type: 'label', label: [placeName(row.place), scopeText(row.place, row.entry), planName(row.entry.plan), stateText(row.entry)].filter(Boolean).join(' · ') }]
+  const items = [{ type: 'label', label: [placeName(row.place), scopeText(row.place, row.entry), entryPlanText(row.entry), stateText(row.entry)].filter(Boolean).join(' · ') }]
   const acts = []
   if (defaultTarget(row))
     acts.push(
@@ -368,10 +424,21 @@ const placesToggleText = computed(() => (placesOpen.value ? t('signedIn.hidePlac
 const canRecheck = (p) => !checking.value[p.id] && !(p.kind === 'ssh' && p.state === 'not-connected') && !(p.kind === 'wsl' && p.state === 'stopped')
 
 const clock = setInterval(() => (now.value = Date.now()), 30000)
-onMounted(() => load())
+// A Claude account's subscription checked again (main's claudePlanCheck.js,
+// or a host's own check): the places read again.
+let stopPlans = null
+onMounted(() => {
+  load()
+  try {
+    stopPlans = window.shellApi?.accounts?.onPlansChanged?.(() => load()) || null
+  } catch {
+    stopPlans = null
+  }
+})
 onBeforeUnmount(() => {
   alive = false
   clearInterval(clock)
+  if (typeof stopPlans === 'function') stopPlans()
 })
 </script>
 
@@ -392,6 +459,14 @@ onBeforeUnmount(() => {
     <p v-else-if="loading" class="si-empty" role="status">{{ t('signedIn.reading', 'Reading…') }}</p>
     <p v-if="error" class="si-error" role="alert">{{ error }}</p>
     <p v-if="notice" class="si-notice" role="status">{{ notice }}</p>
+    <div v-if="attention" class="si-attention" role="status" data-test="signed-in-no-sub" :title="t('signedIn.noSubAccounts', 'Accounts: {{names}}', { names: attention.names })">
+      <span class="si-attention-text">
+        <span v-text="attentionText"></span><span v-if="!attention.target" v-text="' ' + t('signedIn.noSubAdd', 'Add an account with a subscription to move them.')"></span>
+      </span>
+      <button v-if="attention.target" type="button" class="account-btn" data-test="signed-in-no-sub-switch" @click="switchFromNotice">
+        {{ t('signedIn.switchPanes', 'Switch panes…') }}
+      </button>
+    </div>
 
     <section v-for="p in providers" :key="p.agent" class="si-provider" data-test="signed-in-provider" :aria-label="agentLabel(p.agent)">
       <h4 class="si-provider-head">
@@ -404,14 +479,21 @@ onBeforeUnmount(() => {
           <div class="si-acct" :class="{ unknown: a.unknown }">
             <div class="si-acct-main">
               <span class="si-who" :title="accountName(a)">{{ accountName(a) }}</span>
-              <span v-if="planName(a.plan)" class="si-tag" data-test="signed-in-plan">{{ planName(a.plan) }}</span>
+              <template v-if="planOf(a)">
+                <span v-if="planOf(a).tag" class="si-tag" :class="{ warn: planOf(a).warn === 'none' }" data-test="signed-in-plan" :title="planOf(a).title">{{ planOf(a).tag }}</span>
+                <span v-if="planOf(a).warn && planOf(a).warn !== 'none'" class="si-tag warn" data-test="signed-in-plan-warn" :title="planOf(a).title">{{ planOf(a).warnText }}</span>
+                <span v-if="planOf(a).trialText" class="si-tag" data-test="signed-in-plan-trial" :title="planOf(a).title">{{ planOf(a).trialText }}</span>
+              </template>
+              <span v-else-if="planName(a.plan)" class="si-tag" data-test="signed-in-plan">{{ planName(a.plan) }}</span>
               <span v-if="accountMeta(a)" class="si-meta" :title="a.org || accountMeta(a)">{{ accountMeta(a) }}</span>
             </div>
             <div class="si-acct-side">
               <template v-if="!a.unknown">
-                <span v-if="usedBy(a).length" class="si-used" data-test="signed-in-used" :title="usedBy(a).map((x) => x.name).join(', ')">{{ usedByText(a) }}</span>
+                <span v-if="usedBy(a).length" class="si-used" :class="{ warn: !!planOf(a)?.attention }" data-test="signed-in-used" :title="usedBy(a).map((x) => x.name).join(', ')">{{ usedByText(a) }}</span>
+                <!-- Never offered toward an account with no subscription: its
+                     panes are moved away from it (the notice above). -->
                 <button
-                  v-if="switchGroups(a).length"
+                  v-if="switchGroups(a).length && !planOf(a)?.attention"
                   type="button"
                   class="account-btn"
                   data-test="signed-in-switch-open"
@@ -618,6 +700,11 @@ onBeforeUnmount(() => {
   line-height: 16px;
   white-space: nowrap;
 }
+/* No subscription (or a payment issue): the warning colour. */
+.si-tag.warn {
+  background: color-mix(in srgb, var(--warn, #d29922) 20%, transparent);
+  color: var(--warn, #d29922);
+}
 .si-meta {
   flex: 0 1 auto;
   min-width: 0;
@@ -638,6 +725,28 @@ onBeforeUnmount(() => {
 .si-used {
   color: var(--text-dim);
   font-size: 11px;
+}
+.si-used.warn {
+  color: var(--warn, #d29922);
+}
+/* Panes on an account with no subscription: one line, its action beside it. */
+.si-attention {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--warn, #d29922) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warn, #d29922) 10%, transparent);
+  min-width: 0;
+}
+.si-attention-text {
+  flex: 1 1 220px;
+  min-width: 0;
+  color: var(--text-strong);
+  line-height: 1.45;
 }
 .si-chips {
   grid-area: chips;

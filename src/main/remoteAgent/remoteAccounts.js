@@ -18,9 +18,10 @@
 import crypto from 'crypto'
 import { t } from '../i18n'
 import shellSource from './remoteAccounts.sh?raw'
+import { cleanSubscription } from '../../shared/claudeSubscription'
 
 // The functions the host's session may run for this (remoteShell.js FUNCTIONS).
-export const ACCOUNT_FUNCTIONS = ['__t_accts', '__t_acctmk', '__t_acctrm', '__t_acctout', '__t_acctpane', '__t_acctdiag']
+export const ACCOUNT_FUNCTIONS = ['__t_accts', '__t_acctmk', '__t_acctrm', '__t_acctout', '__t_acctpane', '__t_acctdiag', '__t_acctplan']
 // Their definitions, for the prelude (a checkout with CRLF line ends must not
 // reach a POSIX sh).
 export const ACCOUNTS_SHELL = String(shellSource).replace(/\r/g, '')
@@ -93,7 +94,21 @@ const FIELDS = {
   // Claude Code's own name for the plan ("Claude Max").
   planName: (v) => (/^[A-Za-z][A-Za-z0-9 .+-]{0,39}$/.test(v) ? notSecret(v) : null),
   // A folder of Tessel's whose sign-in file is a link (no agent starts on it).
-  linked: (v) => (v === 'yes' ? true : null)
+  linked: (v) => (v === 'yes' ? true : null),
+  // __t_acctplan: how its subscription check went, and the kept fields of
+  // Anthropic's answer (claudeSubscription.js checks them again).
+  subcheck: (v) => (['ok', 'expired', 'refused', 'failed', 'skipped', 'nologin'].includes(v) ? v : null),
+  sub_organization_type: (v) => subWord(v),
+  sub_rate_limit_tier: (v) => subWord(v),
+  sub_seat_tier: (v) => subWord(v),
+  sub_billing_type: (v) => subWord(v),
+  sub_subscription_status: (v) => subWord(v),
+  sub_has_claude_max: (v) => (v === 'true' ? true : v === 'false' ? false : null),
+  sub_has_claude_pro: (v) => (v === 'true' ? true : v === 'false' ? false : null),
+  sub_claude_code_trial_ends_at: (v) => (/^[0-9][0-9T:.+Z -]{9,39}$/.test(v) ? v : null)
+}
+function subWord(v) {
+  return /^[a-z0-9][a-z0-9_-]{0,59}$/.test(v) ? v : null
 }
 
 // The host's answer (remoteAccounts.sh) -> { os, home, entries, loginEnv,
@@ -164,6 +179,35 @@ export function parseAccounts(text) {
     if (v !== null) cur[key] = v
   }
   return out
+}
+
+// What __t_acctplan printed -> { home, unavailable, entries: [{ scope, id,
+// dir, check, account, sub }] }. unavailable: the host has no curl (nothing
+// was asked); check: how that login's check went; sub: its subscription
+// (checked at `at`), only when Anthropic answered. Never throws.
+export function parsePlans(text, at = Date.now()) {
+  const raw = String(text || '')
+  const parsed = parseAccounts(raw)
+  const entries = parsed.entries
+    .filter((e) => e.agent === 'claude' && ['default', 'env', 'tessel'].includes(e.scope))
+    .map((e) => {
+      const sub =
+        e.subcheck === 'ok'
+          ? cleanSubscription({
+              organization_type: e.sub_organization_type,
+              rate_limit_tier: e.sub_rate_limit_tier,
+              seat_tier: e.sub_seat_tier,
+              billing_type: e.sub_billing_type,
+              subscription_status: e.sub_subscription_status,
+              has_claude_max: e.sub_has_claude_max,
+              has_claude_pro: e.sub_has_claude_pro,
+              claude_code_trial_ends_at: e.sub_claude_code_trial_ends_at,
+              checkedAt: at
+            })
+          : null
+      return { scope: e.scope, id: e.id, dir: e.dir, check: e.subcheck || null, account: e.account || null, sub }
+    })
+  return { home: parsed.home, unavailable: /^@n nocurl\r?$/m.test(raw) ? 'nocurl' : null, entries }
 }
 
 // Whether the agent there holds a sign-in Tessel can name (or at least a
@@ -308,9 +352,15 @@ export function createRemoteAccounts({
   newId = () => crypto.randomBytes(6).toString('hex'),
   // New folders: at most this many per host in a window; launches per minute.
   limits = { creates: 6, createWindowMs: 10 * 60_000, launches: 30, launchWindowMs: 60_000 },
-  log = null
+  log = null,
+  // Claude logins' subscriptions there (__t_acctplan): checked at most this
+  // often by a detection, and onPlans(hostId) once a check found something.
+  planEveryMs = 4 * 60 * 60_000,
+  onPlans = () => {}
 } = {}) {
   const cache = new Map() // hostId -> { at, value }
+  // hostId -> { at, unavailable, dirs: Map(folder -> { sub, account, check }), pending }
+  const plans = new Map()
   const inflight = new Map()
   // hostId -> { claude, codex, overrides }: what its login shell said, asked
   // once per connection (dropped when the host is found not connected).
@@ -376,9 +426,79 @@ export function createRemoteAccounts({
     const parsed = parseAccounts(outText(res))
     if (!kept) logins.set(hostId, { claude: parsed.loginEnv ? parsed.loginEnv.claude : null, codex: parsed.loginEnv ? parsed.loginEnv.codex : null, overrides: parsed.envOverrides })
     const login = logins.get(hostId)
-    const value = { ok: true, hostId, at: now(), os: parsed.os, home: parsed.home, entries: parsed.entries, envOverrides: login ? login.overrides : { claude: [], codex: [] } }
+    const value = { ok: true, hostId, at: now(), os: parsed.os, home: parsed.home, entries: withPlans(hostId, parsed.entries), envOverrides: login ? login.overrides : { claude: [], codex: [] } }
     cache.set(hostId, { at: value.at, value })
+    planSoon(hostId)
     return value
+  }
+
+  // --- Claude subscriptions there (the host asks Anthropic itself) ---------
+  // A Claude entry with its folder's last checked subscription, when it is
+  // the same account (its id, once both are known).
+  function withPlans(hostId, entries) {
+    const known = plans.get(hostId)
+    return entries.map((e) => {
+      const rest = { ...e }
+      delete rest.sub
+      const kept = e.agent === 'claude' && known ? known.dirs.get(e.dir) : null
+      if (!kept || !kept.sub || (kept.account && e.account && kept.account !== e.account)) return rest
+      return { ...rest, sub: { ...kept.sub } }
+    })
+  }
+  // A detection starts a check when the last one is older than planEveryMs
+  // (in the background: the detection does not wait for it).
+  function planSoon(hostId) {
+    const known = plans.get(hostId)
+    if (known && (known.pending || now() - known.at < planEveryMs)) return
+    planCheck(hostId).catch(() => null)
+  }
+  // force: a refresh you asked for (at most once a minute). -> { ok, checked }
+  async function planCheck(hostId, { force = false } = {}) {
+    if (!validHost(hostId)) return invalid()
+    let known = plans.get(hostId)
+    if (!known) {
+      known = { at: 0, unavailable: null, dirs: new Map(), pending: null }
+      plans.set(hostId, known)
+    }
+    if (known.pending) return known.pending
+    if (known.at && now() - known.at < (force ? 60_000 : planEveryMs)) return { ok: true, checked: 0 }
+    known.at = now()
+    known.pending = (async () => {
+      const kept = logins.get(hostId)
+      const args = kept && kept.claude ? ['dirs', kept.claude] : []
+      const res = await run(hostId, '__t_acctplan', args, { cap: 64 * 1024, timeoutMs: 60_000 })
+      if (!res || res.error || res.notConnected || res.skipped || typeof res.rc !== 'number' || res.rc !== 0) {
+        // Not reached now: asked again at the next detection after a while.
+        known.at = now() - planEveryMs + 5 * 60_000
+        return { ok: false, checked: 0 }
+      }
+      const parsed = parsePlans(outText(res), now())
+      known.unavailable = parsed.unavailable
+      let checked = 0
+      for (const e of parsed.entries) {
+        const before = known.dirs.get(e.dir) || {}
+        // Never refreshed: an expired login (or a refusal) keeps the last result.
+        if (e.sub) {
+          known.dirs.set(e.dir, { sub: e.sub, account: e.account, check: 'ok' })
+          checked++
+        } else known.dirs.set(e.dir, { ...before, check: e.check })
+      }
+      const cachedValue = cache.get(hostId)
+      if (cachedValue) cachedValue.value = { ...cachedValue.value, entries: withPlans(hostId, cachedValue.value.entries) }
+      if (checked) {
+        try {
+          onPlans(hostId)
+        } catch {
+          /* shown at the next reading */
+        }
+      }
+      return { ok: true, checked, ...(parsed.unavailable ? { unavailable: parsed.unavailable } : {}) }
+    })()
+      .catch(() => ({ ok: false, checked: 0 }))
+      .finally(() => {
+        known.pending = null
+      })
+    return known.pending
   }
 
   // fresh: not the answer of the last seconds; relogin: the login shell
@@ -572,6 +692,7 @@ export function createRemoteAccounts({
     paneFolders,
     diagnose,
     copyPolicy,
+    planCheck,
     cached: (hostId) => (cache.get(hostId) || {}).value || null,
     forget: (hostId) => {
       cache.delete(hostId)
@@ -605,6 +726,8 @@ const ENTRY_KEYS = ['agent', 'scope', 'id', 'dir', 'mtimeMs', 'email', 'org', 'o
 export function publicEntry(e) {
   const out = {}
   for (const k of ENTRY_KEYS) if (e[k] !== undefined) out[k] = e[k]
+  const sub = e.agent === 'claude' ? cleanSubscription(e.sub) : null
+  if (sub) out.sub = sub
   if (Array.isArray(e.providers)) out.providers = e.providers.map((p) => ({ name: p.name, type: p.type }))
   if (Array.isArray(e.override)) out.override = e.override.filter((o) => OVERRIDES.includes(o))
   out.state = entryState(e)

@@ -9,18 +9,24 @@ import path from 'node:path'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { t } from './i18n'
 import { retryAfterMs } from './usagePoller'
+import { subscriptionFields } from '../shared/claudeSubscription'
 
 const ENDPOINTS = Object.freeze({
   codex: 'https://chatgpt.com/backend-api/wham/usage',
   credits: 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits',
   consume: 'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume',
-  claude: 'https://api.anthropic.com/api/oauth/usage'
+  claude: 'https://api.anthropic.com/api/oauth/usage',
+  // The account's subscription now (claudePlanCheck.js): its plan, whether
+  // it is paid, a trial. Read with the same login as its usage.
+  profile: 'https://api.anthropic.com/api/oauth/profile'
 })
 const AUTH_LIMIT = 1024 * 1024
 // A Claude account's .claude.json carries the system's whole projects list,
 // several MB for some people: only its profile is read from it.
 const CONFIG_LIMIT = 16 * 1024 * 1024
 const RESPONSE_LIMIT = 256 * 1024
+// A refusal's answer is read only to tell its kind (permission_error).
+const REFUSAL_LIMIT = 16 * 1024
 const TICKET_TTL = 5 * 60 * 1000
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const finite = (value) => typeof value === 'number' && Number.isFinite(value)
@@ -336,7 +342,13 @@ export function createProviderUsage({
   clock = Date.now,
   history,
   log,
-  timeoutMs = 10000
+  timeoutMs = 10000,
+  // claudePlanCheck.js: the plan Anthropic reported for a Claude account
+  // (accountId -> "Max 20x", "Free"... or undefined), which wins over its
+  // login file's; and the account whose usage was refused for want of a
+  // subscription (its plan is checked again).
+  livePlan = null,
+  onNoSubscription = null
 } = {}) {
   let loggedClaudeShape = false
   const generation = { codex: 0, claude: 0 }
@@ -354,7 +366,9 @@ export function createProviderUsage({
     )
       fail('validation', t('main.usage.chooseAccount', 'Choose an explicit account before reading usage.'))
   }
-  async function scope(provider, accountId) {
+  // anyAccount: a Claude account's subscription is checked for each account,
+  // not only the one new sessions use (its usage is).
+  async function scope(provider, accountId, { anyAccount = false } = {}) {
     validate(provider, accountId)
     const epoch = generation[provider]
     const state = await accounts.list()
@@ -363,7 +377,7 @@ export function createProviderUsage({
       !state?.ok ||
       !row ||
       row.error ||
-      row.selectedId !== accountId ||
+      (!anyAccount && row.selectedId !== accountId) ||
       state.jobs?.some((job) => job.provider === provider && job.state === 'running')
     )
       stale()
@@ -392,6 +406,7 @@ export function createProviderUsage({
     return {
       provider,
       accountId,
+      anyAccount,
       epoch,
       authPath,
       configPath,
@@ -426,8 +441,11 @@ export function createProviderUsage({
       )
     // Tessel never refreshes a token: Claude Code does, in the account's own folder.
     const expiresAt = snapshot.provider === 'claude' ? Number(parsed.claudeAiOauth?.expiresAt) : NaN
-    if (Number.isFinite(expiresAt) && expiresAt > 0 && expiresAt <= clock())
-      fail('auth', t('main.usage.claudeExpired', 'This Claude sign-in has expired. Start Claude on this account to refresh it.'))
+    if (Number.isFinite(expiresAt) && expiresAt > 0 && expiresAt <= clock()) {
+      const error = new UsageError('auth', t('main.usage.claudeExpired', 'This Claude sign-in has expired. Start Claude on this account to refresh it.'))
+      error.expired = true
+      throw error
+    }
     let who = null
     if (snapshot.provider === 'claude' && snapshot.accountId !== null) {
       const expected = identity(snapshot.expectedIdentity)
@@ -474,7 +492,7 @@ export function createProviderUsage({
     }
   }
   async function stable(snapshot, fingerprint) {
-    const current = await scope(snapshot.provider, snapshot.accountId)
+    const current = await scope(snapshot.provider, snapshot.accountId, { anyAccount: !!snapshot.anyAccount })
     if (
       current.epoch !== snapshot.epoch ||
       fold(current.authPath) !== fold(snapshot.authPath) ||
@@ -484,6 +502,30 @@ export function createProviderUsage({
     const login = await auth(current)
     if (login.fingerprint !== fingerprint || current.epoch !== generation[current.provider]) stale()
     return login
+  }
+  // The kind of a refusal ({ error: { type } }), its answer read up to a few
+  // KB and dropped; null when it does not say.
+  async function refusalType(response) {
+    const reader = response.body?.getReader()
+    if (!reader) return null
+    const chunks = []
+    let length = 0
+    try {
+      while (length <= REFUSAL_LIMIT) {
+        const item = await reader.read()
+        if (item.done) break
+        length += item.value.byteLength
+        chunks.push(Buffer.from(item.value))
+      }
+      if (length > REFUSAL_LIMIT) return null
+      const value = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      const type = value?.error?.type
+      return typeof type === 'string' && /^[a-z_]{1,40}$/.test(type) ? type : null
+    } catch {
+      return null
+    } finally {
+      await reader.cancel().catch(() => {})
+    }
   }
   async function network(snapshot, url, headers, body, post = false) {
     if (generation[snapshot.provider] !== snapshot.epoch) stale()
@@ -511,6 +553,12 @@ export function createProviderUsage({
           await response.body?.cancel().catch(() => {})
           fail('redirect', t('main.usage.endpointRedirected', 'The usage endpoint redirected; the request was refused.'))
         }
+        // Claude's usage refused with a permission_error: the account has no
+        // subscription any more (a canceled Max is a free account), so there
+        // is no usage to read. Said as that, not as a sign-in problem; only
+        // the error's type is read from the answer.
+        if (response.status === 403 && url === ENDPOINTS.claude && (await refusalType(response)) === 'permission_error')
+          fail('no-subscription', t('main.usage.noSubscription', 'This Claude account has no subscription: Anthropic gives it no usage limits to show.'))
         if (!response.ok) {
           await response.body?.cancel().catch(() => {})
           // 429: the service says when to come back; automatic refresh waits for it.
@@ -572,6 +620,16 @@ export function createProviderUsage({
       ? { retryAfterMs: error.retryAfterMs }
       : {})
   })
+  // The plan Anthropic reported for this Claude account (claudePlanCheck.js),
+  // when it was checked: a short name, never more.
+  function reportedPlan(accountId) {
+    try {
+      const value = livePlan?.(accountId)
+      return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9 ]{0,23}$/.test(value) ? value : undefined
+    } catch {
+      return undefined
+    }
+  }
   function mint(snapshot, fingerprint, credit, windows) {
     if (redeeming.has(`${snapshot.provider}:${snapshot.accountId}`)) return null
     for (const [key, value] of tickets) {
@@ -761,7 +819,7 @@ export function createProviderUsage({
         const sequence = ++readSequence[provider]
         const snapshot = await scope(provider, accountId)
         const login = await auth(snapshot)
-        knownPlan = provider === 'claude' ? login.plan || snapshot.plan : undefined
+        knownPlan = provider === 'claude' ? reportedPlan(accountId) || login.plan || snapshot.plan : undefined
         const data = await network(snapshot, ENDPOINTS[provider], login.headers)
         // Once per run: the NAMES of the fields Claude's usage answer has
         // (never values), to learn whether it tells about limit resets.
@@ -804,7 +862,7 @@ export function createProviderUsage({
           windows
         }
         const selectedPlan =
-          provider === 'claude' ? login.plan || snapshot.plan : plan(data.plan_type) || snapshot.plan
+          provider === 'claude' ? reportedPlan(accountId) || login.plan || snapshot.plan : plan(data.plan_type) || snapshot.plan
         if (selectedPlan) result.plan = selectedPlan
         if (provider === 'claude') {
           const breakdown = claudeBreakdown(data)
@@ -823,6 +881,13 @@ export function createProviderUsage({
         }
         return result
       } catch (error) {
+        if (provider === 'claude' && error instanceof UsageError && error.code === 'no-subscription') {
+          try {
+            onNoSubscription?.(accountId)
+          } catch {
+            /* its plan is checked later then */
+          }
+        }
         const result = errorResult(error, {
           provider: ['codex', 'claude'].includes(provider) ? provider : null,
           accountId: typeof accountId === 'string' ? accountId : null
@@ -874,6 +939,31 @@ export function createProviderUsage({
           }
         }
         return result
+      }
+    },
+    // A Claude account's subscription now (claudePlanCheck.js): its OAuth
+    // profile read with its login, through the same checks as a usage read
+    // (never refreshed: an expired login says so, code 'auth', expired), for
+    // any account, not only the selected one. Only the kept fields leave here
+    // (claudeSubscription.js), and who: a short hash of the account's email,
+    // to tell a later sign-in to another account in the same folder.
+    async claudeProfile({ accountId = null } = {}) {
+      try {
+        const snapshot = await scope('claude', accountId, { anyAccount: true })
+        const login = await auth(snapshot)
+        const data = await network(snapshot, ENDPOINTS.profile, login.headers)
+        const subscription = subscriptionFields(data)
+        if (!subscription) fail('response', t('main.usage.unsupportedResponse', 'The usage service returned an unsupported response.'))
+        await stable(snapshot, login.fingerprint)
+        const email = text(data.account?.email ?? data.account?.email_address)?.toLowerCase()
+        return {
+          ok: true,
+          accountId,
+          subscription,
+          who: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : null
+        }
+      } catch (error) {
+        return errorResult(error, { accountId: typeof accountId === 'string' ? accountId : null, ...(error?.expired ? { expired: true } : {}) })
       }
     },
     // Settings > Context's exact Claude counts (contextCost/anthropic.js),

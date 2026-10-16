@@ -230,6 +230,20 @@ describe('the account of a pane: not known yet, and the host’s default', () =>
     expect(full.title).toContain('coreine13@gmail.com · Claude Max · Org')
   })
 
+  it('a login the host checked: what Anthropic reports wins over its login file ("name · No subscription")', () => {
+    const at = Date.now() - 60_000
+    const canceled = { organization_type: 'claude_free', subscription_status: 'canceled', has_claude_max: false, has_claude_pro: false, checkedAt: at }
+    const l = entryLabel({ agent: 'claude', scope: 'default', email: 'coreine13@gmail.com', plan: 'max', planName: 'Claude Max', sub: canceled, cred: 'file', state: 'signed-in' }, 'box')
+    expect(l.name).toBe('coreine13 · No subscription')
+    expect(l.title).toContain('Free · No subscription')
+    expect(l.title).not.toContain('Claude Max')
+    expect(l.plan).toMatchObject({ warn: 'none', attention: true })
+    const max = entryLabel({ agent: 'claude', scope: 'default', email: 'coreine13@gmail.com', plan: 'pro', sub: { organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_20x', subscription_status: 'active', checkedAt: at }, cred: 'file', state: 'signed-in' }, 'box')
+    expect(max.name).toBe('coreine13 · Max 20x')
+    // A Codex entry never takes one.
+    expect(entryLabel({ agent: 'codex', scope: 'default', email: 'dev@example.com', plan: 'plus', sub: canceled, cred: 'file', state: 'signed-in' }).name).toBe('dev · Plus')
+  })
+
   it('a default per host and agent: kept in Settings, marked in the choices; null (the host’s own) keeps none', () => {
     settings.hostAccountDefaults = {}
     applyHostAccounts('ssh-d1', { ok: true, entries: [own, work] })

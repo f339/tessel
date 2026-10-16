@@ -6,6 +6,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { reactive, ref } from 'vue'
 import { resetSettings, settings } from '../settings'
 import { remoteHostsState } from '../remoteHosts'
+import { applyAccountList } from '../accountChoices'
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
@@ -222,5 +223,33 @@ describe('an agent pane on an SSH host: its account', () => {
     await flushPromises()
     const restart = document.body.querySelector('[data-test="menu-restart-on-account"]')
     expect(restart.getAttribute('title')).toContain('a new conversation')
+  })
+
+  // The subscription Anthropic reports for the account (a host's own check,
+  // or this PC's claudePlanCheck.js): "name · No subscription", never a modal.
+  const CANCELED = { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', billing_type: 'none', subscription_status: 'canceled', has_claude_max: false, has_claude_pro: false, checkedAt: Date.now() - 60_000 }
+  it('on a host: a login checked there with no subscription says so in its header and hover card', async () => {
+    detect.mockResolvedValue({ ok: true, entries: [{ ...entries[0], plan: 'max', sub: CANCELED }, entries[1]] })
+    await mountPane({ id: 'pane-p1', remoteHostId: 'ssh-plan' })
+    const chip = wrapper.get('[data-test="pane-account-chip"]')
+    expect(chip.text()).toBe('coreine13 · No subscription')
+    expect(chip.classes()).toContain('warn')
+    expect(chip.attributes('title')).toContain('no subscription')
+    expect(wrapper.find('[data-test="pane-plan-warn"]').exists()).toBe(false)
+  })
+
+  it('on this PC: its account’s subscription, as a tag when the header has no account chip, or in the chip', async () => {
+    const system = { id: null, label: 'System default', status: 'ready', email: 'me@home.test', plan: 'max', subscription: CANCELED }
+    applyAccountList({ ok: true, providers: [{ provider: 'claude', selectedId: null, system, accounts: [] }] })
+    await mountPane({ id: 'pane-p2', remoteHostId: undefined, accountId: null })
+    const tag = wrapper.get('[data-test="pane-plan-warn"]')
+    expect(tag.text()).toBe('No subscription')
+    expect(tag.attributes('title')).toContain('Switch panes')
+    wrapper.unmount()
+    applyAccountList({ ok: true, providers: [{ provider: 'claude', selectedId: null, system, accounts: [{ id: 'acc-1', label: 'w@corp.test', email: 'w@corp.test', status: 'ready' }] }] })
+    await mountPane({ id: 'pane-p3', remoteHostId: undefined, accountId: null })
+    expect(wrapper.get('[data-test="pane-account-chip"]').text()).toBe('me · No subscription')
+    expect(wrapper.find('[data-test="pane-plan-warn"]').exists()).toBe(false)
+    applyAccountList({ ok: true, providers: [] })
   })
 })

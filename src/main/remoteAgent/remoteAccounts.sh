@@ -289,6 +289,82 @@ __t_accts() {
   __ta_trash
   return 0
 }
+# A Claude login's subscription as Anthropic reports it now (its OAuth
+# profile), asked by the host itself, so the login never leaves it: the
+# token goes from its file to curl's standard input as a header (-H @-,
+# through the shell's own printf), never on a command line or into this
+# shell's variables, and only the kept fields of the answer are printed
+# (claudeSubscription.js), with the account's id to tell a later sign-in.
+# A login that has expired is not used (Tessel never refreshes one); the
+# first request that cannot reach the service ends the check (the host
+# cannot reach it). Without curl (or a printf of the shell's own), nothing
+# is asked: `@n nocurl`.
+#   @a claude <scope> <id|-> <mtime|-> <folder>
+#   v subcheck ok|expired|refused|failed|skipped|nologin
+#   v sub_<field> <value>, v account <uuid>
+__ta_num() { grep -o "\"$1\"[[:space:]]*:[[:space:]]*[0-9][0-9]*" 2>/dev/null | head -n 1 | sed 's/.*:[[:space:]]*//'; }
+__ta_bool() { grep -o "\"$1\"[[:space:]]*:[[:space:]]*[a-z]*" 2>/dev/null | head -n 1 | sed 's/.*:[[:space:]]*//'; }
+# $1 scope, $2 id, $3 config folder
+__ta_planone() {
+  __c="$3/.credentials.json"
+  [ -f "$__c" ] && [ -r "$__c" ] && [ ! -L "$__c" ] || return 0
+  __ta_head claude "$1" "$2" "$__c" "$3" || return 0
+  if [ "$__pdown" = 1 ]; then __ta_v subcheck skipped; return 0; fi
+  [ "$(__ta_flat "$__c" | __ta_set accessToken)" = 1 ] || { __ta_v subcheck nologin; return 0; }
+  __tx=$(__ta_flat "$__c" | __ta_num expiresAt)
+  __tn=$(date +%s 2>/dev/null)
+  if [ -n "$__tx" ] && [ "${#__tx}" -le 16 ] && [ -n "$__tn" ] && [ $((__tx / 1000)) -le "$__tn" ]; then __ta_v subcheck expired; return 0; fi
+  __tr=$(__ta_flat "$__c" | __ta_str accessToken | {
+    read -r __tk
+    case $__tk in ''|*[!A-Za-z0-9._~+/=-]*) exit 3 ;; esac
+    printf 'Authorization: Bearer %s\n' "$__tk"
+  } | curl -sS --proto =https --max-redirs 0 --connect-timeout 5 --max-time 8 -H @- -H 'anthropic-beta: oauth-2025-04-20' -H 'User-Agent: claude-code/2.1.0' -w '\n@@S %{http_code}\n' https://api.anthropic.com/api/oauth/profile 2>/dev/null)
+  __rc=$?
+  case $__rc in
+    0) ;;
+    6|7|28|35|60) __pdown=1; __tr=; __ta_v subcheck failed; return 0 ;;
+    *) __tr=; __ta_v subcheck failed; return 0 ;;
+  esac
+  __st=$(printf '%s\n' "$__tr" | sed -n 's/^@@S //p' | tail -n 1)
+  case $__st in
+    200) ;;
+    401|403) __tr=; __ta_v subcheck refused; return 0 ;;
+    *) __tr=; __ta_v subcheck failed; return 0 ;;
+  esac
+  __tb=$(printf '%s' "$__tr" | head -c 262144 | tr -d '\n\r'); __tr=
+  __ta_v subcheck ok
+  for __k in organization_type rate_limit_tier seat_tier billing_type subscription_status claude_code_trial_ends_at; do
+    __ta_v "sub_$__k" "$(printf '%s' "$__tb" | __ta_str "$__k")"
+  done
+  __ta_v sub_has_claude_max "$(printf '%s' "$__tb" | __ta_bool has_claude_max)"
+  __ta_v sub_has_claude_pro "$(printf '%s' "$__tb" | __ta_bool has_claude_pro)"
+  __ta_v account "$(printf '%s' "$__tb" | __ta_obj account | __ta_str uuid)"
+  __tb=
+  return 0
+}
+# $1: dirs <claude folder|-> (the login shell's CLAUDE_CONFIG_DIR, kept by
+# Tessel), or nothing. The agent's own folder, that one, and the account
+# folders Tessel made (at most 10).
+__t_acctplan() {
+  printf '@h %s %s\n' "$(uname -s 2>/dev/null | tr -d ' ')" "$HOME"
+  command -v curl >/dev/null 2>&1 || { printf '@n nocurl\n'; return 0; }
+  [ "$(command -v printf)" = printf ] || { printf '@n nocurl\n'; return 0; }
+  __pdown=0; __pn=0; __lc=
+  [ "$1" = dirs ] && [ "$2" != - ] && __lc=$2
+  __ta_planone default - "$HOME/.claude"
+  case $__lc in /*) case $__lc in "$HOME/.claude"|"$HOME/.claude/"|"$HOME"/.tessel-server/*) ;; *) __ta_planone env - "${__lc%/}" ;; esac ;; esac
+  __r="$HOME/.tessel-server/accounts/claude"
+  if [ -d "$__r" ] && [ ! -L "$__r" ]; then
+    for __d in "$__r"/*; do
+      [ -d "$__d" ] && [ ! -L "$__d" ] || continue
+      __i=${__d##*/}
+      __ta_id "$__i" && __ta_mark "$__d" claude "$__i" || continue
+      __pn=$((__pn+1)); [ "$__pn" -le 10 ] || break
+      __ta_planone tessel "$__i" "$__d"
+    done
+  fi
+  return 0
+}
 # Make (new) or repair the folder of one account: ~/.tessel-server/accounts/
 # <agent>/<id>, mode 700, with its marker. Claude Code: its conversations,
 # plugins, skills... are the default folder's (links into ~/.claude), as on

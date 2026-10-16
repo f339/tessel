@@ -300,6 +300,10 @@ const api = {
     cancelLogin: (id) => ipcRenderer.invoke('accounts:cancelLogin', id),
     launchEnv: (provider, accountId) => ipcRenderer.invoke('accounts:launchEnv', { provider, accountId }),
     // An older version's Claude account switch still to be undone.
+    // Each Claude account's subscription checked now (at most once a minute;
+    // force: after a sign-in); onPlansChanged: a result changed.
+    checkPlans: (opts) => ipcRenderer.invoke('accounts:checkPlans', { force: !!(opts && opts.force === true) }),
+    onPlansChanged: (cb) => subscribe('claudePlans:changed', cb),
     claudeSwitch: () => ipcRenderer.invoke('accounts:claudeSwitch'),
     finishClaudeSwitch: () => ipcRenderer.invoke('accounts:finishClaudeSwitch'),
     discardClaudeSwitch: () => ipcRenderer.invoke('accounts:discardClaudeSwitch')

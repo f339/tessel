@@ -1,6 +1,7 @@
 <script setup>
 // Settings > AI provider accounts: sign-ins, usage keys and where you are
 // signed in.
+import { watch } from 'vue'
 import ProviderAccounts from '../ProviderAccounts.vue'
 import ProviderUsageAccounts from '../ProviderUsageAccounts.vue'
 import SignedInPlaces from '../SignedInPlaces.vue'
@@ -8,6 +9,21 @@ import { PAGES } from './settingsPages'
 import { useSettingsShell } from './settingsShell'
 
 const { shown } = useSettingsShell()
+// Each time the page opens, each Claude account's subscription is checked
+// (main's claudePlanCheck.js, at most once a minute); a change reaches the
+// rows below (accounts.onPlansChanged).
+watch(
+  () => shown('accounts'),
+  (open) => {
+    if (!open) return
+    try {
+      window.shellApi?.accounts?.checkPlans?.()?.catch?.(() => {})
+    } catch {
+      /* checked at the next opening */
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <template>

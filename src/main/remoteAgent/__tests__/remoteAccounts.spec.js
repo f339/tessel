@@ -11,6 +11,7 @@ import { createRemoteSession, sessionArgs, FUNCTIONS, prelude } from '../../remo
 import { spawnSync } from 'child_process'
 import {
   parseAccounts,
+  parsePlans,
   parsePaneProcesses,
   parseDiag,
   folderIdOf,
@@ -1179,5 +1180,161 @@ describe('the pane’s real folder and the details, in main', () => {
   it('paneFolders without the host’s home in its answer: nothing taken for sure', async () => {
     const service = createRemoteAccounts({ run: async () => ({ rc: 0, out: Buffer.from('@p pane-a1 42 -\n') }) })
     expect((await service.paneFolders('ssh-1', [{ paneId: 'pane-a1', agent: 'claude' }])).panes['pane-a1']).toEqual({ found: 'unknown', dir: null, folderId: null, own: false })
+  })
+})
+
+// A Claude login's subscription checked by the host itself (__t_acctplan):
+// the login goes from its file to curl's standard input, never on a command
+// line, and only the kept fields of Anthropic's answer come back.
+const PROFILE_ANSWER = {
+  account: { uuid: '1f0c6d1e-1111-4111-8111-111111111111', email: 'canceled.fixture@example.invalid', full_name: 'Fixture Person', has_claude_max: false, has_claude_pro: false },
+  organization: {
+    uuid: '2f0c6d1e-2222-4222-8222-222222222222',
+    name: 'Fixture Organization',
+    organization_type: 'claude_free',
+    rate_limit_tier: 'default_claude_ai',
+    billing_type: 'none',
+    subscription_status: 'canceled',
+    seat_tier: null,
+    claude_code_trial_ends_at: null,
+    payment_auth_hosted_invoice_url: 'https://invoice.example.invalid/pay/SECRET-INVOICE'
+  }
+}
+const lines = (list) => ({ rc: 0, out: Buffer.from(list.join('\n') + '\n') })
+describe('Claude subscriptions on a host (its own check)', () => {
+  it('parsePlans: the kept fields only, checked again; a host without curl says so', () => {
+    const out = parsePlans(
+      [
+        '@h Linux /home/u',
+        '@a claude default - 1760000000 /home/u/.claude',
+        'v subcheck ok',
+        'v sub_organization_type claude_max',
+        'v sub_rate_limit_tier default_claude_max_20x',
+        'v sub_subscription_status active',
+        'v sub_has_claude_max true',
+        'v sub_billing_type stripe subscription',
+        'v sub_payment_auth_hosted_invoice_url https://invoice.example.invalid/x',
+        'v account 1f0c6d1e-1111-4111-8111-111111111111',
+        '@a claude tessel abc123 - /home/u/.tessel-server/accounts/claude/abc123',
+        'v subcheck expired',
+        '@a codex default - - /home/u/.codex',
+        'v subcheck ok'
+      ].join('\n'),
+      5000
+    )
+    expect(out.unavailable).toBeNull()
+    expect(out.entries).toEqual([
+      {
+        scope: 'default',
+        id: null,
+        dir: '/home/u/.claude',
+        check: 'ok',
+        account: '1f0c6d1e-1111-4111-8111-111111111111',
+        sub: { organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_20x', seat_tier: null, billing_type: null, subscription_status: 'active', has_claude_max: true, has_claude_pro: null, claude_code_trial_ends_at: null, checkedAt: 5000 }
+      },
+      { scope: 'tessel', id: 'abc123', dir: '/home/u/.tessel-server/accounts/claude/abc123', check: 'expired', account: null, sub: null }
+    ])
+    expect(JSON.stringify(out)).not.toMatch(/invoice/)
+    expect(parsePlans('@h Linux /home/u\n@n nocurl\n').unavailable).toBe('nocurl')
+  })
+
+  describe.skipIf(!gitSh())('on a POSIX sh playing the host', () => {
+    let dir
+    afterEach(() => {
+      if (dir) fs.rmSync(dir, { recursive: true, force: true })
+      dir = null
+    })
+    // A curl that records how it was called and answers like Anthropic.
+    const fakeCurl = [
+      'curl() {',
+      '  __h=$(cat)',
+      `  printf '%s\\n' "$*" >>"$HOME/curl-args"`,
+      `  printf '%s\\n' "$__h" >>"$HOME/curl-stdin"`,
+      '  cat "$HOME/answer.json"',
+      `  printf '\\n@@S 200\\n'`,
+      '}'
+    ].join('\n')
+    const run = (home, before = fakeCurl, call = '__t_acctplan') =>
+      spawnSync(gitSh(), ['-s'], { input: `${ACCOUNTS_SHELL}\nHOME='${posixPath(home)}'\n${before}\n${call}\n`, encoding: 'utf8' }).stdout
+
+    it('the token reaches curl on its standard input only; nothing secret comes back; an expired login is not used', () => {
+      dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-acctplan-'))
+      write(dir, 'answer.json', PROFILE_ANSWER)
+      write(dir, '.claude/.credentials.json', { claudeAiOauth: { accessToken: 'sk-ant-oat01-SECRETACCESS', refreshToken: 'sk-ant-ort01-SECRETREFRESH', expiresAt: 9999999999999, subscriptionType: 'max' } })
+      write(dir, '.tessel-server/accounts/claude/abc123/.tessel-account', 'tessel-account claude abc123\n')
+      write(dir, '.tessel-server/accounts/claude/abc123/.credentials.json', { claudeAiOauth: { accessToken: 'sk-ant-oat01-SECRETOLD', expiresAt: 1000 } })
+      const out = run(dir)
+      for (const secret of [...SECRETS, 'SECRETOLD', 'SECRET-INVOICE', 'example.invalid', 'Fixture']) expect(out).not.toContain(secret)
+      const args = fs.readFileSync(join(dir, 'curl-args'), 'utf8')
+      expect(args).not.toContain('SECRET')
+      expect(args).toContain('--proto =https')
+      expect(args).toContain('--max-redirs 0')
+      expect(args).toContain('https://api.anthropic.com/api/oauth/profile')
+      expect(fs.readFileSync(join(dir, 'curl-stdin'), 'utf8').trim()).toBe('Authorization: Bearer sk-ant-oat01-SECRETACCESS')
+      const parsed = parsePlans(out, 7000)
+      expect(parsed.entries).toMatchObject([
+        { scope: 'default', check: 'ok', account: '1f0c6d1e-1111-4111-8111-111111111111', sub: { organization_type: 'claude_free', subscription_status: 'canceled', has_claude_max: false, checkedAt: 7000 } },
+        { scope: 'tessel', id: 'abc123', check: 'expired', sub: null }
+      ])
+      // The expired one was never sent.
+      expect(fs.readFileSync(join(dir, 'curl-args'), 'utf8').trim().split('\n')).toHaveLength(1)
+    })
+
+    it('a host that cannot reach the service: the first login says so, the others are not tried; no curl: nothing asked', () => {
+      dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-acctplan-'))
+      write(dir, '.claude/.credentials.json', { claudeAiOauth: { accessToken: 'sk-ant-oat01-SECRETACCESS', expiresAt: 9999999999999 } })
+      write(dir, '.tessel-server/accounts/claude/abc123/.tessel-account', 'tessel-account claude abc123\n')
+      write(dir, '.tessel-server/accounts/claude/abc123/.credentials.json', { claudeAiOauth: { accessToken: 'sk-ant-oat01-SECRETACCESS', expiresAt: 9999999999999 } })
+      const down = run(dir, 'curl() { cat >/dev/null; echo x >>"$HOME/tries"; return 7; }')
+      expect(parsePlans(down).entries.map((e) => e.check)).toEqual(['failed', 'skipped'])
+      expect(fs.readFileSync(join(dir, 'tries'), 'utf8').trim().split('\n')).toHaveLength(1)
+      const none = run(dir, 'PATH=/nonexistent')
+      expect(parsePlans(none)).toMatchObject({ unavailable: 'nocurl', entries: [] })
+    })
+  })
+
+  it('a detection starts a check now and then; its result goes with the matching login, through to the window; an expired login keeps the last one', async () => {
+    let clock = 1000
+    const account = 'v account 1f0c6d1e-1111-4111-8111-111111111111'
+    let planLines = ['@h Linux /home/u', '@a claude default - - /home/u/.claude', 'v subcheck ok', 'v sub_organization_type claude_free', 'v sub_subscription_status canceled', account]
+    const detectLines = ['@h Linux /home/u', '@a claude default - - /home/u/.claude', 'v email a@b.co', account, 'v cred file', 'v plan max', '@a claude tessel abc123 - /home/u/.tessel-server/accounts/claude/abc123', 'v email w@corp.example', 'v cred file']
+    const calls = []
+    const onPlans = vi.fn()
+    const service = createRemoteAccounts({
+      now: () => clock,
+      onPlans,
+      run: async (hostId, fn) => {
+        calls.push(fn)
+        return lines(fn === '__t_acctplan' ? planLines : detectLines)
+      }
+    })
+    const first = await service.detect('ssh-1')
+    expect(first.entries[0].sub).toBeUndefined()
+    await vi.waitFor(() => expect(onPlans).toHaveBeenCalledTimes(1))
+    expect(calls.filter((f) => f === '__t_acctplan')).toHaveLength(1)
+    const shown = publicDetection(service.cached('ssh-1'))
+    expect(shown.entries[0]).toMatchObject({ plan: 'max', sub: { organization_type: 'claude_free', subscription_status: 'canceled', checkedAt: 1000 } })
+    expect(shown.entries[1].sub).toBeUndefined()
+    // Not again at the next detections (every few hours at most), unless asked.
+    clock += 60_000
+    await service.detect('ssh-1', { fresh: true })
+    expect(calls.filter((f) => f === '__t_acctplan')).toHaveLength(1)
+    expect((await service.detect('ssh-1')).entries[0].sub).toMatchObject({ organization_type: 'claude_free' })
+    // Asked (a refresh): the login has expired there; the last result stays.
+    planLines = ['@h Linux /home/u', '@a claude default - - /home/u/.claude', 'v subcheck expired']
+    clock += 61_000
+    expect(await service.planCheck('ssh-1', { force: true })).toMatchObject({ ok: true, checked: 0 })
+    expect(service.cached('ssh-1').entries[0].sub).toMatchObject({ organization_type: 'claude_free', checkedAt: 1000 })
+    // Another account signed in to that folder since: not its result.
+    const other = createRemoteAccounts({
+      now: () => clock,
+      run: async (hostId, fn) =>
+        fn === '__t_acctplan'
+          ? lines(['@h Linux /home/u', '@a claude default - - /home/u/.claude', 'v subcheck ok', 'v sub_organization_type claude_max', account])
+          : lines(['@h Linux /home/u', '@a claude default - - /home/u/.claude', 'v email b@b.co', 'v account 5f0c6d1e-5555-4555-8555-555555555555', 'v cred file'])
+    })
+    await other.detect('ssh-1')
+    await other.planCheck('ssh-1')
+    expect(other.cached('ssh-1').entries[0].sub).toBeUndefined()
   })
 })
