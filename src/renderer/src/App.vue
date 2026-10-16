@@ -3449,13 +3449,13 @@ function buildCommands() {
   })
 
   const agentsGroup = t('app.cmd.group.agents', 'Agents')
-  add(agentsGroup, t('app.cmd.resumeSession', 'Resume a session'), openSessions, {
+  add(agentsGroup, t('app.cmd.resumeSession', 'Resume a past conversation'), openSessions, {
     hint: t('app.cmd.resumeSessionHint', 'Reopen a past agent conversation')
   })
   add(agentsGroup, taskPanelOpen.value && sideTab.value === 'dashboard' ? t('app.cmd.hideAgentDashboard', 'Hide Agent Dashboard') : t('app.cmd.showAgentDashboard', 'Show Agent Dashboard'), () => toggleSideTab('dashboard'), {
     hint: t('app.cmd.agentDashboardHint', 'Every agent of every project at a glance')
   })
-  add(agentsGroup, taskPanelOpen.value && sideTab.value === 'history' ? t('app.cmd.hideSessionHistory', 'Hide Agent Session History') : t('app.cmd.showSessionHistory', 'Show Agent Session History'), () => toggleSideTab('history'), {
+  add(agentsGroup, taskPanelOpen.value && sideTab.value === 'history' ? t('app.cmd.hideSessionHistory', 'Hide past conversations') : t('app.cmd.showSessionHistory', 'Show past conversations'), () => toggleSideTab('history'), {
     hint: t('app.cmd.sessionHistoryHint', 'Browse, search and resume past agent conversations')
   })
   add(agentsGroup, taskPanelOpen.value && sideTab.value === 'conversations' ? t('conversations.cmd.hide', 'Hide Conversations') : t('conversations.cmd.show', 'Show Conversations'), () => toggleSideTab('conversations'), {
@@ -4325,7 +4325,6 @@ function withStatusBar(fn) {
 // then the window, panel or tool opens, as from the palette or the toolbar.
 const settingsToolActions = {
   tools: () => openTools(),
-  sessions: () => openSessions(),
   dashboard: () => showSideTab('dashboard'),
   history: () => showSideTab('history'),
   tasks: () => showSideTab('tasks'),
@@ -13298,7 +13297,13 @@ onBeforeUnmount(() => {
           focusPane(id)
         }
       "
-      @copied="showToast(t('app.sessions.copied', 'Session ID copied.'), { timeout: 2000 })"
+      @open-editor="
+        (file) => {
+          sessionsOpen = false
+          openInTesselEditor({ file, preview: false })
+        }
+      "
+      @toast="(text) => showToast(text, { timeout: 5000 })"
       @close="closeSessions"
     />
 

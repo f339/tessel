@@ -24,7 +24,6 @@ const appSource = readFileSync(join(__dirname, '..', 'App.vue'), 'utf8').replace
 // What each row must do in App.vue (the palette's or toolbar's own call).
 const EXPECTED_ACTION = {
   tools: 'openTools()',
-  sessions: 'openSessions()',
   dashboard: "showSideTab('dashboard')",
   history: "showSideTab('history')",
   tasks: "showSideTab('tasks')",
@@ -338,15 +337,28 @@ describe('Settings > Skills and MCP servers pages', { timeout: 30_000 }, () => {
     expect(visiblePages(wrapper)).toEqual(['orchestration'])
   })
 
-  it("Orchestration's Details opens the MCP servers page (its team connections are no tab there any more)", async () => {
+  it('Orchestration holds the team connections in its Agent hooks group (no jump to MCP servers)', async () => {
+    let reads = 0
+    window.shellApi.teamHooksStatus = async () => {
+      reads++
+      return { node: { found: true }, backups: [], agents: [{ id: 'claude', hooks: 'installed', approval: null, lastSignal: null }] }
+    }
     wrapper = mountAt('orchestration')
     await flushPromises()
-    const details = wrapper.get('.set-page[data-page="orchestration"]').findAll('button').find((b) => b.text() === 'Details')
-    await details.trigger('click')
+    const page = wrapper.get('.set-page[data-page="orchestration"]')
+    expect(page.findAll('button').some((b) => b.text() === 'Details')).toBe(false)
+    const hooks = page.get('[data-agent-hooks]')
+    // Folded under its row until asked for: the Team group shows each agent's state.
+    expect(hooks.find('.mcp-connections').exists()).toBe(false)
+    const show = hooks.get('[data-orch-connections]')
+    expect(show.attributes('aria-expanded')).toBe('false')
+    await show.trigger('click')
     await flushPromises()
-    expect(visiblePages(wrapper)).toEqual(['mcp'])
-    expect(wrapper.find('.set-page[data-page="mcp"] .mcp-connections').exists()).toBe(false)
-    expect(wrapper.get('.set-page[data-page="mcp"] [role="tab"][aria-selected="true"]').text()).toContain('Installed')
+    expect(show.attributes('aria-expanded')).toBe('true')
+    expect(hooks.find('.mcp-connections').exists()).toBe(true)
+    expect(hooks.text()).toContain('Claude Code')
+    expect(reads).toBe(2) // the page's own read, then the connections'
+    expect(visiblePages(wrapper)).toEqual(['orchestration'])
   })
 
   it('search finds both pages by name, without loading their windows', async () => {
