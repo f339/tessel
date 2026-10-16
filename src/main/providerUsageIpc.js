@@ -111,7 +111,13 @@ export function registerProviderUsage({
   // Tests: the provider logins read (default: this computer's).
   usageSources = null,
   // The variables a provider's CLI runs with (Antigravity's agy /usage).
-  cliEnv = null
+  cliEnv = null,
+  // Live Share (liveShare/shareUsage.js): receives every result pushed on
+  // providerUsage:update, after the window got it.
+  onResult = null,
+  // Live Share: receives the function that returns the cached readings
+  // (no provider call): { hidden, entries: { [provider]: poller entry } }.
+  onCache = null
 }) {
   const history = userData
     ? createResetHistory({ file: join(userData, 'reset-history.json'), log })
@@ -148,15 +154,39 @@ export function registerProviderUsage({
     }
     return out
   }
+  // A window that is gone still leaves Live Share its copy.
+  const pushed = (result) => {
+    try {
+      send('providerUsage:update', result)
+    } finally {
+      try {
+        onResult?.(result)
+      } catch {
+        /* Live Share's copy only: the window has its result */
+      }
+    }
+  }
   const poller =
     givenPoller ||
     createUsagePoller({
       read: readOne,
       targets: autoTargets,
-      send: (result) => send('providerUsage:update', result),
+      send: pushed,
       getWindow,
       log
     })
+  // The providers the Usage menu hides (Settings), as the window last said.
+  let hiddenProviders = []
+  try {
+    onCache?.(() => ({
+      hidden: [...hiddenProviders],
+      entries: Object.fromEntries(
+        USAGE_PROVIDERS.map((p) => [p.id, poller.entry?.(p.id) || null]).filter(([, entry]) => entry)
+      )
+    }))
+  } catch {
+    /* no cached readings for Live Share then */
+  }
   const live = createLiveUsageIngest({ accounts, poller, log })
   try {
     onLiveIngest?.((event) => live.ingest(event))
@@ -191,11 +221,13 @@ export function registerProviderUsage({
   // Settings: the providers hidden from the Usage menu and the interval (0 = off).
   handle(
     'providerUsage:autoRefresh',
-    (query) =>
-      poller.configure({
-        hidden: validHiddenUsageProviders(query.hidden),
+    (query) => {
+      hiddenProviders = validHiddenUsageProviders(query.hidden)
+      return poller.configure({
+        hidden: hiddenProviders,
         intervalMs: query.intervalMs === 0 ? 0 : Number(query.intervalMs)
-      }),
+      })
+    },
     () => t('main.usage.autoRefreshFailed', 'Could not set the usage refresh.')
   )
   // OpenCode's usage report (tokens and recorded cost), from its own
