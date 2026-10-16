@@ -41,7 +41,6 @@ import { THEMES } from './themes'
 import McpDialog from './components/McpDialog.vue'
 import SkillsDialog from './components/SkillsDialog.vue'
 import CommandPalette from './components/CommandPalette.vue'
-import ToolsDialog from './components/ToolsDialog.vue'
 import SessionsDialog from './components/SessionsDialog.vue'
 import { OWN_ID_AGENTS, FOUND_IN_FILES, resumeArgs, resumeLine, safeSessionId } from './agentResumeLine'
 import { getPane } from './paneRegistry'
@@ -865,7 +864,6 @@ function runQuickCommand(id, q) {
 const mcpOpen = ref(false)
 // The Skills window (SkillsDialog.vue): agent skills, listed, added, removed.
 const skillsOpen = ref(false)
-const toolsOpen = ref(false)
 const sessionsOpen = ref(false)
 // Launcher's "separate copy" (git worktree) option for agents.
 const useWorktree = ref(false)
@@ -3466,7 +3464,7 @@ function buildCommands() {
   })
   add(agentsGroup, t('app.cmd.mcp', 'MCP servers'), () => (mcpOpen.value = true), { hint: t('app.cmd.mcpHint', 'Give agents extra tools') })
   add(agentsGroup, t('app.cmd.skills', 'Skills'), () => (skillsOpen.value = true), { hint: t('app.cmd.skillsHint', 'See, add and remove agent skills') })
-  add(agentsGroup, t('app.cmd.installTools', 'Install tools'), openTools, { hint: t('app.cmd.installToolsHint', 'Agents, Git, Node.js and more') })
+  add(agentsGroup, t('app.cmd.installTools', 'Install tools'), openTools, { hint: t('app.cmd.installToolsHint', 'Git, Node.js and the other tools agents use') })
   add(agentsGroup, t('app.cmd.checkAgentUpdates', 'Check for agent updates'), () => checkAgentUpdates({ force: true }), {
     hint: t('app.cmd.checkAgentUpdatesHint', 'Newer versions of your installed agent CLIs')
   })
@@ -3813,7 +3811,6 @@ async function confirmWslNode(label, steps, shellId) {
 // forces a shell, e.g. PowerShell for commands written in PowerShell syntax.
 async function runInPane({ label, command, steps, shell }) {
   closeMenus()
-  toolsOpen.value = false
   const shellId = shell && shells.value.some((s) => s.id === shell) ? shell : selectedShell.value
   if (!(await confirmWslNode(label, steps || [command], shellId))) return
   // Installs run on this computer, also from a remote project.
@@ -3896,7 +3893,6 @@ onBeforeUnmount(() => stopInstallResults && stopInstallResults())
 async function installAgent(agent) {
   if (!agent || !agent.install) return
   closeMenus()
-  toolsOpen.value = false
   if (agent.installConfirm) return installAgentConfirmed(agent)
   const shellId = selectedShell.value
   // Install first; start the agent (with its session) only if that succeeds.
@@ -4069,16 +4065,17 @@ async function voiceTyping(paneId) {
     showToast(t('app.voice.failed', 'Could not start voice typing. Press Win+H to start it yourself.'), { kind: 'error' })
 }
 
+// Install tools: Settings > Developer tools (it was a window of its own).
 function openTools() {
   closeMenus()
-  toolsOpen.value = true
+  openSettingsAt('devtools')
 }
 
-function closeTools() {
-  toolsOpen.value = false
-  nextTick(() => {
-    focusActiveInput()
-  })
+// The New menu's "Install agents or add your own": Settings > Agents, with
+// the agents not installed unfolded.
+function openAgentInstalls() {
+  closeMenus()
+  openSettingsAt('agents', 'set-agents-missing')
 }
 
 // Ctrl+Shift+T: the default agent (Settings > Agents) when one is set, is
@@ -12255,7 +12252,6 @@ function dialogOpen() {
     settingsOpen.value ||
     mcpOpen.value ||
     skillsOpen.value ||
-    toolsOpen.value ||
     sessionsOpen.value ||
     helpOpen.value ||
     updateOpen.value ||
@@ -12434,7 +12430,6 @@ function onKey(e, opts = {}) {
     settingsOpen.value = false
     mcpOpen.value = false
     skillsOpen.value = false
-    toolsOpen.value = false
     sessionsOpen.value = false
     if (!githubBusy.value) githubOpen.value = false
     if (!linearBusy.value) linearOpen.value = false
@@ -13256,7 +13251,7 @@ onBeforeUnmount(() => {
       :account-choice="launchMenuLocal"
       :host-menu="launchMenuHost"
       @worktree="(v) => (useWorktree = v)"
-      @tools="openTools"
+      @tools="openAgentInstalls"
       :x="launcher.x"
       :y="launcher.y"
       @launch="onLauncherLaunch"
@@ -13300,15 +13295,6 @@ onBeforeUnmount(() => {
       "
       @copied="showToast(t('app.sessions.copied', 'Session ID copied.'), { timeout: 2000 })"
       @close="closeSessions"
-    />
-
-    <ToolsDialog
-      v-if="toolsOpen"
-      :agents="agents"
-      @run="runInPane"
-      @install-agent="installAgent"
-      @refresh="loadAgents(true)"
-      @close="closeTools"
     />
 
     <McpDialog
@@ -13447,7 +13433,7 @@ onBeforeUnmount(() => {
       :key="approvalCard.card.command + approvalCard.card.kind"
       :card="approvalCard.card"
       @answer="answerAgentApproval"
-      @configure="openSettingsAt('agents')"
+      @configure="openSettingsAt('agents', 'set-agent-terminal')"
     />
 
     <NewTaskDialog

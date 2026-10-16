@@ -25,7 +25,6 @@ const copy = () => t('settings.tools.copy', 'Copy')
 // Page id -> its rows, in the order shown.
 export const SETTINGS_TOOLS = {
   agents: [
-    row('tools', () => t('app.cmd.installTools', 'Install tools'), () => t('settings.tools.toolsHint', 'Install agents, Git, Node.js and more, and add your own agents.'), open),
     row('sessions', () => t('app.cmd.resumeSession', 'Resume a session'), () => t('app.cmd.resumeSessionHint', 'Reopen a past agent conversation'), open),
     row('dashboard', () => t('settings.tools.dashboard', 'Agent Dashboard'), () => t('app.cmd.agentDashboardHint', 'Every agent of every project at a glance'), show),
     row('history', () => t('settings.tools.sessionHistory', 'Agent Session History'), () => t('app.cmd.sessionHistoryHint', 'Browse, search and resume past agent conversations'), show)

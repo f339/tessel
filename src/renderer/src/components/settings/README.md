@@ -72,6 +72,11 @@ The search (in the shell) reads the rendered text of every page, so:
   title that matches shows the whole group; a page title (or its English
   title) shows the whole page.
 - `useSettingsShell()` runs the search again when the page re-renders.
+- A page with tabs (Settings > Agents) keeps every tab rendered and hides
+  the others with CSS only: the section carries `data-tab` (removed while
+  searching) and each `.set-group` its own `data-tab`, so a search shows its
+  matches from every tab. Settings opened on an anchor (`anchor` from the
+  shell) shows the tab that holds it.
 - The shell counts the rows it shows and highlights the words found in them
   (a CSS Custom Highlight, `::highlight(settings-search)`): nothing is added
   to a page's DOM, so no page needs to do anything for it.

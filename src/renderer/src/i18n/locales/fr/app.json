@@ -253,7 +253,7 @@
       "mcp": "Serveurs MCP",
       "mcpHint": "Donner des outils supplémentaires aux agents",
       "installTools": "Installer des outils",
-      "installToolsHint": "Agents, Git, Node.js et plus",
+      "installToolsHint": "Git, Node.js et les autres outils qu'utilisent les agents",
       "checkAgentUpdates": "Rechercher des mises à jour des agents",
       "checkAgentUpdatesHint": "Nouvelles versions de vos CLI d’agents installées",
       "updateAgents": "Mettre à jour les agents ({{count}})",

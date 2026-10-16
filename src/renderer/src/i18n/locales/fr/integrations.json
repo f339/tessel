@@ -229,42 +229,28 @@
     "skillsHint": "Compétences des agents : instructions et fichiers que les agents chargent quand une tâche en a besoin"
   },
   "tools": {
-    "title": "Outils",
     "checking": "Vérification…",
     "checkAgain": "Vérifier à nouveau",
-    "close": "Fermer (Échap)",
-    "intro": "Les installations s'exécutent dans un nouveau panneau pour que vous puissiez les suivre. Quand l'une se termine, cliquez sur Vérifier à nouveau. Les nouveaux panneaux la prennent en compte sans redémarrer l'application.",
     "install": "Installer",
     "installPane": "Installer {{name}}",
     "update": "Mettre à jour",
     "installed": "Installé",
-    "tab": {
-      "needs": "Besoins de Tessel",
-      "agents": "Agents IA",
-      "dev": "Outils de développement"
-    },
     "needs": {
-      "fixWhere": "Correction : {{where}}",
       "ok": "OK",
       "warn": "À corriger",
       "missing": "Manquant",
       "optional": "Facultatif",
-      "checkFailed": "Vérification impossible.",
-      "allHere": "Tout ce dont Tessel a besoin est présent."
+      "checkFailed": "Vérification impossible."
     },
     "dev": {
       "signedIn": "Connecté",
       "signedInAs": "Connecté en tant que {{account}}",
-      "search": "Rechercher des outils",
-      "change": "Modifier",
-      "foot": "Les outils s'installent avec winget, le gestionnaire de paquets intégré à Windows. Certains installateurs demandent une autorisation dans une invite Windows."
+      "change": "Modifier"
     },
     "custom": {
       "title": "Vos propres agents",
-      "hint": "Tout agent en ligne de commande fonctionne. Il apparaît dans le menu Nouveau et s'exécute dans le shell par défaut.",
       "needNameCommand": "Saisissez un nom et la commande qui démarre l'agent.",
       "nameTaken": "Un agent porte déjà ce nom.",
-      "found": "Trouvé",
       "notFound": "Introuvable dans le PATH",
       "remove": "Retirer",
       "color": "Couleur",

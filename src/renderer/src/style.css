@@ -2511,35 +2511,6 @@ body.ws-resizing .ws-layer.hidden .view-room {
   border-color: var(--accent);
 }
 
-/* Settings > Agents: an agent's default model and effort. */
-.agent-models {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 6px 12px;
-  padding: 12px 0 0;
-}
-
-.agent-model-field {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 220px;
-  max-width: 100%;
-  min-width: 0;
-}
-
-.agent-model-switch {
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.agent-models-status {
-  flex: 1 1 100%;
-}
-
 /* New pane menu: the model an agent starts with (Orca's model pill). */
 .launch-model-pill {
   flex: 0 1 auto;
@@ -3412,8 +3383,7 @@ kbd {
   }
 }
 
-.set-card > .set-row:last-child,
-.set-card > .agent-set:last-child .set-row {
+.set-card > .set-row:last-child {
   border-bottom: 0;
 }
 
@@ -3428,10 +3398,6 @@ kbd {
 
 .set-card .agents-head {
   margin: 12px 0 4px;
-}
-
-.set-card .agents-warn {
-  margin: 0 0 8px;
 }
 
 .set-card .orch-tools {
@@ -4123,49 +4089,6 @@ body.pane-dragging * {
   }
 }
 
-/* ================= Tools dialog ================= */
-.tools-card {
-  width: min(720px, 100%);
-  /* Only the list scrolls (.tools-scroll): the title, tabs and intro stay. */
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.tools-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  margin-right: -8px;
-  padding-right: 8px;
-}
-
-.tools-head-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.tools-tabs {
-  margin: 4px 0 10px;
-}
-
-.tools-sub {
-  margin: 18px 0 4px;
-  color: var(--text-strong);
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.tool-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 50px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-}
-
 .tool-main {
   display: flex;
   flex-direction: column;
@@ -4177,15 +4100,6 @@ body.pane-dragging * {
 .tool-name {
   color: var(--text-strong);
   font-size: 13px;
-}
-
-.tool-cmd {
-  overflow: hidden;
-  color: var(--text-dim);
-  font-family: 'Cascadia Mono', Consolas, monospace;
-  font-size: 10.5px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .tool-status {
@@ -4212,25 +4126,9 @@ body.pane-dragging * {
   color: var(--danger);
 }
 
-.tool-why {
-  color: var(--text-dim);
-  font-size: 11.5px;
-  line-height: 1.4;
-}
-
-.tool-detail {
-  color: var(--text);
-  font-size: 11.5px;
-  line-height: 1.4;
-}
-
 .tools-search {
   width: 100%;
   margin-bottom: 4px;
-}
-
-.tools-foot {
-  margin: 12px 0 0;
 }
 
 .custom-agent-form {
@@ -4305,61 +4203,11 @@ body.pane-dragging * {
   padding: 6px 0;
 }
 
-/* Settings > Agents */
-.agents-warn {
-  margin: 4px 0 8px;
-}
-
-.yolo-folder-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  max-width: 60%;
-}
-
-.yolo-folder {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.yolo-folder-path {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-  text-align: left;
-}
-
 .agents-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin: 10px 0 4px;
-}
-
-/* One line, left: icon, name, status (.set-label is a column elsewhere). */
-.agent-set-name,
-.set-card .set-row > .set-label.agent-set-name {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 4px 8px;
-  flex-wrap: wrap;
-  text-align: left;
-}
-
-/* Longer lines under the name (an update, a wait) take the full width. */
-.agent-set-name > .set-hint:not(:nth-child(3)),
-.agent-set-name > div,
-.agent-set-name > p {
-  flex-basis: 100%;
-  margin: 0;
 }
 
 .agent-set-actions {
@@ -4369,118 +4217,12 @@ body.pane-dragging * {
   flex-shrink: 0;
 }
 
-/* Agent versions and updates */
-.agent-set .agent-version.agent-update-available {
-  color: var(--accent);
-}
-.agent-set-name > .agent-version,
-.agent-set-name > .agent-update-job,
-.agent-set .agent-update-last {
-  text-align: left;
-}
-.agent-update-spinner {
-  vertical-align: -1px;
-  margin-right: 3px;
-}
-.agent-set .agent-update-last {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-}
-.agent-update-last .agent-update-why {
-  flex-basis: 100%;
-}
-.agent-update-last .agent-update-detail {
-  flex-basis: 100%;
-  font-size: 11px;
-  opacity: 0.85;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.agent-update-last-actions {
-  display: flex;
-  gap: 6px;
-}
-.agent-update-failed > span:first-child,
-.agent-update-history-list .agent-update-failed > span:nth-child(4) {
-  color: var(--danger, #e5534b);
-}
-.agent-update-history {
-  margin-top: 8px;
-}
-.agent-update-history-toggle {
-  background: none;
-  border: 0;
-  padding: 4px 0;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-.agent-update-history-list {
-  list-style: none;
-  margin: 4px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.agent-update-history-list li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 10px;
-  font-size: 12px;
-}
-
-.agent-custom {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 0 0 10px 23px;
-  padding: 10px;
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
-  border-radius: 6px;
-}
-
-.agent-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.agent-field .set-number {
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.agent-env {
-  resize: vertical;
-  font-family: 'Cascadia Mono', Consolas, monospace;
-}
-
-.agent-custom-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
 .quick-enter {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   color: var(--text-dim);
   font-size: 12px;
-}
-
-.custom-color {
-  width: 32px;
-  height: 28px;
-  padding: 2px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--term);
-  cursor: pointer;
 }
 
 .launch-item.subtle {
@@ -4808,16 +4550,6 @@ body.pane-dragging * {
 .session-id {
   font-family: 'Cascadia Mono', Consolas, monospace;
   font-size: 10.5px;
-}
-
-.tool-setup {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: #8ff0b8;
-  font-size: 11.5px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
 }
 
 .exit-btn.subtle {
@@ -13639,33 +13371,6 @@ body:has(.settings-page) > .orca-menu {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* Agent cards keep update details out of the header's alignment. */
-.agent-set {
-  container-type: inline-size;
-  margin: 12px 0;
-  padding: 14px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-}
-.agent-set-header { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.agent-set-header .agent-set-name { flex: 1; min-width: 0; margin: 0; }
-.agent-set-header .agent-set-name > .brand-icon { flex-shrink: 0; }
-.agent-set-header .agent-set-name > .set-hint { margin: 0; }
-.agent-set-details { display: grid; gap: 8px; margin-top: 10px; }
-.agent-set-update-info { display: grid; gap: 6px; min-width: 0; }
-.agent-set-update-info > .set-hint { margin: 0; text-align: left; }
-.agent-set-update-info:empty { display: none; }
-.agent-set-update-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.agent-model-field .set-select { width: 100%; min-width: 0; max-width: 100%; }
-.agent-model-switch { width: auto; }
-.agent-set .agent-custom { margin: 12px 0 0; padding: 12px 0 0; }
-@container (max-width: 430px) {
-  .agent-set-header { flex-wrap: wrap; }
-  .agent-set-header .agent-set-name { flex-basis: 100%; }
-  .agent-set-actions { margin-left: auto; }
 }
 
 /* Settings > AI provider accounts: one row per provider (ProviderAccountRow),

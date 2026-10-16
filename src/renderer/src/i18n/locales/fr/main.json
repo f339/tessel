@@ -293,8 +293,8 @@
       "uvWhy": "Uniquement pour les serveurs MCP en Python, comme Git, Fetch, Time ou ElevenLabs.",
       "version": "Version {{version}}",
       "versionUnknown": "Version inconnue",
-      "whereAgents": "Outils > Agents IA",
-      "whereGitIdentity": "Outils > Outils de développement > Git > Définir nom et e-mail",
+      "whereAgents": "Paramètres > Agents",
+      "whereGitIdentity": "Paramètres > Outils de développement > Git > Définir nom et e-mail",
       "whereTeam": "Serveurs MCP > Connexions d'équipe",
       "whereTeamSetUp": "Serveurs MCP > Connexions d'équipe > Reconfigurer"
     },

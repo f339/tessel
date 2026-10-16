@@ -1,6 +1,6 @@
 // Settings: its pages and the sidebar's groups (SettingsDialog.vue shows
 // them; each page is a Settings<Page>.vue beside this file).
-import { Cable } from 'lucide-vue-next'
+import { Cable, Wrench } from 'lucide-vue-next'
 import { t } from '../../i18n'
 
 // The pages, grouped as in the sidebar. `icon` is a 16x16 stroke path.
@@ -142,6 +142,17 @@ export const PAGES = {
     },
     icon: 'M5 3v7M5 10a2 2 0 100 4 2 2 0 000-4zM11 3a2 2 0 100 4 2 2 0 000-4zM11 7c0 2.5-2 3-6 3'
   },
+  // The developer tools agents use (Git, Node.js, …), found or installed
+  // with winget: SettingsDevtools.vue (once the Install tools window).
+  devtools: {
+    get title() {
+      return t('settings.pages.devtools.title', 'Developer tools')
+    },
+    get desc() {
+      return t('settings.pages.devtools.desc', 'Git, Node.js and the other tools agents use: install them and finish their setup.')
+    },
+    lucide: Wrench
+  },
   // Scheduled automations (Orca's Automations page): AutomationsPage.vue.
   automations: {
     get title() {
@@ -204,7 +215,7 @@ export const GROUPS = [
     get title() {
       return t('settings.groups.workflows', 'Workflows')
     },
-    pages: ['git', 'automations', 'quick-commands', 'ssh']
+    pages: ['git', 'devtools', 'automations', 'quick-commands', 'ssh']
   },
   {
     id: 'insights',
@@ -238,6 +249,7 @@ export const PAGE_TITLES_EN = {
   browser: 'Browser', // i18n-ignore
   alerts: 'Notifications', // i18n-ignore
   git: 'Git & Source Control', // i18n-ignore
+  devtools: 'Developer tools', // i18n-ignore
   automations: 'Automations', // i18n-ignore
   'quick-commands': 'Quick commands', // i18n-ignore
   updates: 'Updates', // i18n-ignore
