@@ -2661,7 +2661,8 @@ kbd {
 .root-note.below-tools-note {
   top: 80px;
 }
-.tools-note .exit-btn {
+.tools-note .exit-btn,
+.account-note .exit-btn {
   flex: none;
 }
 

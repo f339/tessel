@@ -44,7 +44,7 @@ import { promptShowsPlaceholder } from '../promptCheck'
 import { detectTaskDone } from '../agentLimit'
 import { modelLabel } from '../../../shared/modelLabel'
 import { paneAccount, accountChoices } from '../accountChoices'
-import { HOST_ACCOUNT_AGENTS, defaultRestartChoice, hostAccountChoices, hostEntry, hostPaneAccount, isDefaultHostAccount, recheckAfterTurn, refreshHostAccounts, unwatchHostAccounts, watchHostAccounts } from '../hostAccounts'
+import { HOST_ACCOUNT_AGENTS, hostAccountChoices, hostEntry, hostPaneAccount, isDefaultHostAccount, recheckAfterTurn, refreshHostAccounts, unwatchHostAccounts, watchHostAccounts } from '../hostAccounts'
 import { modelFromScreen, modelFromSwitchLine } from '../../../shared/screenModel'
 import { findFileRefs } from '../../../shared/fileLinks'
 import { osc52Text } from '../../../shared/osc52'
@@ -187,12 +187,14 @@ watch(
 )
 // Which config folder its agent really runs on: checked once it has had time
 // to start (a pane restored, reattached, or started before account folders
-// may not be on the folder its layout names), and on Check again.
+// may not be on the folder its layout names), and on Check again. A new
+// launch ends the notice about the last one.
 let verifyTimer = null
 watch(
   () => [props.node.kind, props.node.remoteHostId, props.node.launchedAt, !!props.node.notConnected],
-  ([kind, hostId, , notConnected]) => {
+  ([kind, hostId, launchedAt, notConnected], before) => {
     clearTimeout(verifyTimer)
+    if (before && before[2] !== launchedAt) delete props.node.hostAccountMismatch
     if (kind !== 'agent' || !hostId || notConnected || !ctx.verifyHostAccount || !HOST_ACCOUNT_AGENTS.includes(props.node.agentId)) return
     verifyTimer = setTimeout(() => ctx.verifyHostAccount(props.node.id), 8000)
   },
@@ -1506,6 +1508,25 @@ function retryRemoteTools() {
   delete props.node.remoteToolsNote
   if (ctx.restartLeaf) ctx.restartLeaf(props.node.id)
 }
+// Its agent on an SSH host runs on another account than the pane's (App.vue
+// verifyHostAccount): the pane asks, Update (the pane's account becomes that
+// one) or Keep (its next restart starts on the saved one).
+function hostAccountName(id) {
+  const n = props.node
+  const l = hostPaneAccount(n.remoteHostId, n.agentId, id ?? undefined, remoteHostName.value)
+  return (l && l.name) || (id ? t('pane.account.otherFolder', 'another account folder') : t('pane.account.ownSignIn', 'the host’s own sign-in'))
+}
+const accountMismatch = computed(() => {
+  const n = props.node
+  const m = n.hostAccountMismatch
+  if (!m || !n.remoteHostId) return null
+  return { runs: hostAccountName(m.runs), saved: hostAccountName(typeof n.hostAccount === 'string' ? n.hostAccount : null) }
+})
+// Below the other notes shown above it.
+const accountNoteTop = computed(() => 36 + 44 * ((props.node.remoteToolsNote ? 1 : 0) + (props.node.rootNoYoloNote ? 1 : 0)))
+function resolveAccountMismatch(update) {
+  if (ctx.resolveHostAccountMismatch) ctx.resolveHostAccountMismatch(props.node.id, update)
+}
 
 // The header's hover card (Orca's hover card, like the sidebar's agent rows)
 // instead of native tooltips on the number, icon, title and state badge.
@@ -1559,10 +1580,9 @@ const hoverInfo = computed(() => {
     accent: showsAgent.value ? n.accent : null,
     model: agent ? modelText.value : guestRuns.value ? guestInfo.value.model || '' : '',
     account: accountInfo.value ? accountInfo.value.title : '',
-    // On an SSH host: its notes, Check again, Restart on the host's default.
+    // On an SSH host: its notes and Check again (Restart on… is the menu's).
     accountNotes: accountNotesOf(!canCheckHostAccount.value),
     accountCheck: canCheckHostAccount.value,
-    restartDefault: restartDefault.value ? t('pane.account.restartDefault', 'Restart on {{account}} (default on this host)', { account: restartDefault.value.name }) : '',
     conversation: autoTitle.value,
     branch: n.worktree ? n.worktree.branch : guestInfo.value && guestInfo.value.copy ? guestInfo.value.copy.branch : '',
     state: headerState.value,
@@ -2545,20 +2565,9 @@ function menuCheckHostAccount() {
   closeCtxMenu()
   ctx.checkHostAccount(props.node.id)
 }
-// "Restart on <default>": the host's default account for this agent, for a
-// pane on another one (the hover card; marked "(default)" in Restart on).
-const restartDefault = computed(() => {
-  const n = props.node
-  if (!canSignInOnHost.value || !ctx.restartOnAccount) return null
-  return defaultRestartChoice(n.remoteHostId, n.agentId, n.hostAccount, remoteHostName.value)
-})
-// The hover card's own buttons (it closes once the pointer leaves it).
+// The hover card's own button (it closes once the pointer leaves it).
 function hoverCheckAccount() {
   if (canCheckHostAccount.value) ctx.checkHostAccount(props.node.id)
-}
-function hoverRestartDefault() {
-  const c = restartDefault.value
-  if (c) ctx.restartOnAccount(props.node.id, c.id)
 }
 function menuCopyAccountDetails() {
   closeCtxMenu()
@@ -3527,7 +3536,7 @@ const paneMenuBindings = computed(() => ({
         </span>
       </div>
       <HoverCardContent :hc="headerHover" side="bottom" align="start" :side-offset="6" class="pane-hover-card" data-test="pane-hover-card">
-        <PaneHoverDetails :info="hoverInfo" @check-account="hoverCheckAccount" @restart-default="hoverRestartDefault" />
+        <PaneHoverDetails :info="hoverInfo" @check-account="hoverCheckAccount" />
       </HoverCardContent>
       <!-- An agent typing in this terminal (its terminal tools): who, what
            it ran, and Stop. -->
@@ -3758,6 +3767,12 @@ const paneMenuBindings = computed(() => ({
           <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
         </svg>
       </button>
+    </div>
+
+    <div v-if="accountMismatch && !node.failed" class="root-note account-note" :style="{ top: `${accountNoteTop}px` }" data-test="host-account-mismatch" role="status" @mousedown.stop>
+      <span class="root-note-text" v-text="t('pane.account.mismatch', 'This pane is running on {{runs}}, not {{saved}}.', accountMismatch)"></span>
+      <button class="exit-btn primary" data-test="host-account-update" :title="t('pane.account.updateHint', 'The pane’s account becomes {{runs}}: its restarts start there', accountMismatch)" @click="resolveAccountMismatch(true)">{{ t('pane.account.update', 'Update') }}</button>
+      <button class="exit-btn" data-test="host-account-keep" :title="t('pane.account.keepHint', 'Keeps {{saved}}: its next restart starts there', accountMismatch)" @click="resolveAccountMismatch(false)">{{ t('pane.account.keep', 'Keep') }}</button>
     </div>
 
     <div v-if="findOpen" class="find-bar" @mousedown.stop>

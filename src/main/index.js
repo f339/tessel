@@ -1343,8 +1343,10 @@ const chatSessions = createChatSessions({
     readAgentFile: (hostId, q) => remoteFs.readAgentFile(hostId, q),
     // A chat on an account folder of the host (remoteAccounts.js): that
     // folder, made whole and checked there. -> { ok, name, dir } | { ok: false, error }
-    accountFolder: async ({ hostId, agent, id }) => {
-      const res = await remoteAccounts.launchEnv(hostId, agent, id)
+    // signedIn: the host's default account (only a folder signed in, else
+    // the chat says so and starts on the host's own sign-in).
+    accountFolder: async ({ hostId, agent, id, signedIn = false }) => {
+      const res = await remoteAccounts.launchEnv(hostId, agent, id, { signedIn: signedIn === true })
       return res.ok ? { ok: true, name: res.name, dir: res.dir } : { ok: false, error: res.error }
     },
     // Claude's skills there (~/.claude/skills, the project's): listed over
@@ -2142,12 +2144,14 @@ ipcMain.handle('remoteAccounts:signOut', async (_evt, q) => {
   if (!hostId) return noHost()
   return remoteAccounts.signOut(hostId, agent, { panes })
 })
-// Which config folder a pane's agent really runs on there (its process's
-// CLAUDE_CONFIG_DIR / CODEX_HOME, nothing else read). ({ hostId, agent, paneId })
-ipcMain.handle('remoteAccounts:paneFolder', async (_evt, q) => {
-  const { hostId, agent } = remoteAccountArgs(q)
+// Which config folder each pane's agent really runs on there (its process's
+// CLAUDE_CONFIG_DIR / CODEX_HOME, nothing else read), one pass for all the
+// panes asked. ({ hostId, list: [{ paneId, agent }] })
+ipcMain.handle('remoteAccounts:paneFolders', async (_evt, q) => {
+  const { hostId } = remoteAccountArgs(q)
   if (!hostId) return noHost()
-  return remoteAccounts.paneFolder(hostId, agent, q && typeof q.paneId === 'string' ? q.paneId : null)
+  const list = q && Array.isArray(q.list) ? q.list.slice(0, 50).map((p) => ({ paneId: p && typeof p.paneId === 'string' ? p.paneId : '', agent: p && typeof p.agent === 'string' ? p.agent : '' })) : []
+  return remoteAccounts.paneFolders(hostId, list)
 })
 // "Copy account details": presence flags only. ({ hostId, agent, id, paneId })
 ipcMain.handle('remoteAccounts:diagnose', async (_evt, q) => {

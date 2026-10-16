@@ -166,12 +166,74 @@ function hookFocus() {
 // A turn of an agent on this host ended (a /login, its first answer): its
 // account not fully known yet (not signed in, or no email), the host is
 // asked again a few seconds later (Claude Code writes the email once it has
-// fetched its profile). -> the timer to clear, or null
+// fetched its profile), never sooner than the gap after its last answer,
+// and at most TURN_TRIES times while that account stays as it is. Not for
+// what a turn cannot change: an account known by its profile only (macOS
+// keeps Claude Code's login in the Keychain, no file to see), or none there
+// (a key in the environment, a folder removed). -> the timer to clear, or null
+const TURN_TRIES = 3
+const turnTries = new Map() // host\nagent\naccount -> { state, n }
 export function recheckAfterTurn(hostId, agentId, hostAccount, delayMs = 4000) {
   if (typeof hostId !== 'string' || !hostId || !HOST_ACCOUNT_AGENTS.includes(agentId)) return null
   const e = hostEntry(hostId, agentId, hostAccount)
-  if (e && e.state === 'signed-in' && (e.email || e.method === 'apikey')) return null
-  return setTimeout(() => checkHostAccountsNow(hostId).catch(() => null), delayMs)
+  const key = `${hostId}\n${agentId}\n${typeof hostAccount === 'string' ? hostAccount : ''}`
+  if (!e || e.state === 'profile' || (e.state === 'signed-in' && (e.email || e.method === 'apikey'))) {
+    // Known (or past knowing): a later sign-out there starts its tries afresh.
+    turnTries.delete(key)
+    return null
+  }
+  const seen = turnTries.get(key)
+  const n = seen && seen.state === e.state ? seen.n : 0
+  if (n >= TURN_TRIES) return null
+  turnTries.set(key, { state: e.state, n: n + 1 })
+  const last = (hostAccountsOf(hostId) || {}).at || 0
+  return setTimeout(
+    () => {
+      // Asked meanwhile (its timer, another pane): that answer is the one.
+      const at = (hostAccountsOf(hostId) || {}).at || 0
+      if (at > last && Date.now() - at < MIN_GAP_MS) return
+      checkHostAccountsNow(hostId).catch(() => null)
+    },
+    Math.max(delayMs, last ? MIN_GAP_MS - (Date.now() - last) : 0)
+  )
+}
+
+// Which config folder each pane's agent really runs on (main's
+// paneFolders): the panes of one host asked together, in one pass over its
+// processes there. Panes restored or started together wait for each other
+// (PANE_BATCH_MS after the last one asked, PANE_BATCH_MAX_MS at most).
+// -> { ok, found, dir, folderId, own } for that pane, or main's failure
+export const PANE_BATCH_MS = 1500
+const PANE_BATCH_MAX_MS = 6000
+const paneAsks = new Map() // hostId -> { panes: Map(paneId -> { agent, waiters }), first, timer }
+export function hostPaneFolder(hostId, agentId, paneId) {
+  const a = api()
+  if (!a || !a.paneFolders || typeof hostId !== 'string' || !hostId || !HOST_ACCOUNT_AGENTS.includes(agentId) || typeof paneId !== 'string') return Promise.resolve(null)
+  let b = paneAsks.get(hostId)
+  if (!b) {
+    b = { panes: new Map(), first: Date.now(), timer: null }
+    paneAsks.set(hostId, b)
+  }
+  return new Promise((resolve) => {
+    const cur = b.panes.get(paneId)
+    if (cur) cur.waiters.push(resolve)
+    else b.panes.set(paneId, { agent: agentId, waiters: [resolve] })
+    clearTimeout(b.timer)
+    b.timer = setTimeout(() => askPaneFolders(hostId, b), Math.min(PANE_BATCH_MS, Math.max(0, b.first + PANE_BATCH_MAX_MS - Date.now())))
+  })
+}
+function askPaneFolders(hostId, b) {
+  if (paneAsks.get(hostId) === b) paneAsks.delete(hostId)
+  const list = [...b.panes].map(([paneId, p]) => ({ paneId, agent: p.agent }))
+  Promise.resolve()
+    .then(() => api().paneFolders(hostId, list))
+    .catch(() => null)
+    .then((res) => {
+      for (const [paneId, p] of b.panes) {
+        const one = res && res.ok ? (res.panes && res.panes[paneId] ? { ok: true, ...res.panes[paneId] } : { ok: true, found: 'unknown', dir: null, folderId: null, own: false }) : res
+        for (const w of p.waiters) w(one)
+      }
+    })
 }
 
 // For tests: the hosts followed, their panes and their next wait.
@@ -299,15 +361,6 @@ export function hostAccountChoices(hostId, agentId, hostLabel = '') {
   for (const c of out) if (out.filter((o) => o.name === c.name).length > 1) c.name = c.title
   for (const c of out) c.isDefault = isDefaultHostAccount(hostId, agentId, c.id)
   return out
-}
-
-// "Restart on <default>": the host's default account for this agent, when
-// the pane runs on another one and the default can be started on (signed in
-// there). -> the choice ({ id, name, title, isDefault }) or null
-export function defaultRestartChoice(hostId, agentId, paneAccount, hostLabel = '') {
-  const want = defaultHostAccount(hostId, agentId) ?? null
-  if (want === (typeof paneAccount === 'string' ? paneAccount : null)) return null
-  return hostAccountChoices(hostId, agentId, hostLabel).find((c) => c.id === want) || null
 }
 
 // A pane's own host account, as saved with the layout: a folder id, or

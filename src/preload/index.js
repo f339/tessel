@@ -318,7 +318,7 @@ const api = {
     signOut: (hostId, agent, opts) => ipcRenderer.invoke('remoteAccounts:signOut', { hostId, agent, panes: (opts && Array.isArray(opts.panes) && opts.panes) || [] }),
     copyPolicy: (agent) => ipcRenderer.invoke('remoteAccounts:copyPolicy', agent),
     // The config folder a pane's agent really runs on there; presence-only details.
-    paneFolder: (hostId, agent, paneId) => ipcRenderer.invoke('remoteAccounts:paneFolder', { hostId, agent, paneId }),
+    paneFolders: (hostId, list) => ipcRenderer.invoke('remoteAccounts:paneFolders', { hostId, list }),
     diagnose: (hostId, agent, id, paneId) => ipcRenderer.invoke('remoteAccounts:diagnose', { hostId, agent, id, paneId })
   },
   // "Where you're signed in" (src/main/signedInPlaces.js): this PC, its WSL

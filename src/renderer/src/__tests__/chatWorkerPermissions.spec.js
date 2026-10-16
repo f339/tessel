@@ -7,7 +7,7 @@ import fs from 'fs'
 import vm from 'vm'
 import { join } from 'path'
 import { validHostAccount, hostAccountChoice, defaultHostAccount } from '../hostAccounts'
-import { isRemotePath } from '../../../shared/remotePath'
+import { isRemotePath, parseRemotePath } from '../../../shared/remotePath'
 
 const source = fs.readFileSync(join(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
 function slice(from, to) {
@@ -17,11 +17,15 @@ function slice(from, to) {
   return source.slice(a, b)
 }
 
-function load(settingsMode) {
-  const open = vi.fn(async () => ({ ok: true, sessionId: 's', launchToken: 'tok' }))
+function load(settingsMode, open = vi.fn(async () => ({ ok: true, sessionId: 's', launchToken: 'tok' }))) {
+  const showToast = vi.fn()
   const setOption = vi.fn(async (q) => ({ ok: true, permissionMode: q.permissionMode, permissions: q.permissionMode === 'bypassPermissions' ? 'yolo' : 'manual' }))
   const ctx = {
     isRemotePath,
+    parseRemotePath,
+    showToast,
+    remoteHostLabel: (id) => id,
+    t: (k, en, vars) => en.replace(/\{\{(\w+)\}\}/g, (_, n) => (vars && vars[n] != null ? vars[n] : '')),
     validHostAccount,
     hostAccountChoice,
     defaultHostAccount,
@@ -42,7 +46,7 @@ function load(settingsMode) {
       '\nthis.api = { coordinatorPermissions, chatOpen, chatSetOption }',
     ctx
   )
-  return { api: ctx.api, open, setOption }
+  return { api: ctx.api, open, setOption, showToast }
 }
 
 describe('a chat on an SSH host', () => {
@@ -52,6 +56,19 @@ describe('a chat on an SSH host', () => {
     expect(open.mock.calls[0][0]).toMatchObject({ hostAccount: 'abc123' })
     await api.chatOpen({ id: 'p2', kind: 'chat', agentId: 'claude', cwd: 'C:\\proj', hostAccount: 'abc123' })
     expect(open.mock.calls[1][0]).not.toHaveProperty('hostAccount')
+    expect(open.mock.calls[0][0]).not.toHaveProperty('hostAccountSignedIn')
+  })
+
+  it('on the host’s default account: only if signed in there; signed out, started again on the host’s own sign-in, said', async () => {
+    const open = vi.fn(async (q) => (q.hostAccount ? { ok: false, code: 'account', error: 'signed out there' } : { ok: true, sessionId: 's', launchToken: 'tok' }))
+    const { api, showToast } = load('manual', open)
+    const leaf = { id: 'p1', kind: 'chat', agentId: 'claude', cwd: 'ssh://ssh-box1/srv/app', hostAccount: 'abc123', hostAccountFromDefault: true }
+    const res = await api.chatOpen(leaf)
+    expect(open.mock.calls[0][0]).toMatchObject({ hostAccount: 'abc123', hostAccountSignedIn: true })
+    expect(open.mock.calls[1][0]).not.toHaveProperty('hostAccount')
+    expect(res.ok).toBe(true)
+    expect(leaf.hostAccount).toBeNull()
+    expect(showToast.mock.calls[0][0]).toContain('signed out there')
   })
 })
 

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import SignedInPlaces from '../components/SignedInPlaces.vue'
 import { settings } from '../settings'
-import { groupByProvider, panesUsing, placesToCheck, shownOrg, switchCandidates } from '../signedInPlaces'
+import { groupByProvider, panesUsing, placesToCheck, shownOrg, switchCandidates, switchTarget } from '../signedInPlaces'
 
 const pc = { id: 'pc', kind: 'pc', state: 'ready', entries: [{ agent: 'claude', scope: 'system', id: null, email: 'coreine13@gmail.com', org: "coreine13@gmail.com's Organization", plan: 'pro', state: 'signed-in' }] }
 const hostEntries = [
@@ -238,6 +238,16 @@ describe('signedInPlaces: by provider, panes, places to check', () => {
     expect(panesUsing(work, list).map((p) => p.id)).toEqual(['p2'])
     expect(switchCandidates(work, list).map((g) => [g.place.id, g.items.map((i) => [i.pane.id, i.target.id])])).toEqual([['ssh:ssh-1', [['p1', 'abc123']]]])
     expect(switchCandidates(own, list).map((g) => [g.place.id, g.items.map((i) => [i.pane.id, i.target.id])])).toEqual([['ssh:ssh-1', [['p2', null]]]])
+  })
+  it('a folder whose sign-in file is a link: no pane switched to it, never a default (its launch is refused)', () => {
+    const linked = { agent: 'claude', scope: 'tessel', id: 'lnk123', email: 'work@corp.example', plan: 'max', cred: 'file', state: 'signed-in', linked: true }
+    const place = { ...host, entries: [...hostEntries, linked] }
+    expect(switchTarget(place, linked, place.entries)).toBeNull()
+    const account = groupByProvider([place])[0].accounts.find((a) => a.email === 'work@corp.example')
+    const list = [{ id: 'p1', name: 'Archimedes', agentId: 'claude', remoteHostId: 'ssh-1' }]
+    // The folder Tessel made for that account still is a target; the linked one never.
+    expect(switchCandidates(account, list).flatMap((g) => g.items.map((i) => i.target.id))).toEqual(['abc123'])
+    expect(switchCandidates({ chips: [{ place, entry: linked }] }, list)).toEqual([])
   })
   it('places to check: not read yet (not connected, unknown, error), WSL not started apart, nothing being checked', () => {
     const places = [pc, { ...host, id: 'ssh:a', state: 'not-connected' }, { ...host, id: 'ssh:b', state: 'error' }, { ...host, id: 'ssh:c', state: 'unknown' }, host, { id: 'wsl:U', kind: 'wsl', label: 'U', state: 'stopped' }]

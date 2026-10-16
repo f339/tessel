@@ -2,7 +2,7 @@
 // account a pane there runs on (header, menu), the accounts it can restart
 // on, and "Where you're signed in" grouped by account (signedInPlaces.js).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { applyHostAccounts, entryLabel, hostAccountChoices, hostEntry, hostPaneAccount, hostWatchers, planName, refreshHostAccounts, unwatchHostAccounts, validHostAccount, watchHostAccounts, checkHostAccountsNow, defaultHostAccount, hostAccountChoice, isDefaultHostAccount, setDefaultHostAccount, defaultRestartChoice, recheckAfterTurn, unnamedEntry } from '../hostAccounts'
+import { applyHostAccounts, entryLabel, hostAccountChoices, hostEntry, hostPaneAccount, hostWatchers, planName, refreshHostAccounts, unwatchHostAccounts, validHostAccount, watchHostAccounts, checkHostAccountsNow, defaultHostAccount, hostAccountChoice, isDefaultHostAccount, setDefaultHostAccount, recheckAfterTurn, unnamedEntry, hostPaneFolder, PANE_BATCH_MS } from '../hostAccounts'
 import { settings, loadSettings, validHostAccountDefaults } from '../settings'
 import { accountKey, groupAccounts, panesOnLogin, switchTarget, switchablePanes } from '../signedInPlaces'
 
@@ -336,15 +336,71 @@ describe('an account signed in but not named yet, a folder linked elsewhere, Res
     unwatchHostAccounts('ssh-f1', 'p2')
   })
 
-  it('after a turn: asked again a few seconds later while its account is not signed in or not named; never once named', async () => {
+  it('after a turn: asked again while its account is not signed in or not named, never sooner than the gap; never once named', async () => {
     const detect = vi.fn(async () => ({ ok: true, entries: [own, unnamed] }))
     window.shellApi = { remoteAccounts: { detect } }
     applyHostAccounts('ssh-t1', { ok: true, entries: [own, unnamed] })
     expect(recheckAfterTurn('ssh-t1', 'claude', 'bd93c7f5566d')).not.toBeNull()
+    // Just answered: not before 20 s have passed since.
     await vi.advanceTimersByTimeAsync(4000)
+    expect(detect).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(16_000)
     expect(detect).toHaveBeenCalledWith('ssh-t1', { fresh: true })
     expect(recheckAfterTurn('ssh-t1', 'claude', undefined)).toBeNull()
     expect(recheckAfterTurn('ssh-t1', 'gemini', undefined)).toBeNull()
+  })
+
+  it('after a turn: a few times at most while nothing changes; never for a Keychain profile, a sign-in with no entry, a folder removed', async () => {
+    const detect = vi.fn(async () => ({ ok: true, entries: [own, fresh] }))
+    window.shellApi = { remoteAccounts: { detect } }
+    applyHostAccounts('ssh-t2', { ok: true, entries: [own, fresh] }, Date.now() - 60_000)
+    const timers = []
+    for (let i = 0; i < 5; i++) timers.push(recheckAfterTurn('ssh-t2', 'claude', 'new999'))
+    expect(timers.filter(Boolean)).toHaveLength(3)
+    // Signed in now (not named yet): a new state, its tries afresh.
+    applyHostAccounts('ssh-t2', { ok: true, entries: [own, { ...fresh, cred: 'file', state: 'signed-in' }] }, Date.now() - 60_000)
+    const again = recheckAfterTurn('ssh-t2', 'claude', 'new999')
+    expect(again).not.toBeNull()
+    // macOS Keychain: a profile only, no login file to see.
+    applyHostAccounts('ssh-t3', { ok: true, entries: [{ ...own, cred: undefined, state: 'profile' }] }, Date.now() - 60_000)
+    expect(recheckAfterTurn('ssh-t3', 'claude', undefined)).toBeNull()
+    // No entry: a key in the environment, a folder removed.
+    applyHostAccounts('ssh-t4', { ok: true, entries: [] }, Date.now() - 60_000)
+    expect(recheckAfterTurn('ssh-t4', 'claude', undefined)).toBeNull()
+    expect(recheckAfterTurn('ssh-t4', 'claude', 'gone123')).toBeNull()
+    for (const tm of [...timers, again]) clearTimeout(tm)
+  })
+
+  it('the folder each pane’s agent runs on: the panes of a host asked together, once they stop coming', async () => {
+    const paneFolders = vi.fn(async (hostId, list) => ({ ok: true, panes: Object.fromEntries(list.map((p) => [p.paneId, { found: 'yes', dir: null, folderId: null, own: true }])) }))
+    window.shellApi = { remoteAccounts: { paneFolders } }
+    const a = hostPaneFolder('ssh-b1', 'claude', 'pane-1')
+    await vi.advanceTimersByTimeAsync(1000)
+    const b = hostPaneFolder('ssh-b1', 'codex', 'pane-2')
+    const c = hostPaneFolder('ssh-b1', 'claude', 'pane-1')
+    const other = hostPaneFolder('ssh-b2', 'claude', 'pane-3')
+    await vi.advanceTimersByTimeAsync(PANE_BATCH_MS)
+    expect(paneFolders).toHaveBeenCalledTimes(2)
+    expect(paneFolders).toHaveBeenCalledWith('ssh-b1', [{ paneId: 'pane-1', agent: 'claude' }, { paneId: 'pane-2', agent: 'codex' }])
+    expect(paneFolders).toHaveBeenCalledWith('ssh-b2', [{ paneId: 'pane-3', agent: 'claude' }])
+    expect(await a).toEqual({ ok: true, found: 'yes', dir: null, folderId: null, own: true })
+    expect((await b).found).toBe('yes')
+    expect(await c).toEqual(await a)
+    expect((await other).ok).toBe(true)
+    // Panes that keep coming: asked within a few seconds all the same.
+    paneFolders.mockClear()
+    for (let i = 0; i < 6; i++) {
+      hostPaneFolder('ssh-b1', 'claude', `pane-k${i}`)
+      await vi.advanceTimersByTimeAsync(1000)
+    }
+    expect(paneFolders).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(PANE_BATCH_MS)
+    // The host not answering: each pane gets that answer.
+    paneFolders.mockResolvedValue({ ok: false, notConnected: true })
+    const d = hostPaneFolder('ssh-b3', 'claude', 'pane-9')
+    await vi.advanceTimersByTimeAsync(PANE_BATCH_MS)
+    expect(await d).toEqual({ ok: false, notConnected: true })
+    expect(await hostPaneFolder('ssh-b3', 'gemini', 'pane-9')).toBeNull()
   })
 
   it('a folder whose sign-in file is a link: said, never a choice to start on', () => {
@@ -354,17 +410,12 @@ describe('an account signed in but not named yet, a folder linked elsewhere, Res
     expect(hostAccountChoices('ssh-l1', 'claude', 'box').map((c) => c.id)).toEqual([null])
   })
 
-  it('Restart on the default: for a pane on another account, when the default is signed in there', () => {
+  it('the host’s default in Restart on: marked on its choice, only when signed in there', () => {
     applyHostAccounts('ssh-r1', { ok: true, entries: [own, work, fresh] })
-    expect(defaultRestartChoice('ssh-r1', 'claude', undefined, 'box')).toBeNull()
     settings.hostAccountDefaults = { 'ssh-r1': { claude: 'abc123' } }
-    expect(defaultRestartChoice('ssh-r1', 'claude', null, 'box')).toMatchObject({ id: 'abc123', name: 'work · Max', isDefault: true })
-    expect(defaultRestartChoice('ssh-r1', 'claude', 'abc123', 'box')).toBeNull()
-    // The pane on the default folder, the default the host's own: Restart on it.
-    settings.hostAccountDefaults = {}
-    expect(defaultRestartChoice('ssh-r1', 'claude', 'abc123', 'box')).toMatchObject({ id: null })
-    // A default not signed in there: not offered.
+    expect(hostAccountChoices('ssh-r1', 'claude', 'box').find((c) => c.id === 'abc123')).toMatchObject({ name: 'work · Max', isDefault: true })
+    // A default not signed in there: no choice for it.
     settings.hostAccountDefaults = { 'ssh-r1': { claude: 'new999' } }
-    expect(defaultRestartChoice('ssh-r1', 'claude', null, 'box')).toBeNull()
+    expect(hostAccountChoices('ssh-r1', 'claude', 'box').some((c) => c.isDefault)).toBe(false)
   })
 })

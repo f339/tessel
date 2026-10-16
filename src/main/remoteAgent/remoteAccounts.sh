@@ -21,20 +21,27 @@
 # running wrote it again after its folder was removed).
 __ta_flat() { head -c 8388608 "$1" 2>/dev/null | tr -d '\n\r'; }
 __ta_str() { grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" 2>/dev/null | head -n 1 | sed 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//'; }
-# The object a key holds, nested objects in it included (Claude Code's
-# oauthAccount now holds ccOnboardingFlags: {...}); quoted braces skipped.
+# The object a key holds (the first place the key is followed by `: {`, not
+# a string equal to it), its own fields only: an object nested in it is
+# printed empty (Claude Code's oauthAccount now holds ccOnboardingFlags:
+# {...}; a field of that name in there never passes for the account's own).
+# Quoted braces skipped.
 __ta_obj() {
   awk -v k="\"$1\"" '{
-    s = $0; i = index(s, k); if (!i) exit
-    s = substr(s, i + length(k)); j = index(s, "{"); if (!j) exit
-    pre = substr(s, 1, j - 1); gsub(/[ \t:]/, "", pre); if (pre != "") exit
-    s = substr(s, j); d = 0; q = 0; e = 0; n = length(s)
+    s = $0; f = 0
+    while ((i = index(s, k)) > 0) {
+      s = substr(s, i + length(k))
+      if (match(s, /^[ \t]*:[ \t]*\{/)) { s = substr(s, RLENGTH); f = 1; break }
+    }
+    if (!f) exit
+    d = 0; q = 0; e = 0; o = ""; n = length(s)
     for (x = 1; x <= n; x++) {
       c = substr(s, x, 1)
-      if (q) { if (e) e = 0; else if (c == "\\") e = 1; else if (c == "\"") q = 0; continue }
+      if (q) { if (d == 1) o = o c; if (e) e = 0; else if (c == "\\") e = 1; else if (c == "\"") q = 0; continue }
+      if (c == "{") { d++; if (d <= 2) o = o c; continue }
+      if (c == "}") { if (d <= 2) o = o c; d--; if (d == 0) { print o; exit }; continue }
       if (c == "\"") q = 1
-      else if (c == "{") d++
-      else if (c == "}") { d--; if (d == 0) { print substr(s, 1, x); exit } }
+      if (d == 1) o = o c
     }
   }' 2>/dev/null
 }
@@ -404,33 +411,111 @@ __t_acctrm() {
   rm -rf -- "$__tr"
   [ ! -e "$__tr" ] || return 98
 }
-# The agent a pane runs (its processes carry TESSEL_PANE_ID=<pane>, from the
-# pane's env file), on Linux: which config folder it really uses
+# The agents panes run (their processes carry TESSEL_PANE_ID=<pane>, from
+# the pane's env file), on Linux: which config folder each really uses
 # (CLAUDE_CONFIG_DIR / CODEX_HOME in its environment; nothing else of it is
-# read). Prints `@p <pid> <folder|->`, or `@p none` / `@p unknown` (no /proc).
-__ta_panepid() {
-  [ -d /proc ] && [ -r /proc/self/environ ] || { echo unknown; return 0; }
-  __pp=
-  for __e in /proc/[0-9]*/environ; do
-    [ -r "$__e" ] || continue
-    tr '\0' '\n' 2>/dev/null <"$__e" | grep -qx "TESSEL_PANE_ID=$1" || continue
-    __q=${__e%/environ}; __q=${__q#/proc/}
-    __a=$(tr '\0' '\n' 2>/dev/null <"/proc/$__q/cmdline" | head -n 1)
-    case ${__a##*/} in "$2"|"$2".exe) __pp=$__q; break ;; esac
-    case $(tr '\0' ' ' 2>/dev/null <"/proc/$__q/cmdline") in *"/$2"*|*"$2-code"*) [ -n "$__pp" ] || __pp=$__q ;; esac
-  done
-  [ -n "$__pp" ] && echo "$__pp" || echo none
+# read). One pass over the processes for all the panes asked, and only this
+# user's own (as root, another user's process could pass for a pane). An
+# environment is read entry by entry, NUL-separated (a value holding a
+# newline cannot pass for another variable), each variable's first entry
+# as the agent's getenv sees it.
+__ta_mine() { [ -O "$1" ]; }
+# An awk that splits its input at NUL bytes (gawk, mawk); else (BusyBox)
+# each environment goes through tr first: its NULs made newlines, its own
+# newlines (and the marker byte) made \001.
+__ta_nulawk() { [ "$(printf 'a\nb\0c\0' | awk 'BEGIN { RS = "\0" } NR == 1 { print ($0 == "a\nb") ? "y" : "n" }' 2>/dev/null)" = y ]; }
+# $1 "<pane> <agent> ...", $2 1 (files after it, read NUL-separated) or 0
+# (the tr'd stream on stdin, each process after a \002<pid> line).
+# Prints "<pid> <pane> <agent> <folder|-|?>" for each process of a pane
+# (?: a folder that is not one absolute path on one line).
+__ta_envscan() {
+  __w=$1; __z=$2; shift 2
+  awk -v want="$__w" -v nul="$__z" -v o="$(printf '\001')" -v m="$(printf '\002')" '
+    BEGIN { if (nul == 1) RS = "\0"; n = split(want, w, " "); for (i = 1; i < n; i += 2) ag[w[i]] = w[i + 1] }
+    nul == 1 && FNR == 1 { pid = FILENAME; sub(/\/environ$/, "", pid); sub(/.*\//, "", pid) }
+    nul != 1 && index($0, m) == 1 { pid = substr($0, 2); next }
+    index($0, "TESSEL_PANE_ID=") == 1 { if (!(pid in sp)) { sp[pid] = 1; v = substr($0, 16); if (v in ag) pane[pid] = v }; next }
+    index($0, "CLAUDE_CONFIG_DIR=") == 1 { if (!(pid in cc)) cc[pid] = substr($0, 19); next }
+    index($0, "CODEX_HOME=") == 1 { if (!(pid in cx)) cx[pid] = substr($0, 12); next }
+    END {
+      for (p in pane) {
+        d = ""
+        if (ag[pane[p]] == "claude") { if (p in cc) d = cc[p] } else if (p in cx) d = cx[p]
+        if (d == "") d = "-"
+        else if (substr(d, 1, 1) != "/" || index(d, "\n") || index(d, o)) d = "?"
+        print p, pane[p], ag[pane[p]], d
+      }
+    }' "$@" 2>/dev/null
 }
-__ta_paneenv() { tr '\0' '\n' 2>/dev/null <"/proc/$1/environ" | sed -n "s/^$2=//p" | head -n 1; }
+# $1 "<pane> <agent> ...": one `@p <pane> <pid> <folder|->` per pane, or
+# `@p <pane> none` (no agent process of it now), `@p <pane> unknown` (no
+# /proc, or a folder that cannot be read), `@p <pane> mixed` (its agent
+# processes are on different folders: a process left over from an older
+# session, or one started with another folder; none is taken for it). An
+# agent process: its name is the agent's; else, when it has none of those,
+# its command line names it (node .../claude-code).
+__ta_panes() {
+  if [ ! -d /proc ] || [ ! -r /proc/self/environ ]; then
+    printf '%s\n' "$1" | awk '{ for (i = 1; i < NF; i += 2) print "@p " $i " unknown" }'
+    return 0
+  fi
+  __l=
+  for __q in /proc/[0-9]*; do
+    __ta_mine "$__q" && [ -r "$__q/environ" ] && __l="$__l $__q/environ"
+  done
+  {
+    if [ -z "$__l" ]; then :
+    elif __ta_nulawk; then __ta_envscan "$1" 1 $__l
+    else
+      for __e in $__l; do
+        __q=${__e%/environ}; printf '\002%s\n' "${__q##*/}"
+        tr '\n\0\002' '\001\n\001' 2>/dev/null <"$__e"; echo
+      done | __ta_envscan "$1" 0
+    fi
+  } | while read -r __q __pn __ag __dv; do
+    __r=0
+    __a=$(tr '\0' '\n' 2>/dev/null <"/proc/$__q/cmdline" | head -n 1)
+    case ${__a##*/} in
+      "$__ag"|"$__ag".exe) __r=2 ;;
+      *) case $(tr '\0' ' ' 2>/dev/null <"/proc/$__q/cmdline") in *"/$__ag"*|*"$__ag-code"*) __r=1 ;; esac ;;
+    esac
+    [ "$__r" -gt 0 ] && printf '%s %s %s %s\n' "$__pn" "$__r" "$__q" "$__dv"
+  done | awk -v want="$1" '
+    { p = $1; r = $2 + 0; d = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ /, "", d)
+      if (!(p in best) || r > best[p]) { best[p] = r; dir[p] = d; pid[p] = $3; mix[p] = 0 }
+      else if (r == best[p] && d != dir[p]) mix[p] = 1 }
+    END {
+      n = split(want, w, " ")
+      for (i = 1; i < n; i += 2) {
+        p = w[i]
+        if (!(p in best)) print "@p " p " none"
+        else if (mix[p]) print "@p " p " mixed"
+        else if (dir[p] == "?") print "@p " p " unknown"
+        else print "@p " p " " pid[p] " " dir[p]
+      }
+    }'
+}
+# __t_acctpane <pane> <agent> [<pane> <agent>...] (at most 50): the home
+# (`@h <os> <home>`, what a folder is checked against), then __ta_panes.
 __t_acctpane() {
-  case $1 in ''|*[!0-9A-Za-z_-]*) return 90 ;; esac
-  case $2 in claude) __v=CLAUDE_CONFIG_DIR ;; codex) __v=CODEX_HOME ;; *) return 90 ;; esac
-  __pp=$(__ta_panepid "$1" "$2")
-  case $__pp in none|unknown) printf '@p %s\n' "$__pp"; return 0 ;; esac
-  __dv=$(__ta_paneenv "$__pp" "$__v")
-  case $__dv in *'
-'*) __dv= ;; esac
-  printf '@p %s %s\n' "$__pp" "${__dv:--}"
+  [ $# -ge 2 ] && [ $# -le 100 ] && [ $(($# % 2)) -eq 0 ] || return 90
+  __w=
+  while [ $# -gt 0 ]; do
+    case $1 in ''|*[!0-9A-Za-z_-]*) return 90 ;; esac
+    case $2 in claude|codex) ;; *) return 90 ;; esac
+    __w="$__w $1 $2"; shift 2
+  done
+  printf '@h %s %s\n' "$(uname -s 2>/dev/null | tr -d ' ')" "$HOME"
+  __ta_panes "${__w# }"
+}
+# Whether a process's environment sets one of these variables (not empty):
+# its value is never read into the shell (grep -q prints nothing).
+__ta_envhas() {
+  __f="/proc/$1/environ"; shift
+  for __n in "$@"; do
+    tr '\n\0' '\001\n' 2>/dev/null <"$__f" | grep -q "^$__n=." && return 0
+  done
+  return 1
 }
 # What a "Copy account details" shows: presence only (yes / no), never a
 # value, a token or an email. $1 agent, $2 folder id or -, $3 pane id or -.
@@ -472,17 +557,16 @@ __t_acctdiag() {
     fi
   fi
   if [ "$3" != - ]; then
-    __pp=$(__ta_panepid "$3" "$1")
-    case $__pp in
-      none|unknown) printf 'd process.found %s\n' "$__pp" ;;
+    __pl=$(__ta_panes "$3 $1" | sed -n 's/^@p [^ ]* //p' | head -n 1)
+    case $__pl in
+      ''|none|unknown|mixed) printf 'd process.found %s\n' "${__pl:-unknown}" ;;
       *)
+        __pp=${__pl%% *}; __dv=${__pl#* }
         printf 'd process.found yes\n'
-        [ "$1" = claude ] && __v=CLAUDE_CONFIG_DIR || __v=CODEX_HOME
-        __dv=$(__ta_paneenv "$__pp" "$__v")
-        printf 'd process.configDirSet %s\n' "$(__ta_yn [ -n "$__dv" ])"
+        printf 'd process.configDirSet %s\n' "$(__ta_yn [ "$__dv" != - ])"
         [ "$2" != - ] && printf 'd process.onFolder %s\n' "$(__ta_yn [ "$__dv" = "$HOME/.tessel-server/accounts/$1/$2" ])"
-        printf 'd process.keyEnv %s\n' "$(__ta_yn [ -n "$(__ta_paneenv "$__pp" ANTHROPIC_API_KEY)$(__ta_paneenv "$__pp" CLAUDE_CODE_OAUTH_TOKEN)$(__ta_paneenv "$__pp" ANTHROPIC_AUTH_TOKEN)" ])"
-        printf 'd process.dbus %s\n' "$(__ta_yn [ -n "$(__ta_paneenv "$__pp" DBUS_SESSION_BUS_ADDRESS)" ])"
+        printf 'd process.keyEnv %s\n' "$(__ta_yn __ta_envhas "$__pp" ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_AUTH_TOKEN)"
+        printf 'd process.dbus %s\n' "$(__ta_yn __ta_envhas "$__pp" DBUS_SESSION_BUS_ADDRESS)"
         ;;
     esac
   fi

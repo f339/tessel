@@ -3,7 +3,7 @@
 // accounts and a sign-in to another one (TerminalPane, PaneActionsMenu).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import { ref } from 'vue'
+import { reactive, ref } from 'vue'
 import { resetSettings, settings } from '../settings'
 import { remoteHostsState } from '../remoteHosts'
 
@@ -158,7 +158,7 @@ describe('an agent pane on an SSH host: its account', () => {
     settings.hostAccountDefaults = {}
   })
 
-  it('its hover card: Check again, and Restart on the host’s default for a pane on another account', async () => {
+  it('its hover card: Check again only (restarting on another account is the menu’s: never one click that stops a busy agent)', async () => {
     ctx.checkHostAccount = vi.fn()
     ctx.restartOnAccount = vi.fn()
     settings.hostAccountDefaults = { 'ssh-acct': { claude: 'abc123' } }
@@ -170,20 +170,38 @@ describe('an agent pane on an SSH host: its account', () => {
     expect(card.querySelector('[data-hover-account]').textContent).toContain('coreine13@gmail.com')
     card.querySelector('[data-test="hover-check-account"]').click()
     expect(ctx.checkHostAccount).toHaveBeenCalledWith('pane-h1')
-    const restart = card.querySelector('[data-test="hover-restart-default"]')
-    expect(restart.textContent).toBe('Restart on work · Max (default on this host)')
-    restart.click()
-    expect(ctx.restartOnAccount).toHaveBeenCalledWith('pane-h1', 'abc123')
+    expect(card.querySelectorAll('.hc-account-actions button')).toHaveLength(1)
+    expect(ctx.restartOnAccount).not.toHaveBeenCalled()
     wrapper.unmount()
-    // On the default already: no Restart on it; "Default on this host" said.
+    // On the default already: "Default on this host" said.
     await mountPane({ id: 'pane-h2', hostAccount: 'abc123' })
     await wrapper.get('[data-test="pane-hover-trigger"]').trigger('pointerover')
     await new Promise((r) => setTimeout(r, 500))
     await flushPromises()
     const again = [...document.body.querySelectorAll('.pane-hover-card')].at(-1)
-    expect(again.querySelector('[data-test="hover-restart-default"]')).toBeNull()
     expect(again.querySelector('[data-hover-account-note]').textContent).toBe('Default on this host')
     settings.hostAccountDefaults = {}
+  })
+
+  it('its agent runs on another account than the pane’s: the pane asks, Update or Keep (nothing changed until then); a new launch ends the notice', async () => {
+    ctx.resolveHostAccountMismatch = vi.fn()
+    const node = reactive({ id: 'pane-m1', type: 'leaf', kind: 'agent', agentId: 'claude', agentCommand: 'claude', title: 'Archimedes', remoteHostId: 'ssh-acct', sessionId: 's-1', hostAccount: 'abc123', hostAccountMismatch: { runs: null }, launchedAt: 1 })
+    wrapper = mount(TerminalPane, { props: { node }, global: { provide: { panelCtx: ctx } }, attachTo: document.body })
+    await flushPromises()
+    const note = wrapper.get('[data-test="host-account-mismatch"]')
+    expect(note.text()).toContain('This pane is running on coreine13 · Pro, not work · Max.')
+    expect(node.hostAccount).toBe('abc123')
+    await wrapper.get('[data-test="host-account-update"]').trigger('click')
+    expect(ctx.resolveHostAccountMismatch).toHaveBeenLastCalledWith('pane-m1', true)
+    await wrapper.get('[data-test="host-account-keep"]').trigger('click')
+    expect(ctx.resolveHostAccountMismatch).toHaveBeenLastCalledWith('pane-m1', false)
+    // A folder the host no longer lists: named as one.
+    node.hostAccountMismatch = { runs: 'zzz999' }
+    await flushPromises()
+    expect(wrapper.get('[data-test="host-account-mismatch"]').text()).toContain('running on another account folder, not work · Max')
+    node.launchedAt = 2
+    await flushPromises()
+    expect(wrapper.find('[data-test="host-account-mismatch"]').exists()).toBe(false)
   })
 
   it('signed in, its email not known yet: its plan in the header, Check again in its title', async () => {

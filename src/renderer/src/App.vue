@@ -27,7 +27,7 @@ import { channelHead, leadHead, reviewRequest, teammateHead } from '../../shared
 import { notePanes } from './paneSessionTrail'
 import LaunchMenu from './components/LaunchMenu.vue'
 import { accountChoices, refreshAccountChoices, setOpenPanesSource } from './accountChoices'
-import { HOST_ACCOUNT_AGENTS, checkHostAccountsNow, defaultHostAccount, hostAccountChoice, hostAccountsOf, hostEntry, refreshHostAccounts, setDefaultHostAccount, validHostAccount } from './hostAccounts'
+import { HOST_ACCOUNT_AGENTS, checkHostAccountsNow, defaultHostAccount, hostAccountChoice, hostAccountsOf, hostEntry, hostPaneFolder, refreshHostAccounts, setDefaultHostAccount, validHostAccount } from './hostAccounts'
 import SettingsDialog from './components/SettingsDialog.vue'
 import UpdateDialog from './components/UpdateDialog.vue'
 import UpdateCard from './components/UpdateCard.vue'
@@ -630,8 +630,10 @@ async function chatOpen(leaf, { askTrust = true } = {}) {
       extraEnv,
       accountEnv,
       unsetEnv,
-      // On an SSH host: the account folder its terminal ran on (checked in main).
-      ...(isRemotePath(leaf.cwd) && validHostAccount(leaf.hostAccount) ? { hostAccount: leaf.hostAccount } : {})
+      // On an SSH host: the account folder its terminal ran on (checked in main);
+      // the host's default account only when signed in there (else the
+      // fallback below, as a terminal pane's).
+      ...(isRemotePath(leaf.cwd) && validHostAccount(leaf.hostAccount) ? { hostAccount: leaf.hostAccount, ...(leaf.hostAccountFromDefault ? { hostAccountSignedIn: true } : {}) } : {})
     })
   } catch (err) {
     res = { ok: false, code: 'failed', error: err && err.message }
@@ -3276,6 +3278,7 @@ provide('panelCtx', {
   restartOnAccount,
   signInOnHost,
   verifyHostAccount,
+  resolveHostAccountMismatch,
   checkHostAccount,
   setHostAccountDefault,
   copyAccountDetails,
@@ -4676,29 +4679,63 @@ async function restartOnAccount(leafId, accountId) {
 }
 
 // A pane on an SSH host: which config folder its agent really runs on (its
-// process's CLAUDE_CONFIG_DIR / CODEX_HOME there). A folder its layout names
-// but it does not run on is not claimed (a pane restored or reattached
-// without a relaunch, one started before account folders): its account
-// follows what runs. -> the host's answer, or null
+// process's CLAUDE_CONFIG_DIR / CODEX_HOME there, the host's panes asked
+// together). A folder its layout names but it does not run on (a pane
+// restored or reattached without a relaunch, one started before account
+// folders) is never changed behind your back: the pane asks (Update / Keep,
+// leaf.hostAccountMismatch, not saved). Changed at once only when the host
+// was sure (one folder for all its agent processes, one Tessel knows or the
+// host's own sign-in) and the saved account is not signed in there.
+// -> the host's answer, or null
 async function verifyHostAccount(leafId) {
   const leaf = findLeaf(leafId)
-  const api = window.shellApi.remoteAccounts
-  if (!leaf || leaf.kind !== 'agent' || !leaf.remoteHostId || leaf.notConnected || !HOST_ACCOUNT_AGENTS.includes(leaf.agentId) || !api || !api.paneFolder) return null
-  const res = await api.paneFolder(leaf.remoteHostId, leaf.agentId, leafId).catch(() => null)
-  if (!res || !res.ok || res.found !== 'yes' || findLeaf(leafId) !== leaf) return res
-  const runs = res.folderId || null
-  if ((typeof leaf.hostAccount === 'string' ? leaf.hostAccount : null) !== runs) {
-    if (window.shellApi.log) window.shellApi.log('info', `remote accounts: pane ${leafId} runs on ${runs || 'the host’s own sign-in'}, not on what its layout said (${leaf.hostAccount || 'none'})`) // i18n-ignore log
+  if (!leaf || leaf.kind !== 'agent' || !leaf.remoteHostId || leaf.notConnected || !HOST_ACCOUNT_AGENTS.includes(leaf.agentId)) return null
+  const hostId = leaf.remoteHostId
+  const res = await hostPaneFolder(hostId, leaf.agentId, leafId).catch(() => null)
+  if (!res || !res.ok || findLeaf(leafId) !== leaf || leaf.remoteHostId !== hostId) return res
+  // No agent process now, mixed or unknown evidence, a folder Tessel does
+  // not know: nothing said, nothing changed.
+  const runs = res.found !== 'yes' ? undefined : typeof res.folderId === 'string' ? res.folderId : res.own === true ? null : undefined
+  if (runs === undefined) return res
+  const saved = typeof leaf.hostAccount === 'string' ? leaf.hostAccount : null
+  if (runs === saved) {
+    delete leaf.hostAccountMismatch
+    return res
+  }
+  const known = hostAccountsOf(hostId)
+  const savedEntry = known && known.at ? hostEntry(hostId, leaf.agentId, saved ?? undefined) : undefined
+  if (known && known.at && (!savedEntry || savedEntry.state !== 'signed-in')) {
+    if (window.shellApi.log) window.shellApi.log('info', `remote accounts: pane ${leafId} runs on ${runs || 'the host’s own sign-in'}; its saved account (${saved || 'none'}) is not signed in there: followed`) // i18n-ignore log
+    delete leaf.hostAccountMismatch
     leaf.hostAccount = runs
     scheduleSave()
+    return res
   }
+  // Kept once for this folder: not asked again for it.
+  if (leaf.hostAccountKept !== runs) leaf.hostAccountMismatch = { runs }
   return res
+}
+// The pane's notice: Update (the pane's account becomes the one its agent
+// runs on, saved with the layout) or Keep (the saved one stays, its next
+// restart starts there).
+function resolveHostAccountMismatch(leafId, update) {
+  const leaf = findLeaf(leafId)
+  const m = leaf && leaf.hostAccountMismatch
+  if (!m) return
+  delete leaf.hostAccountMismatch
+  if (update) {
+    leaf.hostAccount = m.runs
+    delete leaf.hostAccountKept
+    scheduleSave()
+  } else leaf.hostAccountKept = m.runs
 }
 // Pane menu > Check account again: the host asked now (past the cache and
 // the back-off), and the folder its agent runs on checked.
 async function checkHostAccount(leafId) {
   const leaf = findLeaf(leafId)
   if (!leaf || !leaf.remoteHostId) return
+  // Asked by you: a folder kept before is asked about again.
+  delete leaf.hostAccountKept
   await Promise.all([checkHostAccountsNow(leaf.remoteHostId), verifyHostAccount(leafId)])
 }
 // Pane menu > Make this the default on <host>: new panes of this agent there

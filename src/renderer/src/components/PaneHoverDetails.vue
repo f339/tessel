@@ -18,9 +18,10 @@ const props = defineProps({
   // yolo, team: { name, lead } | null, session, id }
   info: { type: Object, required: true }
 })
-// On an SSH host (info.accountCheck, info.restartDefault): ask the host now
-// which account it is; restart the agent on the host's default account.
-defineEmits(['check-account', 'restart-default'])
+// On an SSH host (info.accountCheck): ask the host now which account it is.
+// Restarting on another account is the pane menu's (Restart on…): one click
+// in a card that opens on hover would stop a busy agent mid-turn.
+defineEmits(['check-account'])
 
 const modelLine = computed(() => (props.info.model ? t('pane.model.title', 'Model: {{model}}', { model: props.info.model }) : ''))
 // The account it runs on (when its agent has more than one).
@@ -58,11 +59,10 @@ const sessionLine = computed(() => (props.info.session ? t('pane.status.session'
         <span v-text="accountLine"></span>
       </div>
       <div v-for="(note, i) in info.accountNotes || []" :key="`n${i}`" class="hc-detail hc-account-note" data-hover-account-note="" v-text="note"></div>
-      <div v-if="info.accountCheck || info.restartDefault" class="hc-account-actions">
-        <button v-if="info.accountCheck" type="button" class="hc-link" data-test="hover-check-account" @click="$emit('check-account')">
+      <div v-if="info.accountCheck" class="hc-account-actions">
+        <button type="button" class="hc-link" data-test="hover-check-account" @click="$emit('check-account')">
           {{ t('pane.account.checkAgain', 'Check again') }}
         </button>
-        <button v-if="info.restartDefault" type="button" class="hc-link" data-test="hover-restart-default" @click="$emit('restart-default')" v-text="info.restartDefault"></button>
       </div>
       <div v-if="info.conversation" class="hc-agent" data-hover-conversation="">
         <MessageSquareText :size="12" aria-hidden="true" />

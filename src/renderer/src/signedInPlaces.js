@@ -96,9 +96,11 @@ export function shownOrg(org, email) {
 // The pane account a row stands for, when a pane can be switched to it:
 // this PC, Claude Code (a Tessel account id, null: the system's sign-in);
 // an SSH host, Claude Code or Codex (an account folder id, null: the
-// host's own sign-in, the login shell's folder first). null: none.
+// host's own sign-in, the login shell's folder first). null: none, and
+// never a folder whose sign-in file is a link (made outside Tessel: no agent
+// is started on it, so it is neither a default nor a pane's target).
 export function switchTarget(place, entry, siblings = []) {
-  if (!place || !entry || entry.state !== 'signed-in') return null
+  if (!place || !entry || entry.state !== 'signed-in' || entry.linked) return null
   if (place.kind === 'pc') {
     if (entry.agent !== 'claude') return null
     if (entry.scope === 'system') return { id: null }
