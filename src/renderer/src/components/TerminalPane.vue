@@ -92,6 +92,7 @@ import { terminalControl, terminalLog } from '../agentTerminal/agentTerminalStat
 import { nativeChatSessionChoiceLabel } from '../chat/orca/native-chat-session-option-labels'
 import { liveShareFit, liveShareOffset, LS_TEXT_SIZES } from '../liveShareFit'
 import { layoutDragging } from '../layoutDrag'
+import { claimWebgl, releaseWebgl, noteWebglShown } from '../terminalWebgl'
 
 const props = defineProps({
   node: { type: Object, required: true }
@@ -2702,11 +2703,35 @@ let webgl = null
 // shown again. After Orca's src/renderer/src/lib/pane-manager/
 // pane-rendering-control.ts and pane-webgl-renderer.ts (MIT, Copyright (c)
 // 2026 Lovecast Inc.).
+// A pane takes one only once it has been on screen, and within the window's
+// places (terminalWebgl.js): a pane opened out of sight (a hidden project's,
+// as every pane is while Tessel restores its layout) starts with the normal
+// renderer. Every pane of every project taking a context as it opened lost
+// every one past Chromium's 16 at each start of Tessel, and those panes
+// showed white.
 const WEBGL_RELEASE_MS = 30000
 let webglReleased = false
 let onScreen = true
+// Seen on screen yet (the IntersectionObserver's first answer). Without the
+// observer: as on screen.
+let seenOnScreen = typeof IntersectionObserver === 'undefined'
 let releaseTimer = null
 let screenObserver = null
+// Its place among the window's WebGL terminals (terminalWebgl.js).
+const webglOwner = {
+  onScreen: () => onScreen,
+  // A pane coming on screen takes its place: the normal renderer until this
+  // one is shown again.
+  release: () => {
+    if (!webgl) return
+    webglReleased = true
+    applyRenderer()
+  },
+  // A place freed while it waited on screen.
+  retry: () => {
+    if (onScreen && !webglReleased) applyRenderer()
+  }
+}
 // The same, reactive (the conversation view watches its file only while shown).
 const paneOnScreen = ref(true)
 // Back on screen: an agent on an SSH host reads its model again (skipped
@@ -2716,15 +2741,16 @@ watch(paneOnScreen, (shown) => {
 })
 function setOnScreen(visible) {
   paneOnScreen.value = visible
-  if (visible === onScreen) return
+  const firstSeen = visible && !seenOnScreen
+  if (visible) seenOnScreen = true
+  if (visible === onScreen && !firstSeen) return
   onScreen = visible
   clearTimeout(releaseTimer)
   releaseTimer = null
   if (visible) {
-    if (webglReleased) {
-      webglReleased = false
-      applyRenderer()
-    }
+    noteWebglShown(webglOwner)
+    webglReleased = false
+    if (!webgl) applyRenderer()
     return
   }
   // Off screen only because the window is minimized: kept (no rebuild of
@@ -2762,10 +2788,26 @@ function releaseWebglContext(addon) {
     /* the normal dispose still runs */
   }
 }
+function dropWebgl() {
+  const gl = webgl
+  webgl = null
+  releaseWebgl(webglOwner)
+  if (!gl) return
+  releaseWebglContext(gl)
+  try {
+    gl.dispose()
+  } catch {
+    /* already gone */
+  }
+}
 function applyRenderer() {
   if (!term) return
-  const want = useWebgl(settings.gpuAcceleration) && !webglReleased
+  const want = useWebgl(settings.gpuAcceleration) && !webglReleased && seenOnScreen
   if (want && !webgl) {
+    // Out of sight: it takes one when it is shown (setOnScreen). Every place
+    // taken by panes on screen: the normal renderer until one frees
+    // (webglOwner.retry).
+    if (!onScreen || !claimWebgl(webglOwner)) return
     try {
       const gl = new WebglAddon()
       if (gl.onContextLoss)
@@ -2775,23 +2817,44 @@ function applyRenderer() {
           } catch {
             /* already gone */
           }
-          if (webgl === gl) webgl = null
+          if (webgl === gl) {
+            webgl = null
+            releaseWebgl(webglOwner)
+          }
         })
       term.loadAddon(gl)
       webgl = gl
     } catch {
       /* no WebGL: keep the default renderer */
+      releaseWebgl(webglOwner)
     }
   } else if (!want && webgl) {
-    const gl = webgl
-    webgl = null
-    releaseWebglContext(gl)
+    dropWebgl()
+  } else if (!want) {
+    releaseWebgl(webglOwner)
+  }
+}
+// Its context lost (Chromium's limit of contexts reached, the graphics card
+// reset): the normal renderer at once. xterm waits 3 s for the context to come
+// back, and meanwhile Chromium draws the canvas as a white box with a broken
+// image in its corner. A new context when the pane is shown again.
+function onWebglContextLost(e) {
+  const gl = webgl
+  if (!gl) return
+  const canvas = gl._renderer && gl._renderer._canvas
+  if (canvas && e && e.target !== canvas) return
+  webgl = null
+  releaseWebgl(webglOwner)
+  webglReleased = true
+  // After xterm's own handler for the event.
+  setTimeout(() => {
     try {
       gl.dispose()
     } catch {
       /* already gone */
     }
-  }
+    if (term && typeof term.refresh === 'function') term.refresh(0, term.rows - 1)
+  }, 0)
 }
 
 // Hide the mouse pointer while you type in the pane; it comes back as soon
@@ -2989,6 +3052,9 @@ onMounted(() => {
   }
   for (const ev of ['wheel', 'keydown', 'pointerdown', 'pointermove'])
     hostEl.value.addEventListener(ev, byHand, { passive: true, capture: true })
+  // A WebGL context lost: the normal renderer at once (the event does not
+  // bubble: heard on the way down to the canvas).
+  if (term.element) term.element.addEventListener('webglcontextlost', onWebglContextLost, true)
   applyRenderer()
   // A copy xterm makes itself (Ctrl+Insert): without the gutter too.
   if (term.element)
@@ -3333,9 +3399,14 @@ onBeforeUnmount(() => {
   unregisterPane(props.node.id, paneApi)
   if (unsubData) unsubData()
   if (unsubExit) unsubExit()
+  // Its WebGL context and its place given back now (term.dispose() alone
+  // leaves the context to the garbage collector; it disposes the addon).
+  const gl = webgl
+  webgl = null
+  releaseWebgl(webglOwner)
+  if (gl) releaseWebglContext(gl)
   if (term) term.dispose()
   term = null
-  webgl = null
   // NOTE: the PTY is intentionally NOT killed here — the pane may merely be
   // re-mounting after a layout change. App.closeLeaf() owns PTY termination.
 })
