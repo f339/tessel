@@ -50,6 +50,7 @@ function load({ shared = false, tree = null } = {}) {
     watch: (getter, cb) => watchers.push({ getter, cb }),
     newId: () => 'pane-new',
     seedBuffer: () => {},
+    exitOf: () => null,
     validPaneSessionOptions: (o) => (o && o.model ? o : null),
     validSavedFiles: () => [],
     launchPermissions: () => 'manual',
@@ -194,5 +195,27 @@ describe("a terminal agent's chat view is kept with the layout", () => {
     expect(shellApi.createPty).not.toHaveBeenCalled()
     const plain = await api.deserializeNode({ type: 'leaf', id: 'pane-c2', shellId: 'pwsh', kind: 'agent', agentId: 'claude', agentCommand: 'claude', title: 'Claude', sessionId: '22222222-3333-4444-8555-666666666666', sleeping: { at: 1 }, chatView: 'yes' })
     expect(plain.chatView).toBeUndefined()
+  })
+})
+
+// Startup asks for a pane's re-attach ahead (restoreAttach.js): its terminal
+// may end before the pane is rebuilt. Its end, kept by process id
+// (ptyStore.js exitOf), wins over the older answer that said it was running.
+describe('a pane re-attached from an answer asked ahead at startup', () => {
+  const answer = { ok: true, shell: { id: 'pwsh', name: 'PowerShell' }, backend: 'conpty', pid: 42, cwd: 'C:\\proj', exited: false, buffer: 'SCREEN' }
+  it('comes back ended when its terminal ended since the answer', async () => {
+    const { api, ctx, shellApi } = load()
+    ctx.exitOf = (id, pid) => (id === 'pane-l1' && pid === 42 ? { exitCode: 1 } : null)
+    const leaf = await api.createLeaf('pwsh', null, 'C:\\proj', null, { id: 'pane-l1', attaching: Promise.resolve({ ...answer }) })
+    expect(leaf).toMatchObject({ id: 'pane-l1', pid: 42, exitedAtStart: true })
+    // Answered ahead: not asked again, and its output was seeded already.
+    expect(shellApi.attachPty).not.toHaveBeenCalled()
+    expect(shellApi.createPty).not.toHaveBeenCalled()
+  })
+  it('still running: comes back running', async () => {
+    const { api, ctx } = load()
+    ctx.exitOf = () => null
+    const leaf = await api.createLeaf('pwsh', null, 'C:\\proj', null, { id: 'pane-l2', attaching: Promise.resolve({ ...answer }) })
+    expect(leaf).toMatchObject({ id: 'pane-l2', exitedAtStart: false })
   })
 })

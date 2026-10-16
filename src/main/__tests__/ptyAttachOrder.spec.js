@@ -38,18 +38,25 @@ function load({ registerDelay = null } = {}) {
     revokeTeamSecret: vi.fn(),
     setTeamSecret: vi.fn(),
     remoteHosts: { paneStarted: vi.fn() },
-    agentStateStore: { register: vi.fn(() => registerDelay || Promise.resolve()) },
+    agentStateStore: { register: vi.fn(() => registerDelay || Promise.resolve()), unregister: vi.fn(async () => {}) },
     windowsBuildNumber: () => 26200,
     PANE_HISTORY_CHARS,
     Date,
     Math,
-    log: { info: vi.fn() }
+    endedPtyPids: new Set(),
+    installLogs: { onExit: vi.fn() },
+    sshAskpass: { paneExited: vi.fn() },
+    remoteAgentCheck: { paneExited: vi.fn() },
+    log: { info: vi.fn(), warn: vi.fn() }
   }
+  ctx.remoteHosts.paneExited = vi.fn()
   vm.createContext(ctx)
+  // The host's exit notice, as createPtyClient gets it in index.js.
+  const onExit = slice('  onExit: (id, exitCode, signal, pid) => {', '  // ssh2 connections')
   vm.runInContext(
     slice('const pendingData = new Map()', '// Live Share (liveShare.js)') +
       slice('const attachStats = {', '// After the interface restores its panes') +
-      '\nthis.api = { queueData, flushData }',
+      '\nthis.api = { queueData, flushData, ...{' + onExit + '} }',
     ctx
   )
   const flush = () => timers.splice(0).forEach((fn) => fn())
@@ -84,6 +91,37 @@ describe('pty:attach', () => {
       ['pty:data', { id: 'pane-2', data: 'other' }],
       ['pty:data', { id: 'pane-1', data: 'new' }]
     ])
+  })
+
+  it('an end that comes while its answer is on its way follows the answer, after the last output', async () => {
+    let releaseRegister
+    const env = load({ registerDelay: new Promise((r) => (releaseRegister = r)) })
+    const attaching = env.handlers['pty:attach'](null, 'pane-1')
+    env.reply({ ok: true, shellId: 'pwsh', shellName: 'PowerShell', pid: 7, buffer: 'SCREEN', agentProvider: 'claude', agentLaunchToken: 'tok', agentStartedAt: 1 })
+    // In the same read: its last output, then its end.
+    env.api.queueData('pane-1', 'FINAL OUTPUT')
+    env.api.onExit('pane-1', 3, 0, 7)
+    await Promise.resolve()
+    env.flush()
+    // Nothing of it before the answer (still registering its agent state).
+    expect(env.sent).toEqual([])
+    expect(env.ctx.agentStateStore.unregister).not.toHaveBeenCalled()
+    releaseRegister()
+    const res = await attaching
+    // The answer says it ended.
+    expect(res).toMatchObject({ ok: true, buffer: 'SCREEN', exited: true, exitCode: 3 })
+    expect(env.sent).toEqual([])
+    env.flush()
+    expect(env.sent).toEqual([
+      ['pty:data', { id: 'pane-1', data: 'FINAL OUTPUT' }],
+      ['pty:exit', { id: 'pane-1', exitCode: 3, signal: 0, pid: 7 }]
+    ])
+    // Its state, secret and logs are closed after it was registered.
+    expect(env.ctx.agentStateStore.unregister).toHaveBeenCalledWith('pane-1', 'tok')
+    expect(env.ctx.setTeamSecret.mock.invocationCallOrder[0]).toBeLessThan(env.ctx.revokeTeamSecret.mock.invocationCallOrder[0])
+    // Another pane's end is not held.
+    env.api.onExit('pane-2', 0, 0, 8)
+    expect(env.sent.at(-1)).toEqual(['pty:exit', { id: 'pane-2', exitCode: 0, signal: 0, pid: 8 }])
   })
 
   it('cuts the replay to what the window keeps of a pane (an older host sends it all)', async () => {

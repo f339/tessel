@@ -118,7 +118,7 @@ import { automationsState, applySnapshot as applyAutomations, subscribeAutomatio
 import { trackAgent } from '../../shared/tracking'
 import { pasteAndConfirm, turnStarting } from './deliver'
 import { createTeamDelivery } from './teamDelivery'
-import { dropBuffer, seedBuffer } from './ptyStore'
+import { dropBuffer, exitOf, seedBuffer } from './ptyStore'
 import { prefetchAttaches, terminalLeafIds } from './restoreAttach'
 import { afterStartup, startupBegins, startupFinished } from './startupIdle'
 import { tasks as boardTasks, setTasks, updateTask, removeTask, addTask, deletedTaskIds, addDeletedTasks, takeDeletedToPurge, cardOnBoard, beginBoardLoad, endBoardLoad } from './taskBoardStore'
@@ -1526,7 +1526,9 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     launchedAt: Date.now(),
     teamTools: !attached && teamToolsReady,
     toolsVersion: !attached && teamToolsReady ? teamToolsVersion : null,
-    exitedAtStart: attached && !!res.exited,
+    // Ended already, or since its answer came (asked ahead at startup, it may
+    // have ended before its pane was rebuilt: its end was kept, ptyStore.js).
+    exitedAtStart: attached && (!!res.exited || !!exitOf(id, res.pid)),
     restoredText,
     broadcast: true
   })

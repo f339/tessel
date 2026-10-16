@@ -13,6 +13,11 @@ import { PANE_HISTORY_CHARS } from '../../shared/paneHistory'
 
 const MAX = PANE_HISTORY_CHARS // ~200 KB of recent output kept per pane
 const buffers = new Map() // id -> ChunkBuffer
+// The last end of each pane's terminal (its process id and code), heard from
+// the start: a pane rebuilt or mounted after its terminal ended (startup asks
+// for its re-attach long before its pane exists) still learns it ended.
+const exits = new Map() // id -> { pid, exitCode }
+const EXITS_MAX = 500
 let started = false
 
 function bufferFor(id) {
@@ -28,6 +33,21 @@ export function startCapture() {
   if (started || !window.shellApi) return
   started = true
   window.shellApi.onData(({ id, data }) => bufferFor(id).push(data))
+  if (window.shellApi.onExit)
+    window.shellApi.onExit((e) => {
+      if (!e || typeof e.id !== 'string') return
+      exits.delete(e.id)
+      exits.set(e.id, { pid: e.pid || null, exitCode: e.exitCode })
+      if (exits.size > EXITS_MAX) exits.delete(exits.keys().next().value)
+    })
+}
+
+// How the terminal with this process id ended, if it did since the start:
+// { exitCode } or null. Only that process: a pane restarted in place keeps
+// its id, and an older process's end is not the new one's.
+export function exitOf(id, pid) {
+  const e = exits.get(id)
+  return e && pid && e.pid === pid ? { exitCode: e.exitCode } : null
 }
 
 // A pane's history from the terminal host (re-attach): it holds everything
@@ -45,6 +65,8 @@ export function getBuffer(id) {
   return b ? b.text() : ''
 }
 
+// The pane closed or its terminal replaced: its output and its end go.
 export function dropBuffer(id) {
   buffers.delete(id)
+  exits.delete(id)
 }

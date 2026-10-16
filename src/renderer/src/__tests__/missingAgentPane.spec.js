@@ -64,6 +64,7 @@ function load({ shared = true, status = null, tree = null } = {}) {
     watch: () => {},
     newId: () => `pane-new${++paneNo}`,
     seedBuffer: () => {},
+    exitOf: () => null,
     validPaneSessionOptions: (o) => (o && o.model ? o : null),
     validSavedFiles: () => [],
     launchSessionValues: () => null,

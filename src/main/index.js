@@ -3914,13 +3914,45 @@ function flushData() {
     pendingData.delete(id)
   }
 }
+// A pane's end that came while its re-attach answer was held: handled once
+// that answer has gone (releaseData), so the window gets the snapshot, then
+// the last output, then the end; the answer itself says it ended (pty:attach).
+const heldExits = new Map() // id -> { exitCode, signal, pid }
 function releaseData(id) {
   heldData.delete(id)
+  const ended = heldExits.get(id)
+  if (ended) {
+    heldExits.delete(id)
+    // A turn later: the answer is sent first (as its promise settles).
+    setTimeout(() => paneExited(id, ended.exitCode, ended.signal, ended.pid), 0)
+    return
+  }
   if (pendingData.has(id) && !flushTimer) flushTimer = setTimeout(flushData, 8)
 }
 function queueData(id, data) {
   pendingData.set(id, (pendingData.get(id) || '') + data)
   if (!flushTimer) flushTimer = setTimeout(flushData, 8)
+}
+// A terminal ended (the host's exit notice).
+function paneExited(id, exitCode, signal, pid) {
+  if (pid) endedPtyPids.add(pid)
+  const info = ptyInfo.get(id)
+  if (pid && info?.pid && pid !== info.pid) return // a delayed exit from the previous execution
+  void agentStateStore.unregister(id, info?.agentLaunchToken).catch(() => {})
+  revokeTeamSecret(id)
+  installLogs.onExit(id, exitCode)
+  sshAskpass.paneExited(id)
+  remoteHosts.paneExited(id, exitCode)
+  remoteAgentCheck.paneExited(id)
+  flushData() // deliver the last output before the exit notice
+  liveShare?.onPtyExit(id, exitCode)
+  if (exitCode && info) {
+    log.warn(
+      'pty',
+      `${info.shellName} ${id} exited with code ${exitCode}${signal ? ` (signal ${signal})` : ''}`
+    )
+  }
+  send('pty:exit', { id, exitCode, signal, pid: pid || null })
 }
 
 // Live Share (liveShare.js): this Tessel's screen shared with guests, or the
@@ -3940,25 +3972,12 @@ const host = createPtyClient({
     liveShare?.onPtyData(id, data)
   },
   onExit: (id, exitCode, signal, pid) => {
-    if (pid) endedPtyPids.add(pid)
-    const info = ptyInfo.get(id)
-    if (pid && info?.pid && pid !== info.pid) return // a delayed exit from the previous execution
-    void agentStateStore.unregister(id, info?.agentLaunchToken).catch(() => {})
-    revokeTeamSecret(id)
-    installLogs.onExit(id, exitCode)
-    sshAskpass.paneExited(id)
-    remoteHosts.paneExited(id, exitCode)
-    remoteAgentCheck.paneExited(id)
-    heldData.delete(id)
-    flushData() // deliver the last output before the exit notice
-    liveShare?.onPtyExit(id, exitCode)
-    if (exitCode && info) {
-      log.warn(
-        'pty',
-        `${info.shellName} ${id} exited with code ${exitCode}${signal ? ` (signal ${signal})` : ''}`
-      )
+    // Its re-attach answer is on its way: handled right after it (releaseData).
+    if (heldData.has(id)) {
+      heldExits.set(id, { exitCode, signal, pid })
+      return
     }
-    send('pty:exit', { id, exitCode, signal, pid: pid || null })
+    paneExited(id, exitCode, signal, pid)
   },
   // ssh2 connections, channels and questions (ssh/sshRemote.js).
   onEvent: (msg) => {
@@ -4481,8 +4500,9 @@ async function attached(id, res, asked) {
     windowsBuild: windowsBuildNumber(),
     pid: res.pid,
     cwd: res.cwd,
-    exited: !!res.exited,
-    exitCode: res.exitCode,
+    // Ended while its answer was held (its notice follows the answer).
+    exited: !!res.exited || heldExits.has(id),
+    exitCode: heldExits.has(id) ? heldExits.get(id).exitCode : res.exitCode,
     buffer: replayOf(res.buffer),
     agentLaunchToken: res.agentLaunchToken || null,
     remoteHostId: res.remoteHostId || null

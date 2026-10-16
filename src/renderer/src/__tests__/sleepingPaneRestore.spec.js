@@ -48,6 +48,7 @@ function load({ shared = false, tree = null } = {}) {
     watch: (getter, cb) => watchers.push({ getter, cb }),
     newId: () => 'pane-new',
     seedBuffer: () => {},
+    exitOf: () => null,
     validPaneSessionOptions: (o) => (o && o.model ? o : null),
     validSavedFiles: () => [],
     launchPermissions: () => 'manual',

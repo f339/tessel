@@ -8,7 +8,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { SearchAddon } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { getBuffer } from '../ptyStore'
+import { exitOf, getBuffer } from '../ptyStore'
 import { isFloatingToggleKey } from '../floatingTerminal'
 import BrandIcon from './BrandIcon.vue'
 import LiveShareReaders from './LiveShareReaders.vue'
@@ -2904,6 +2904,16 @@ function showMouse() {
   hostEl.value.classList.remove('mouse-hidden')
 }
 
+// Its terminal ended.
+function paneEnded(code) {
+  // Put to sleep (Settings > Agents): not an end; the pane shows it asleep.
+  if (props.node.sleeping || !term) return
+  exited.value = true
+  activityMonitor.dispose()
+  exitCode.value = code
+  term.write(`\r\n\x1b[33m[${t('pane.exitedWithCode', 'process exited with code {{code}}', { code })}]\x1b[0m\r\n`)
+}
+
 // Focus follows mouse (Settings > Terminal): hovering a pane makes it the
 // active one, never while a button is held (a drag, a selection) nor when
 // Tessel is in the background or a menu is open.
@@ -3263,13 +3273,12 @@ onMounted(() => {
       if (!mounted || props.node.gen !== gen || !term) return
       if (a && a.ok && !a.exited && (!a.pid || !props.node.pid || a.pid === props.node.pid)) return
     }
-    // Put to sleep (Settings > Agents): not an end; the pane shows it asleep.
-    if (props.node.sleeping) return
-    exited.value = true
-    activityMonitor.dispose()
-    exitCode.value = code
-    term.write(`\r\n\x1b[33m[${t('pane.exitedWithCode', 'process exited with code {{code}}', { code })}]\x1b[0m\r\n`)
+    paneEnded(code)
   })
+  // Its terminal ended before this pane was mounted (rebuilt at startup from
+  // an answer asked ahead, or mounted again): the end kept since (ptyStore.js).
+  const endedBefore = exitOf(props.node.id, props.node.pid)
+  if (endedBefore && !exited.value) paneEnded(endedBefore.exitCode)
 
   // Refit whenever the pane is resized (divider drag, window resize, splits).
   ro = new ResizeObserver(() => scheduleFit())

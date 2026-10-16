@@ -65,6 +65,7 @@ function load({ username = 'root', status = { hostId: HOST, claude: '/usr/local/
     newId: () => 'pane-new',
     newUuid: () => SID,
     seedBuffer: () => {},
+    exitOf: () => null,
     validPaneSessionOptions: () => null,
     launchSessionValues: () => null,
     modelsFor: () => null,
