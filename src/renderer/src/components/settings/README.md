@@ -6,7 +6,7 @@ group), the search and which page shows. Each page is a component here.
 | File | What |
 | --- | --- |
 | `Settings<Page>.vue` | One page each (`SettingsGeneral.vue`, `SettingsAgents.vue`, …). |
-| `settingsPages.js` | `PAGES` (title, description, icon), `GROUPS` (the sidebar), `PAGE_TITLES_EN`. |
+| `settingsPages.js` | `PAGES` (title, description, icon), `GROUPS` (the sidebar), `PAGE_TITLES_EN`, `PAGE_ALIASES` (pages that moved). |
 | `settingsShell.js` | `useSettingsShell()`: what a page gets from the shell. |
 | `settingsFields.js` | `setNumber` / `setRange` for number fields. |
 | `settingsList.css` | The list rows (`.sl-*`), imported first by `style.css`. |
@@ -57,6 +57,11 @@ needs from App.vue comes as props, passed by the shell.
 A new page: add it to `PAGES`, `GROUPS` and `PAGE_TITLES_EN`, import it in
 the shell and put its tag in the shell's `<main>`, in sidebar order.
 
+A page merged into another (Text is Terminal's Font group): remove it from
+the three, and add its old id to `PAGE_ALIASES` with the page and the group's
+element id. The shell then opens that group for the old id (a link, or the
+page remembered), and the search finds the group by the old title.
+
 ### What the search needs
 
 The search (in the shell) reads the rendered text of every page, so:
@@ -104,7 +109,10 @@ in a disclosure:
 **Controls.** A boolean is `input.set-switch` (never Off/On segments or a
 native checkbox); 2 or 3 short choices `.launch-seg.set-seg`; more or longer
 ones `ThemedSelect`; numbers `.set-number` (unit and range in the hint, then
-`setNumber(key, $event)`); a path or command `.sl-path` with a title and a
+`setNumber(key, $event)`); a 0-1 value or a short range, a slider
+`input.set-range` with its value in `output.set-range-value` (`setRange`); a
+few on/off items in one row (a multi-select), `.set-chips` of `button.chip`
+with `aria-pressed`; a path or command `.sl-path` with a title and a
 copy button; a command to try, in a hint, `code.set-code` (one line each).
 Page tabs are `.launch-seg` with `role="tablist"` and `aria-selected`.
 

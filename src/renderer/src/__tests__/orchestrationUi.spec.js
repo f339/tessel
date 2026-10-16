@@ -8,6 +8,7 @@ import OrchestrationCard from '../components/OrchestrationCard.vue'
 import SettingsDialog from '../components/SettingsDialog.vue'
 import { settings, resetSettings, loadSettings, DEFAULT_SETTINGS } from '../settings'
 import { _resetFeedsForTest } from '../agentChildrenFeed'
+import { ORCHESTRATION_TOOLS } from '../orchestrationGuide'
 
 const NOW = Date.now()
 const pane = (id, extra = {}) => ({ id, num: 1, kind: 'agent', title: id, agentId: 'codex', state: 'ready', team: 'tm1', ...extra })
@@ -169,8 +170,13 @@ describe('Settings > Orchestration: workers', () => {
     const group = w.find('[data-orch-workers]')
     expect(group.exists()).toBe(true)
     expect(group.find('[data-orch-setup]').findAll('li')).toHaveLength(3)
-    // The trust model, said plainly: same Windows user.
-    expect(group.find('[data-orch-trust]').text()).toMatch(/signed with a secret only its pane has.*your Windows user/)
+    // The trust model, said plainly (same Windows user), in the folded "How
+    // to ask for teamwork" with the example prompts and the team tools.
+    const guide = w.find('[data-orch-guide] details')
+    expect(guide.element.open).toBe(false)
+    expect(guide.find('[data-orch-trust]').text()).toMatch(/signed with a secret only its pane has.*your Windows user/)
+    expect(guide.findAll('.orch-example')).toHaveLength(6)
+    expect(guide.findAll('.orch-tools li')).toHaveLength(ORCHESTRATION_TOOLS.length)
     const confirm = group.find('[data-setting="orchestrationConfirmWorkers"]')
     expect(confirm.element.checked).toBe(true)
     await confirm.setValue(false)
@@ -184,5 +190,136 @@ describe('Settings > Orchestration: workers', () => {
     await depth.trigger('change')
     expect(settings.orchestrationMaxDepth).toBe(2)
     expect(group.text()).toContain('Per coordinator (1 to 8)')
+  })
+})
+
+describe('Settings > Orchestration: team and agent hooks', () => {
+  const agents = [
+    { id: 'claude', name: 'Claude Code', available: true },
+    { id: 'codex', name: 'Codex', available: true },
+    { id: 'gemini', name: 'Gemini CLI', available: true }
+  ]
+  const status = {
+    node: { found: true },
+    backups: ['C:/Users/a/.claude/settings.json.before-tessel', 'C:/Users/a/.codex/hooks.json.before-tessel'],
+    agents: [
+      { id: 'claude', hooks: 'installed', approval: null },
+      { id: 'codex', hooks: 'installed', approval: 'needs-approval' },
+      { id: 'gemini', hooks: 'missing' },
+      { id: 'cursor', hooks: 'installed', statusOnly: true }
+    ]
+  }
+  async function open(api = {}, provide = {}) {
+    window.shellApi = { teamHooksStatus: vi.fn(async () => status), ...api }
+    const w = mount(SettingsDialog, { props: { section: 'orchestration', agents }, attachTo: document.body, global: { provide } })
+    mounted.push(w)
+    await new Promise((r) => setTimeout(r, 0))
+    await nextTick()
+    return w
+  }
+  const flush = async () => {
+    await new Promise((r) => setTimeout(r, 0))
+    await nextTick()
+  }
+
+  it('Team: one tag per agent with its state, then the two wake switches (the second under the first)', async () => {
+    const w = await open()
+    const team = w.get('[data-orch-team]')
+    expect(team.get('[data-orch-coverage] .set-hint').text()).toBe('1 of 3 agents can work as a team.')
+    const tags = team.findAll('.orch-tag')
+    expect(tags.map((t) => [t.attributes('data-agent'), t.attributes('data-state')])).toEqual([
+      ['claude', 'ready'],
+      ['codex', 'approval'],
+      ['gemini', 'missing']
+    ])
+    expect(tags[1].classes()).toContain('tag-warn')
+    expect(tags[1].text()).toContain('Codex · needs your approval')
+    const wake = team.get('[data-setting="teamWakeUps"]')
+    const unconfirmed = team.get('[data-setting="teamWakeUnconfirmed"]')
+    expect(unconfirmed.element.closest('.set-row').classList.contains('set-row-nested')).toBe(true)
+    await wake.setValue(false)
+    expect(settings.teamWakeUps).toBe(false)
+    expect(unconfirmed.element.disabled).toBe(true)
+    await wake.setValue(true)
+    await unconfirmed.setValue(true)
+    expect(settings.teamWakeUnconfirmed).toBe(true)
+    expect(team.find('[data-wake-unconfirmed-warning]').exists()).toBe(true)
+    // Each long explanation waits behind Learn more.
+    expect(team.findAll('details.set-more').length).toBe(2)
+  })
+
+  it('a failed check says so in a sentence, the raw error behind Details; Check again reads again', async () => {
+    const teamHooksStatus = vi.fn().mockRejectedValueOnce(new Error('EACCES: hooks.json')).mockResolvedValue(status)
+    const w = await open({ teamHooksStatus })
+    const row = w.get('[data-orch-coverage]')
+    expect(row.get('.set-hint').text()).toBe('Could not check your agents.')
+    expect(row.get('[data-orch-check-error]').element.open).toBe(false)
+    expect(row.get('[data-orch-check-error]').text()).toContain('EACCES: hooks.json')
+    await row.get('[data-orch-check]').trigger('click')
+    await flush()
+    expect(teamHooksStatus).toHaveBeenCalledTimes(2)
+    expect(row.findAll('.orch-tag')).toHaveLength(3)
+  })
+
+  it('no agent with the team tools: one sentence and a way to Agents', async () => {
+    const w = await open({ teamHooksStatus: vi.fn(async () => ({ agents: [] })) })
+    const row = w.get('[data-orch-coverage]')
+    expect(row.text()).toContain('No agent with the team tools yet')
+    await row.get('[data-orch-open-agents]').trigger('click')
+    expect(w.get('.set-page[data-page="agents"]').attributes('hidden')).toBeUndefined()
+  })
+
+  it('Agent hooks: the copies kept are folded; Remove asks first, then removes', async () => {
+    const teamRemoveHooks = vi.fn(async () => ({ errors: [] }))
+    let asked = null
+    const askConfirm = vi.fn(async (q) => {
+      asked = q
+      return true
+    })
+    const w = await open({ teamRemoveHooks }, { askConfirm })
+    const hooks = w.get('[data-agent-hooks]')
+    const copies = hooks.get('[data-hooks-backups]')
+    expect(copies.element.open).toBe(false)
+    expect(copies.get('summary').text()).toBe('Copies Tessel kept (2)')
+    expect(copies.findAll('.sl-path').map((p) => p.attributes('title'))).toEqual(status.backups)
+    const remove = hooks.get('[data-remove-hooks]')
+    expect(remove.classes()).toContain('danger')
+    await remove.trigger('click')
+    await flush()
+    expect(asked).toMatchObject({ title: 'Remove Tessel hooks?', danger: true })
+    expect(teamRemoveHooks).toHaveBeenCalledTimes(1)
+    expect(hooks.get('[data-hooks-removed]').text()).toBe('Tessel hooks removed.')
+  })
+
+  it('Remove: nothing happens when the question is refused; a failure is a sentence with Details', async () => {
+    const teamRemoveHooks = vi.fn(async () => ({ errors: ['C:/x/hooks.json: EBUSY'] }))
+    let answer = false
+    const w = await open({ teamRemoveHooks }, { askConfirm: async () => answer })
+    const hooks = w.get('[data-agent-hooks]')
+    await hooks.get('[data-remove-hooks]').trigger('click')
+    await flush()
+    expect(teamRemoveHooks).not.toHaveBeenCalled()
+    answer = true
+    await hooks.get('[data-remove-hooks]').trigger('click')
+    await flush()
+    const result = hooks.get('[data-hooks-removed]')
+    expect(result.classes()).toContain('set-callout')
+    expect(result.text()).toContain('Some hooks could not be removed.')
+    expect(result.get('details').element.open).toBe(false)
+    expect(result.get('details').text()).toContain('EBUSY')
+  })
+
+  it('the search opens "How to ask for teamwork" when it finds something in it, and folds it again after', async () => {
+    const w = await open()
+    const guide = w.get('[data-orch-guide] details')
+    expect(guide.element.open).toBe(false)
+    await w.get('.set-search input').setValue('team_worker_start')
+    await flush()
+    await flush()
+    expect(guide.element.open).toBe(true)
+    expect(w.get('[data-orch-guide]').attributes('hidden')).toBeUndefined()
+    await w.get('.set-search input').setValue('')
+    await flush()
+    expect(guide.element.open).toBe(false)
   })
 })

@@ -1,4 +1,4 @@
-// The Agent Session History tab (SessionHistoryPanel.vue, SessionHistoryRow.vue):
+// The Past conversations tab (SessionHistoryPanel.vue, SessionHistoryRow.vue):
 // the list from the main process, its scope, search, rows, details and actions.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mount, flushPromises, config } from '@vue/test-utils'
@@ -76,7 +76,7 @@ describe('SessionHistoryPanel.vue', () => {
   it('lists the workspace’s conversations first, then the project, then all', async () => {
     await make()
     expect(calls[0]).toEqual(['list', { cwd: null, limit: 50 }])
-    expect(wrapper.find('.sh-title-full').text()).toBe('Agent Session History')
+    expect(wrapper.find('.sh-title-full').text()).toBe('Past conversations')
     expect(wrapper.find('[data-test="scope-workspace"]').attributes('aria-pressed')).toBe('true')
     expect(titles()).toEqual(['Fix the build'])
     expect(wrapper.find('[data-test="session-bar"]').text()).toContain('1 of 3 sessions')
@@ -235,6 +235,19 @@ describe('SessionHistoryPanel.vue', () => {
     vi.useRealTimers()
   })
 
+  it('in the side panel, Escape in the search empties it and stops there', async () => {
+    await make()
+    const outer = vi.fn()
+    wrapper.element.parentElement.addEventListener('keydown', outer)
+    const search = wrapper.find('[data-test="session-query"]')
+    await search.setValue('build')
+    await search.trigger('keydown', { key: 'Escape' })
+    expect(search.element.value).toBe('')
+    await search.trigger('keydown', { key: 'Escape' })
+    expect(outer).not.toHaveBeenCalled()
+    expect(document.activeElement).not.toBe(search.element)
+  })
+
   it('the view menu: an agent unticked hides its rows, the depth asks for more', async () => {
     await make({ cwd: null })
     await openMenu(wrapper.find('[data-test="session-view"]'))
@@ -270,6 +283,16 @@ describe('a project on an SSH host', () => {
     expect(api.listRemoteSessions).toHaveBeenCalledWith({ hostId: 'ssh-box', limit: expect.any(Number) })
     expect(api.listSessions).not.toHaveBeenCalled()
     expect(titles()).toEqual(['On the server'])
+  })
+
+  it('a host that fails: a sentence, its message behind Details; no session search in the view menu', async () => {
+    api.listRemoteSessions = vi.fn(() => Promise.resolve({ ok: false, error: 'bash: claude: command not found' }))
+    await make({ cwd: null, remote: REMOTE })
+    const error = wrapper.find('[data-test="session-error"]')
+    expect(error.find('.sh-error-text').text()).toBe('The sessions of box could not be read.')
+    expect(error.find('[data-test="session-error-detail"]').text()).toContain('command not found')
+    await openMenu(wrapper.find('[data-test="session-view"]'))
+    expect(menuItem('index-enable')).toBe(null)
   })
 
   it('says to connect when the host is not signed in (and never shows local sessions)', async () => {
@@ -316,7 +339,7 @@ describe('SessionHistoryPanel.vue: loading, empty and error states', () => {
     list.pending[0].resolve([])
     await flushPromises()
     expect(loadingShown()).toBe(false)
-    expect(wrapper.find('[data-test="session-empty"]').text()).toContain('No agent sessions found')
+    expect(wrapper.find('[data-test="session-empty"]').text()).toContain('No past conversations found')
   })
 
   it('another local project: read again, loading (not "none") while its rows are not there yet', async () => {
@@ -373,7 +396,12 @@ describe('SessionHistoryPanel.vue: loading, empty and error states', () => {
     let fail = true
     api.listSessions = vi.fn(() => (fail ? Promise.reject(new Error('disk gone')) : Promise.resolve(SESSIONS)))
     await make()
-    expect(wrapper.find('[data-test="session-error"]').text()).toContain('disk gone')
+    // A sentence first; the raw message behind Details.
+    const error = wrapper.find('[data-test="session-error"]')
+    expect(error.find('.sh-error-text').text()).toBe('The conversations could not be read.')
+    const detail = error.find('[data-test="session-error-detail"]')
+    expect(detail.element.open).toBe(false)
+    expect(detail.text()).toContain('disk gone')
     expect(loadingShown()).toBe(false)
     expect(emptyShown()).toBe(false)
     fail = false

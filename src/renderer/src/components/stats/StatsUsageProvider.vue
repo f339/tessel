@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, useId } from 'vue'
+import { Info } from 'lucide-vue-next'
 import StatsStatCard from './StatsStatCard.vue'
 import StatsIcon from './StatsIcon.vue'
 import StatsUsageChart from './StatsUsageChart.vue'
@@ -21,6 +22,16 @@ const emit = defineEmits(['enable', 'refresh', 'filter'])
 const filtersOpen = ref(false)
 const filterControl = ref(null)
 const shareOpen = ref(false)
+// About these numbers: the notes on the metrics, the cost and the source,
+// in one tooltip by the selection (hover, or a click that keeps it open).
+const tipHover = ref(false)
+const tipPinned = ref(false)
+const tipShown = computed(() => tipHover.value || tipPinned.value)
+const tipId = `${useId()}-about` // i18n-ignore
+function closeTip() {
+  tipHover.value = false
+  tipPinned.value = false
+}
 const RANGES = computed(() => [
   { value: '7d', label: t('stats.range.last7', 'Last 7 days') },
   { value: '30d', label: t('stats.range.last30', 'Last 30 days') },
@@ -163,8 +174,8 @@ const noReaderText = () =>
   t('stats.noReader', 'No local {{name}} usage reader is available in Tessel.', { name: props.label })
 const introText = () =>
   t('stats.provider.intro', 'Reads local {{name}} usage logs to show token, model, and session stats.', { name: props.label })
-const scanErrorText = () =>
-  t('stats.provider.scanError', 'Last scan error: {{error}}', { error: props.error })
+const readFailedText = () =>
+  t('stats.provider.readFailed', 'Could not read the {{name}} usage.', { name: props.label })
 const emptyText = () =>
   t('stats.provider.empty', 'No local {{name}} usage found yet for this scope.', { name: props.label })
 const recentHint = () =>
@@ -288,15 +299,61 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', outside))
       </div>
     </header>
     <template v-if="supported && enabled">
-      <p class="su-muted su-selection-summary">{{ scopeLabel }} &middot; {{ rangeLabel }}</p>
-      <p v-if="error" class="su-error" role="alert">
-        {{ scanErrorText()
-        }}<span v-if="model?.hasData">
-          {{
-            t('stats.provider.lastScan', 'Showing the last successful scan for this scope.')
-          }}</span
+      <div class="su-selection">
+        <p class="su-muted su-selection-summary">{{ scopeLabel }} &middot; {{ rangeLabel }}</p>
+        <span v-if="model?.hasData" class="su-info" @mouseenter="tipHover = true" @mouseleave="tipHover = false">
+          <button
+            type="button"
+            class="su-icon-button su-info-btn"
+            :aria-label="t('stats.provider.about', 'About these numbers')"
+            :aria-describedby="tipId"
+            :aria-expanded="tipShown"
+            data-test="stats-about"
+            @click="tipPinned = !tipPinned"
+            @blur="tipPinned = false"
+            @keydown.escape.stop="closeTip"
+          >
+            <Info :size="14" aria-hidden="true" />
+          </button>
+          <span :id="tipId" role="tooltip" class="su-tip" :hidden="!tipShown">
+            <span>{{
+              provider === 'claude'
+                ? t('stats.provider.claudeMetricNote', 'Cache reuse rate is calculated as cache read tokens / (input tokens + cache read tokens).'
+                  )
+                : t('stats.provider.codexMetricNote', 'Reasoning tokens are shown for visibility. Cached input and reasoning output are included in input and output totals.'
+                  )
+            }}</span>
+            <span v-if="provider === 'codex'">{{
+              t('stats.provider.codexCost', 'API-equivalent cost is unavailable: no verified Codex pricing is provided by this local report.'
+              )
+            }}</span>
+            <span v-else-if="provider === 'opencode'">{{
+              t('stats.provider.opencodeCost', 'The cost is the one OpenCode recorded for each reply, not your subscription bill.')
+            }}</span>
+            <span v-else
+              >{{ t('stats.provider.claudeCost', 'API-equivalent cost is an estimate, not your subscription bill.')
+              }}<template v-if="summary.hasUnpricedModels">
+                {{ t('stats.provider.unpriced', 'Some model prices are unavailable.') }}</template
+              ></span
+            >
+            <span class="su-source-note">{{ model.scopeLabel }}. {{ model.turnsMeaning }}</span>
+          </span>
+        </span>
+      </div>
+      <div v-if="error" class="set-callout warn" role="alert">
+        <span class="set-callout-text"
+          >{{ readFailedText()
+          }}<template v-if="model?.hasData">
+            {{
+              t('stats.provider.lastScan', 'Showing the last successful scan for this scope.')
+            }}</template
+          ></span
         >
-      </p>
+        <details class="set-more su-callout-more">
+          <summary>{{ t('stats.details', 'Details') }}</summary>
+          <p>{{ error }}</p>
+        </details>
+      </div>
       <p v-for="warning in model?.warnings || []" :key="warning" class="su-muted">{{ warning }}</p>
       <div v-if="loading && !model?.hasData" class="su-loading" role="status" aria-live="polite">
         <p>{{ t('stats.scanning', 'Scanning local usage logs...') }}</p>
@@ -323,31 +380,6 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', outside))
             :icon="card.icon"
           />
         </div>
-        <p class="su-muted su-metric-note">
-          {{
-            provider === 'claude'
-              ? t('stats.provider.claudeMetricNote', 'Cache reuse rate is calculated as cache read tokens / (input tokens + cache read tokens).'
-                )
-              : t('stats.provider.codexMetricNote', 'Reasoning tokens are shown for visibility. Cached input and reasoning output are included in input and output totals.'
-                )
-          }}
-        </p>
-        <p v-if="provider === 'codex'" class="su-muted">
-          {{
-            t('stats.provider.codexCost', 'API-equivalent cost is unavailable: no verified Codex pricing is provided by this local report.'
-            )
-          }}
-        </p>
-        <p v-else-if="provider === 'opencode'" class="su-muted">
-          {{ t('stats.provider.opencodeCost', 'The cost is the one OpenCode recorded for each reply, not your subscription bill.') }}
-        </p>
-        <p v-else class="su-muted">
-          {{ t('stats.provider.claudeCost', 'API-equivalent cost is an estimate, not your subscription bill.')
-          }}<span v-if="summary.hasUnpricedModels">
-            {{ t('stats.provider.unpriced', 'Some model prices are unavailable.') }}</span
-          >
-        </p>
-        <p class="su-muted su-source-note">{{ model.scopeLabel }}. {{ model.turnsMeaning }}</p>
         <StatsUsageChart :provider="provider" :daily="model.byDay" />
         <div class="su-breakdowns">
           <section v-for="group in groups" :key="group.id" class="su-panel">

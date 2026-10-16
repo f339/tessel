@@ -1,11 +1,11 @@
 <script setup>
-// Settings > Terminal: shell, scrollback, drawing, copy and paste.
+// Settings > Terminal: shell, font (the old Text page), cursor, drawing, copy
+// and paste, mouse and scrolling.
 import { computed } from 'vue'
 import ThemedSelect from '../ui/ThemedSelect.vue'
-import { t } from '../../i18n'
-import BrandIcon from '../BrandIcon.vue'
+import { t, intlLocale } from '../../i18n'
 import SettingsToolRows from '../SettingsToolRows.vue'
-import { settings, clamp, DEFAULT_SETTINGS } from '../../settings'
+import { settings, clamp, DEFAULT_SETTINGS, FONT_FAMILIES } from '../../settings'
 import { LIGHT_BG_MIN_CONTRAST, DEFAULT_WORD_SEPARATOR } from '../../terminalOptions'
 import { PAGES } from './settingsPages'
 import { setNumber, setRange } from './settingsFields'
@@ -22,6 +22,43 @@ function setScrollback(e) {
   if (Number.isFinite(n)) settings.scrollback = clamp(n, 500, 100000)
   e.target.value = settings.scrollback
 }
+
+// Font: size, weights (the CSS names), cursor.
+function stepFont(d) {
+  settings.fontSize = clamp(settings.fontSize + d, 8, 28)
+}
+const WEIGHT_NAMES = computed(() => ({
+  100: t('settings.text.weightThin', 'Thin'),
+  200: t('settings.text.weightExtraLight', 'Extra light'),
+  300: t('settings.text.weightLight', 'Light'),
+  400: t('settings.text.weightNormal', 'Normal'),
+  500: t('settings.text.weightMedium', 'Medium'),
+  600: t('settings.text.weightSemibold', 'Semibold'),
+  700: t('settings.text.weightBold', 'Bold'),
+  800: t('settings.text.weightExtraBold', 'Extra bold'),
+  900: t('settings.text.weightBlack', 'Black')
+}))
+// The nine CSS weights, plus the one saved if it is none of them (a value
+// typed before the weights were a list, e.g. 350), so it still shows.
+function weightOptions(current) {
+  const values = [100, 200, 300, 400, 500, 600, 700, 800, 900]
+  if (Number.isFinite(current) && !values.includes(current)) values.push(current)
+  return values
+    .sort((a, b) => a - b)
+    .map((value) => ({
+      value,
+      label: WEIGHT_NAMES.value[value]
+        ? t('settings.text.weightOption', '{{name}} ({{weight}})', { name: WEIGHT_NAMES.value[value], weight: value })
+        : String(value)
+    }))
+}
+const CURSORS = computed(() => [
+  { id: 'block', label: t('settings.text.cursorBlock', 'Block') },
+  { id: 'bar', label: t('settings.text.cursorBar', 'Bar') },
+  { id: 'underline', label: t('settings.text.cursorUnderline', 'Underline') }
+])
+const percent = (v) => new Intl.NumberFormat(intlLocale(), { style: 'percent', maximumFractionDigits: 0 }).format(v)
+
 const GPU_MODES = computed(() => [
   { id: 'auto', label: t('settings.terminal.gpuAuto', 'Auto') },
   { id: 'on', label: t('settings.common.on', 'On') },
@@ -82,17 +119,14 @@ function resetScrollSpeed() {
           <label class="set-label" for="settings-shell">
             {{ t('settings.terminal.defaultShell', 'Default shell') }} <span class="set-hint">{{ t('settings.terminal.defaultShellHint', 'Agents run in it too') }}</span>
           </label>
-          <div class="set-shell">
-            <BrandIcon :kind="defaultShell || ''" :size="15" />
-            <ThemedSelect
-              id="settings-shell"
-              class="set-select"
-              :value="defaultShell"
-              @change="emit('set-default-shell', $event.target.value)"
-            >
-              <option v-for="s in shells" :key="s.id" :value="s.id">{{ s.name }}</option>
-            </ThemedSelect>
-          </div>
+          <ThemedSelect
+            id="settings-shell"
+            class="set-select"
+            :value="defaultShell"
+            @change="emit('set-default-shell', $event.target.value)"
+          >
+            <option v-for="s in shells" :key="s.id" :value="s.id">{{ s.name }}</option>
+          </ThemedSelect>
         </div>
         <div class="set-row">
           <label class="set-label" for="settings-scrollback">
@@ -111,10 +145,120 @@ function resetScrollSpeed() {
         </div>
       </div>
     </div>
+    <!-- The old Text page (Settings > Text opens here: PAGE_ALIASES). -->
+    <div id="set-terminal-font" class="set-group" data-group="font">
+      <h3 class="set-group-title">{{ t('settings.terminal.font', 'Font') }}</h3>
+      <p class="set-group-desc">{{ t('settings.terminal.fontDesc', 'The text of every terminal: typeface, size, weights and line height.') }}</p>
+      <div class="set-card">
+        <div class="set-row">
+          <label class="set-label" for="settings-font">
+            {{ t('settings.text.font', 'Font') }}
+            <span class="set-hint">{{ t('settings.text.fontHint', 'The typeface of every terminal') }}</span>
+          </label>
+          <ThemedSelect id="settings-font" v-model="settings.fontFamily" class="set-select">
+            <option v-for="f in FONT_FAMILIES" :key="f" :value="f">{{ f }}</option>
+          </ThemedSelect>
+        </div>
+        <div class="set-row">
+          <div class="set-label">
+            {{ t('settings.text.size', 'Size') }}
+            <span class="set-hint">{{ t('settings.text.sizeHint', 'Also Ctrl+= and Ctrl+-') }}</span>
+          </div>
+          <div class="set-stepper">
+            <button type="button" :title="t('settings.text.smaller', 'Smaller')" :aria-label="t('settings.text.smaller', 'Smaller')" @click="stepFont(-1)">−</button>
+            <span data-test="font-size">{{ settings.fontSize }}</span>
+            <button type="button" :title="t('settings.text.bigger', 'Bigger')" :aria-label="t('settings.text.bigger', 'Bigger')" @click="stepFont(1)">+</button>
+          </div>
+        </div>
+        <div class="set-row">
+          <label class="set-label" for="settings-font-weight">
+            {{ t('settings.text.fontWeight', 'Font weight') }}
+            <span class="set-hint">{{ t('settings.text.fontWeightHint', 'The weight of normal text.') }}</span>
+          </label>
+          <ThemedSelect id="settings-font-weight" v-model="settings.fontWeight" class="set-select">
+            <option v-for="w in weightOptions(settings.fontWeight)" :key="w.value" :value="w.value">{{ w.label }}</option>
+          </ThemedSelect>
+        </div>
+        <div class="set-row">
+          <!-- Not a <label>: a click on Learn more must not open the select. -->
+          <div class="set-label">
+            <label for="settings-font-weight-bold">{{ t('settings.text.boldWeight', 'Bold font weight') }}</label>
+            <span class="set-hint">{{ t('settings.text.boldWeightHint', 'The weight of bold text, set apart from the font weight.') }}</span>
+            <details class="set-more">
+              <summary>{{ t('settings.common.learnMore', 'Learn more') }}</summary>
+              <p>{{ t('settings.text.boldWeightMore', 'Some fonts map several weights to one face: if bold looks unchanged, lower the font weight or choose another font.') }}</p>
+            </details>
+          </div>
+          <ThemedSelect id="settings-font-weight-bold" v-model="settings.fontWeightBold" class="set-select">
+            <option v-for="w in weightOptions(settings.fontWeightBold)" :key="w.value" :value="w.value">{{ w.label }}</option>
+          </ThemedSelect>
+        </div>
+        <div class="set-row">
+          <label class="set-label" for="settings-line-height">
+            {{ t('settings.text.lineHeight', 'Line height') }}
+            <span class="set-hint">{{ t('settings.text.lineHeightHint', 'A multiple of the font size, from 1 to 3.') }}</span>
+          </label>
+          <input
+            id="settings-line-height"
+            class="set-number"
+            type="number"
+            min="1"
+            max="3"
+            step="0.1"
+            :value="settings.lineHeight"
+            @change="setNumber('lineHeight', $event)"
+          />
+        </div>
+      </div>
+    </div>
+    <div class="set-group" data-group="cursor">
+      <h3 class="set-group-title">{{ t('settings.text.cursor', 'Cursor') }}</h3>
+      <div class="set-card">
+        <div class="set-row">
+          <div id="settings-cursor-label" class="set-label">{{ t('settings.text.cursorStyle', 'Cursor style') }}</div>
+          <div class="launch-seg set-seg" role="group" aria-labelledby="settings-cursor-label">
+            <button
+              v-for="c in CURSORS"
+              :key="c.id"
+              type="button"
+              class="launch-seg-btn"
+              :class="{ on: settings.cursorStyle === c.id }"
+              :aria-pressed="settings.cursorStyle === c.id"
+              @click="settings.cursorStyle = c.id"
+            >
+              {{ c.label }}
+            </button>
+          </div>
+        </div>
+        <label class="set-row">
+          <div class="set-label">{{ t('settings.text.blink', 'Blinking cursor') }}</div>
+          <input v-model="settings.cursorBlink" type="checkbox" class="set-switch" />
+        </label>
+        <div class="set-row">
+          <label class="set-label" for="settings-cursor-opacity">
+            {{ t('settings.text.cursorOpacity', 'Cursor opacity') }}
+            <span class="set-hint">{{ t('settings.text.cursorOpacityHint', 'Opacity of the terminal cursor.') }}</span>
+          </label>
+          <div class="set-inline">
+            <input
+              id="settings-cursor-opacity"
+              class="set-range"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              :value="settings.cursorOpacity"
+              @input="setRange('cursorOpacity', $event)"
+            />
+            <output class="set-range-value" for="settings-cursor-opacity">{{ percent(settings.cursorOpacity) }}</output>
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="set-group">
       <h3 class="set-group-title">{{ t('settings.terminal.rendering', 'Rendering') }}</h3>
+      <p class="set-group-desc">{{ t('settings.terminal.renderingDesc', 'How panes draw the terminal: the renderer, its colors and the space around the text.') }}</p>
       <div class="set-card">
-        <p class="set-hint set-card-text">{{ t('settings.terminal.renderingIntro', 'Terminal renderer behavior for live panes and new panes.') }}</p>
         <div class="set-row">
           <div id="settings-gpu-label" class="set-label">
             {{ t('settings.terminal.gpu', 'GPU acceleration') }}
@@ -153,7 +297,7 @@ function resetScrollSpeed() {
             </button>
           </div>
         </div>
-        <div v-if="contrastMode === 'custom'" class="set-row">
+        <div v-if="contrastMode === 'custom'" class="set-row set-row-nested">
           <label class="set-label" for="settings-contrast-ratio">
             {{ t('settings.terminal.contrastTarget', 'Contrast target') }}
             <span class="set-hint">{{ t('settings.terminal.contrastTargetHint', 'Higher values increase contrast where possible. Background colors stay unchanged.') }}</span>
@@ -181,6 +325,38 @@ function resetScrollSpeed() {
             />
           </div>
         </div>
+        <div class="set-row">
+          <label class="set-label" for="settings-pad-x">
+            {{ t('settings.appearance.padX', 'Horizontal padding') }}
+            <span class="set-hint">{{ t('settings.appearance.padXHint', 'Horizontal padding around the terminal grid in pixels.') }}</span>
+          </label>
+          <input
+            id="settings-pad-x"
+            class="set-number"
+            type="number"
+            min="0"
+            max="512"
+            step="1"
+            :value="settings.terminalPaddingX"
+            @change="setNumber('terminalPaddingX', $event, true)"
+          />
+        </div>
+        <div class="set-row">
+          <label class="set-label" for="settings-pad-y">
+            {{ t('settings.appearance.padY', 'Vertical padding') }}
+            <span class="set-hint">{{ t('settings.appearance.padYHint', 'Vertical padding around the terminal grid in pixels.') }}</span>
+          </label>
+          <input
+            id="settings-pad-y"
+            class="set-number"
+            type="number"
+            min="0"
+            max="512"
+            step="1"
+            :value="settings.terminalPaddingY"
+            @change="setNumber('terminalPaddingY', $event, true)"
+          />
+        </div>
       </div>
     </div>
     <div class="set-group">
@@ -207,16 +383,29 @@ function resetScrollSpeed() {
         <label class="set-row">
           <div class="set-label">
             {{ t('settings.terminal.alwaysSelect', 'Always select with the mouse') }}
-            <span class="set-hint">{{ t('settings.terminal.alwaysSelectHint', 'Even in programs that use the mouse (GitHub Copilot, htop). They no longer get clicks or the wheel. Otherwise, hold Shift to select') }}</span>
+            <span class="set-hint">{{ t('settings.terminal.alwaysSelectHint', 'Even in programs that use the mouse (htop), which then get no clicks. Else hold Shift.') }}</span>
           </div>
           <input v-model="settings.alwaysSelect" type="checkbox" class="set-switch" />
+        </label>
+        <label class="set-row">
+          <div class="set-label">
+            {{ t('settings.terminal.trimGutter', 'Trim gutter on copy') }}
+            <span class="set-hint">{{ t('settings.terminal.trimGutterHint', 'Copied agent output loses the indent all its lines share.') }}</span>
+          </div>
+          <input v-model="settings.copyTrimsGutter" type="checkbox" class="set-switch" />
+        </label>
+        <label class="set-row">
+          <div class="set-label">
+            {{ t('settings.terminal.osc52', 'Allow TUI clipboard writes (OSC 52)') }}
+            <span class="set-hint">{{ t('settings.terminal.osc52Hint', 'Let programs in the terminal (Zellij, tmux, Neovim, fzf, Grok, SSH) copy to your system clipboard.') }}</span>
+          </div>
+          <input v-model="settings.allowOsc52Clipboard" type="checkbox" class="set-switch" />
         </label>
       </div>
     </div>
     <div class="set-group">
-      <h3 class="set-group-title">{{ t('settings.terminal.interaction', 'Terminal interaction') }}</h3>
+      <h3 class="set-group-title">{{ t('settings.terminal.mouse', 'Mouse and scrolling') }}</h3>
       <div class="set-card">
-        <p class="set-hint set-card-text">{{ t('settings.terminal.interactionIntro', 'Mouse and clipboard behavior for terminal panes.') }}</p>
         <div class="set-row">
           <div class="set-label">
             {{ t('settings.terminal.scrollSpeed', 'Scroll speed') }}
@@ -224,7 +413,7 @@ function resetScrollSpeed() {
           </div>
           <button class="exit-btn" type="button" @click="resetScrollSpeed">{{ t('settings.common.reset', 'Reset') }}</button>
         </div>
-        <div class="set-row">
+        <div class="set-row set-row-nested">
           <label class="set-label" for="settings-scroll-normal">
             {{ t('settings.terminal.scrollNormal', 'Normal') }}
             <span class="set-hint">{{ t('settings.terminal.scrollNormalHint', 'Scrollback wheel multiplier.') }}</span>
@@ -252,7 +441,7 @@ function resetScrollSpeed() {
             />
           </div>
         </div>
-        <div class="set-row">
+        <div class="set-row set-row-nested">
           <label class="set-label" for="settings-scroll-fast">
             {{ t('settings.terminal.scrollFast', 'Fast') }}
             <span class="set-hint">{{ t('settings.terminal.scrollFastHint', 'Extra multiplier while scrolling with a modifier key.') }}</span>
@@ -289,24 +478,16 @@ function resetScrollSpeed() {
         </label>
         <label class="set-row">
           <div class="set-label">
-            {{ t('settings.terminal.trimGutter', 'Trim gutter on copy') }}
-            <span class="set-hint">{{ t('settings.terminal.trimGutterHint', 'Drop the left gutter agent output is painted behind, so copied text is not indented. Only the indent every selected line shares is removed.') }}</span>
+            {{ t('settings.appearance.hideMouse', 'Hide mouse while typing') }}
+            <span class="set-hint">{{ t('settings.terminal.hideMouseHint', 'The pointer hides over a terminal while you type in it.') }}</span>
           </div>
-          <input v-model="settings.copyTrimsGutter" type="checkbox" class="set-switch" />
-        </label>
-        <label class="set-row">
-          <div class="set-label">
-            {{ t('settings.terminal.osc52', 'Allow TUI clipboard writes (OSC 52)') }}
-            <span class="set-hint">{{ t('settings.terminal.osc52Hint', 'Let programs in the terminal (Zellij, tmux, Neovim, fzf, Grok, SSH) copy to your system clipboard.') }}</span>
-          </div>
-          <input v-model="settings.allowOsc52Clipboard" type="checkbox" class="set-switch" />
+          <input v-model="settings.hideMouseWhileTyping" type="checkbox" class="set-switch" />
         </label>
       </div>
     </div>
     <div class="set-group">
       <h3 class="set-group-title">{{ t('settings.terminal.advanced', 'Advanced') }}</h3>
       <div class="set-card">
-        <p class="set-hint set-card-text">{{ t('settings.terminal.advancedIntro', 'Scrollback, word boundaries, and platform-specific terminal behaviors.') }}</p>
         <div class="set-row">
           <label class="set-label" for="settings-word-separators">
             {{ t('settings.terminal.wordSeparators', 'Word separators') }}

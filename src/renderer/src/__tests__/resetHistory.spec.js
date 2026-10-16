@@ -47,6 +47,10 @@ describe('reset history UI', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Limits reset')
     expect(wrapper.text()).toContain('Credits: 2 → 1')
+    // The account by its name, never its raw id.
+    expect(wrapper.get('.rh-account').text()).toBe('Codex · Work')
+    expect(wrapper.text()).not.toContain('(work)')
+    expect(wrapper.get('.rh-row .tag').classes()).toContain('tag-ok')
     expect(mock.providerUsage.creditHistory).not.toHaveBeenCalled()
     await wrapper.get('[data-test="reset-provider-credits"]').trigger('click')
     await flushPromises()
@@ -101,6 +105,9 @@ describe('reset history UI', () => {
     mock.providerUsage.resetHistory.mockResolvedValueOnce({ ok: false, error: 'Read failed' })
     await wrapper.get('.rh-heading .rh-button').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[role="alert"]').text()).toBe('Read failed')
+    // A sentence first, the raw message behind Details.
+    const alert = wrapper.get('[role="alert"]')
+    expect(alert.get('.set-callout-text').text()).toBe('Could not read reset history.')
+    expect(alert.get('details').text()).toContain('Read failed')
   })
 })

@@ -67,7 +67,7 @@ describe('Muse Code: MCP servers in its settings', () => {
   it('its legacy streamable_http entries and a server turned off (enabled: false)', () => {
     put({ schema_version: 1, mcpServers: { issues: { transport: 'streamable_http', url: 'https://issues/mcp', headers: { 'X-Team': 'platform' } }, off: { command: 'x', enabled: false } } })
     expect(listJsonAgent('muse', home).servers).toEqual([
-      { name: 'issues', scope: 'user', type: 'http', target: 'https://issues/mcp' },
+      { name: 'issues', scope: 'user', type: 'http', target: 'https://issues/mcp', headerKeys: ['X-Team'] },
       { name: 'off', scope: 'user', type: 'stdio', target: 'x', enabled: false }
     ])
     expect(jsonAgentConfig('muse', 'issues', home)).toEqual({ transport: 'http', sse: false, url: 'https://issues/mcp', headers: { 'X-Team': 'platform' } })

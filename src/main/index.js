@@ -116,6 +116,7 @@ import {
   addMcp,
   removeMcp,
   testMcp,
+  testMcpSpec,
   copyMcp,
   hklFromTip,
   runAgentCommand
@@ -2720,6 +2721,10 @@ ipcMain.handle(
 ipcMain.handle(
   'mcp:test',
   safe((ref) => testMcp(ref, freshEnv()))
+)
+ipcMain.handle(
+  'mcp:testSpec',
+  safe((spec) => testMcpSpec(spec, freshEnv()))
 )
 ipcMain.handle(
   'mcp:copy',

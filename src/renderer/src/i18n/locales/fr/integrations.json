@@ -36,7 +36,33 @@
       "signIn": "Se connecter",
       "test": "Tester",
       "notInstalled": "Non installé",
-      "turnedOff": "Désactivé"
+      "turnedOff": "Désactivé",
+      "addToMenu": "Ajouter à…",
+      "all": "Tous",
+      "attention": "À vérifier",
+      "connects": "Se connecte à",
+      "copyTarget": "Copier ce que lance {{name}}",
+      "dotAuth": "Dernier test : connexion requise",
+      "dotError": "Dernier test : échec",
+      "dotNone": "Pas encore testé",
+      "dotOk": "Dernier test : connecté",
+      "emptyOne": "Aucun serveur MCP pour l'instant : ajoutez-en un depuis le catalogue pour donner de nouveaux outils à vos agents.",
+      "env": "Variables",
+      "everyAgent": "Chaque agent installé ici l'a déjà",
+      "filter": "Afficher",
+      "headers": "En-têtes",
+      "hidden": "valeur masquée",
+      "loadFailed": "Les serveurs n'ont pas pu être lus.",
+      "noMatch": "Aucun serveur ne correspond.",
+      "readError": "{{agent}} : ses réglages MCP n'ont pas pu être lus, ses serveurs manquent donc ici.",
+      "refresh": "Actualiser",
+      "runs": "Lance",
+      "search": "Rechercher des serveurs",
+      "showAll": "Tout afficher",
+      "shown": "{{shown}} sur {{count}}",
+      "teamLink": "État de connexion des outils d'équipe → Orchestration",
+      "testOn": "Tester avec {{agent}}",
+      "usedBy": "Utilisé par"
     },
     "test": {
       "testing": "Test…",
@@ -50,13 +76,15 @@
     },
     "copy": {
       "added": "« {{name}} » ajouté à {{agent}}.{{note}} Redémarrez les panneaux {{agent}} ouverts pour le charger.",
-      "failed": "échec de la copie"
+      "failed": "échec de la copie",
+      "failedFor": "Impossible d'ajouter « {{name}} » à {{agent}}."
     },
     "remove": {
       "confirm": "Retirer « {{name}} » de {{agent}} ?",
       "button": "Retirer",
       "done": "« {{name}} » retiré de {{agent}}.",
-      "failed": "échec du retrait"
+      "failed": "échec du retrait",
+      "failedFor": "Impossible de retirer « {{name}} » de {{agent}}."
     },
     "signIn": {
       "pane": "Connexion : {{name}}",
@@ -103,7 +131,8 @@
     },
     "teamServer": {
       "title": "Ajouté par Tessel : messages d'équipe.",
-      "body": "Les agents d'une même équipe l'utilisent pour se parler en arrière-plan, sans jamais rien taper dans vos terminaux, et pour placer le travail qu'ils partagent sur le tableau des tâches de l'équipe (qui fait quoi). Il ne fait rien pour un agent qui n'est pas dans une équipe. Claude Code reçoit aussi ses nouveaux messages automatiquement (hooks dans ~/.claude/settings.json). Un agent déjà ouvert l'utilise après un redémarrage."
+      "body": "Les agents d'une même équipe l'utilisent pour se parler en arrière-plan, sans jamais rien taper dans vos terminaux, et pour placer le travail qu'ils partagent sur le tableau des tâches de l'équipe (qui fait quoi). Il ne fait rien pour un agent qui n'est pas dans une équipe. Claude Code reçoit aussi ses nouveaux messages automatiquement (hooks dans ~/.claude/settings.json). Un agent déjà ouvert l'utilise après un redémarrage.",
+      "short": "Ajouté par Tessel : les agents d'une même équipe l'utilisent pour s'écrire et partager le tableau des tâches. Il ne fait rien pour un agent hors d'une équipe."
     },
     "category": {
       "all": "Tous",
@@ -127,7 +156,24 @@
       "headersHint": "Facultatif, Claude Code seulement. Nom: valeur par ligne",
       "tokenVar": "Variable de jeton Codex",
       "tokenVarHint": "Facultatif : variable d'environnement contenant un jeton bearer",
-      "add": "Ajouter le serveur"
+      "add": "Ajouter le serveur",
+      "commandArgs": "Commande et arguments",
+      "commandMissing": "Saisissez la commande qui démarre le serveur.",
+      "envHint2": "Facultatif : variables que le serveur lit, une clé d'API par exemple.",
+      "exists": "Déjà dans {{agents}} : l'y ajouter à nouveau le remplace ou échoue.",
+      "headersHint2": "Facultatif : envoyés avec chaque requête, une clé d'API par exemple.",
+      "http": "HTTP",
+      "httpHint": "Un serveur sur le web (HTTP en streaming).",
+      "nameInvalid": "Lettres, chiffres, - et _ seulement (sans espaces).",
+      "nameMissing": "Saisissez un nom.",
+      "noSse": "{{agent}} se connecte seulement aux serveurs HTTP en streaming",
+      "sse": "SSE",
+      "sseHint": "Un serveur web plus ancien (HTTP avec événements envoyés par le serveur).",
+      "stdioHint": "Un programme sur cet ordinateur (stdio).",
+      "testFirst": "Tester avant d'ajouter",
+      "triedOk": "Il répond : prêt à être ajouté.",
+      "urlInvalid": "Commencez par http:// ou https://",
+      "urlMissing": "Saisissez l'URL du serveur."
     },
     "catalog": {
       "needsTool": "Ce serveur a besoin de {{tool}}, qui n'est pas installé.",
@@ -222,11 +268,45 @@
       },
       "vercel": {
         "desc": "Projets, déploiements et journaux sur Vercel."
-      }
+      },
+      "addCount": "Ajouter {{count}} serveurs",
+      "addedMark": "Ajouté ✓",
+      "alreadyIn": "Déjà dans",
+      "categories": "Catégories",
+      "clearSelection": "Vider la sélection",
+      "copy": "Copier",
+      "docs": "Documentation",
+      "enterFor": "{{name}} : saisissez {{field}}.",
+      "hasIt": "{{agent}} l'a déjà",
+      "inSome": "Dans {{count}}/{{total}}",
+      "oauthNote": "Il vous demande de vous connecter la première fois qu'un agent l'utilise.",
+      "required": "Obligatoire",
+      "select": "Sélectionner {{name}} pour l'ajouter avec d'autres",
+      "someFailed": "Pas ajouté partout : les détails de chaque serveur disent pourquoi."
     },
     "addNotListed": "{{agent}} ne le liste pas.",
     "skills": "Skills",
-    "skillsHint": "Compétences des agents : instructions et fichiers que les agents chargent quand une tâche en a besoin"
+    "skillsHint": "Compétences des agents : instructions et fichiers que les agents chargent quand une tâche en a besoin",
+    "addbar": {
+      "claudeScope": "Claude Code :",
+      "label": "Ajouter aux agents",
+      "unreadable": "Ses réglages MCP n'ont pas pu être lus"
+    },
+    "details": "Détails",
+    "dismiss": "Fermer",
+    "kv": {
+      "addEnv": "Ajouter une variable",
+      "addHeader": "Ajouter un en-tête",
+      "envKey": "Nom de la variable",
+      "envName": "Lettres, chiffres et _, sans commencer par un chiffre.",
+      "headerKey": "Nom de l'en-tête",
+      "headerName": "Pas d'espaces ni de deux-points dans un nom d'en-tête.",
+      "hide": "Masquer la valeur",
+      "nameMissing": "Saisissez un nom.",
+      "remove": "Retirer cette ligne",
+      "show": "Afficher la valeur",
+      "value": "Valeur"
+    }
   },
   "tools": {
     "checking": "Vérification…",

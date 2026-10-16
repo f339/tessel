@@ -30,11 +30,12 @@ const { page, searching, shown, go, mcpTab, emit } = useSettingsShell()
           @run="emit('run-job', $event)"
           @tools="go('devtools')"
           @skills="go('skills')"
+          @orchestration="go('orchestration')"
         />
       </div>
       <div v-else class="set-row">
         <div class="set-label">{{ t('settings.mcp.installed', 'Installed servers') }}
-          <span class="set-hint">{{ t('settings.mcp.installedHint', 'Every MCP server of your agents, the catalog, your own servers and the team connections.') }}</span>
+          <span class="set-hint">{{ t('settings.mcp.installedHint', 'Every MCP server of your agents, the catalog and your own servers.') }}</span>
         </div>
         <button type="button" class="exit-btn" @click="go('mcp')">{{ t('settings.mcp.open', 'Open MCP servers') }}</button>
       </div>
