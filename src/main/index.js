@@ -40,6 +40,10 @@ import { createAddProject, registerAddProject } from './addProject'
 import { createSshAskpass, registerSshAskpass, askpassExePath } from './sshAskpass'
 import { createAskpassPipeHost } from './askpassPipeHost'
 import { createRemoteFs, registerRemoteFs, remoteRootsOfLayout, SESSION_PREFIX as REMOTE_FS_PREFIX } from './remoteFs'
+import { createRemoteAccounts, publicDetection, chatsOnLogin, copyPolicy as copyRemotePolicy } from './remoteAgent/remoteAccounts'
+import { createSignedInPlaces, copilotRows } from './signedInPlaces'
+import { createWslAccounts } from './wslAccounts'
+import { createUsageProviderSources } from './usageProviderSources'
 import { createGitTrust, setGitTrust } from './gitSafety'
 import { createWorktreeList, localRootsOfLayout, localRepoRootsOfLayout } from './worktreeList'
 import { createWorktreeCleanup } from './worktreeCleanup'
@@ -1336,6 +1340,12 @@ const chatSessions = createChatSessions({
       return exe ? { exe } : null
     },
     readAgentFile: (hostId, q) => remoteFs.readAgentFile(hostId, q),
+    // A chat on an account folder of the host (remoteAccounts.js): that
+    // folder, made whole and checked there. -> { ok, name, dir } | { ok: false, error }
+    accountFolder: async ({ hostId, agent, id }) => {
+      const res = await remoteAccounts.launchEnv(hostId, agent, id)
+      return res.ok ? { ok: true, name: res.name, dir: res.dir } : { ok: false, error: res.error }
+    },
     // Claude's skills there (~/.claude/skills, the project's): listed over
     // the connection, read-only (chat/remoteSkills.js).
     skills: (q) => remoteSkills.skills(q),
@@ -1990,6 +2000,179 @@ const claudeAccounts = createClaudeAccounts({
 const accounts = createProviderAccounts({
   claude: claudeAccounts,
   codex: createCodexAccounts(accountOptions)
+})
+// The agents' accounts on SSH hosts (remoteAgent/remoteAccounts.js): who
+// each one is signed in with there (identity fields only), and the folders
+// Tessel makes there for one account each, so a pane on the host runs on
+// the account you choose. A change to a folder, or a sign-out, is asked
+// here, in main (never on the window's word).
+const remoteAccounts = createRemoteAccounts({
+  // A change you asked for (a folder made, an agent started on it, removed)
+  // only on a host already connected or with a terminal open on it: never
+  // a sign-in to a saved host nobody is using.
+  run: (hostId, fn, args, opts) => {
+    if (!remoteHosts.get(hostId)) return { error: t('main.remote.notFound', 'This remote host is no longer saved in Tessel.') }
+    if (opts && opts.user && !remoteFs.connectedQuietly(hostId) && !remoteHosts.panesOf(hostId).length) {
+      const target = remoteHosts.get(hostId)
+      return { notConnected: true, error: t('main.remoteFs.notConnected', '{{host}} is not connected. Use Connect to sign in.', { host: (target && target.label) || hostId }) }
+    }
+    return remoteFs.accountCall(hostId, fn, args, opts)
+  },
+  label: (hostId) => {
+    const target = remoteHosts.get(hostId)
+    return (target && target.label) || hostId
+  },
+  confirm: (q) => confirmRemoteAccount(q),
+  stopPanes: (hostId, ids, login) => stopAccountPanes(hostId, ids, login),
+  // A new folder gets the team tools and hooks from the shim's install.
+  afterChange: (hostId) => {
+    remoteShims.forget(hostId)
+    return remoteShims.ensure(hostId)
+  },
+  log
+})
+// The panes still running on a login that is about to be removed or signed
+// out of (the window names them): their terminals on that host are ended,
+// their chats closed (only the ones main sees on that host and account), and
+// Tessel waits until they are gone (a running agent would write its sign-in
+// back). login: { agent, account } (account null: the agent's own). -> { ok }
+async function stopAccountPanes(hostId, ids, login = {}) {
+  const onHost = new Set(remoteHosts.panesOf(hostId))
+  const terms = ids.filter((id) => onHost.has(id))
+  for (const id of terms) {
+    remoteHosts.paneClosing(id)
+    host.send('kill', { id })
+  }
+  await Promise.all(chatsOnLogin(chatSessions.list(), ids, { hostId, agent: login.agent, account: login.account }).map((paneId) => chatSessions.close({ paneId }).catch(() => null)))
+  for (let i = 0; i < 40; i++) {
+    const left = new Set(remoteHosts.panesOf(hostId))
+    if (!terms.some((id) => left.has(id))) return { ok: true }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  log.warn('remote-accounts', `panes on ${hostId} did not stop before a removal`) // i18n-ignore log
+  return { ok: false }
+}
+async function confirmRemoteAccount({ kind, host, agent, email, panes = 0, keychain = false }) {
+  const name = AGENT_PRESETS.find((a) => a.id === agent)?.name || agent
+  const who = email || t('main.remoteAccounts.thisAccount', 'this account')
+  const stopping = panes > 0 ? t('main.remoteAccounts.stopsPanes', panes === 1 ? 'One pane still runs on it: Tessel stops it first (it would write the sign-in back).' : '{{count}} panes still run on it: Tessel stops them first (they would write the sign-in back).', { count: panes }) : ''
+  let opts
+  if (kind === 'signOut') {
+    opts = {
+      type: 'warning',
+      title: t('main.remoteAccounts.signOutTitle', 'Sign {{agent}} out on {{host}}?', { agent: name, host }),
+      message: t('main.remoteAccounts.signOutMessage', '{{agent}} on {{host}} is signed in with {{account}} in its own folder. Signing out removes that sign-in from the host: every session there that is not on an account folder of Tessel’s will need to sign in again.', { agent: name, host, account: who }),
+      detail: [stopping, keychain ? t('main.remoteAccounts.keychainStays', 'This is a Mac: Tessel removes the sign-in file only. The login Claude Code keeps in the macOS Keychain stays; sign out in Claude Code there (/logout) to remove it.') : ''].filter(Boolean).join('\n\n') || undefined,
+      buttons: [t('main.remoteAccounts.signOut', 'Sign out on the host'), t('main.remoteAccounts.cancel', 'Cancel')]
+    }
+  } else if (kind === 'removeOrphan') {
+    opts = {
+      type: 'warning',
+      title: t('main.remoteAccounts.removeOrphanTitle', 'Remove the sign-in left on {{host}}?', { host }),
+      message: t('main.remoteAccounts.removeOrphanMessage', 'An agent that kept running after its account folder was removed wrote a sign-in for {{account}} ({{agent}}) back on {{host}}. Tessel removes that folder and its sign-in.', { account: who, host, agent: name }),
+      detail: [stopping, agent === 'codex' ? t('main.remoteAccounts.keptCodex', 'Kept: its conversations (sessions and archived sessions) and its prompt history go to the host’s own Codex folder (~/.codex).') : t('main.remoteAccounts.keptClaude', 'Kept: its conversations are in the host’s own Claude folder already (~/.claude); its prompt history is added to the one there.')].filter(Boolean).join('\n\n'),
+      buttons: [t('main.remoteAccounts.remove', 'Remove from this host'), t('main.remoteAccounts.cancel', 'Cancel')]
+    }
+  } else {
+    opts = {
+      type: 'warning',
+      title: t('main.remoteAccounts.removeTitle', 'Remove {{account}} from {{host}}?', { account: who, host }),
+      message: t('main.remoteAccounts.removeMessage', 'Tessel removes the folder it made on {{host}} for {{account}} ({{agent}}): its sign-in there goes with it. Panes on that account will need another account to start again.', { account: who, host, agent: name }),
+      detail: [stopping, agent === 'codex' ? t('main.remoteAccounts.keptCodex', 'Kept: its conversations (sessions and archived sessions) and its prompt history go to the host’s own Codex folder (~/.codex).') : t('main.remoteAccounts.keptClaude', 'Kept: its conversations are in the host’s own Claude folder already (~/.claude); its prompt history is added to the one there.')].filter(Boolean).join('\n\n'),
+      buttons: [t('main.remoteAccounts.remove', 'Remove from this host'), t('main.remoteAccounts.cancel', 'Cancel')]
+    }
+  }
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  const res = win ? await themedMessageBox(win, { ...opts, defaultId: 1, cancelId: 1, noLink: true }) : await themedMessageBox({ ...opts, defaultId: 1, cancelId: 1, noLink: true })
+  return res.response === 0
+}
+// Settings > Where you're signed in > Check, on a WSL distro that is not
+// running: starting it is asked here.
+async function confirmStartDistro(name) {
+  const opts = {
+    type: 'question',
+    title: t('main.signedIn.startTitle', 'Start {{name}}?', { name }),
+    message: t('main.signedIn.startMessage', 'The WSL distro {{name}} is not running. Tessel starts it to look at the agents’ sign-ins there (it keeps running until Windows stops it).', { name }),
+    buttons: [t('main.signedIn.start', 'Start and check'), t('main.remoteAccounts.cancel', 'Cancel')],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true
+  }
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  const res = win ? await themedMessageBox(win, opts) : await themedMessageBox(opts)
+  return res.response === 0
+}
+const remoteAccountArgs = (q) => {
+  const hostId = q && typeof q === 'object' && typeof q.hostId === 'string' && /^[\w-]{1,80}$/.test(q.hostId) && remoteHosts.get(q.hostId) ? q.hostId : null
+  const agent = q && typeof q.agent === 'string' ? q.agent : null
+  const id = q && typeof q.id === 'string' ? q.id : null
+  const panes = q && Array.isArray(q.panes) ? q.panes.filter((p) => typeof p === 'string').slice(0, 50) : []
+  return { hostId, agent, id, panes }
+}
+const noHost = () => ({ ok: false, error: t('main.remote.notFound', 'This remote host is no longer saved in Tessel.') })
+// ({ hostId, fresh, relogin }) -> { ok, entries: [{ agent, scope, id, email, plan... }] } | { ok: false, notConnected?, error }
+ipcMain.handle('remoteAccounts:detect', async (_evt, q) => {
+  const { hostId } = remoteAccountArgs(q)
+  if (!hostId) return noHost()
+  return publicDetection(await remoteAccounts.detect(hostId, { fresh: !!(q && q.fresh === true), relogin: !!(q && q.relogin === true) }))
+})
+ipcMain.handle('remoteAccounts:create', async (_evt, q) => {
+  const { hostId, agent } = remoteAccountArgs(q)
+  if (!hostId) return noHost()
+  const res = await remoteAccounts.create(hostId, agent)
+  return res.ok ? { ok: true, id: res.id } : { ok: false, error: res.error, ...(res.notConnected ? { notConnected: true } : {}) }
+})
+// The words typed before the agent's command on the host (its folder).
+ipcMain.handle('remoteAccounts:launchEnv', async (_evt, q) => {
+  const { hostId, agent, id } = remoteAccountArgs(q)
+  if (!hostId) return noHost()
+  const res = await remoteAccounts.launchEnv(hostId, agent, id)
+  return res.ok ? { ok: true, prefix: res.prefix } : { ok: false, error: res.error, ...(res.missing ? { missing: true } : {}) }
+})
+// panes: the window's panes still on that login (stopped first, after the yes).
+ipcMain.handle('remoteAccounts:remove', async (_evt, q) => {
+  const { hostId, agent, id, panes } = remoteAccountArgs(q)
+  if (!hostId) return noHost()
+  return remoteAccounts.remove(hostId, agent, id, { panes, orphan: !!(q && q.orphan === true) })
+})
+ipcMain.handle('remoteAccounts:signOut', async (_evt, q) => {
+  const { hostId, agent, panes } = remoteAccountArgs(q)
+  if (!hostId) return noHost()
+  return remoteAccounts.signOut(hostId, agent, { panes })
+})
+// Why a sign-in is never copied from this PC to a host (the sign-in dialog says it).
+ipcMain.handle('remoteAccounts:copyPolicy', (_evt, agent) => copyRemotePolicy(agent))
+// "Where you're signed in" (signedInPlaces.js): this PC, its WSL distros,
+// the saved SSH hosts (each checked on its own, never a sign-in).
+const signedInPlaces = createSignedInPlaces({
+  accounts,
+  localSignIn: (() => {
+    const sources = createUsageProviderSources({})
+    return (provider) => sources.signIn(provider)
+  })(),
+  localOthers: () => copilotRows({ home: os.homedir() }),
+  hosts: remoteHosts,
+  connected: (hostId) => remoteFs.connectedQuietly(hostId),
+  remoteAccounts,
+  wsl:
+    process.platform === 'win32'
+      ? createWslAccounts({ wslExe: join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wsl.exe'), exists: (p) => fs.existsSync(p) })
+      : null,
+  confirmStart: (name) => confirmStartDistro(name)
+})
+ipcMain.handle('signedIn:places', async () => {
+  try {
+    return await signedInPlaces.places()
+  } catch {
+    return { ok: false }
+  }
+})
+ipcMain.handle('signedIn:scan', async (_evt, id, opts) => {
+  try {
+    return await signedInPlaces.scan(id, { fresh: !!(opts && opts.fresh === true), relogin: !!(opts && opts.relogin === true), start: !!(opts && opts.start === true) })
+  } catch {
+    return { ok: false }
+  }
 })
 // The terminals the host ran when Tessel connected to it, and the processes
 // that ended since: tells the Claude sessions an older version started.

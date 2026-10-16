@@ -8,6 +8,7 @@ import fs from 'fs'
 import vm from 'vm'
 import { join } from 'path'
 import { reactive } from 'vue'
+import { HOST_ACCOUNT_AGENTS, validHostAccount } from '../hostAccounts'
 import { needsRemoteAgentCheck, remoteAgentLine, hasClaudeYoloFlag, rootSafeClaudeArgs } from '../remoteAgentLaunch'
 import { remoteInstallLine, remoteInstallPlan } from '../remoteAgentInstalls'
 import { NVM_INSTALL_URL } from '../shellChain'
@@ -53,6 +54,9 @@ function load({ shared = true, status = null, tree = null } = {}) {
     return null
   }
   const ctx = {
+    HOST_ACCOUNT_AGENTS,
+    validHostAccount,
+    refreshHostAccounts: () => {},
     t: (k, en, vars) => en.replace(/\{\{(\w+)\}\}/g, (_, n) => (vars && vars[n] != null ? vars[n] : '')),
     reactive,
     watch: () => {},

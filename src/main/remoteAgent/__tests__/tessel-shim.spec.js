@@ -154,6 +154,73 @@ describe('install', () => {
     expect(JSON.parse(fs.readFileSync(join(home, '.claude', 'settings.json'), 'utf8')).hooks.Stop).toHaveLength(1)
   })
 
+  it('sets up the account folders Tessel made: team tools, hooks, your MCP servers added once; never a folder without its marker', () => {
+    fs.writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: { mine: { command: 'x' } } }))
+    fs.mkdirSync(join(home, '.codex'))
+    fs.writeFileSync(join(home, '.codex', 'config.toml'), 'model = "o3"\n')
+    const acct = join(home, '.tessel-server', 'accounts', 'claude', 'abc123')
+    const cx = join(home, '.tessel-server', 'accounts', 'codex', 'def456')
+    const stranger = join(home, '.tessel-server', 'accounts', 'claude', 'zzz999')
+    for (const d of [acct, cx, stranger]) fs.mkdirSync(d, { recursive: true })
+    fs.writeFileSync(join(acct, '.tessel-account'), 'tessel-account claude abc123\n')
+    fs.writeFileSync(join(cx, '.tessel-account'), 'tessel-account codex def456\n')
+    // Its own profile and a server of its own are kept.
+    fs.writeFileSync(join(acct, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'work@corp.example' }, mcpServers: { mine: { command: 'own' } } }))
+    const r = shim.install({ home, shimPath: ABS, env })
+    expect(r.errors).toEqual([])
+    const cfg = JSON.parse(fs.readFileSync(join(acct, '.claude.json'), 'utf8'))
+    expect(cfg.oauthAccount).toEqual({ emailAddress: 'work@corp.example' })
+    expect(cfg.mcpServers.mine).toEqual({ command: 'own' })
+    expect(cfg.mcpServers['tessel-team'].args).toEqual([ABS, 'mcp'])
+    expect(JSON.parse(fs.readFileSync(join(acct, 'settings.json'), 'utf8')).hooks.Stop).toHaveLength(1)
+    expect(fs.readFileSync(join(cx, 'config.toml'), 'utf8')).toContain('[mcp_servers.tessel-team]')
+    expect(JSON.parse(fs.readFileSync(join(cx, 'hooks.json'), 'utf8')).hooks.Stop).toHaveLength(1)
+    expect(fs.readdirSync(stranger)).toEqual([])
+    // A second account with no server of its own gets yours once.
+    const acct2 = join(home, '.tessel-server', 'accounts', 'claude', 'b2')
+    fs.mkdirSync(acct2)
+    fs.writeFileSync(join(acct2, '.tessel-account'), 'tessel-account claude b2\n')
+    shim.install({ home, shimPath: ABS, env })
+    expect(Object.keys(JSON.parse(fs.readFileSync(join(acct2, '.claude.json'), 'utf8')).mcpServers).sort()).toEqual(['mine', 'tessel-team'])
+    expect(shim.install({ home, shimPath: ABS, env }).changed).toEqual([])
+  })
+
+  it('your MCP servers in an account: copied once, kept in step while untouched, gone when gone; one you changed or removed stays as you made it', () => {
+    const sys = (servers) => fs.writeFileSync(join(home, '.claude.json'), JSON.stringify({ mcpServers: servers }))
+    const acct = join(home, '.tessel-server', 'accounts', 'claude', 'abc123')
+    fs.mkdirSync(acct, { recursive: true })
+    fs.writeFileSync(join(acct, '.tessel-account'), 'tessel-account claude abc123\n')
+    const servers = () => JSON.parse(fs.readFileSync(join(acct, '.claude.json'), 'utf8')).mcpServers
+    const setServers = (m) => {
+      const cfg = JSON.parse(fs.readFileSync(join(acct, '.claude.json'), 'utf8'))
+      cfg.mcpServers = m
+      fs.writeFileSync(join(acct, '.claude.json'), JSON.stringify(cfg))
+    }
+    sys({ a: { command: 'a', env: { TOKEN: 'v1' } }, b: { command: 'b' } })
+    shim.install({ home, shimPath: ABS, env })
+    expect(Object.keys(servers()).sort()).toEqual(['a', 'b', 'tessel-team'])
+    expect(JSON.parse(fs.readFileSync(join(acct, '.tessel-mcp.json'), 'utf8')).servers).toMatchObject({ a: expect.any(String), b: expect.any(String) })
+    // A key rotated in the default config: the untouched copy follows.
+    sys({ a: { command: 'a', env: { TOKEN: 'v2' } }, b: { command: 'b' } })
+    shim.install({ home, shimPath: ABS, env })
+    expect(servers().a.env.TOKEN).toBe('v2')
+    // Changed and removed in the account: left as made, never copied again.
+    const mine = servers()
+    delete mine.a
+    mine.b = { command: 'mine' }
+    setServers(mine)
+    sys({ a: { command: 'a', env: { TOKEN: 'v3' } }, b: { command: 'b2' }, c: { command: 'c' } })
+    shim.install({ home, shimPath: ABS, env })
+    expect(servers().a).toBeUndefined()
+    expect(servers().b).toEqual({ command: 'mine' })
+    expect(servers().c).toEqual({ command: 'c' })
+    // Gone from the default config: its untouched copy goes; yours stays.
+    sys({})
+    shim.install({ home, shimPath: ABS, env })
+    expect(Object.keys(servers()).sort()).toEqual(['b', 'tessel-team'])
+    expect(shim.install({ home, shimPath: ABS, env }).changed).toEqual([])
+  })
+
   it('writes the absolute node given with --node in every config', () => {
     const node = '/home/u/.nvm/versions/node/v22.1.0/bin/node'
     fs.writeFileSync(join(home, '.claude.json'), '{}')
@@ -401,6 +468,17 @@ describe('sessions', () => {
     // limit: 1..200, default 60
     expect(list('abc').sessions).toHaveLength(3)
     expect(list(0).sessions).toHaveLength(2)
+  })
+
+  it('lists the conversations of a Codex account folder Tessel made (never one without its marker)', () => {
+    const acct = join(home, '.tessel-server', 'accounts', 'codex', 'def456')
+    const other = join(home, '.tessel-server', 'accounts', 'codex', 'zzz999')
+    for (const [dir, title] of [[acct, 'On the work account'], [other, 'Not Tessel']]) {
+      fs.mkdirSync(join(dir, 'sessions', '2026', '10', '05'), { recursive: true })
+      fs.writeFileSync(join(dir, 'sessions', '2026', '10', '05', 'rollout-x.jsonl'), jsonl([codexMeta(U(dir === acct ? 4 : 5)), { type: 'event_msg', payload: { type: 'user_message', message: title } }]))
+    }
+    fs.writeFileSync(join(acct, '.tessel-account'), 'tessel-account codex def456\n')
+    expect(list(60).sessions.map((s) => s.title)).toEqual(['On the work account'])
   })
 
   it('reads CLAUDE_CONFIG_DIR and CODEX_HOME, and nothing there is no error', () => {

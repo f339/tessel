@@ -4,7 +4,7 @@ import { ref } from 'vue'
 import PaneContextMenu from './PaneContextMenu.vue'
 import BrandIcon from './BrandIcon.vue'
 import { t } from '../i18n'
-const props = defineProps(["ctxMenu","paneTitle","closeCtxMenuAndRefocus","node","team","teamFactTitle","isLead","isAgent","yoloTitle","statusTitle","exited","asksApproval","limit","limitState","agentStatus","estimatedState","needsYou","stuck","track","cache","cacheTitle","cacheLeft","unsent","launchStale","menuResolveUnsent","applyTitle","menuRestartApply","menuCopy","menuPaste","menuCopyOutput","menuClear","menuResetTerminal","menuCopySession","menuFind","hasModelChoice","modelTitle","menuModel","modelText","sessionPillLabel","paneModelList","paneValues","ctx","menuVoice","settings","menuPickVoice","lsTextSize","menuLsTextSize","otherPanes","menuSendSelection","menuAskReview","closeCtxMenu","leadToggleText","leaveTeamText","startEditTitle","isMaximized","menuOpenHere","menuSplit","menuRestart","accountRestartChoices","menuRestartOnAccount","canViewTranscript","menuViewTranscript","transcriptOpen","canOpenAsChat","menuOpenAsChat","chatViewAvailable","canContinueOnHost","continueOnHostReason","menuContinueOnHost","canSwitchYolo","menuSwitchYolo","yoloFolder","yoloFolderOn","menuYoloFolder","folderName","menuClose","isChat","disabledReasons"])
+const props = defineProps(["ctxMenu","paneTitle","closeCtxMenuAndRefocus","node","team","teamFactTitle","isLead","isAgent","yoloTitle","statusTitle","exited","asksApproval","limit","limitState","agentStatus","estimatedState","needsYou","stuck","track","cache","cacheTitle","cacheLeft","unsent","launchStale","menuResolveUnsent","applyTitle","menuRestartApply","menuCopy","menuPaste","menuCopyOutput","menuClear","menuResetTerminal","menuCopySession","menuFind","hasModelChoice","modelTitle","menuModel","modelText","sessionPillLabel","paneModelList","paneValues","ctx","menuVoice","settings","menuPickVoice","lsTextSize","menuLsTextSize","otherPanes","menuSendSelection","menuAskReview","closeCtxMenu","leadToggleText","leaveTeamText","startEditTitle","isMaximized","menuOpenHere","menuSplit","menuRestart","accountRestartChoices","menuRestartOnAccount","canSignInOnHost","menuSignInOnHost","hostName","accountInfo","canViewTranscript","menuViewTranscript","transcriptOpen","canOpenAsChat","menuOpenAsChat","chatViewAvailable","canContinueOnHost","continueOnHostReason","menuContinueOnHost","canSwitchYolo","menuSwitchYolo","yoloFolder","yoloFolderOn","menuYoloFolder","folderName","menuClose","isChat","disabledReasons"])
 const unavailable = name => props.disabledReasons?.[name] || ''
 const menuRef = ref(null)
 defineExpose({ focus: options => menuRef.value?.focus(options), contains: target => menuRef.value?.contains(target), getBoundingClientRect: () => menuRef.value.getBoundingClientRect() })
@@ -33,6 +33,9 @@ defineExpose({ focus: options => menuRef.value?.focus(options), contains: target
         </div>
         <div v-if="team" class="ctx-menu-fact" data-test="pane-team" :title="teamFactTitle()">
           <span class="ctx-fact-label">{{ t('pane.fact.team', 'Team') }}</span><span class="ctx-fact-value pane-team-name">{{ team.name }}{{ isLead ? ' · ' + t('pane.fact.lead', 'lead') : '' }}</span>
+        </div>
+        <div v-if="isAgent && accountInfo" class="ctx-menu-fact" data-test="pane-account" :title="accountInfo.title">
+          <span class="ctx-fact-label">{{ t('pane.fact.account', 'Account') }}</span><span class="ctx-fact-value">{{ accountInfo.name }}</span>
         </div>
         <div v-if="isAgent && node.launchYolo" class="ctx-menu-fact" data-test="pane-yolo" :title="yoloTitle()">
           <span class="ctx-fact-label">{{ t('pane.fact.started', 'Started') }}</span><span class="ctx-fact-value pane-yolo">Yolo</span>
@@ -191,9 +194,17 @@ defineExpose({ focus: options => menuRef.value?.focus(options), contains: target
         :key="choice.id || 'system'"
         class="ctx-menu-item"
         data-test="menu-restart-on-account"
-        :title="t('pane.menu.restartOnAccountHint', 'Restart this agent on {{account}}: same pane, its conversation resumed', { account: choice.title || choice.name })"
+        :title="choice.hint || t('pane.menu.restartOnAccountHint', 'Restart this agent on {{account}}: same pane, its conversation resumed', { account: choice.title || choice.name })"
         @click="menuRestartOnAccount(choice.id)"
         v-text="t('pane.menu.restartOnAccount', 'Restart on {{account}}', { account: choice.name })"
+      ></button>
+      <button
+        v-if="canSignInOnHost"
+        class="ctx-menu-item"
+        data-test="menu-sign-in-on-host"
+        :title="t('pane.menu.signInOnHostHint', 'Opens this agent next to this pane in a new account folder on {{host}}, where you sign in with its own login. Your sign-in stays on the host; nothing is copied from this PC.', { host: hostName })"
+        @click="menuSignInOnHost"
+        v-text="t('pane.menu.signInOnHost', 'Sign in to another account on {{host}}…', { host: hostName })"
       ></button>
       <button
         v-if="canViewTranscript"

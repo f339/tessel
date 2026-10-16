@@ -44,6 +44,7 @@ import { promptShowsPlaceholder } from '../promptCheck'
 import { detectTaskDone } from '../agentLimit'
 import { modelLabel } from '../../../shared/modelLabel'
 import { paneAccount, accountChoices } from '../accountChoices'
+import { HOST_ACCOUNT_AGENTS, hostAccountChoices, hostPaneAccount, refreshHostAccounts, unwatchHostAccounts, watchHostAccounts } from '../hostAccounts'
 import { modelFromScreen, modelFromSwitchLine } from '../../../shared/screenModel'
 import { findFileRefs } from '../../../shared/fileLinks'
 import { osc52Text } from '../../../shared/osc52'
@@ -134,9 +135,42 @@ const guestIconClass = computed(() => ({ working: 'busy', monitoring: 'monitorin
 // Its sub-agents, read on the host (their sessions stay there).
 const guestChildrenSource = computed(() => (guestRuns.value && guestInfo.value.children && ctx.liveShareChildrenSource ? ctx.liveShareChildrenSource(props.node.id) : null))
 // The account a Claude Code or Codex pane runs on, when that agent has more
-// than one (on an SSH host it is the host's own sign-in: not shown).
-const accountInfo = computed(() => (isAgent.value && !props.node.remoteHostId ? paneAccount(props.node.agentId, props.node.accountId) : null))
+// than one. On an SSH host: the account the agent there is signed in with
+// (its account folder, or the host's own sign-in; hostAccounts.js), shown
+// whenever it is known.
+const accountInfo = computed(() => {
+  if (!isAgent.value) return null
+  if (props.node.remoteHostId) return hostPaneAccount(props.node.remoteHostId, props.node.agentId, props.node.hostAccount, remoteHostName.value)
+  return paneAccount(props.node.agentId, props.node.accountId)
+})
 const accountChipLabel = computed(() => (accountInfo.value ? t('pane.account.chip', 'Account: {{account}}', { account: accountInfo.value.title }) : ''))
+// An agent on an SSH host follows its accounts there: read when it opens and
+// after a restart; then the host's one timer (hostAccounts.js: every minute,
+// sooner while a pane waits for a sign-in in its account folder).
+let watchedHost = null
+watch(
+  () => [props.node.kind, props.node.remoteHostId, props.node.agentId, props.node.hostAccount, !!props.node.notConnected],
+  ([kind, hostId, agentId, hostAccount, notConnected]) => {
+    if (watchedHost && watchedHost !== hostId) unwatchHostAccounts(watchedHost, props.node.id)
+    watchedHost = null
+    if (kind !== 'agent' || !hostId || notConnected) {
+      if (hostId) unwatchHostAccounts(hostId, props.node.id)
+      return
+    }
+    watchedHost = hostId
+    watchHostAccounts(hostId, props.node.id, { agentId, hostAccount })
+  },
+  { immediate: true }
+)
+watch(
+  () => props.node.launchedAt,
+  () => {
+    if (watchedHost) refreshHostAccounts(watchedHost)
+  }
+)
+onBeforeUnmount(() => {
+  if (watchedHost) unwatchHostAccounts(watchedHost, props.node.id)
+})
 // An agent pane asks for its model list (missing or a day old) once it
 // opens: its pickers (header, chat view, Settings) all list from it, not
 // only the pane menu's.
@@ -2433,9 +2467,28 @@ function menuRestart() {
 // accounts; a Codex account keeps its own conversations).
 const accountRestartChoices = computed(() => {
   const n = props.node
-  if (n.kind !== 'agent' || n.agentId !== 'claude' || !n.agentCommand || n.detected || n.remoteHostId || !ctx.restartOnAccount) return []
+  if (n.kind !== 'agent' || !n.agentCommand || n.detected || !ctx.restartOnAccount) return []
+  // On an SSH host: the host's accounts of its agent (Claude Code goes on
+  // with its conversation; Codex starts a new one there).
+  if (n.remoteHostId) {
+    if (!HOST_ACCOUNT_AGENTS.includes(n.agentId) || n.notConnected) return []
+    const fresh = n.agentId === 'codex'
+    return hostAccountChoices(n.remoteHostId, n.agentId, remoteHostName.value)
+      .filter((c) => c.id !== (n.hostAccount ?? null))
+      .map((c) => ({ ...c, hint: fresh ? t('pane.menu.restartOnHostAccountNew', 'Restart Codex on {{account}}: same pane, a new conversation (a Codex conversation stays with its account)', { account: c.title }) : t('pane.menu.restartOnAccountHint', 'Restart this agent on {{account}}: same pane, its conversation resumed', { account: c.title }) }))
+  }
+  if (n.agentId !== 'claude') return []
   return accountChoices('claude').filter((c) => c.id !== (n.accountId ?? null))
 })
+// Pane menu > Sign in to another account on <host> (App's signInOnHost).
+const canSignInOnHost = computed(() => {
+  const n = props.node
+  return n.kind === 'agent' && !!n.remoteHostId && !n.notConnected && !n.detected && !!n.agentCommand && HOST_ACCOUNT_AGENTS.includes(n.agentId) && !!ctx.signInOnHost
+})
+function menuSignInOnHost() {
+  closeCtxMenu()
+  ctx.signInOnHost(props.node.id)
+}
 function menuRestartOnAccount(accountId) {
   closeCtxMenu()
   ctx.restartOnAccount(props.node.id, accountId)
@@ -3216,6 +3269,10 @@ const paneMenuBindings = computed(() => ({
   menuRestart: unref(menuRestart),
   accountRestartChoices: unref(accountRestartChoices),
   menuRestartOnAccount: unref(menuRestartOnAccount),
+  canSignInOnHost: unref(canSignInOnHost),
+  menuSignInOnHost: unref(menuSignInOnHost),
+  hostName: unref(remoteHostName),
+  accountInfo: unref(accountInfo),
   canViewTranscript: unref(canViewTranscript),
   menuViewTranscript: unref(menuViewTranscript),
   transcriptOpen: unref(transcriptOpen),

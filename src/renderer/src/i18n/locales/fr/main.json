@@ -899,7 +899,8 @@
       "remoteNoAnswer": "{{host}} n’a pas répondu : {{error}}",
       "noCodexOnHost": "Codex est introuvable sur {{host}}. Installez-le sur cet hôte, puis réessayez.",
       "noClaudeOnHost": "Claude Code est introuvable sur {{host}}. Installez-le sur cet hôte, puis réessayez.",
-      "remoteDisconnected": "La connexion à {{host}} a été perdue. La conversation reprend dès son retour (envoyez un message, ou attendez que Tessel se reconnecte)."
+      "remoteDisconnected": "La connexion à {{host}} a été perdue. La conversation reprend dès son retour (envoyez un message, ou attendez que Tessel se reconnecte).",
+      "hostAccountUnusable": "Ce chat tourne sur un dossier de compte de {{host}} qui ne peut pas être utilisé maintenant : {{error}}"
     },
     "browserMenu": {
       "openLinkNewPane": "Ouvrir le lien dans un nouveau volet",
@@ -1015,6 +1016,41 @@
       "badName": "Nom de plugin invalide.",
       "setFailed": "L'Antigravity CLI n'a pas pu modifier ce plugin.",
       "removeFailed": "L'Antigravity CLI n'a pas pu désinstaller ce plugin."
+    },
+    "remoteAccounts": {
+      "noCopy": "Copier une connexion depuis ce PC n’est pas proposé : l’agent renouvelle sa connexion avec un jeton à usage unique, donc une copie déconnecterait ce PC ou l’hôte au premier renouvellement, et le serveur garderait un identifiant de longue durée. Connectez-vous plutôt sur l’hôte.",
+      "failed": "Les comptes sur {{host}} n’ont pas pu être lus.",
+      "invalid": "Ce compte ne peut pas être utilisé sur cet hôte.",
+      "createFailed": "Tessel n’a pas pu créer le dossier du compte sur {{host}}.",
+      "gone": "Le dossier de ce compte n’est plus sur {{host}}. Démarrez l’agent sur un autre compte.",
+      "unusable": "Le dossier de ce compte sur {{host}} ne peut pas être utilisé sans risque (il a été modifié en dehors de Tessel).",
+      "removeFailed": "Tessel n’a pas pu retirer le dossier de ce compte de {{host}} : il n’a pas été créé par Tessel, ou il a été modifié depuis.",
+      "signOutFailed": "Tessel n’a pas pu déconnecter {{agent}} sur {{host}}.",
+      "thisAccount": "ce compte",
+      "signOutTitle": "Déconnecter {{agent}} sur {{host}} ?",
+      "signOutMessage": "{{agent}} sur {{host}} est connecté avec {{account}} dans son propre dossier. La déconnexion retire cette connexion de l’hôte : chaque session là-bas qui n’est pas sur un dossier de compte de Tessel devra se reconnecter.",
+      "signOut": "Se déconnecter sur l’hôte",
+      "cancel": "Annuler",
+      "removeTitle": "Retirer {{account}} de {{host}} ?",
+      "removeMessage": "Tessel retire le dossier qu’il a créé sur {{host}} pour {{account}} ({{agent}}) : sa connexion là-bas part avec lui. Les panneaux sur ce compte devront démarrer sur un autre compte.",
+      "remove": "Retirer de cet hôte",
+      "tooFast": "Trop de nouveaux comptes sur {{host}} en peu de temps : réessayez dans quelques minutes.",
+      "tooMany": "{{host}} a déjà trop de dossiers de compte : retirez-en un d’abord (Réglages > Comptes des fournisseurs d’IA > Où vous êtes connecté).",
+      "launchTooFast": "Trop d’agents démarrés sur des dossiers de compte de {{host}} en une minute : réessayez dans un instant.",
+      "panesRunning": "Les panneaux sur cette connexion de {{host}} ne se sont pas arrêtés : rien n’a été retiré. Fermez-les et réessayez.",
+      "stopsPanes_one": "Un panneau tourne encore dessus : Tessel l’arrête d’abord (il réécrirait la connexion).",
+      "stopsPanes_other": "{{count}} panneaux tournent encore dessus : Tessel les arrête d’abord (ils réécriraient la connexion).",
+      "keychainStays": "C’est un Mac : Tessel retire seulement le fichier de connexion. La connexion que Claude Code garde dans le trousseau macOS reste ; déconnectez-vous dans Claude Code là-bas (/logout) pour la retirer.",
+      "removeOrphanTitle": "Retirer la connexion laissée sur {{host}} ?",
+      "removeOrphanMessage": "Un agent qui a continué de tourner après le retrait de son dossier de compte a réécrit une connexion pour {{account}} ({{agent}}) sur {{host}}. Tessel retire ce dossier et sa connexion.",
+      "keptCodex": "Gardé : ses conversations (sessions et sessions archivées) et son historique de requêtes vont dans le dossier Codex propre de l’hôte (~/.codex).",
+      "keptClaude": "Gardé : ses conversations sont déjà dans le dossier Claude propre de l’hôte (~/.claude) ; son historique de requêtes est ajouté à celui de ce dossier.",
+      "unsafeHome": "Les dossiers de compte ne peuvent pas être utilisés sur {{host}} : le nom de votre dossier personnel là-bas contient un caractère que Tessel ne peut pas transmettre sans risque à la commande de l’agent (une barre oblique inverse, un ! ou un caractère invisible). La connexion propre de l’agent là-bas fonctionne toujours."
+    },
+    "signedIn": {
+      "startTitle": "Démarrer {{name}} ?",
+      "startMessage": "La distribution WSL {{name}} ne tourne pas. Tessel la démarre pour voir les connexions des agents qui s’y trouvent (elle tourne ensuite jusqu’à ce que Windows l’arrête).",
+      "start": "Démarrer et vérifier"
     }
   },
   "main.chat.image.tooLarge": "Cette image dépasse {{mb}} Mo.",

@@ -14,6 +14,7 @@ import { recentProjectSessions } from '../projectLauncher'
 import { agentLabel, timeAgo } from '../sessionHistory'
 import { t } from '../i18n'
 import { accountChoices, defaultAccountChoice, refreshAccountChoices } from '../accountChoices'
+import { hostAccountChoices, refreshHostAccounts } from '../hostAccounts'
 
 const props = defineProps({
   name: { type: String, default: '' },
@@ -111,18 +112,32 @@ const numberOf = (item) => {
 }
 
 // The account Claude Code or Codex starts on, when it has more than one
-// signed in (on this computer only: a host has its own sign-in). The select
-// keeps 'system' for the system's sign-in.
+// signed in: on this computer, its accounts here; on an SSH host, the host's
+// own sign-in and the account folders Tessel made there (hostAccounts.js).
+// The select keeps 'system' for the system's (or the host's) own sign-in.
 const chosenAccount = reactive({})
-const accountsOf = (a) => (props.remote || a.missing ? [] : accountChoices(a.id))
+const hostChoices = (a) => {
+  const list = hostAccountChoices(props.remote.hostId, a.id, props.remote.host || props.remote.hostId)
+  return list.length > 1 || list.some((c) => c.id !== null) ? list : []
+}
+const accountsOf = (a) => (a.missing ? [] : props.remote ? (props.remote.hostId ? hostChoices(a) : []) : accountChoices(a.id))
 const accountKey = (id) => (id === null ? 'system' : id)
 function accountValue(a) {
   const choices = accountsOf(a)
   const key = chosenAccount[a.id]
   if (choices.some((c) => accountKey(c.id) === key)) return key
+  if (props.remote) return accountKey(choices.some((c) => c.id === null) ? null : choices[0] ? choices[0].id : null)
   const fallback = defaultAccountChoice(a.id)
   return accountKey(fallback === undefined ? null : fallback)
 }
+// A connected host: its accounts read once the launcher shows.
+watch(
+  () => [props.remote && props.remote.hostId, props.hostConnected],
+  ([hostId, connected]) => {
+    if (hostId && connected) refreshHostAccounts(hostId)
+  },
+  { immediate: true }
+)
 const accountLabelOf = (a) => t('launcher.accountFor', '{{name}} account', { name: a.name })
 
 // A missing agent reads as its install (the name has mustaches: built here).

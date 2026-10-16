@@ -10,6 +10,7 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted, onUpdated, inje
 import BrandIcon from './BrandIcon.vue'
 import ProviderAccounts from './ProviderAccounts.vue'
 import ProviderUsageAccounts from './ProviderUsageAccounts.vue'
+import SignedInPlaces from './SignedInPlaces.vue'
 import StatsUsage from './StatsUsage.vue'
 import RemoteHostsSettings from './remote/RemoteHostsSettings.vue'
 import AutomationsPage from './AutomationsPage.vue'
@@ -60,6 +61,8 @@ const props = defineProps({
   updateStatus: { type: Object, default: () => ({ state: 'disabled' }) },
   // Open on this page, e.g. 'quick-commands', 'accounts', 'agents'.
   section: { type: String, default: null },
+  // ...scrolled to this part of it (an element id there, e.g. 'set-signed-in').
+  anchor: { type: String, default: null },
   // Agent CLI updates: { checkedAt, agents: { id: { installed, latest,
   // update, source, note } } }, the updates running (agentId -> job) and
   // the ones waiting their turn.
@@ -354,6 +357,17 @@ watch(
   () => props.section,
   (s) => s && go(s)
 )
+// Opened on a part of a page (the usage menu's Where you're signed in…).
+function scrollToAnchor() {
+  const id = props.anchor
+  if (!id || !/^[\w-]{1,60}$/.test(id)) return
+  nextTick(() => {
+    const el = mainEl.value && mainEl.value.querySelector(`#${id}`)
+    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'start' })
+  })
+}
+watch(() => [props.section, props.anchor], scrollToAnchor)
+onMounted(scrollToAnchor)
 function openMcpTab(tab) {
   go('mcp')
   mcpTab.value = tab
@@ -1839,6 +1853,7 @@ function previewSound() {
             <div class="set-card set-accounts-card">
               <ProviderAccounts />
               <ProviderUsageAccounts />
+              <SignedInPlaces />
             </div>
           </div>
         </section>

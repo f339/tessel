@@ -27,6 +27,7 @@ import { channelHead, leadHead, reviewRequest, teammateHead } from '../../shared
 import { notePanes } from './paneSessionTrail'
 import LaunchMenu from './components/LaunchMenu.vue'
 import { accountChoices, refreshAccountChoices, setOpenPanesSource } from './accountChoices'
+import { HOST_ACCOUNT_AGENTS, refreshHostAccounts, validHostAccount } from './hostAccounts'
 import SettingsDialog from './components/SettingsDialog.vue'
 import UpdateDialog from './components/UpdateDialog.vue'
 import UpdateCard from './components/UpdateCard.vue'
@@ -301,8 +302,11 @@ async function sendGithubPrompt({ item, prompt, target } = {}) {
   return { ok: false, error: t('github.agent.choose', 'Choose an agent.') }
 }
 const settingsSection = ref(null) // opens Settings scrolled to that section
-function openSettingsAt(section) {
+// ...and to that part of it (an element id there, e.g. Where you're signed in).
+const settingsAnchor = ref(null)
+function openSettingsAt(section, anchor = null) {
   settingsSection.value = section
+  settingsAnchor.value = typeof anchor === 'string' ? anchor : null
   settingsOpen.value = true
 }
 // Markdown, diagrams, tables, JSON and images open as editor tabs with
@@ -612,7 +616,9 @@ async function chatOpen(leaf, { askTrust = true } = {}) {
       idleMinutes: Number.isInteger(settings.chatIdleMinutes) ? settings.chatIdleMinutes : 30,
       extraEnv,
       accountEnv,
-      unsetEnv
+      unsetEnv,
+      // On an SSH host: the account folder its terminal ran on (checked in main).
+      ...(isRemotePath(leaf.cwd) && validHostAccount(leaf.hostAccount) ? { hostAccount: leaf.hostAccount } : {})
     })
   } catch (err) {
     res = { ok: false, code: 'failed', error: err && err.message }
@@ -1368,6 +1374,11 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
   // Ask first or Yolo: the pane's own choice (pane menu > Restart in Yolo),
   // else Yolo in a Yolo folder, else Settings > Agents.
   const panePermissions = opts.permissions === 'manual' || opts.permissions === 'yolo' ? opts.permissions : null
+  // An agent on an SSH host: the account folder Tessel made there that it
+  // runs on (hostAccounts.js), or none: the agent's own sign-in there. A
+  // launcher's account choice (accountId) is that folder for a pane on a host.
+  const hostAccount =
+    agent && opts.remoteHostId && HOST_ACCOUNT_AGENTS.includes(agent.id) ? validHostAccount(opts.hostAccount !== undefined ? opts.hostAccount : opts.accountId) : undefined
   // A pane on an SSH host reopened when Tessel starts, its terminal gone (the
   // terminal host restarted): it does not connect by itself (no password
   // question nobody asked for). It keeps its place, name and conversation and
@@ -1389,6 +1400,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
       startDir: opts.startDir || null,
       sessionId: opts.sessionId || null,
       accountId: opts.accountId,
+      ...(hostAccount ? { hostAccount } : {}),
       launchedAt: opts.launchedAt || null,
       ...(paneChoice ? { sessionOptions: paneChoice } : {}),
       ...(panePermissions ? { permissions: panePermissions } : {}),
@@ -1502,6 +1514,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
       backend: 'conpty',
       sessionId: opts.sessionId || null,
       accountId,
+      ...(hostAccount ? { hostAccount } : {}),
       ...(paneChoice ? { sessionOptions: paneChoice } : {}),
       ...(panePermissions ? { permissions: panePermissions } : {}),
       ...(permissionMode ? { permissionMode } : {}),
@@ -1529,6 +1542,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     startDir: res.cwd || cwd || null,
     sessionId: null,
     accountId,
+    ...(hostAccount ? { hostAccount } : {}),
     // A terminal on a remote host (Settings > SSH Hosts): ssh runs in it.
     remoteHostId: opts.remoteHostId || res.remoteHostId || null,
     // ...in this folder of that host (a remote project).
@@ -1603,6 +1617,20 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     launchArgs = rootSafeClaudeArgs(launchArgs, permissionMode)
     noteRootNoYolo(leaf, opts.remoteHostId)
   }
+  // On an account folder of the host: CLAUDE_CONFIG_DIR / CODEX_HOME before
+  // its command (the folder made whole again first). It can't be used (gone,
+  // changed outside Tessel, the host not answering): the agent is not started
+  // on another account; the pane says why and keeps its shell.
+  let hostPrefix = ''
+  if (agent && launchCommand && hostAccount) {
+    const env = window.shellApi.remoteAccounts ? await window.shellApi.remoteAccounts.launchEnv(opts.remoteHostId, agent.id, hostAccount).catch(() => null) : null
+    if (env && env.ok && typeof env.prefix === 'string') hostPrefix = env.prefix
+    else {
+      launchCommand = null
+      leaf.sessionId = opts.sessionId || null
+      showToast(t('app.hostAccount.refused', '{{agent}} was not started on its account on this host: {{error}} Pane menu > Restart on… starts it on another one.', { agent: agent.name || agent.id, error: (env && env.error) || t('app.common.unknownError', 'unknown error') }), { kind: 'error', timeout: 15000 })
+    }
+  }
   if (agent && agent.command && launchCommand) {
     const start = await agentStartLine({ ...agent, command: launchCommand }, opts.sessionId || null, !!opts.resume, accountId, {
       known: opts.remoteSession === true && !!opts.remoteHostId,
@@ -1648,7 +1676,7 @@ async function createLeaf(shellId, agent = null, cwd = null, worktree = null, op
     }
     const lineWith = (args) => {
       const permissionModeArg = permissionMode && !/--permission-mode\b/.test(args) ? ` --permission-mode ${permissionMode}` : '' // i18n-ignore
-      return (args ? `${start.line} ${args}` : start.line) + extra + automationArgs + continueArgs + permissionModeArg
+      return hostPrefix + (args ? `${start.line} ${args}` : start.line) + extra + automationArgs + continueArgs + permissionModeArg
     }
     const base = lineWith(launchArgs)
     setTimeout(() => {
@@ -1788,6 +1816,7 @@ function serializeNode(node) {
       model: node.model || null,
       effort: node.effort || null,
       accountId: node.accountId,
+      hostAccount: isRemotePath(node.cwd) ? validHostAccount(node.hostAccount) : undefined,
       team: node.team || null,
       worker: node.worker ? true : undefined,
       maxPermissions: node.maxPermissions === 'manual' ? 'manual' : undefined,
@@ -1830,6 +1859,8 @@ function serializeNode(node) {
       sessionId: node.sessionId || null,
       // Left out when not recorded (see createLeaf); null is kept.
       accountId: node.detected ? undefined : node.accountId,
+      // On an SSH host: the account folder it runs on there (none: the host's own sign-in).
+      hostAccount: node.detected || !node.remoteHostId ? undefined : validHostAccount(node.hostAccount),
       remoteHostId: node.remoteHostId || undefined,
       remotePath: node.remotePath || undefined,
       // Asleep: restored asleep (no terminal) until you open it.
@@ -1912,6 +1943,7 @@ async function deserializeNode(snap, cwd = null) {
     if (snap.paneName) leaf.paneName = snap.paneName
     if (Number.isInteger(snap.num) && snap.num > 0) leaf.num = snap.num
     if (typeof snap.accountId === 'string' || snap.accountId === null) leaf.accountId = snap.accountId
+    if (isRemotePath(leaf.cwd) && validHostAccount(snap.hostAccount)) leaf.hostAccount = snap.hostAccount
     if (typeof snap.team === 'string') leaf.team = snap.team
     const flag = (v) => (typeof v === 'string' && /^[A-Za-z0-9._:[\]-]{1,60}$/.test(v) ? v : null)
     // OpenCode's models are provider/model.
@@ -1974,6 +2006,7 @@ async function deserializeNode(snap, cwd = null) {
             ? snap.accountId
             : undefined,
         launchedAt: Number.isFinite(snap.launchedAt) ? snap.launchedAt : null,
+        ...(validHostAccount(snap.hostAccount) && typeof snap.remoteHostId === 'string' ? { hostAccount: snap.hostAccount } : {}),
         ...(validPaneSessionOptions(snap.sessionOptions) ? { sessionOptions: validPaneSessionOptions(snap.sessionOptions) } : {}),
         // Only a Yolo pin survives a restart of Tessel: an "ask first" pane
         // follows Settings again (Yolo on: every agent starts in Yolo).
@@ -2004,6 +2037,7 @@ async function deserializeNode(snap, cwd = null) {
           ? snap.accountId
           : undefined,
       launchedAt: Number.isFinite(snap.launchedAt) ? snap.launchedAt : null,
+      hostAccount: validHostAccount(snap.hostAccount),
       startDir: typeof snap.startDir === 'string' ? snap.startDir : null,
       sessionOptions: snap.sessionOptions,
       permissions: snap.permissions === 'yolo' ? 'yolo' : undefined,
@@ -2613,6 +2647,25 @@ setOpenPanesSource(() => {
   })
   return out
 })
+// Settings > Where you're signed in: the agent panes open now (where each
+// runs and on which account), and Switch (Restart on that account).
+provide('accountPanes', {
+  list: () => {
+    const out = []
+    forEachWsLeaf((l) => {
+      if (l.kind === 'chat') {
+        // A chat on an SSH host: its login there (never switched from here).
+        const onHost = isRemotePath(l.cwd) ? parseRemotePath(l.cwd) : null
+        if (onHost) out.push({ id: l.id, kind: 'chat', name: l.paneName || l.title || l.agentId, agentId: l.agentId, remoteHostId: onHost.hostId, hostAccount: l.hostAccount, accountId: l.accountId })
+        return
+      }
+      if (l.kind !== 'agent' || !l.agentCommand || l.notConnected) return
+      out.push({ id: l.id, kind: 'agent', name: l.paneName || l.title || l.agentId, agentId: l.agentId, remoteHostId: l.remoteHostId || null, hostAccount: l.hostAccount, accountId: l.accountId, detected: !!l.detected })
+    })
+    return out
+  },
+  switchTo: (leafId, accountId) => restartOnAccount(leafId, accountId)
+})
 onMounted(() => refreshAccountChoices())
 onBeforeUnmount(() => liveShare.dispose())
 
@@ -3187,6 +3240,7 @@ provide('panelCtx', {
   restartLeaf,
   restartWithPermissions,
   restartOnAccount,
+  signInOnHost,
   // Chat <-> terminal (the same conversation).
   // Asked while the agent works: done when its turn ends (never interrupted).
   switchToChat: (id) => requestSwitch(id, 'chat'),
@@ -4273,6 +4327,7 @@ async function copyDiagnostics() {
 function closeSettings() {
   settingsOpen.value = false
   settingsSection.value = null
+  settingsAnchor.value = null
 }
 
 // The status bar (its Resource Manager and Ports popovers open from Settings).
@@ -4356,6 +4411,7 @@ async function connectLeaf(leafId) {
       savedOutput: old.savedText || '',
       sessionId: old.sessionId || null,
       accountId: old.accountId,
+      hostAccount: old.hostAccount,
       launchedAt: old.launchedAt || null,
       startDir: old.startDir || null,
       sessionOptions: old.sessionOptions,
@@ -4523,6 +4579,7 @@ function waitForHostAgain(leafId, { exitCode, pid = null } = {}) {
     startDir: old.startDir || null,
     sessionId: old.sessionId || null,
     accountId: old.accountId,
+    ...(old.hostAccount ? { hostAccount: old.hostAccount } : {}),
     launchedAt: old.launchedAt || null,
     ...(old.sessionOptions ? { sessionOptions: old.sessionOptions } : {}),
     ...(old.permissions ? { permissions: old.permissions } : {}),
@@ -4560,13 +4617,43 @@ onBeforeUnmount(() => offDropExit && offDropExit())
 // Pane menu > Restart on <account>: a Claude Code pane goes on with the same
 // conversation on another account (conversations are shared between
 // accounts; a Codex account keeps its own, so Codex panes don't offer it).
+// On an SSH host (accountId: an account folder there, null: the host's own
+// sign-in): Claude Code goes on with its conversation too (the folders share
+// it, remoteAccounts.sh); Codex starts a new one (its conversations are
+// each account's own).
 async function restartOnAccount(leafId, accountId) {
   const leaf = findLeaf(leafId)
-  if (!leaf || leaf.kind !== 'agent' || leaf.agentId !== 'claude' || leaf.remoteHostId || !leaf.agentCommand) return
-  if (!(accountId === null || typeof accountId === 'string') || restartingLeaves.has(leafId)) return
-  const ok = await restartInPlace(leafId, { resume: true, accountId })
+  if (!leaf || leaf.kind !== 'agent' || !leaf.agentCommand || restartingLeaves.has(leafId)) return
+  let ok
+  if (leaf.remoteHostId) {
+    if (!HOST_ACCOUNT_AGENTS.includes(leaf.agentId) || !(accountId === null || validHostAccount(accountId))) return
+    ok = await restartInPlace(leafId, { resume: leaf.agentId === 'claude', hostAccount: accountId === null ? undefined : accountId })
+    refreshHostAccounts(leaf.remoteHostId, { fresh: true })
+  } else {
+    if (leaf.agentId !== 'claude' || !(accountId === null || typeof accountId === 'string')) return
+    ok = await restartInPlace(leafId, { resume: true, accountId })
+  }
   if (ok === false && findLeaf(leafId) === leaf)
     showToast(t('app.restart.failed', '{{name}} could not be restarted: its terminal did not stop. Try again.', { name: leaf.paneName || leaf.title }), { kind: 'error', timeout: 8000 })
+}
+
+// Pane menu > Sign in to another account on <host>: Tessel makes a new
+// account folder there and opens the agent in it next to this pane, where
+// you sign in with the agent's own login (its link or device code). Once
+// signed in, Restart on… lists it for every pane of that agent on the host.
+async function signInOnHost(leafId) {
+  const leaf = findLeaf(leafId)
+  const api = window.shellApi.remoteAccounts
+  if (!leaf || leaf.kind !== 'agent' || !leaf.remoteHostId || !HOST_ACCOUNT_AGENTS.includes(leaf.agentId) || !api) return
+  const res = await api.create(leaf.remoteHostId, leaf.agentId).catch(() => null)
+  if (!res || !res.ok) {
+    showToast(t('app.hostAccount.createFailed', 'Could not prepare a new account on this host: {{error}}', { error: (res && res.error) || t('app.common.unknownError', 'unknown error') }), { kind: 'error', timeout: 10000 })
+    return
+  }
+  const agent = { id: leaf.agentId, name: agentById(leaf.agentId)?.name || leaf.title, command: leaf.agentCommand, accent: leaf.accent }
+  const fresh = await splitLeaf(leafId, 'row', agent, leaf.shellId, null, { hostAccount: res.id, remoteHostId: leaf.remoteHostId, ...(leaf.remotePath ? { remotePath: leaf.remotePath } : {}), inheritView: true })
+  if (fresh) showToast(t('app.hostAccount.signInHint', 'Sign in to the other account in the new pane. Then Restart on… in a pane’s menu switches it to that account.'), { timeout: 12000 })
+  refreshHostAccounts(leaf.remoteHostId, { fresh: true })
 }
 
 // Per-session Claude accounts: an older version's account switch put an
@@ -5297,7 +5384,7 @@ async function startInEmptyWorkspace(ws, choice) {
   if (choice.kind === 'agent' && !agent) return null
   const shellId = choice.kind === 'terminal' && choice.shellId && shells.value.some((s) => s.id === choice.shellId) ? choice.shellId : selectedShell.value
   // The account chosen in the launcher (else the default one).
-  const account = agent && !ws.remote && (choice.accountId === null || typeof choice.accountId === 'string') ? { accountId: choice.accountId } : {}
+  const account = agent && !ws.remote && (choice.accountId === null || typeof choice.accountId === 'string') ? { accountId: choice.accountId } : agent && ws.remote && validHostAccount(choice.accountId) ? { hostAccount: choice.accountId } : {}
   // The empty grid of a task copy (only its editors or browsers left): the
   // new pane works in that copy (paneViews.js).
   const from = ws.tree && ws.activeId ? findLeafIn(ws.tree, ws.activeId) : null
@@ -8596,7 +8683,8 @@ async function installTeamToolsOnce() {
 // opts.resume: resume the conversation (default: when it has one);
 // opts.forTools: restarted to load the team tools (it has them afterwards);
 // opts.accountId: started on that account instead of its own (null: the
-// system's sign-in).
+// system's sign-in); opts.hostAccount, on an SSH host: on that account
+// folder there (undefined: the host's own sign-in).
 // false: its terminal did not stop; null: it could not start again (the
 // reason was already shown).
 async function restartInPlace(leafId, opts = {}) {
@@ -8635,6 +8723,9 @@ async function restartInPlaceNow(leafId, opts) {
     id: leafId,
     sessionId: old.sessionId,
     accountId: 'accountId' in opts ? opts.accountId : old.accountId,
+    // On an SSH host: its account folder there (opts.hostAccount undefined:
+    // the host's own sign-in).
+    hostAccount: 'hostAccount' in opts ? opts.hostAccount : old.hostAccount,
     sessionOptions: old.sessionOptions,
     permissions: old.permissions,
     permissionMode: old.permissionMode,
@@ -8773,7 +8864,7 @@ async function switchToTerminal(leafId) {
     // On a host: the agent launch there, in the chat's folder, resuming the
     // conversation by its id (its file is the host's, never looked up here).
     const where = onHost
-      ? [null, null, { remoteHostId: onHost.hostId, remotePath: onHost.path, remoteSession: true }]
+      ? [null, null, { remoteHostId: onHost.hostId, remotePath: onHost.path, remoteSession: true, ...(validHostAccount(old.hostAccount) ? { hostAccount: old.hostAccount } : {}) }]
       : [old.cwd || ws.cwd, old.worktree || null, { accountId: old.accountId }]
     const fresh = await createLeaf(selectedShell.value, agent, where[0], where[1], {
       id: leafId,
@@ -8877,6 +8968,8 @@ async function switchToChat(leafId) {
     leaf.num = old.num
     leaf.paneName = old.paneName
     leaf.accountId = old.accountId
+    // On an SSH host's account folder: the chat runs on it too.
+    if (hostRoot && validHostAccount(old.hostAccount)) leaf.hostAccount = old.hostAccount
     if (old.worktree) leaf.worktree = old.worktree
     const choice = old.modelChoice || old.sessionOptions || null
     if (choice && choice.model) leaf.model = choice.model
@@ -12681,7 +12774,7 @@ onBeforeUnmount(() => {
 
         <span class="toolbar-sep"></span>
 
-        <UsageMenu :host-usage="liveShare.hostUsage()" :host-name="liveShare.state.guest.host || ''" @details="openSettingsAt('stats')" @accounts="openSettingsAt('accounts')" />
+        <UsageMenu :host-usage="liveShare.hostUsage()" :host-name="liveShare.state.guest.host || ''" @details="openSettingsAt('stats')" @accounts="(where) => openSettingsAt('accounts', where)" />
         <NotificationsMenu @focus-pane="focusPane" />
         <!-- Live Share: a pill while you share or are in a session (its
              popover has the details), else the button that opens it. -->
@@ -13333,6 +13426,7 @@ onBeforeUnmount(() => {
       :default-shell="selectedShell"
       :update-status="updateStatus"
       :section="settingsSection"
+      :anchor="settingsAnchor"
       :agents="agents"
       :worktree-paths="usageWorktreePaths"
       :project-cwd="currentWs ? currentWs.cwd : null"

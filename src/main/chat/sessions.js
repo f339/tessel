@@ -1266,7 +1266,7 @@ export function createChatSessions(deps) {
 
   // from: internal, the asleep session this open wakes (see below).
   async function open(opts = {}, from = null) {
-    const { paneId, cwd, projectDir, resumeId, model, effort, accountEnv, askTrust, envOpts } = opts
+    const { paneId, cwd, projectDir, resumeId, model, effort, accountEnv, askTrust, envOpts, hostAccount } = opts
     let { permissions = 'manual', permissionMode } = opts
     const agent = opts.agent ?? 'claude'
     const idleMinutes = opts.idleMinutes ?? 30
@@ -1313,7 +1313,8 @@ export function createChatSessions(deps) {
       (model != null && !validModel(agent, model)) ||
       (effort != null && !validFlag(effort)) ||
       !['yolo', 'manual'].includes(permissions) ||
-      (permissionMode != null && !PERMISSION_MODES.includes(permissionMode))
+      (permissionMode != null && !PERMISSION_MODES.includes(permissionMode)) ||
+      (hostAccount != null && (!onHost || typeof hostAccount !== 'string' || !/^[0-9a-z]{1,40}$/.test(hostAccount)))
     )
       return { ok: false, code: 'invalid', error: t('main.chat.invalid', 'Invalid chat request.') }
 
@@ -1333,6 +1334,9 @@ export function createChatSessions(deps) {
     const s = {
       paneId,
       agent,
+      // On an SSH host's account folder: its id (main stops the chats on a
+      // login before it is removed, by host and account).
+      hostAccount: onHost && hostAccount ? hostAccount : null,
       adapter: null,
       // Codex and OpenCode name a new conversation themselves: known once it started.
       sessionId: resumeId || (agent === 'codex' || agent === 'opencode' ? null : randomUUID()),
@@ -1446,6 +1450,25 @@ export function createChatSessions(deps) {
         // variables and Settings > Agents ones: never this PC's, never an
         // account's local folders.
         childEnv = remoteAgentEnv({ paneId, agent, extraEnv: envOpts?.extraEnv })
+        // On an account folder of the host (its terminal ran there): that
+        // folder, checked there (remoteAccounts.js). It can't be used: the
+        // chat does not start on another account.
+        if (hostAccount) {
+          let folder = null
+          try {
+            folder = remote.accountFolder ? await remote.accountFolder({ hostId: onHost.hostId, agent, id: hostAccount }) : null
+          } catch {
+            folder = null
+          }
+          if (s.closing) return closedWhileStarting()
+          if (!folder || !folder.ok || typeof folder.name !== 'string' || typeof folder.dir !== 'string') {
+            drop()
+            const error = t('main.chat.hostAccountUnusable', 'This chat runs on an account folder of {{host}} that cannot be used now: {{error}}', { host: hostName(onHost.hostId), error: (folder && folder.error) || t('main.project.unknownError', 'unknown error') })
+            emit(paneId, { type: 'status', state: 'crashed', agent, error })
+            return { ok: false, code: 'account', error }
+          }
+          childEnv[folder.name] = folder.dir
+        }
       } else {
         let base = envDeps.forPane({ paneId, cwd, projectDir: s.projectDir, accountEnv, ...(envOpts || {}) })
         if (base && typeof base === 'object' && base.env && typeof base.env === 'object') base = base.env
@@ -2108,7 +2131,7 @@ export function createChatSessions(deps) {
   }
 
   function list() {
-    return [...sessions.values()].map((s) => ({ paneId: s.paneId, agent: s.agent, sessionId: s.sessionId, status: s.status, model: s.model, launchToken: s.launchToken }))
+    return [...sessions.values()].map((s) => ({ paneId: s.paneId, agent: s.agent, sessionId: s.sessionId, status: s.status, model: s.model, launchToken: s.launchToken, hostId: remoteFolder(s.cwd)?.hostId || null, hostAccount: s.hostAccount || null }))
   }
 
   // ---- IPC -------------------------------------------------------------------
@@ -2140,7 +2163,9 @@ export function createChatSessions(deps) {
         worker: o.worker === true,
         askTrust: o.askTrust === true,
         agentFolderTrust: o.agentFolderTrust === true,
-        envOpts: { extraEnv: o.extraEnv, accountEnv: o.accountEnv, unsetEnv: Array.isArray(o.unsetEnv) ? o.unsetEnv.filter((n) => typeof n === 'string').slice(0, 50) : [] }
+        envOpts: { extraEnv: o.extraEnv, accountEnv: o.accountEnv, unsetEnv: Array.isArray(o.unsetEnv) ? o.unsetEnv.filter((n) => typeof n === 'string').slice(0, 50) : [] },
+        // A chat on an SSH host's account folder (its id; the folder is checked in main).
+        ...(typeof o.hostAccount === 'string' ? { hostAccount: o.hostAccount } : {})
       })
     })
     ipcMain.handle('chat:send', (_e, q) => {

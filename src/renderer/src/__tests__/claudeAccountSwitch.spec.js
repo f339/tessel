@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import fs from 'fs'
 import vm from 'vm'
 import { join } from 'path'
+import { HOST_ACCOUNT_AGENTS, validHostAccount } from '../hostAccounts'
 
 const source = fs.readFileSync(join(process.cwd(), 'src/renderer/src/App.vue'), 'utf8').replace(/\r\n/g, '\n')
 function slice(from, to) {
@@ -16,8 +17,13 @@ function slice(from, to) {
 }
 const code = slice('// Pane menu > Restart on <account>', '// Pane menu > Restart in Yolo / Restart asking first')
 
-function load({ leaves = {}, accounts = {}, restart = async () => true } = {}) {
+function load({ leaves = {}, accounts = {}, remoteAccounts = null, restart = async () => true, splitLeaf = async () => ({ id: 'n1' }) } = {}) {
   const ctx = {
+    HOST_ACCOUNT_AGENTS,
+    validHostAccount,
+    refreshHostAccounts: vi.fn(),
+    splitLeaf: vi.fn(splitLeaf),
+    agentById: (id) => ({ id, name: id === 'claude' ? 'Claude Code' : 'Codex' }),
     t: (k, en, vars) => en.replace(/\{\{(\w+)\}\}/g, (_, n) => (vars && vars[n] != null ? vars[n] : '')),
     findLeaf: (id) => leaves[id] || null,
     restartingLeaves: new Set(),
@@ -26,10 +32,10 @@ function load({ leaves = {}, accounts = {}, restart = async () => true } = {}) {
     refreshAccountChoices: vi.fn(),
     onMounted: () => {},
     onBeforeUnmount: () => {},
-    window: { shellApi: { accounts }, addEventListener: () => {}, removeEventListener: () => {} },
+    window: { shellApi: { accounts, ...(remoteAccounts ? { remoteAccounts } : {}) }, addEventListener: () => {}, removeEventListener: () => {} },
     Promise
   }
-  vm.runInNewContext(`${code}\nthis.api = { restartOnAccount, finishClaudeSwitch, checkClaudeSwitch }`, ctx)
+  vm.runInNewContext(`${code}\nthis.api = { restartOnAccount, signInOnHost, finishClaudeSwitch, checkClaudeSwitch }`, ctx)
   return ctx
 }
 const claude = (extra = {}) => ({ id: 'p1', kind: 'agent', agentId: 'claude', agentCommand: 'claude', title: 'Claude Code', ...extra })
@@ -50,6 +56,37 @@ describe('pane menu > Restart on <account>', () => {
     await env.api.restartOnAccount('s', 'acct-b')
     await env.api.restartOnAccount('p1', 42)
     expect(env.restartInPlace).not.toHaveBeenCalled()
+  })
+
+  it('on an SSH host: Claude Code goes on with its conversation on a host account (null: the host’s own sign-in), Codex starts a new one', async () => {
+    const env = load({ leaves: { s: claude({ id: 's', remoteHostId: 'ssh-1' }), x: claude({ id: 'x', agentId: 'codex', agentCommand: 'codex', remoteHostId: 'ssh-1' }), g: claude({ id: 'g', agentId: 'gemini', remoteHostId: 'ssh-1' }) } })
+    await env.api.restartOnAccount('s', 'abc123')
+    expect(env.restartInPlace).toHaveBeenLastCalledWith('s', { resume: true, hostAccount: 'abc123' })
+    await env.api.restartOnAccount('s', null)
+    expect(env.restartInPlace).toHaveBeenLastCalledWith('s', { resume: true, hostAccount: undefined })
+    await env.api.restartOnAccount('x', 'def456')
+    expect(env.restartInPlace).toHaveBeenLastCalledWith('x', { resume: false, hostAccount: 'def456' })
+    expect(env.refreshHostAccounts).toHaveBeenCalledWith('ssh-1', { fresh: true })
+    // Not an account folder id, or an agent with no account folders: nothing.
+    await env.api.restartOnAccount('s', '../x')
+    await env.api.restartOnAccount('g', 'abc123')
+    expect(env.restartInPlace).toHaveBeenCalledTimes(3)
+  })
+
+  it('sign in to another account on a host: a new folder there, the agent opened in it next to the pane', async () => {
+    const remoteAccounts = { create: vi.fn(async () => ({ ok: true, id: 'a1b2c3' })) }
+    const env = load({ leaves: { s: claude({ id: 's', remoteHostId: 'ssh-1', remotePath: '/srv/app', shellId: 'pwsh' }), p1: claude() }, remoteAccounts })
+    await env.api.signInOnHost('s')
+    expect(remoteAccounts.create).toHaveBeenCalledWith('ssh-1', 'claude')
+    expect(env.splitLeaf).toHaveBeenCalledWith('s', 'row', expect.objectContaining({ id: 'claude', command: 'claude' }), 'pwsh', null, { hostAccount: 'a1b2c3', remoteHostId: 'ssh-1', remotePath: '/srv/app', inheritView: true })
+    // A pane on this PC: never.
+    await env.api.signInOnHost('p1')
+    expect(remoteAccounts.create).toHaveBeenCalledTimes(1)
+    // The folder could not be made: said, nothing opened.
+    remoteAccounts.create.mockResolvedValueOnce({ ok: false, error: 'not connected' })
+    await env.api.signInOnHost('s')
+    expect(env.splitLeaf).toHaveBeenCalledTimes(1)
+    expect(env.showToast.mock.calls.at(-1)[0]).toContain('not connected')
   })
 
   it("says the terminal did not stop only when that is what happened (a refused start already said why)", async () => {
@@ -101,6 +138,14 @@ describe('a restart in place (the real restartInPlaceNow)', () => {
     expect(r.createLeaf.mock.calls[0][4].accountId).toBeNull()
     r = await run({ resume: true })
     expect(r.createLeaf.mock.calls[0][4].accountId).toBe('acct-a')
+  })
+
+  it('on an SSH host: on the host account asked for (undefined: the host’s own), else its own', async () => {
+    let r = await run({ resume: true, hostAccount: 'abc123' })
+    expect(r.createLeaf.mock.calls[0][4]).toMatchObject({ hostAccount: 'abc123' })
+    r = await run({ resume: true, hostAccount: undefined })
+    expect('hostAccount' in r.createLeaf.mock.calls[0][4]).toBe(true)
+    expect(r.createLeaf.mock.calls[0][4].hostAccount).toBeUndefined()
   })
 
   it('a start that was refused: null, not "its terminal did not stop"', async () => {

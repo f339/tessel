@@ -23,6 +23,7 @@
 //   ~/.local/share/Trash, with its .trashinfo so a file manager or
 //   `gio trash --restore` can put it back), never rm.
 import crypto from 'crypto'
+import { ACCOUNT_FUNCTIONS } from './remoteAgent/remoteAccounts'
 import { createRemoteSession, sessionArgs, remotePathArg, rawArg, RC } from './remoteShell'
 import { createScm } from './sourceControl'
 import { looksBinary, MAX_EDIT_BYTES, MAX_HEAD_BYTES } from './editorFiles'
@@ -1694,6 +1695,27 @@ ${root}`, () => gitWorktreesNow(root))
     return { ok: true, home: clean }
   }
 
+  // The agents' accounts on this host (remoteAgent/remoteAccounts.js): its
+  // functions only. A read runs in the background on a host already signed
+  // in (never a sign-in). user: something you asked for (a pane started on an
+  // account, a folder made or removed), in your turn, signing in like a
+  // terminal opened there would. -> { rc, out } | { error, notConnected? }
+  async function accountCall(hostId, fn, args, { cap = 64 * 1024, timeoutMs = 25_000, user = false } = {}) {
+    if (!hostIdOk(hostId)) return { error: t('main.remote.notFound', 'This remote host is no longer saved in Tessel.') }
+    if (!ACCOUNT_FUNCTIONS.includes(fn) || !Array.isArray(args) || args.some((a) => typeof a !== 'string')) return { error: 'invalid' }
+    const notConnected = () => ({ notConnected: true, error: t('main.remoteFs.notConnected', '{{host}} is not connected. Use Connect to sign in.', { host: hostLabel(hostId) }) })
+    if (user) {
+      allow(hostId)
+      return call(hostId, fn, args, { cap, timeoutMs, op: 'accounts' })
+    }
+    if (!connectedQuietly(hostId)) return notConnected()
+    const entry = sessions.get(hostId)
+    const open = !!(entry && !entry.closed && entry.session && entry.session.state === 'ready')
+    const res = await call(hostId, fn, args, { cap, timeoutMs, op: 'accounts', background: true, ...(open ? { ifOpen: true } : {}) })
+    if (!res || res.skipped) return notConnected()
+    return res
+  }
+
   // Claude Code's skills on this host (__t_skills): ~/.claude/skills, and
   // the project's .claude/skills when `project` (a remote path) is given.
   // agent 'codex': Codex's (__t_cxskills): $CODEX_HOME/skills and
@@ -1826,6 +1848,7 @@ ${q && q.root}`, () => scm.scmStatus(q)), scmDiscard: (q) => scm.scmDiscard(q) }
     listSubagentFiles,
     hostHome,
     listAgentSkills,
+    accountCall,
     browse,
     cloneProject,
     createProject,
