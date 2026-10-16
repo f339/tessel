@@ -2216,7 +2216,9 @@ const signedInPlaces = createSignedInPlaces({
     process.platform === 'win32'
       ? createWslAccounts({ wslExe: join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wsl.exe'), exists: (p) => fs.existsSync(p) })
       : null,
-  confirmStart: (name) => confirmStartDistro(name)
+  confirmStart: (name) => confirmStartDistro(name),
+  // A WSL distro's Claude subscriptions checked: the window reads them.
+  onPlans: () => send('claudePlans:changed', {})
 })
 ipcMain.handle('signedIn:places', async () => {
   try {

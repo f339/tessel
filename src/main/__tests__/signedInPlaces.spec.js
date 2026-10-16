@@ -285,41 +285,57 @@ describe('the subscription of each Claude sign-in', () => {
     expect(rows[2].sub).toBeUndefined()
   })
 
-  it('an SSH host: a refresh you ask for checks its subscriptions too, and shows the result', async () => {
+  it('an SSH host: a refresh you ask for starts its subscription check without waiting for it', async () => {
     const remoteAccounts = {
       detect: vi.fn(async (hostId) => ({ ok: true, hostId, at: 5, entries: hostEntries })),
-      planCheck: vi.fn(async () => ({ ok: true, checked: 1 })),
-      cached: vi.fn(() => ({ ok: true, hostId: 'ssh-a', at: 6, entries: [{ ...hostEntries[0], sub: CANCELED }, ...hostEntries.slice(1)] }))
+      // Never answers: the scan must not wait for it.
+      planCheck: vi.fn(() => new Promise(() => {})),
+      cached: vi.fn(() => null)
     }
     const places = createSignedInPlaces({ accounts: { list: async () => accountsList }, hosts: { list: () => [{ id: 'ssh-a', label: 'alpha' }] }, connected: () => true, remoteAccounts, now: () => 100 })
     const plain = await places.scan('ssh:ssh-a')
     expect(remoteAccounts.planCheck).not.toHaveBeenCalled()
-    expect(plain.place.entries[0].sub).toBeUndefined()
+    expect(plain.place.state).toBe('ready')
     const asked = await places.scan('ssh:ssh-a', { fresh: true, relogin: true })
-    expect(remoteAccounts.planCheck).toHaveBeenCalledWith('ssh-a', { force: true })
-    expect(asked.place.entries[0].sub).toMatchObject({ organization_type: 'claude_free' })
+    expect(asked.place.state).toBe('ready')
+    await vi.waitFor(() => expect(remoteAccounts.planCheck).toHaveBeenCalledWith('ssh-a', { force: true }))
   })
 
-  it('a WSL distro: checked by the distro itself at its first check, then every few hours or on a refresh; a later failure keeps the result', async () => {
+  it('a WSL distro: checked by the distro itself after its check answered (never waited for), one at a time, a refresh at most once a minute; a later failure keeps the result', async () => {
     let clock = 100
+    let release
     let answer = { ok: true, entries: [{ scope: 'default', id: null, dir: '/home/u/.claude', check: 'ok', account: null, sub: CANCELED }] }
     const wsl = {
       list: vi.fn(async () => ({ ok: true, distros: [{ name: 'Ubuntu', running: true }] })),
       scan: vi.fn(async () => ({ ok: true, os: 'Linux', loginEnv: { claude: '/opt/c', codex: null }, entries: hostEntries.slice(0, 1) })),
-      plans: vi.fn(async () => answer)
+      plans: vi.fn(() => new Promise((r) => (release = () => r(answer))))
     }
-    const places = createSignedInPlaces({ accounts: { list: async () => accountsList }, hosts: { list: () => [] }, remoteAccounts: { cached: () => null }, wsl, now: () => clock, wslTtlMs: 0 })
+    const onPlans = vi.fn()
+    const places = createSignedInPlaces({ accounts: { list: async () => accountsList }, hosts: { list: () => [] }, remoteAccounts: { cached: () => null }, wsl, now: () => clock, wslTtlMs: 0, onPlans })
     await places.places()
     const first = await places.scan('wsl:Ubuntu')
-    expect(wsl.plans).toHaveBeenCalledWith('Ubuntu', { claude: '/opt/c' })
-    expect(first.place.entries[0].sub).toMatchObject({ organization_type: 'claude_free' })
-    clock += 60_000
-    await places.scan('wsl:Ubuntu', { fresh: true })
+    // Answered before the distro's own check is done.
+    expect(first.place.entries[0].sub).toBeUndefined()
+    await vi.waitFor(() => expect(wsl.plans).toHaveBeenCalledWith('Ubuntu', { claude: '/opt/c' }))
+    // A refresh while it runs: no second check.
+    await places.scan('wsl:Ubuntu', { fresh: true, relogin: true })
     expect(wsl.plans).toHaveBeenCalledTimes(1)
+    release()
+    await vi.waitFor(() => expect(onPlans).toHaveBeenCalledTimes(1))
+    // Its result is shown with the last scan, and with the next ones.
+    expect((await places.places()).places.find((p) => p.id === 'wsl:Ubuntu').entries[0].sub).toMatchObject({ organization_type: 'claude_free' })
+    expect((await places.scan('wsl:Ubuntu', { fresh: true })).place.entries[0].sub).toMatchObject({ organization_type: 'claude_free' })
+    // Refreshes within the minute: not again; after it, again.
+    clock += 30_000
+    await places.scan('wsl:Ubuntu', { fresh: true, relogin: true })
+    expect(wsl.plans).toHaveBeenCalledTimes(1)
+    clock += 31_000
     answer = { ok: true, entries: [{ scope: 'default', id: null, dir: '/home/u/.claude', check: 'expired', account: null, sub: null }] }
-    const again = await places.scan('wsl:Ubuntu', { fresh: true, relogin: true })
+    await places.scan('wsl:Ubuntu', { fresh: true, relogin: true })
     expect(wsl.plans).toHaveBeenCalledTimes(2)
-    expect(again.place.entries[0].sub).toMatchObject({ organization_type: 'claude_free', checkedAt: 5000 })
+    release()
+    await new Promise((r) => setTimeout(r, 5))
+    expect((await places.scan('wsl:Ubuntu', { fresh: true })).place.entries[0].sub).toMatchObject({ organization_type: 'claude_free', checkedAt: 5000 })
   })
 
   it('wslAccounts.plans: the check runs in the distro, its script on stdin, the login shell’s folder passed back quoted', async () => {

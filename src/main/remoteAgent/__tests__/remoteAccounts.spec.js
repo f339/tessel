@@ -1338,3 +1338,139 @@ describe('Claude subscriptions on a host (its own check)', () => {
     expect(other.cached('ssh-1').entries[0].sub).toBeUndefined()
   })
 })
+
+// The host's check reads Claude's own login only (MCP servers' sign-ins sit
+// in the same file), ignores the host's ~/.curlrc, traces nothing, keeps to
+// its time budget; main takes a cut-short answer's finished logins and backs
+// off after failures.
+describe('Claude subscriptions on a host: what is sent, and when', () => {
+  describe.skipIf(!gitSh())('on a POSIX sh playing the host', () => {
+    let dir
+    afterEach(() => {
+      if (dir) fs.rmSync(dir, { recursive: true, force: true })
+      dir = null
+    })
+    const recordingCurl = [
+      'curl() {',
+      '  __h=$(cat)',
+      `  printf '%s\\n' "$*" >>"$HOME/curl-args"`,
+      `  printf '%s\\n' "$__h" >>"$HOME/curl-stdin"`,
+      '  cat "$HOME/answer.json"',
+      `  printf '\\n@@S 200\\n'`,
+      '}'
+    ].join('\n')
+    const run = (home, before = recordingCurl) =>
+      spawnSync(gitSh(), ['-s'], { input: `${ACCOUNTS_SHELL}\nHOME='${posixPath(home)}'\n${before}\n__t_acctplan\n`, encoding: 'utf8' })
+    const MCP_TOKEN = 'MCP-SECRET-THIRDPARTY-TOKEN'
+    const seed = (credentials) => {
+      dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-acctplan2-'))
+      write(dir, 'answer.json', PROFILE_ANSWER)
+      // Written as text: the MCP servers' sign-ins first, as Claude Code may.
+      write(dir, '.claude/.credentials.json', credentials)
+      return dir
+    }
+
+    it('an MCP server’s token listed first is never sent; only Claude’s own login is', () => {
+      seed(`{"mcpOAuth":{"notion|abc":{"serverName":"notion","accessToken":"${MCP_TOKEN}","expiresAt":9999999999999}},"claudeAiOauth":{"accessToken":"sk-ant-oat01-SECRETACCESS","expiresAt":9999999999999}}`)
+      const res = run(dir)
+      expect(parsePlans(res.stdout).entries).toMatchObject([{ scope: 'default', check: 'ok' }])
+      const sent = fs.readFileSync(join(dir, 'curl-stdin'), 'utf8')
+      expect(sent.trim()).toBe('Authorization: Bearer sk-ant-oat01-SECRETACCESS')
+      expect(sent + fs.readFileSync(join(dir, 'curl-args'), 'utf8') + res.stdout + res.stderr).not.toContain(MCP_TOKEN)
+    })
+
+    it('an expired MCP sign-in listed first does not make Claude’s login expired, nor an MCP one valid', () => {
+      seed(`{"mcpOAuth":{"x|1":{"accessToken":"${MCP_TOKEN}","expiresAt":1000}},"claudeAiOauth":{"accessToken":"sk-ant-oat01-SECRETACCESS","expiresAt":9999999999999}}`)
+      expect(parsePlans(run(dir).stdout).entries[0].check).toBe('ok')
+      fs.rmSync(dir, { recursive: true, force: true })
+      seed(`{"mcpOAuth":{"x|1":{"accessToken":"${MCP_TOKEN}","expiresAt":9999999999999}},"claudeAiOauth":{"accessToken":"sk-ant-oat01-SECRETACCESS","expiresAt":1000}}`)
+      expect(parsePlans(run(dir).stdout).entries[0].check).toBe('expired')
+      expect(fs.existsSync(join(dir, 'curl-args'))).toBe(false)
+      fs.rmSync(dir, { recursive: true, force: true })
+      // No login of Claude's own (only an MCP server's): nothing sent.
+      seed(`{"mcpOAuth":{"x|1":{"accessToken":"${MCP_TOKEN}","expiresAt":9999999999999}}}`)
+      expect(parsePlans(run(dir).stdout).entries[0].check).toBe('nologin')
+      expect(fs.existsSync(join(dir, 'curl-args'))).toBe(false)
+    })
+
+    it('a token of the wrong shape: curl is never started; an expiry with leading zeros is read as a number, never an error', () => {
+      for (const token of ['abc def', '--config=/etc/passwd', 'abc\\" -H X-Evil:1']) {
+        seed(`{"claudeAiOauth":{"accessToken":"${token}","expiresAt":9999999999999}}`)
+        const res = run(dir)
+        expect(parsePlans(res.stdout).entries[0].check).toBe('nologin')
+        expect(fs.existsSync(join(dir, 'curl-args'))).toBe(false)
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+      seed('{"claudeAiOauth":{"accessToken":"sk-ant-oat01-SECRETACCESS","expiresAt":0999}}')
+      let res = run(dir)
+      expect(res.status).toBe(0)
+      expect(res.stderr).toBe('')
+      expect(parsePlans(res.stdout).entries[0].check).toBe('expired')
+      fs.rmSync(dir, { recursive: true, force: true })
+      seed('{"claudeAiOauth":{"accessToken":"sk-ant-oat01-SECRETACCESS","expiresAt":000}}')
+      res = run(dir)
+      expect(parsePlans(res.stdout).entries[0].check).toBe('ok')
+    })
+
+    it('curl reads no ~/.curlrc (-q first) and stops past 256 KB; a trace turned on before never shows the token', () => {
+      seed('{"claudeAiOauth":{"accessToken":"sk-ant-oat01-SECRETACCESS","expiresAt":9999999999999}}')
+      const res = run(dir, `${recordingCurl}\nset -x`)
+      const args = fs.readFileSync(join(dir, 'curl-args'), 'utf8').trim()
+      expect(args.startsWith('-q ')).toBe(true)
+      expect(args).toContain('--max-filesize 262144')
+      expect(res.stderr).not.toContain('SECRETACCESS')
+      expect(res.stdout).not.toContain('SECRETACCESS')
+    })
+
+    it('keeps to its time budget: the logins left once it is spent are said skipped, not asked', () => {
+      seed('{"claudeAiOauth":{"accessToken":"sk-ant-oat01-SECRETACCESS","expiresAt":9999999999999}}')
+      for (const id of ['abc123', 'def456']) {
+        write(dir, `.tessel-server/accounts/claude/${id}/.tessel-account`, `tessel-account claude ${id}\n`)
+        write(dir, `.tessel-server/accounts/claude/${id}/.credentials.json`, { claudeAiOauth: { accessToken: 'sk-ant-oat01-SECRETACCESS', expiresAt: 9999999999999 } })
+      }
+      write(dir, 'now', '1000\n')
+      // The clock moves past the budget (45 s) during the first request.
+      const slow = `${recordingCurl.replace('cat "$HOME/answer.json"', 'cat "$HOME/answer.json"; echo 1100 >"$HOME/now"')}\n__ta_now() { cat "$HOME/now"; }`
+      const out = parsePlans(run(dir, slow).stdout)
+      expect(out.entries.map((e) => e.check)).toEqual(['ok', 'skipped', 'skipped'])
+      expect(fs.readFileSync(join(dir, 'curl-args'), 'utf8').trim().split('\n')).toHaveLength(1)
+    })
+  })
+
+  it('main: a check cut short keeps the logins it finished (not the last, maybe cut); failures back off, longer each time', async () => {
+    let clock = 1_000_000
+    let answer = { rc: 124, out: Buffer.from(['@h Linux /home/u', '@a claude default - - /home/u/.claude', 'v subcheck ok', 'v sub_organization_type claude_free', '@a claude tessel abc123 - /home/u/.tessel-server/accounts/claude/abc123', 'v subcheck ok', 'v sub_organization_type claude_max'].join('\n') + '\n') }
+    const calls = []
+    const service = createRemoteAccounts({
+      now: () => clock,
+      run: async (hostId, fn) => {
+        calls.push(fn)
+        if (fn === '__t_acctplan') return answer
+        return lines(['@h Linux /home/u', '@a claude default - - /home/u/.claude', 'v email a@b.co', 'v cred file', '@a claude tessel abc123 - /home/u/.tessel-server/accounts/claude/abc123', 'v email w@corp.example', 'v cred file'])
+      }
+    })
+    expect(await service.planCheck('ssh-1')).toMatchObject({ ok: true, checked: 1 })
+    await service.detect('ssh-1')
+    const entries = service.cached('ssh-1').entries
+    expect(entries[0].sub).toMatchObject({ organization_type: 'claude_free' })
+    expect(entries[1].sub).toBeUndefined()
+    // Failures: 5 min, then 10, then 20 before the next detection asks again.
+    const asks = () => calls.filter((f) => f === '__t_acctplan').length
+    answer = { error: 'gone' }
+    clock += 4 * 3600_000
+    await service.planCheck('ssh-1')
+    const waits = []
+    for (let i = 0; i < 3; i++) {
+      const before = asks()
+      let waited = 0
+      while (asks() === before && waited < 4 * 3600_000) {
+        clock += 60_000
+        waited += 60_000
+        await service.detect('ssh-1', { fresh: true })
+        await new Promise((r) => setTimeout(r, 0))
+      }
+      waits.push(waited)
+    }
+    expect(waits).toEqual([5 * 60_000, 10 * 60_000, 20 * 60_000])
+  })
+})

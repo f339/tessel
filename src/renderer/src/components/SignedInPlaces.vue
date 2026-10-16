@@ -18,7 +18,7 @@ import BrandIcon from './BrandIcon.vue'
 import OrcaMenu from './OrcaMenu.vue'
 import { t } from '../i18n'
 import { agentLabel, timeAgo } from '../sessionHistory'
-import { groupByProvider, panesOnLogin, panesUsing, placesToCheck, shownOrg, switchCandidates, switchTarget } from '../signedInPlaces'
+import { groupByProvider, panesOn, panesOnLogin, panesUsing, placesToCheck, shownOrg, switchCandidates, switchTarget } from '../signedInPlaces'
 import { planName, applyHostAccounts, overrideText, isDefaultHostAccount, setDefaultHostAccount, HOST_ACCOUNT_AGENTS } from '../hostAccounts'
 import { planInfo } from '../claudePlan'
 
@@ -163,35 +163,55 @@ function usedByText(a) {
   const n = usedBy(a).length
   return n === 1 ? t('signedIn.usedByOne', 'Used by 1 pane') : t('signedIn.usedBy', 'Used by {{count}} panes', { count: n })
 }
-// Its subscription as Anthropic last reported it (a Claude account), or null.
+// Its subscription as Anthropic last reported it (a Claude account; see
+// accountSub: this PC's own check when signed in here), or null.
 function planOf(a) {
   void now.value
   return a && a.agent === 'claude' ? planInfo(a.sub, now.value) : null
 }
-// A sign-in's plan in words: the checked one, else its login file's.
+// A sign-in's own check (that place's), or null.
+function rowPlan(row) {
+  void now.value
+  return row && row.entry && row.entry.agent === 'claude' ? planInfo(row.entry.sub, now.value) : null
+}
+// A sign-in's plan in words: its own check, else its login file's.
 function entryPlanText(entry) {
   const info = entry.agent === 'claude' ? planInfo(entry.sub, now.value) : null
   return info ? info.title : planName(entry.plan)
 }
+// Its panes on a sign-in whose own check needs attention (each place's panes
+// by that place's own check: a host's answer never flags this PC's panes).
+function flaggedPanes(a) {
+  const out = []
+  for (const row of (a && a.chips) || []) if (rowPlan(row)?.attention) out.push(...panesOn(row.place, row.entry, panes.value).map((pane) => ({ pane, warn: rowPlan(row).warn })))
+  return out
+}
 
 // --- Panes on an account with no subscription (a notice at the top) ---------
-// The accounts that need it (no subscription, or a payment issue, no trial
-// running) with panes on them; the panes once each; and where they can go:
-// another account of that agent whose subscription is active (checked), else
-// one not known to lack one, that can take at least one of them.
+// The panes on a sign-in whose own check says no subscription (or a payment
+// issue, no trial running), once each; and where they can go: another
+// account of that agent that can take at least one of them at a place whose
+// own check is active, else at one not known to lack one.
 const attention = computed(() => {
   const all = providers.value.flatMap((p) => p.accounts)
-  const bad = all.filter((a) => !a.unknown && planOf(a)?.attention && usedBy(a).length)
+  const flagged = new Map()
+  const bad = []
+  for (const a of all) {
+    if (a.unknown) continue
+    const hits = flaggedPanes(a)
+    if (!hits.length) continue
+    bad.push(a)
+    for (const hit of hits) if (!flagged.has(hit.pane.id)) flagged.set(hit.pane.id, hit)
+  }
   if (!bad.length) return null
-  const panesOnBad = new Map()
-  for (const a of bad) for (const pane of usedBy(a)) panesOnBad.set(pane.id, pane)
-  const takes = (a) => switchGroups(a).some((g) => g.items.some((i) => panesOnBad.has(i.pane.id)))
-  const others = all.filter((a) => !a.unknown && a.agent === bad[0].agent && !bad.includes(a) && takes(a))
-  const target = others.find((a) => planOf(a) && !planOf(a).warn) || others.find((a) => !planOf(a)?.warn) || null
+  const ids = [...flagged.keys()]
+  const takes = (a, active) => switchGroups(a).some((g) => g.items.some((i) => flagged.has(i.pane.id) && (!active || (rowPlan(i.row) && !rowPlan(i.row).warn))))
+  const others = all.filter((a) => !a.unknown && a.agent === bad[0].agent)
+  const target = others.find((a) => takes(a, true)) || others.find((a) => takes(a, false)) || null
   return {
-    count: panesOnBad.size,
-    ids: [...panesOnBad.keys()],
-    payment: bad.every((a) => planOf(a).warn === 'payment'),
+    count: ids.length,
+    ids,
+    payment: [...flagged.values()].every((hit) => hit.warn === 'payment'),
     names: bad.map(accountName).join(', '),
     target
   }
@@ -237,7 +257,7 @@ function chipState(row) {
   if (checking.value[row.place.id]) return 'checking'
   if (row.place.state !== 'ready') return 'stale'
   if (row.entry.state !== 'signed-in') return 'off'
-  return (Array.isArray(row.entry.override) && row.entry.override.length) || row.entry.linked ? 'warn' : 'on'
+  return (Array.isArray(row.entry.override) && row.entry.override.length) || row.entry.linked || rowPlan(row)?.attention ? 'warn' : 'on'
 }
 // What a chip says beside its place when it is not signed in there.
 function chipStateShort(row) {
@@ -375,7 +395,14 @@ const isBusy = (kind, row) => !!busy.value[`${kind}:${row.place.id}:${row.entry.
 // --- Switch panes… (a panel under the account) ------------------------------
 const switchOpen = ref('') // the account's key
 const picked = ref({}) // pane id -> true
-const switchGroups = (a) => switchCandidates(a, panes.value)
+// Never toward a sign-in whose own check says it has no subscription.
+const switchGroups = (a) => {
+  const usable = (a.chips || []).filter((row) => !rowPlan(row)?.attention)
+  return switchCandidates({ ...a, chips: usable }, panes.value).map((g) => ({
+    ...g,
+    items: g.items.map((i) => ({ ...i, row: usable.find((row) => row.place.id === g.place.id && switchTarget(row.place, row.entry, row.place.entries || [])?.id === i.target.id) || null }))
+  }))
+}
 function toggleSwitch(a) {
   switchOpen.value = switchOpen.value === a.key ? '' : a.key
   picked.value = {}
@@ -489,11 +516,11 @@ onBeforeUnmount(() => {
             </div>
             <div class="si-acct-side">
               <template v-if="!a.unknown">
-                <span v-if="usedBy(a).length" class="si-used" :class="{ warn: !!planOf(a)?.attention }" data-test="signed-in-used" :title="usedBy(a).map((x) => x.name).join(', ')">{{ usedByText(a) }}</span>
-                <!-- Never offered toward an account with no subscription: its
-                     panes are moved away from it (the notice above). -->
+                <span v-if="usedBy(a).length" class="si-used" :class="{ warn: flaggedPanes(a).length > 0 }" data-test="signed-in-used" :title="usedBy(a).map((x) => x.name).join(', ')">{{ usedByText(a) }}</span>
+                <!-- Never offered toward a sign-in with no subscription (its own
+                     check): its panes are moved away from it (the notice). -->
                 <button
-                  v-if="switchGroups(a).length && !planOf(a)?.attention"
+                  v-if="switchGroups(a).length"
                   type="button"
                   class="account-btn"
                   data-test="signed-in-switch-open"

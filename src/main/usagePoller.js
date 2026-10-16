@@ -179,12 +179,12 @@ export function createUsagePoller({
     return stalePolicy(entry, result, now)
   }
 
-  // What the renderer is shown after a read. An account found with no
-  // subscription (Claude's usage refused for that) shows no old reading: it
-  // has no limits now. It is still read again later (its failure back-off),
-  // in case a subscription is taken again.
+  // What the renderer is shown after a read. An account Anthropic gives no
+  // usage limits (Claude's usage refused for that: no subscription, say)
+  // shows no old reading. It is still read again later (its failure
+  // back-off), in case a subscription is taken again.
   function stalePolicy(entry, result, now) {
-    if (result.ok || result.code === 'unavailable' || result.code === 'no-subscription') return result
+    if (result.ok || result.code === 'unavailable' || result.code === 'no-usage-limits') return result
     const previous = entry.snapshot
     if (!previous || !hasWindows(previous)) return result
     const threshold =

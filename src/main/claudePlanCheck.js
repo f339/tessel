@@ -8,16 +8,18 @@
 //
 // - Checked when Settings > AI provider accounts opens (at most once a
 //   minute), a couple of minutes after startup, every few hours, and at once
-//   when Claude's usage is refused for want of a subscription.
+//   when Claude's usage is refused with no usage limits for the account.
 // - A login is never refreshed: an expired one (or any failure) keeps the
 //   last result, which says when it was checked.
 // - Kept per account in userData (claude-plans.json): only the fields
-//   claudeSubscription.js keeps, when they were checked, and a short hash of
-//   the account's email (a later sign-in to another account in the same
-//   folder does not inherit them). Never a token, an email or a payment link.
+//   claudeSubscription.js keeps, when they were checked, and the account's
+//   email as an HMAC with a random key of this install (claude-plans.key,
+//   beside it), so a later sign-in to another account in the same folder
+//   does not inherit them and the file names nobody. Never a token, an email
+//   or a payment link.
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHmac, randomBytes } from 'node:crypto'
 import { cleanSubscription, subscriptionPlan, subscriptionState, SUBSCRIPTION_FIELDS } from '../shared/claudeSubscription'
 
 const VERSION = 1
@@ -33,13 +35,16 @@ export const FORCE_GAP_MS = 10 * 1000
 // A usage refusal checks the plan again unless it was tried this recently.
 export const REFUSAL_GAP_MS = 10 * 60 * 1000
 const KEY = /^(system|[A-Za-z0-9_-]{1,100})$/
-const WHO = /^[0-9a-f]{16}$/
+const WHO = /^[0-9a-f]{32}$/
+const SECRET = /^[0-9a-f]{64}$/
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 const keyOf = (accountId) => (accountId === null || accountId === undefined ? 'system' : accountId)
 
-// The short hash an account's email is kept as (never the email itself).
-export function emailKey(email) {
-  return typeof email === 'string' && email.trim() ? createHash('sha256').update(email.trim().toLowerCase()).digest('hex').slice(0, 16) : null
+// What an account's email is kept as: an HMAC with this install's key (never
+// the email itself, nor a plain hash anyone could match to an address).
+export function emailKey(email, secret) {
+  if (typeof email !== 'string' || !email.trim() || typeof secret !== 'string' || !SECRET.test(secret)) return null
+  return createHmac('sha256', Buffer.from(secret, 'hex')).update(email.trim().toLowerCase()).digest('hex').slice(0, 32)
 }
 const sameFields = (a, b) => !!a && !!b && SUBSCRIPTION_FIELDS.every((k) => a[k] === b[k])
 
@@ -59,6 +64,9 @@ export function createClaudePlanCheck({
 } = {}) {
   // key ('system' | account id) -> { sub, who, triedAt, failure }
   const kept = new Map()
+  const secretFile = path.join(path.dirname(file), 'claude-plans.key')
+  // This install's key for emailKey (claude-plans.key), made at first use.
+  let secret = null
   let loading = null
   let running = null
   let lastRun = 0
@@ -67,8 +75,27 @@ export function createClaudePlanCheck({
   let startTimer = null
   let everyTimer = null
 
+  async function loadSecret() {
+    try {
+      const value = (await fs.readFile(secretFile, 'utf8')).trim()
+      if (SECRET.test(value)) return value
+    } catch {
+      /* made below */
+    }
+    const made = randomBytes(32).toString('hex')
+    try {
+      await fs.mkdir(path.dirname(secretFile), { recursive: true })
+      await fs.writeFile(secretFile, `${made}\n`, { mode: 0o600 })
+    } catch {
+      // Not kept: this run's results match no account after a restart (they
+      // are checked again then).
+    }
+    return made
+  }
+  const whoOf = (email) => emailKey(email, secret)
   function load() {
     loading ??= (async () => {
+      secret = await loadSecret()
       try {
         const stat = await fs.stat(file)
         if (!stat.isFile() || stat.size > FILE_LIMIT) return
@@ -76,7 +103,10 @@ export function createClaudePlanCheck({
         if (value?.version !== VERSION || !object(value.accounts)) return
         for (const [key, entry] of Object.entries(value.accounts).slice(0, MAX_ACCOUNTS)) {
           const sub = KEY.test(key) ? cleanSubscription(entry) : null
-          if (sub && !kept.has(key)) kept.set(key, { sub, who: WHO.test(entry.who) ? entry.who : null })
+          // A result whose account cannot be told (an older or edited file)
+          // is dropped: checked again rather than shown for anyone.
+          if (entry?.who !== undefined && !WHO.test(entry.who)) continue
+          if (sub && !kept.has(key)) kept.set(key, { sub, who: entry.who ?? null })
         }
       } catch {
         /* none kept yet, or unreadable: checked again */
@@ -131,7 +161,8 @@ export function createClaudePlanCheck({
     const key = keyOf(accountId)
     let res
     try {
-      res = await usage.claudeProfile({ accountId })
+      await load()
+      res = await usage.claudeProfile({ accountId, whoOf })
     } catch {
       res = null
     }
@@ -182,9 +213,10 @@ export function createClaudePlanCheck({
     return running
   }
 
-  // Claude's usage was refused for want of a subscription: that account is
-  // checked again now, unless its last result already says so (then at the
-  // usual pace) or it was tried a moment ago.
+  // Claude's usage was refused with no usage limits for that account: it is
+  // checked again now (whether it has a subscription), unless its last
+  // result already says it has none (then at the usual pace) or it was
+  // tried a moment ago.
   function noSubscription(accountId) {
     const key = keyOf(accountId)
     if (!KEY.test(key) || single.has(key)) return
@@ -214,7 +246,7 @@ export function createClaudePlanCheck({
     const attach = (row, key) => {
       const entry = row ? kept.get(key) : null
       if (!entry?.sub) return row
-      if (entry.who && row.email && emailKey(row.email) !== entry.who) return row
+      if (entry.who && row.email && whoOf(row.email) !== entry.who) return row
       return { ...row, subscription: { ...entry.sub } }
     }
     return {

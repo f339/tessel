@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createProviderUsage } from '../providerUsage'
+import { createHash } from 'node:crypto'
 import { createClaudePlanCheck, emailKey } from '../claudePlanCheck'
 import { cleanSubscription, subscriptionFields, subscriptionPlan, subscriptionState } from '../../shared/claudeSubscription'
 
@@ -266,7 +267,25 @@ describe('the check of each Claude login', () => {
     expect((await shown()).subscription).toBeTruthy()
     state.email = 'someone.else@example.invalid'
     expect((await shown()).subscription).toBeUndefined()
-    expect(emailKey(EMAIL)).toMatch(/^[0-9a-f]{16}$/)
+  })
+
+  it('the email is kept as an HMAC with this install’s random key, never as a plain hash; an older result with another kind is dropped', async () => {
+    const { plans, file, accounts } = setup()
+    await plans.checkAll()
+    await plans.saved()
+    const secret = fs.readFileSync(path.join(path.dirname(file), 'claude-plans.key'), 'utf8').trim()
+    expect(secret).toMatch(/^[0-9a-f]{64}$/)
+    const kept = JSON.parse(fs.readFileSync(file, 'utf8')).accounts.system
+    expect(kept.who).toBe(emailKey(EMAIL, secret))
+    expect(kept.who).toMatch(/^[0-9a-f]{32}$/)
+    const plain = createHash('sha256').update(EMAIL).digest('hex')
+    expect(fs.readFileSync(file, 'utf8')).not.toContain(plain.slice(0, 16))
+    expect(emailKey(EMAIL, 'ab'.repeat(32))).not.toBe(kept.who)
+    expect(emailKey(EMAIL)).toBeNull()
+    // A file from before (a plain 16-character hash): not shown for anyone.
+    fs.writeFileSync(file, JSON.stringify({ version: 1, accounts: { system: { ...kept, who: plain.slice(0, 16) } } }))
+    const again = createClaudePlanCheck({ file, accounts, usage: { claudeProfile: vi.fn() }, clock: () => T0 })
+    expect((await again.decorate(await accounts.list())).providers[0].system.subscription).toBeUndefined()
   })
 
   it('kept in userData across a restart; what an edited file adds is dropped', async () => {
@@ -298,12 +317,13 @@ describe('the check of each Claude login', () => {
 })
 
 describe('a usage read refused for want of a subscription', () => {
-  it('is "no subscription", not a sign-in error; the plan is checked again at once, then not on every refusal', async () => {
+  it('is "no usage limits" (not asserting no subscription), not a sign-in error; the plan is checked again at once, then not on every refusal', async () => {
     const refused = () => reply({ type: 'error', error: { type: 'permission_error', message: 'fixture-secret-detail' } }, 403)
     const { usage, plans, request, shown, log } = setup({ usageReply: refused })
     const result = await usage.read({ provider: 'claude', accountId: null })
-    expect(result).toMatchObject({ ok: false, code: 'no-subscription' })
-    expect(result.error).toMatch(/no subscription/i)
+    expect(result).toMatchObject({ ok: false, code: 'no-usage-limits' })
+    expect(result.error).toMatch(/no usage limits/i)
+    expect(result.error).not.toMatch(/subscription/i)
     expect(JSON.stringify(result)).not.toMatch(/fixture-secret/)
     await vi.waitFor(() => expect(profileCalls(request)).toHaveLength(1))
     await vi.waitFor(async () => expect((await shown()).subscription).toMatchObject({ organization_type: 'claude_free' }))

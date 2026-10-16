@@ -359,7 +359,7 @@ export function createRemoteAccounts({
   onPlans = () => {}
 } = {}) {
   const cache = new Map() // hostId -> { at, value }
-  // hostId -> { at, unavailable, dirs: Map(folder -> { sub, account, check }), pending }
+  // hostId -> { at, unavailable, failures, dirs: Map(folder -> { sub, account, check }), pending }
   const plans = new Map()
   const inflight = new Map()
   // hostId -> { claude, codex, overrides }: what its login shell said, asked
@@ -457,7 +457,7 @@ export function createRemoteAccounts({
     if (!validHost(hostId)) return invalid()
     let known = plans.get(hostId)
     if (!known) {
-      known = { at: 0, unavailable: null, dirs: new Map(), pending: null }
+      known = { at: 0, unavailable: null, failures: 0, dirs: new Map(), pending: null }
       plans.set(hostId, known)
     }
     if (known.pending) return known.pending
@@ -467,15 +467,22 @@ export function createRemoteAccounts({
       const kept = logins.get(hostId)
       const args = kept && kept.claude ? ['dirs', kept.claude] : []
       const res = await run(hostId, '__t_acctplan', args, { cap: 64 * 1024, timeoutMs: 60_000 })
-      if (!res || res.error || res.notConnected || res.skipped || typeof res.rc !== 'number' || res.rc !== 0) {
-        // Not reached now: asked again at the next detection after a while.
-        known.at = now() - planEveryMs + 5 * 60_000
+      const answered = !!res && !res.error && !res.notConnected && !res.skipped && typeof res.rc === 'number'
+      const parsed = answered ? parsePlans(outText(res), now()) : null
+      // Cut short (its time limit): the logins it finished count; the last
+      // one it printed may be cut, so it does not.
+      const entries = parsed ? (res.rc === 0 ? parsed.entries : parsed.entries.slice(0, -1)) : []
+      if (!parsed || (res.rc !== 0 && !entries.length)) {
+        // Not reached now: asked again at a detection after 5 min, twice as
+        // long after each failure in a row (at most planEveryMs).
+        known.failures = Math.min((known.failures || 0) + 1, 10)
+        known.at = now() - planEveryMs + Math.min(planEveryMs, 5 * 60_000 * 2 ** (known.failures - 1))
         return { ok: false, checked: 0 }
       }
-      const parsed = parsePlans(outText(res), now())
+      if (res.rc === 0) known.failures = 0
       known.unavailable = parsed.unavailable
       let checked = 0
-      for (const e of parsed.entries) {
+      for (const e of entries) {
         const before = known.dirs.get(e.dir) || {}
         // Never refreshed: an expired login (or a refusal) keeps the last result.
         if (e.sub) {

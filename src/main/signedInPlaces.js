@@ -100,11 +100,14 @@ export async function copilotRows({ home }) {
 // connectedQuietly; remoteAccounts: remoteAccounts.js; wsl: wslAccounts.js.
 // confirmStart(name) -> true when you said yes to starting a stopped WSL
 // distro (a dialog in main).
-export function createSignedInPlaces({ accounts, localSignIn = async () => null, localOthers = async () => [], hosts, connected = () => false, remoteAccounts, wsl = null, confirmStart = async () => false, now = Date.now, wslTtlMs = 60_000, planEveryMs = 4 * 60 * 60_000 } = {}) {
-  const wslScans = new Map() // name -> { at, place }
-  // name -> { at, dirs: Map(folder -> { sub, account }) }: its Claude
-  // logins' subscriptions, asked by the distro itself (wsl.plans) at a
-  // check when the last is older than planEveryMs, or on a refresh.
+// onPlans(): a WSL distro's Claude subscriptions were checked (in the
+// background, after its scan answered): the window reads the places again.
+export function createSignedInPlaces({ accounts, localSignIn = async () => null, localOthers = async () => [], hosts, connected = () => false, remoteAccounts, wsl = null, confirmStart = async () => false, now = Date.now, wslTtlMs = 60_000, planEveryMs = 4 * 60 * 60_000, onPlans = () => {} } = {}) {
+  const wslScans = new Map() // name -> { at, place, entries, overrides }
+  // name -> { at, dirs: Map(folder -> { sub, account }), pending }: its
+  // Claude logins' subscriptions, asked by the distro itself (wsl.plans) in
+  // the background after a check, when the last is older than planEveryMs,
+  // or on a refresh (at most once a minute), one at a time.
   const wslPlans = new Map()
   // name -> { claude, codex, overrides }: what a distro's login shell said
   // (asked at its first check in this run, and when you ask for a refresh).
@@ -207,12 +210,14 @@ export function createSignedInPlaces({ accounts, localSignIn = async () => null,
       const target = targets().find((h) => h.id === hostId)
       if (!target) return { ok: false }
       if (!isConnected(hostId)) return { ok: true, place: { ...sshPlace(target, remoteAccounts.cached(hostId), 'not-connected') } }
-      let value = await remoteAccounts.detect(hostId, { fresh, relogin })
-      // A refresh you asked for: its Claude subscriptions checked now too
-      // (the host asks Anthropic itself; at most once a minute).
+      const value = await remoteAccounts.detect(hostId, { fresh, relogin })
+      // A refresh you asked for: its Claude subscriptions checked too, in the
+      // background (the host asks Anthropic itself; at most once a minute);
+      // their result reaches the window when it is there (onPlans).
       if (relogin && value && value.ok && typeof remoteAccounts.planCheck === 'function') {
-        await Promise.resolve(remoteAccounts.planCheck(hostId, { force: true })).catch(() => null)
-        value = remoteAccounts.cached(hostId) || value
+        Promise.resolve()
+          .then(() => remoteAccounts.planCheck(hostId, { force: true }))
+          .catch(() => null)
       }
       return { ok: true, place: sshPlace(target, value, value && value.ok ? 'ready' : value && value.notConnected ? 'not-connected' : 'error') }
     }
@@ -225,28 +230,50 @@ export function createSignedInPlaces({ accounts, localSignIn = async () => null,
     const res = await wsl.scan(name, { start, dirs: known })
     if (res && res.ok && !known) wslLogins.set(name, { claude: res.loginEnv ? res.loginEnv.claude : null, codex: res.loginEnv ? res.loginEnv.codex : null, overrides: res.envOverrides || {} })
     const login = wslLogins.get(name)
-    if (res && res.ok) await wslPlanCheck(name, login, relogin)
     const place = res && res.ok
       ? { id, kind: 'wsl', distro: name, label: name, state: 'ready', at: now(), entries: hostRows(withWslPlans(name, res.entries), { envOverrides: login && login.overrides }), ...(res.os ? { os: text(res.os, 40) } : {}) }
       : { id, kind: 'wsl', distro: name, label: name, state: res && res.stopped ? 'stopped' : 'error', at: null, entries: [] }
-    if (res && res.ok) wslScans.set(name, { at: now(), place })
+    if (res && res.ok) {
+      wslScans.set(name, { at: now(), place, entries: res.entries, overrides: login && login.overrides })
+      wslPlanCheck(name, login, relogin)
+    }
     else if (res && res.stopped) wslScans.delete(name)
     return { ok: true, place }
   }
 
-  async function wslPlanCheck(name, login, force) {
-    if (!wsl || typeof wsl.plans !== 'function') return
+  // -> the check in flight (a promise), or null when none was due.
+  function wslPlanCheck(name, login, force) {
+    if (!wsl || typeof wsl.plans !== 'function') return null
     const known = wslPlans.get(name)
-    if (known && !force && now() - known.at < planEveryMs) return
-    const next = { at: now(), dirs: known ? known.dirs : new Map() }
+    if (known && known.pending) return known.pending
+    if (known && now() - known.at < (force ? 60_000 : planEveryMs)) return null
+    const next = { at: now(), dirs: known ? known.dirs : new Map(), pending: null }
     wslPlans.set(name, next)
-    try {
-      const res = await wsl.plans(name, { claude: login ? login.claude : null })
-      // Never refreshed: a login not checked now keeps its last result.
-      for (const e of (res && res.ok && res.entries) || []) if (e.sub) next.dirs.set(e.dir, { sub: e.sub, account: e.account })
-    } catch {
-      /* the last results stay */
-    }
+    next.pending = Promise.resolve()
+      .then(() => wsl.plans(name, { claude: login ? login.claude : null }))
+      .then((res) => {
+        let found = 0
+        // Never refreshed: a login not checked now keeps its last result.
+        for (const e of (res && res.ok && res.entries) || []) {
+          if (!e.sub) continue
+          next.dirs.set(e.dir, { sub: e.sub, account: e.account })
+          found++
+        }
+        if (!found) return
+        // The distro's last scan, shown with them from now on.
+        const scanned = wslScans.get(name)
+        if (scanned && scanned.entries) scanned.place = { ...scanned.place, entries: hostRows(withWslPlans(name, scanned.entries), { envOverrides: scanned.overrides }) }
+        try {
+          onPlans(name)
+        } catch {
+          /* shown at the next check */
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        next.pending = null
+      })
+    return next.pending
   }
   function withWslPlans(name, entries) {
     const known = wslPlans.get(name)
@@ -256,5 +283,5 @@ export function createSignedInPlaces({ accounts, localSignIn = async () => null,
     })
   }
 
-  return { places, scan }
+  return { places, scan, wslPlanCheck }
 }

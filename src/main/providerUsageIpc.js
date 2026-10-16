@@ -119,7 +119,7 @@ export function registerProviderUsage({
   // (no provider call): { hidden, entries: { [provider]: poller entry } }.
   onCache = null,
   // claudePlanCheck.js: the plan Anthropic reported for a Claude account,
-  // and the account whose usage was refused for want of a subscription.
+  // and the account whose usage was refused with no usage limits for it.
   livePlan = null,
   onNoSubscription = null
 }) {

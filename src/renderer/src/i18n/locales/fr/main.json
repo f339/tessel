@@ -626,7 +626,7 @@
       "museApiKey": "Muse Code est connecté avec une clé API : il est facturé au jeton, sans quota d’abonnement à afficher.",
       "museNothingYet": "Muse Code n’a pas encore vu l’utilisation de votre abonnement. Envoyez-lui une demande, puis actualisez.",
       "museConfig": "Muse Code n’a pas pu charger ses réglages ou sa connexion. Lancez muse pour voir pourquoi.",
-      "noSubscription": "Ce compte Claude n’a pas d’abonnement : Anthropic ne lui donne aucune limite d’utilisation à afficher."
+      "noUsageLimits": "Anthropic ne donne aucune limite d’utilisation pour ce compte Claude."
     },
     "reset": {
       "notSaved": "Le résultat de la réinitialisation n'a pas pu être enregistré dans l'historique local.",

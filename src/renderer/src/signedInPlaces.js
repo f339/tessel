@@ -19,13 +19,28 @@ export function accountKey(e) {
   return who ? `${e.agent}|${who}` : null
 }
 
-// The newer of two subscriptions (a Claude account checked on this PC and on
-// a host: the last check says it).
 const newerSub = (a, b) => (!a ? b || null : !b ? a : (b.checkedAt || 0) > (a.checkedAt || 0) ? b : a)
+
+// The subscription an account's row shows (a Claude account), from its
+// sign-ins' own checks: this PC's check when it is signed in here (a host's
+// answer never stands for it: the same email may be another organization's
+// there, or the host may not be trusted); else the hosts' checks when they
+// are of one account (the same account id), the newest; else none (each
+// place's chip says its own). Each place's panes follow their own place's
+// check (SignedInPlaces.vue), never this.
+export function accountSub(rows) {
+  const list = Array.isArray(rows) ? rows : []
+  const pc = list.filter((r) => r.place && r.place.kind === 'pc')
+  if (pc.length) return pc.map((r) => r.entry.sub).filter(Boolean).reduce(newerSub, null)
+  const checked = list.filter((r) => r.entry && r.entry.sub)
+  if (checked.length <= 1) return checked.length ? checked[0].entry.sub : null
+  const ids = new Set(checked.map((r) => r.entry.account || ''))
+  return ids.size === 1 && !ids.has('') ? checked.map((r) => r.entry.sub).reduce(newerSub, null) : null
+}
 
 // places -> { groups: [{ key, agent, email, login, plan, sub, org, rows: [{ place, entry }] }], unnamed: [{ place, entry }] }
 // A folder nobody signed in to yet is no account: left to its place. sub:
-// its subscription as Anthropic last reported it (a Claude account).
+// its subscription as Anthropic last reported it (accountSub).
 export function groupAccounts(places) {
   const groups = new Map()
   const unnamed = []
@@ -43,12 +58,12 @@ export function groupAccounts(places) {
         groups.set(key, g)
       }
       if (!g.plan && entry.plan) g.plan = entry.plan
-      if (entry.sub) g.sub = newerSub(g.sub, entry.sub)
       if (!g.org && entry.org) g.org = entry.org
       if (!g.email && entry.email) g.email = entry.email
       g.rows.push({ place, entry })
     }
   }
+  for (const g of groups.values()) g.sub = accountSub(g.rows)
   const list = [...groups.values()].sort((a, b) => rank(a.agent) - rank(b.agent) || String(a.email || a.login || a.key).localeCompare(String(b.email || b.login || b.key)))
   return { groups: list, unnamed }
 }

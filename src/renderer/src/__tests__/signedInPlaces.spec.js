@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import SignedInPlaces from '../components/SignedInPlaces.vue'
 import { settings } from '../settings'
-import { groupByProvider, panesUsing, placesToCheck, shownOrg, switchCandidates, switchTarget } from '../signedInPlaces'
+import { accountSub, groupByProvider, panesUsing, placesToCheck, shownOrg, switchCandidates, switchTarget } from '../signedInPlaces'
 
 const pc = { id: 'pc', kind: 'pc', state: 'ready', entries: [{ agent: 'claude', scope: 'system', id: null, email: 'coreine13@gmail.com', org: "coreine13@gmail.com's Organization", plan: 'pro', state: 'signed-in' }] }
 const hostEntries = [
@@ -378,11 +378,44 @@ describe('Where you’re signed in: the plan Anthropic reports', () => {
     expect(notice.find('[data-test="signed-in-no-sub-switch"]').exists()).toBe(false)
   })
 
-  it('an account on a host checked there and here: the newer check wins', () => {
-    const host = { id: 'ssh:ssh-1', kind: 'ssh', hostId: 'ssh-1', label: 'linux-box', state: 'ready', entries: [{ agent: 'claude', scope: 'default', email: 'canceled.fixture@example.invalid', sub: { ...SUBS.max20, checkedAt: T - 86400_000 }, state: 'signed-in' }] }
-    const [claude] = groupByProvider([pcWith(SUBS.canceled, null), host])
-    const account = claude.accounts.find((a) => a.email === 'canceled.fixture@example.invalid')
+  it('an account signed in here and on a host: this PC’s own check stands for it, never a host’s; hosts agree only by account id', () => {
+    const host = (id, sub, account) => ({ id: `ssh:${id}`, kind: 'ssh', hostId: id, label: id, state: 'ready', entries: [{ agent: 'claude', scope: 'default', email: 'canceled.fixture@example.invalid', ...(account ? { account } : {}), sub, state: 'signed-in' }] })
+    const newerFree = { ...SUBS.canceled, checkedAt: T + 3600_000 }
+    // This PC active (its own check), a host newer and free: the PC's stands.
+    let [claude] = groupByProvider([pcWith(SUBS.max20, null), host('h1', newerFree)])
+    let account = claude.accounts.find((a) => a.email === 'canceled.fixture@example.invalid')
     expect(account.chips).toHaveLength(2)
-    expect(account.sub).toMatchObject({ organization_type: 'claude_free' })
+    expect(account.sub).toMatchObject({ organization_type: 'claude_max' })
+    // Signed in here but not checked here yet: no host's answer for it.
+    ;[claude] = groupByProvider([pcWith(null, null), host('h1', newerFree)])
+    expect(claude.accounts.find((a) => a.email === 'canceled.fixture@example.invalid').sub).toBeNull()
+    // Hosts only: one account (the same id), the newest; two ids, none.
+    const A = '1f0c6d1e-1111-4111-8111-111111111111'
+    const B = '5f0c6d1e-5555-4555-8555-555555555555'
+    expect(accountSub([{ place: { kind: 'ssh' }, entry: { sub: SUBS.max20, account: A } }, { place: { kind: 'ssh' }, entry: { sub: newerFree, account: A } }])).toMatchObject({ organization_type: 'claude_free' })
+    expect(accountSub([{ place: { kind: 'ssh' }, entry: { sub: SUBS.max20, account: A } }, { place: { kind: 'ssh' }, entry: { sub: newerFree, account: B } }])).toBeNull()
+    expect(accountSub([{ place: { kind: 'ssh' }, entry: { sub: SUBS.max20 } }, { place: { kind: 'ssh' }, entry: { sub: newerFree } }])).toBeNull()
+    expect(accountSub([{ place: { kind: 'ssh' }, entry: { sub: newerFree } }])).toMatchObject({ organization_type: 'claude_free' })
+  })
+
+  it('a host’s answer flags only that host’s panes: never this PC’s, never its Switch panes or its ticks', async () => {
+    const hostPlace = { id: 'ssh:h1', kind: 'ssh', hostId: 'h1', label: 'linux-box', state: 'ready', entries: [{ agent: 'claude', scope: 'default', id: null, email: 'canceled.fixture@example.invalid', sub: { ...SUBS.canceled, checkedAt: T + 3600_000 }, state: 'signed-in', removable: false, signOut: true }] }
+    setup(pcWith(SUBS.max20, SUBS.max20))
+    window.shellApi.signedIn.places = vi.fn(async () => ({ ok: true, places: [pcWith(SUBS.max20, SUBS.max20), hostPlace] }))
+    const list = panes.list()
+    list.push({ id: 'h-1', name: 'Host pane', agentId: 'claude', remoteHostId: 'h1' })
+    await open()
+    const account = w.findAll('[data-test="signed-in-account"]').find((a) => a.text().includes('canceled.fixture@example.invalid'))
+    // Its tag: this PC's own check.
+    expect(account.get('[data-test="signed-in-plan"]').text()).toBe('Max 20x')
+    // The host's chip carries its own warning.
+    const hostChip = account.findAll('[data-test="signed-in-chip"]').find((c) => c.text().includes('linux-box'))
+    expect(hostChip.classes()).toContain('warn')
+    expect(hostChip.attributes('title')).toContain('No subscription')
+    // One pane flagged: the host's; this PC's 5 are not.
+    const notice = w.get('[data-test="signed-in-no-sub"]')
+    expect(notice.text()).toContain('1 pane uses an account with no subscription')
+    // This PC's account still takes panes here (the 1 pane on the other account).
+    expect(account.find('[data-test="signed-in-switch-open"]').exists()).toBe(true)
   })
 })

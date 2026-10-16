@@ -295,30 +295,49 @@ __t_accts() {
 # through the shell's own printf), never on a command line or into this
 # shell's variables, and only the kept fields of the answer are printed
 # (claudeSubscription.js), with the account's id to tell a later sign-in.
-# A login that has expired is not used (Tessel never refreshes one); the
-# first request that cannot reach the service ends the check (the host
-# cannot reach it). Without curl (or a printf of the shell's own), nothing
-# is asked: `@n nocurl`.
+# Only Claude's own login is read (its claudeAiOauth object): the same file
+# keeps the MCP servers' sign-ins (mcpOAuth), each with its own accessToken
+# and expiresAt, which never go anywhere. A login that has expired is not
+# used (Tessel never refreshes one). curl reads no ~/.curlrc (-q: no trace,
+# proxy or output file of the host's applies to this request). The first
+# request that cannot reach the service ends the check (the host cannot
+# reach it), and so does the check's own time budget (about 45 s; the
+# others are said skipped and keep their last result in Tessel). Without
+# curl (or a printf of the shell's own), nothing is asked: `@n nocurl`.
 #   @a claude <scope> <id|-> <mtime|-> <folder>
 #   v subcheck ok|expired|refused|failed|skipped|nologin
 #   v sub_<field> <value>, v account <uuid>
 __ta_num() { grep -o "\"$1\"[[:space:]]*:[[:space:]]*[0-9][0-9]*" 2>/dev/null | head -n 1 | sed 's/.*:[[:space:]]*//'; }
 __ta_bool() { grep -o "\"$1\"[[:space:]]*:[[:space:]]*[a-z]*" 2>/dev/null | head -n 1 | sed 's/.*:[[:space:]]*//'; }
+# Claude's own login object of a credentials file (never an MCP server's).
+__ta_login() { __ta_flat "$1" | __ta_obj claudeAiOauth; }
+# Prints "ok" when the login's token has a bearer token's shape (it is
+# checked before curl starts; the token itself stays in this pipe).
+__ta_tokshape() {
+  __ta_login "$1" | __ta_str accessToken | {
+    read -r __tk
+    case $__tk in ''|-*|*[!A-Za-z0-9._~+/=-]*) ;; *) [ "${#__tk}" -le 4096 ] && echo ok ;; esac
+  }
+}
+__ta_now() { __tn=$(date +%s 2>/dev/null); case $__tn in ''|*[!0-9]*) echo 0 ;; *) echo "$__tn" ;; esac; }
 # $1 scope, $2 id, $3 config folder
 __ta_planone() {
+  set +x
   __c="$3/.credentials.json"
   [ -f "$__c" ] && [ -r "$__c" ] && [ ! -L "$__c" ] || return 0
   __ta_head claude "$1" "$2" "$__c" "$3" || return 0
   if [ "$__pdown" = 1 ]; then __ta_v subcheck skipped; return 0; fi
-  [ "$(__ta_flat "$__c" | __ta_set accessToken)" = 1 ] || { __ta_v subcheck nologin; return 0; }
-  __tx=$(__ta_flat "$__c" | __ta_num expiresAt)
-  __tn=$(date +%s 2>/dev/null)
-  if [ -n "$__tx" ] && [ "${#__tx}" -le 16 ] && [ -n "$__tn" ] && [ $((__tx / 1000)) -le "$__tn" ]; then __ta_v subcheck expired; return 0; fi
-  __tr=$(__ta_flat "$__c" | __ta_str accessToken | {
+  if [ "$__pend" -gt 0 ] && [ "$(__ta_now)" -ge "$__pend" ]; then __ta_v subcheck skipped; return 0; fi
+  [ "$(__ta_tokshape "$__c")" = ok ] || { __ta_v subcheck nologin; return 0; }
+  # Its expiry in ms: digits only, leading zeros dropped (0 or none: not said).
+  __tx=$(__ta_login "$__c" | __ta_num expiresAt | sed 's/^0*//')
+  __tn=$(__ta_now)
+  if [ -n "$__tx" ] && [ "${#__tx}" -le 16 ] && [ "$__tn" -gt 0 ] && [ $((__tx / 1000)) -le "$__tn" ]; then __ta_v subcheck expired; return 0; fi
+  __tr=$(__ta_login "$__c" | __ta_str accessToken | {
     read -r __tk
-    case $__tk in ''|*[!A-Za-z0-9._~+/=-]*) exit 3 ;; esac
+    case $__tk in ''|-*|*[!A-Za-z0-9._~+/=-]*) exit 3 ;; esac
     printf 'Authorization: Bearer %s\n' "$__tk"
-  } | curl -sS --proto =https --max-redirs 0 --connect-timeout 5 --max-time 8 -H @- -H 'anthropic-beta: oauth-2025-04-20' -H 'User-Agent: claude-code/2.1.0' -w '\n@@S %{http_code}\n' https://api.anthropic.com/api/oauth/profile 2>/dev/null)
+  } | curl -q -sS --proto =https --max-redirs 0 --connect-timeout 5 --max-time 8 --max-filesize 262144 -H @- -H 'anthropic-beta: oauth-2025-04-20' -H 'User-Agent: claude-code/2.1.0' -w '\n@@S %{http_code}\n' https://api.anthropic.com/api/oauth/profile 2>/dev/null)
   __rc=$?
   case $__rc in
     0) ;;
@@ -344,12 +363,14 @@ __ta_planone() {
 }
 # $1: dirs <claude folder|-> (the login shell's CLAUDE_CONFIG_DIR, kept by
 # Tessel), or nothing. The agent's own folder, that one, and the account
-# folders Tessel made (at most 10).
+# folders Tessel made (at most 10), within about 45 seconds.
 __t_acctplan() {
+  set +x
   printf '@h %s %s\n' "$(uname -s 2>/dev/null | tr -d ' ')" "$HOME"
   command -v curl >/dev/null 2>&1 || { printf '@n nocurl\n'; return 0; }
   [ "$(command -v printf)" = printf ] || { printf '@n nocurl\n'; return 0; }
   __pdown=0; __pn=0; __lc=
+  __pend=$(__ta_now); [ "$__pend" -gt 0 ] && __pend=$((__pend + 45))
   [ "$1" = dirs ] && [ "$2" != - ] && __lc=$2
   __ta_planone default - "$HOME/.claude"
   case $__lc in /*) case $__lc in "$HOME/.claude"|"$HOME/.claude/"|"$HOME"/.tessel-server/*) ;; *) __ta_planone env - "${__lc%/}" ;; esac ;; esac

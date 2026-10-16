@@ -345,8 +345,8 @@ export function createProviderUsage({
   timeoutMs = 10000,
   // claudePlanCheck.js: the plan Anthropic reported for a Claude account
   // (accountId -> "Max 20x", "Free"... or undefined), which wins over its
-  // login file's; and the account whose usage was refused for want of a
-  // subscription (its plan is checked again).
+  // login file's; and the account whose usage was refused with no usage
+  // limits for it (its plan is checked again).
   livePlan = null,
   onNoSubscription = null
 } = {}) {
@@ -553,12 +553,14 @@ export function createProviderUsage({
           await response.body?.cancel().catch(() => {})
           fail('redirect', t('main.usage.endpointRedirected', 'The usage endpoint redirected; the request was refused.'))
         }
-        // Claude's usage refused with a permission_error: the account has no
-        // subscription any more (a canceled Max is a free account), so there
-        // is no usage to read. Said as that, not as a sign-in problem; only
-        // the error's type is read from the answer.
+        // Claude's usage refused with a permission_error: Anthropic gives this
+        // account no usage limits (a canceled Max is a free account; a login
+        // without that permission says the same). Said as that, not as a
+        // sign-in problem, and its plan is checked again (claudePlanCheck.js
+        // says whether it has a subscription). Only the error's type is read
+        // from the answer.
         if (response.status === 403 && url === ENDPOINTS.claude && (await refusalType(response)) === 'permission_error')
-          fail('no-subscription', t('main.usage.noSubscription', 'This Claude account has no subscription: Anthropic gives it no usage limits to show.'))
+          fail('no-usage-limits', t('main.usage.noUsageLimits', 'Anthropic gives no usage limits for this Claude account.'))
         if (!response.ok) {
           await response.body?.cancel().catch(() => {})
           // 429: the service says when to come back; automatic refresh waits for it.
@@ -881,7 +883,7 @@ export function createProviderUsage({
         }
         return result
       } catch (error) {
-        if (provider === 'claude' && error instanceof UsageError && error.code === 'no-subscription') {
+        if (provider === 'claude' && error instanceof UsageError && error.code === 'no-usage-limits') {
           try {
             onNoSubscription?.(accountId)
           } catch {
@@ -945,9 +947,10 @@ export function createProviderUsage({
     // profile read with its login, through the same checks as a usage read
     // (never refreshed: an expired login says so, code 'auth', expired), for
     // any account, not only the selected one. Only the kept fields leave here
-    // (claudeSubscription.js), and who: a short hash of the account's email,
-    // to tell a later sign-in to another account in the same folder.
-    async claudeProfile({ accountId = null } = {}) {
+    // (claudeSubscription.js), and who: whoOf(the account's email) (the
+    // caller's keyed hash), to tell a later sign-in to another account in
+    // the same folder; null without whoOf. The email itself never leaves.
+    async claudeProfile({ accountId = null, whoOf = null } = {}) {
       try {
         const snapshot = await scope('claude', accountId, { anyAccount: true })
         const login = await auth(snapshot)
@@ -956,12 +959,13 @@ export function createProviderUsage({
         if (!subscription) fail('response', t('main.usage.unsupportedResponse', 'The usage service returned an unsupported response.'))
         await stable(snapshot, login.fingerprint)
         const email = text(data.account?.email ?? data.account?.email_address)?.toLowerCase()
-        return {
-          ok: true,
-          accountId,
-          subscription,
-          who: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : null
+        let who = null
+        try {
+          who = email && typeof whoOf === 'function' ? whoOf(email) || null : null
+        } catch {
+          who = null
         }
+        return { ok: true, accountId, subscription, who: typeof who === 'string' ? who : null }
       } catch (error) {
         return errorResult(error, { accountId: typeof accountId === 'string' ? accountId : null, ...(error?.expired ? { expired: true } : {}) })
       }
