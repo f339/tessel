@@ -57,8 +57,8 @@ import { createGuestReview } from './shareReview'
 import { fileKind, extOf, IMAGE_MIME } from '../../shared/fileKinds'
 import { cleanRel, segmentOk, isShareProjectId, LSHARE_LIMITS as L } from '../../shared/liveSharePath'
 import { guestText, cleanRoots, maskSecrets } from './shareChat'
-import { createShareScope, assertNoHostPaths, writeAllowed, hiddenByName, relFrom, touchesSpecial } from './shareScope'
-import { runAsGuest } from '../gitSafety'
+import { createShareScope, assertNoHostPaths, writeAllowed, hiddenByName, relFrom, touchesSpecial, hidesPrivate, checkIgnore } from './shareScope'
+import { runAsGuest, localGitArgs } from '../gitSafety'
 
 // --- Argument shapes -----------------------------------------------------------------
 const OK = (value) => ({ ok: true, value })
@@ -1021,12 +1021,21 @@ op('scm.commit', {
     if (!a.message.replace(/\0/g, '').trim()) return fail('no-message')
     const { place, failed } = await placeOrFail(env)
     if (failed) return failed
-    // Nothing staged outside the project (the guest can't see it): else the
-    // host commits it first.
-    if (place.prefix) {
-      const staged = await sourceControl.stagedPaths(place.top)
-      if (!staged) return fail('failed')
-      if (staged.some((p) => !underRoot(place, p))) return fail('staged-outside')
+    // Nothing staged that the guest can't see (outside the project, or
+    // hidden or ignored for guests inside it): the host commits it first.
+    const staged = await sourceControl.stagedPaths(place.top)
+    if (!staged) return fail('failed')
+    if (staged.some((p) => !underRoot(place, p))) return fail('staged-outside')
+    const inside = staged.map((p) => fromTop(place, p))
+    if (inside.some((rel) => !rel || hiddenByName(rel, env.settings) || touchesSpecial(rel))) return fail('staged-hidden')
+    if ((await env.scope.hiddenOf(env.info, inside, env.settings, { charge: env.charge })).size) return fail('staged-hidden')
+    // A file the host staged by force that git's rules ignore (git no longer
+    // says so of a staged file without --no-index): one check for all of
+    // them, counted in the guest's budget; git failing: refused.
+    if (inside.length && hidesPrivate(env.settings)) {
+      if (!env.charge()) return fail('busy')
+      const ignored = await env.ctx.ignoreCheck(env.info.real, await localGitArgs(place.top), inside, { noIndex: true })
+      if (!ignored || ignored.size) return fail('staged-hidden')
     }
     if (!(await stillAllowed(env))) return fail('revoked')
     const res = await sourceControl.scmCommit({ root: env.info.real, message: a.message })
@@ -1224,12 +1233,14 @@ function rootOf(roots, project) {
   return typeof v === 'string' ? v : null
 }
 
-// createShareRequests({ scope?, log? }) -> { handle(req, ctx), scope }
+// createShareRequests({ scope?, log?, ignoreCheck? }) -> { handle(req, ctx), scope }
 // req: { op, project, args } as the guest sent it.
-// ctx: { roots, rights, settings, trashItem?, recheck?, localHistory? (the
-// editor's Local History: list, read), taskCopy? ((project, task id) -> the
-// card's copy { path, branch, target } | null) }: the host's.
-export function createShareRequests({ scope = createShareScope(), log = null, review = createGuestReview() } = {}) {
+// ctx: { roots, rights, settings, trashItem?, recheck?, spend?, localHistory?
+// (the editor's Local History: list, read), taskCopy? ((project, task id) ->
+// the card's copy { path, branch, target } | null) }: the host's.
+// ignoreCheck: git check-ignore (shareScope.js checkIgnore; tests give theirs).
+// review: a task branch's reading for guests (shareReview.js).
+export function createShareRequests({ scope = createShareScope(), log = null, ignoreCheck = checkIgnore, review = createGuestReview() } = {}) {
   const chains = new Map() // project's real folder -> the git work queued on it
   function serial(key, fn) {
     const prev = chains.get(key) || Promise.resolve()
@@ -1266,7 +1277,7 @@ export function createShareRequests({ scope = createShareScope(), log = null, re
       review,
       rights,
       settings,
-      ctx,
+      ctx: { ...ctx, ignoreCheck },
       scope,
       charge,
       extra: null,

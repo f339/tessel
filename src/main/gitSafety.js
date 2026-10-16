@@ -271,10 +271,24 @@ export function emptyHooksDir() {
 }
 
 // The settings that run programs, from every config file the repository
-// reads (system, user, the repository's and what it includes).
-export const GUEST_CONFIG_ARGS = ['config', '--includes', '-z', '--get-regexp', RISKY_PATTERN]
-// What a guest's git always gets beyond them.
-export const GUEST_FIXED_ARGS = ['-c', 'commit.gpgSign=false', '-c', 'tag.gpgSign=false', '-c', 'diff.external=', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'core.alternateRefsCommand=', '-c', 'core.sshCommand=ssh']
+// reads (system, user, the repository's and what it includes), and the merge
+// drivers (a merge runs them).
+const MERGE_DRIVER_RE = /^merge\.(.+)\.driver$/i
+export const GUEST_CONFIG_ARGS = ['config', '--includes', '-z', '--get-regexp', `${RISKY_PATTERN}|^merge\\..+\\.driver$`]
+// What a guest's git always gets beyond them (credential.helper empty: no
+// helper at all).
+export const GUEST_FIXED_ARGS = ['-c', 'commit.gpgSign=false', '-c', 'tag.gpgSign=false', '-c', 'diff.external=', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'core.alternateRefsCommand=', '-c', 'core.sshCommand=ssh', '-c', 'credential.helper=']
+// The merge drivers named in config output, each turned off.
+export function mergeDriverArgs(out) {
+  const names = new Set()
+  for (const rec of String(out || '').split('\0')) {
+    const key = (rec.includes('\n') ? rec.slice(0, rec.indexOf('\n')) : rec).trim()
+    const m = MERGE_DRIVER_RE.exec(key)
+    // eslint-disable-next-line no-control-regex -- control characters are what it refuses
+    if (m && !/[\u0000-\u001f=]/.test(m[1])) names.add(m[1])
+  }
+  return [...names].sort().flatMap((n) => ['-c', `merge.${n}.driver=`])
+}
 const guestCache = new Map() // top -> { at, args }
 export async function guestGitArgs(top) {
   const key = `guest:${String(top).toLowerCase()}`
@@ -283,7 +297,7 @@ export async function guestGitArgs(top) {
   const res = await run('git', ['-C', top, ...GUEST_CONFIG_ARGS], { timeout: 10000 })
   const risky = res.ok ? parseRisky(res.stdout) : []
   // Every hook off whatever the config says (also a hooksPath it sets).
-  const args = [...neutralize(risky, { hooksDir: emptyHooksDir() }), ...GUEST_FIXED_ARGS]
+  const args = [...neutralize(risky, { hooksDir: emptyHooksDir() }), ...GUEST_FIXED_ARGS, ...(res.ok ? mergeDriverArgs(res.stdout) : [])]
   guestCache.set(key, { at: Date.now(), args })
   if (guestCache.size > 200) guestCache.delete(guestCache.keys().next().value)
   return args
