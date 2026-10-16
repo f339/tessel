@@ -26,14 +26,20 @@
 // proves its identity key on the join (shareCrypto.js signIdentity, bound to
 // this connection), and the host trusts that key (shareTrust.js), something
 // it can only do for a guest it let in itself. An older guest has no identity
-// key: it joins as before and can't be trusted. Each invitation lets no new
+// key: it joins as before and can't be trusted. A trusted identity has one
+// connection at a time (a new join of it replaces the one it had, as coming
+// back does), joins a few times a minute at most, and its counts (what it
+// opened, closed, asked) are its identity's: leaving and joining again
+// resets nothing. Each invitation lets no new
 // guest in once it is revoked, expired, used up (its uses) or blocked: past a
 // few connections that got its keys and never got in, whatever their way out
 // (someone in the middle could be trying to make the verification codes
 // match), it is blocked until the host makes it a new code. After a no (or a
-// guest who left while waiting, or one removed), that invitation's new guests
-// wait a while before they can ask again; each invitation has a waiting line
-// of its own; handshakes are limited to a few a minute.
+// guest who left or was removed while waiting), that invitation's new guests
+// wait a while before they can ask again, and a few noes in a row pause
+// every invitation; each invitation has a waiting line of its own, and at
+// most MAX_WAITING_ALL guests wait for the host at once in all; handshakes
+// are limited to a few a minute.
 //
 // A guest let in made a reconnect key of its own (Ed25519) and gave its
 // public half when it joined. When its connection drops (its network, its
@@ -108,7 +114,7 @@ import { SHARE_FEATURES, cleanFeatures, CHAT_LIMITS, CHAT_CODES } from './shareC
 import { NO_RIGHTS, cleanRights, sameRights } from '../../shared/liveShareRights'
 import { MAX_PROJECTS, isProjectId, cleanProjectIds, cleanName, cleanGrant } from './shareGrant.js'
 import { createAccess, pathOfUrl, keyHash, personId, isInviteId, INVITE_TTL_MS } from './shareAccess.js'
-import { isTrustId } from './shareTrust.js'
+import { isTrustId, trustId } from './shareTrust.js'
 
 export { NO_RIGHTS, cleanRights, MAX_PROJECTS, isProjectId, cleanProjectIds, cleanName, INVITE_TTL_MS }
 
@@ -127,6 +133,10 @@ export { NO_RIGHTS, cleanRights, MAX_PROJECTS, isProjectId, cleanProjectIds, cle
 export const SHARE_PROTOCOL = 4
 const MAX_GUESTS = 10
 const MAX_WAITING = 3 // guests waiting for the host's answer at once, per invitation
+const MAX_WAITING_ALL = 3 // and in all
+// Times a trusted identity joins in a minute (each join replaces the
+// connection it had).
+const TRUSTED_JOINS_PER_MINUTE = 3
 const MAX_FRAME = 1024 * 1024 // a guest's message (typing, a paste)
 const MAX_WRITE = 256 * 1024
 const MAX_BUFFERED = 16 * 1024 * 1024 // a guest this far behind is dropped
@@ -150,6 +160,9 @@ const MAX_AGENTS = 32
 // on screen this often at most.
 const TYPING_MS = 3000
 const FOCUS_PER_MINUTE = 120
+// Typing that goes on is said again this often (the host's window lets a
+// typing mark not heard of for a while go).
+const TYPING_AGAIN_MS = 4000
 // Conversations (the 'chat' feature): watched by one guest at once, started
 // in a minute, and how often one pane's goes out (the latest when its time
 // comes); one bigger than this is not sent.
@@ -336,6 +349,9 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
 
   const inHandshake = (g) => g.state === 'handshake' || g.state === 'committed' || g.state === 'secured'
   const trustedOf = (g) => (g.person ? access.trustedOf(g.person) : null)
+  // Where a guest's counts are kept: its person's, or a trusted one's
+  // identity's.
+  const countsOf = (g) => access.countersOf(g.person)
   const inviteOfGuest = (g) => {
     if (g.person) return access.viaOf(g.person)
     const inv = g.entry ? access.liveInvite(g.entry) : null
@@ -351,6 +367,8 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     projects: [...g.projects],
     invite: inviteOfGuest(g),
     trusted: !!trustedOf(g),
+    // The trusted entry it is (t-...), when it is one.
+    trustId: trustedOf(g) ? trustId(trustedOf(g).fp) : null,
     trustable: !!g.identity
   })
   const notifyGuests = () => callbacks.onGuests?.([...guests.values()].filter((g) => !inHandshake(g)).map(publicGuest))
@@ -386,9 +404,10 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     // doing: counted against its invitation (see onInviteBlocked), whatever
     // its way out.
     if (g.keysSent && !g.everJoined && !g.byHost && !HOST_ENDS.has(reason)) stoppedEarly(g)
-    // A guest who left while waiting, or one removed: that invitation's new
+    // A guest who left or was removed while waiting: that invitation's new
     // guests wait as after a no (asking again and again costs something).
-    if ((g.state === 'waiting' && (reason === 'left' || reason === 'closed')) || reason === 'removed') denied(g)
+    // One removed after it was let in pauses no one else.
+    if (g.state === 'waiting' && (reason === 'left' || reason === 'closed' || reason === 'removed')) denied(g)
     // Left on purpose, or removed: it can't come back. Otherwise: seen now.
     if (g.person && (reason === 'left' || reason === 'removed')) access.removePerson(g.person.hash)
     else if (g.person && g.everJoined && access.person(g.person.hash)) {
@@ -623,12 +642,18 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     }
     return [...panes].map(([id, m]) => ({ id, guests: [...m.values()] }))
   }
-  // Typing seen: said now, and once more when it is over.
+  // Typing seen: said when it starts, again every TYPING_AGAIN_MS while it
+  // goes on, and once more when it is over.
   function typed(g, id) {
+    const t = now()
     const was = g.typed.get(id)
-    g.typed.set(id, now())
+    g.typed.set(id, t)
     if (g.typed.size > 64) g.typed.delete(g.typed.keys().next().value)
-    if (!was || now() - was >= TYPING_MS) presenceChanged()
+    if (!was || t - was >= TYPING_MS || t - (g.typedSaid.get(id) || 0) >= TYPING_AGAIN_MS) {
+      g.typedSaid.set(id, t)
+      if (g.typedSaid.size > 64) g.typedSaid.delete(g.typedSaid.keys().next().value)
+      presenceChanged()
+    }
     clearTimeout(typingTimer)
     typingTimer = setTimeout(presenceChanged, TYPING_MS + 50)
     typingTimer.unref?.()
@@ -800,7 +825,11 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     g.person.lastSeen = now()
     syncGrant(g)
     const t = trustedOf(g)
-    if (t) trust.seen(t.fp)
+    if (t) {
+      trust.seen(t.fp)
+      // One connection per trusted identity: the one it had ends.
+      for (const other of [...guests.values()]) if (other !== g && other.person && other.person.trust === t.fp) drop(other, 'replaced')
+    }
     knownChanged()
     log(`guest ${g.name || '?'} ${back ? 'came back' : 'joined'}${t ? ' (trusted)' : ''}`)
     notifyGuests()
@@ -826,7 +855,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     // its address like any connection, never against the code (it proved its
     // key); only the times it got in count, so its Tessel trying again every
     // few seconds gets in once the minute is over.
-    if (!within(person, 'rejoins', REJOINS_PER_MINUTE)) {
+    if (!within(access.countersOf(person), 'rejoins', REJOINS_PER_MINUTE)) {
       g.byHost = true
       return drop(g, 'busy')
     }
@@ -872,15 +901,6 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       log(`a new guest turned away: invitation ${why === 'revoked' && !inv ? 'replaced or gone' : why}`)
       return drop(g, 'expired')
     }
-    const inOrWaiting = [...guests.values()].filter((x) => x.state === 'joined' || x.state === 'waiting')
-    // The room full (guests the host let in, and at most a few waiting): the
-    // host's doing, not counted against the invitation, up to ROOM_FULL_FREE
-    // in 10 min. Checked first: a room full with its waiting line full too is
-    // still a full room.
-    if (inOrWaiting.length >= MAX_GUESTS) {
-      if (access.noteRoomFull(inv.id)) g.byHost = true
-      return drop(g, 'busy')
-    }
     // Its reconnect key: it signed this connection with it (it holds it), not
     // a weak one, and not one already known (another guest's); and its
     // identity key, when it gives one, proved the same way.
@@ -890,13 +910,41 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     const identity = identityOf(g, msg.identity)
     if (identity === false) return drop(g, 'protocol')
     g.identity = identity
-    // A trusted person: in at once, with its trusted grant.
     const t = identity && trust ? trust.get(identityFingerprint(identity)) : null
-    if (t) return admit(g, key, inv, { trust: t.fp })
+    const inOrWaiting = [...guests.values()].filter((x) => x.state === 'joined' || x.state === 'waiting')
+    // A trusted identity already in comes in its own place (its connection
+    // is replaced).
+    const replacing = !!t && inOrWaiting.some((x) => x.state === 'joined' && x.person && x.person.trust === t.fp)
+    // The room full (guests the host let in, and at most a few waiting): the
+    // host's doing, not counted against the invitation, up to ROOM_FULL_FREE
+    // in 10 min. A room full with its waiting line full too is still a full
+    // room.
+    if (inOrWaiting.length >= MAX_GUESTS && !replacing) {
+      if (access.noteRoomFull(inv.id)) g.byHost = true
+      return drop(g, 'busy')
+    }
+    // A trusted person: in at once, with its trusted grant, a few times a
+    // minute at most (its identity's count: never against the code, it
+    // proved its keys).
+    if (t) {
+      if (!within(access.trustCounters(t.fp), 'joins', TRUSTED_JOINS_PER_MINUTE)) {
+        g.byHost = true
+        return drop(g, 'busy')
+      }
+      return admitTrusted(g, key, inv, t.fp)
+    }
     // The invitation pausing after a no, or its waiting line full, with room
     // left: counted (anyone can cause those: leave while waiting, or wait
     // three times, so they can't be a way around the count).
-    if (access.pausing(inv.id) || inOrWaiting.filter((x) => x.state === 'waiting' && x.guardId === inv.id).length >= MAX_WAITING) return drop(g, 'busy')
+    const waiting = inOrWaiting.filter((x) => x.state === 'waiting')
+    if (access.pausing(inv.id) || waiting.filter((x) => x.guardId === inv.id).length >= MAX_WAITING) return drop(g, 'busy')
+    // Every invitation pausing (noes in a row), or the host's waiting line
+    // full in all: like a full room (other invitations' guests may cause
+    // those: not counted against this one, up to ROOM_FULL_FREE).
+    if (access.pausingAll() || waiting.length >= MAX_WAITING_ALL) {
+      if (access.noteRoomFull(inv.id)) g.byHost = true
+      return drop(g, 'busy')
+    }
     g.state = 'waiting'
     notifyGuests()
     send(g, { t: 'waiting' })
@@ -922,21 +970,33 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
     // all of them. Its rights: the answer's (none when not said).
     const given = answer === true ? [...sharedIds()] : cleanProjectIds(answer.projects)
     const grant = cleanGrant({ projects: given.filter((id) => sharedIds().has(id)), rights: answer === true ? null : answer.rights })
-    // Trusted from now on, when the host said so (only with an identity key).
-    let fp = null
+    // Trusted from now on, when the host said so (only with an identity key;
+    // the host's window checks there is room in the list first).
     if (answer !== true && answer.trust === true && identity && trust) {
       const e = trust.add({ key: identity, name: g.name, projects: grant.projects, rights: grant.rights })
-      fp = e ? e.fp : null
+      if (e) return admitTrusted(g, key, inv, e.fp)
+      log(`guest ${g.name || '?'} let in without trust: the trusted list is full`)
     }
-    admit(g, key, inv, fp ? { trust: fp } : { grant })
+    g.person = access.addPerson({ key, name: g.name, sid: g.entry.sid, via: inv.id, identity: g.identity, grant })
+    if (!g.person) return drop(g, 'busy')
+    welcome(g)
+    // One more use: past its last, the others waiting with it are turned away.
+    if (access.used(inv)) dropNotJoined('expired')
   }
 
-  // A new guest in, through its invitation (one more use: past its last, the
-  // others waiting with it are turned away).
-  function admit(g, key, inv, { grant = null, trust: fp = null }) {
-    g.person = access.addPerson({ key, name: g.name, sid: g.entry.sid, via: inv.id, identity: g.identity, grant, trust: fp })
+  // A trusted identity in, through an invitation: its one person entry (taken
+  // over with this reconnect key; the connection it had ends), no new use
+  // for an invitation it used already.
+  function admitTrusted(g, key, inv, fp) {
+    const claim = access.claimTrusted(fp, { key, name: g.name, sid: g.entry.sid, via: inv.id, identity: g.identity })
+    if (!claim) {
+      g.byHost = true
+      return drop(g, 'busy')
+    }
+    for (const other of [...guests.values()]) if (other !== g && other.person && (other.person === claim.person || claim.replaced.includes(other.person.hash))) drop(other, 'replaced')
+    g.person = claim.person
     welcome(g)
-    if (access.used(inv)) dropNotJoined('expired')
+    if (access.usedBy(inv, fp)) dropNotJoined('expired')
   }
 
   // Under a limit a minute of a guest's person (the times of its last ones,
@@ -954,7 +1014,8 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
   // tells the guest it asked too often.
   function allowed(g, listName, perMinute, inAll = Infinity) {
     if (!g.person) return false
-    if (g.person.opened >= inAll || !within(g.person, listName, perMinute)) {
+    const counts = countsOf(g)
+    if (counts.opened >= inAll || !within(counts, listName, perMinute)) {
       send(g, { t: 'notice', code: 'limit' })
       return false
     }
@@ -978,7 +1039,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       case 'resync': {
         if (!g.subscribed.has(msg.id) || !canSee(g, msg.id)) return
         // Counted in its person: a new connection does not start from zero.
-        if (!within(g.person, 'resyncs', RESYNCS_PER_MINUTE)) return
+        if (!within(countsOf(g), 'resyncs', RESYNCS_PER_MINUTE)) return
         resubscribe(g, msg.id)
         return
       }
@@ -997,7 +1058,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
         if (spec.kind === 'agent' && !agentIds().has(spec.agent)) return send(g, { t: 'notice', code: 'agent' })
         if (g.rights.open) {
           if (!allowed(g, 'opens', OPENS_PER_MINUTE, OPENS_IN_ALL)) return
-          g.person.opened++
+          countsOf(g).opened++
           knownChanged()
           log(`guest ${g.name || '?'} opened ${spec.kind === 'agent' ? `the agent ${spec.agent}` : 'a terminal'}`)
           callbacks.openPane(spec, publicGuest(g))
@@ -1005,7 +1066,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
         }
         // Without the right: the host is asked (a guest whose Tessel can ask).
         if (!speaksAgents(g) || typeof callbacks.askOpen !== 'function') return
-        if (!within(g.person, 'openAsks', OPEN_ASKS_PER_MINUTE)) return send(g, { t: 'notice', code: 'limit' })
+        if (!within(countsOf(g), 'openAsks', OPEN_ASKS_PER_MINUTE)) return send(g, { t: 'notice', code: 'limit' })
         callbacks.askOpen(spec, publicGuest(g))
         return
       }
@@ -1018,7 +1079,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       // The pane it has on screen now (presence, the host's eyes only): one
       // of its panes, or none; a couple a second at most. It gives nothing.
       case 'focus': {
-        if (!g.features.has('presence') || !within(g.person, 'focuses', FOCUS_PER_MINUTE)) return
+        if (!g.features.has('presence') || !within(countsOf(g), 'focuses', FOCUS_PER_MINUTE)) return
         const id = typeof msg.id === 'string' && /^[\w-]{1,80}$/.test(msg.id) && canSee(g, msg.id) ? msg.id : null
         if (id === g.focus) return
         g.focus = id
@@ -1029,7 +1090,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       // right needed, nothing reaches the pane).
       case 'chat': {
         if (!speaksChat(g) || typeof msg.id !== 'string' || !/^[\w-]{1,80}$/.test(msg.id)) return
-        const person = g.person
+        const person = countsOf(g)
         // A stop: only for a conversation it watches (of a project it sees:
         // one it lost is let go already).
         if (msg.on !== true) {
@@ -1141,6 +1202,7 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       chatHeldTimer: null,
       focus: null, // the pane it has on screen (presence)
       typed: new Map(), // pane id -> when it last typed there (presence)
+      typedSaid: new Map(), // pane id -> when its typing there was last said
       subscribed: new Map(), // pane id -> { state: 'loading' | 'live', held, exit, project }
       pending: new Map(),
       flushTimer: null,
@@ -1466,12 +1528,22 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
       if (!subject || !subject.person) return false
       const e = access.trustPerson(subject.person)
       if (!e) return false
+      // One connection per trusted identity: this one stays.
+      const keep = connectionOf(subject.person)
+      for (const other of [...guests.values()]) if (other !== keep && other.state === 'joined' && other.person && other.person.trust === e.fp && keep) drop(other, 'replaced')
       notifyGuests()
       return true
     },
+    // No longer trusted: its people are removed (connected ones too): to come
+    // back, the host's yes again.
     untrust(id) {
       const fp = isTrustId(id) ? id.slice(2) : null
-      if (!fp || !access.untrust(fp)) return false
+      const r = fp ? access.untrust(fp) : null
+      if (!r) return false
+      for (const hash of r.people) {
+        const g = [...guests.values()].find((x) => x.person && x.person.hash === hash)
+        if (g) drop(g, 'removed')
+      }
       notifyGuests()
       return true
     },
@@ -1496,7 +1568,8 @@ export function createShareHost({ secret = null, hostName, callbacks, log = () =
         .map((p) => {
           const g = access.grantOf(p)
           const shared = sharedIds()
-          return { id: personId(p.hash), name: p.name, rights: cleanRights(g.rights), projects: g.projects.filter((x) => shared.has(x)), invite: access.viaOf(p), trusted: !!access.trustedOf(p), trustable: !!p.identity }
+          const t = access.trustedOf(p)
+          return { id: personId(p.hash), name: p.name, rights: cleanRights(g.rights), projects: g.projects.filter((x) => shared.has(x)), invite: access.viaOf(p), trusted: !!t, trustId: t ? trustId(t.fp) : null, trustable: !!p.identity }
         })
     },
     // Removes a guest let in, connected or not (its id from offlineGuests):

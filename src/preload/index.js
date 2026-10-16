@@ -718,6 +718,7 @@ const api = {
     leave: () => ipcRenderer.invoke('liveShare:leave'),
     open: ({ kind, agent, project } = {}) => ipcRenderer.invoke('liveShare:open', { kind, agent, project }),
     focus: (id) => ipcRenderer.send('liveShare:focus', typeof id === 'string' ? id : null),
+    requestDone: (request) => ipcRenderer.send('liveShare:requestDone', typeof request === 'string' ? request : ''),
     // Guest: a host's agent pane's conversation watched here (read only),
     // which comes with onChat.
     chatWatch: ({ id, on } = {}) => ipcRenderer.invoke('liveShare:chatWatch', { id, on: !!on }),
