@@ -572,6 +572,7 @@
     "accounts": {
       "actionFailed": "L'action sur le compte n'a pas pu être effectuée.",
       "systemDefault": "Valeur par défaut du système",
+      "systemTag": "Connexion du système",
       "status": {
         "ready": "Connecté",
         "missing": "Connexion requise",

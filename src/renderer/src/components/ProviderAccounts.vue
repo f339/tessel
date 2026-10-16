@@ -53,11 +53,13 @@ function rows(provider) {
           {
             ...provider.system,
             id: null,
-            // The main process names it in English: show it in the interface's language.
+            // Named by its address when known; else its own label, or "System
+            // default" (named in English by main) in the interface's language.
             label:
-              provider.system.label && provider.system.label !== 'System default' // i18n-ignore
+              provider.system.email ||
+              (provider.system.label && provider.system.label !== 'System default' // i18n-ignore
                 ? provider.system.label
-                : t('settings.accounts.systemDefault', 'System default'),
+                : t('settings.accounts.systemDefault', 'System default')),
             system: true
           }
         ]
@@ -469,6 +471,7 @@ onBeforeUnmount(() => {
             <span class="account-info">
               <span class="account-title"
                 ><span>{{ accountName(account) }}</span
+                ><span v-if="account.system && account.email" class="account-badge" data-test="account-system-tag">{{ t('settings.accounts.systemTag', 'System sign-in') }}</span
                 ><span v-if="selected(provider, account)" class="account-badge">{{ t('settings.accounts.forNewSessions', 'New sessions') }}</span></span
               >
               <span class="account-meta"
