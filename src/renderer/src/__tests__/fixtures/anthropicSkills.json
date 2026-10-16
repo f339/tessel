@@ -1,0 +1,887 @@
+{
+ "_about": "anthropics/skills as Tessel read it on 2026-10-16 (packageFromGithub): the list of its 20 skills, and the files (paths and sizes only) of its two biggest, claude-api and canvas-design. Their SKILL.md is not copied: the spec writes one.",
+ "list": {
+  "repo": "anthropics/skills",
+  "commit": "dbd4588f9e1033efb41dad4bef2f7947c8993d44",
+  "total": 20,
+  "candidates": [
+   {
+    "path": "skills/academy-guide",
+    "name": "academy-guide",
+    "description": "Stop and check this skill before finishing any reply to a question about how to use Claude or a Claude product — it recommends matching courses, tutorials, and use cases from Claude Academy (academy.claude.com), Anthropic's learning hub. Trigger on: \"how do I\", \"how can I\", \"getting started with\", \"what can Claude do\", \"teach me\", \"learn to use\"; questions about artifacts, projects, skills, plugins, connectors, MCP; requests about rolling Claude out to a team, class, or organization; and any ask for trainin",
+    "files": 2,
+    "bytes": 19100
+   },
+   {
+    "path": "skills/algorithmic-art",
+    "name": "algorithmic-art",
+    "description": "Creating algorithmic art using p5.js with seeded randomness and interactive parameter exploration. Use this when users request creating art using code, generative art, algorithmic art, flow fields, or particle systems. Create original algorithmic art rather than copying existing artists' work to avoid copyright violations.",
+    "files": 4,
+    "bytes": 59784
+   },
+   {
+    "path": "skills/brand-guidelines",
+    "name": "brand-guidelines",
+    "description": "Applies Anthropic's official brand colors and typography to any sort of artifact that may benefit from having Anthropic's look-and-feel. Use it when brand colors or style guidelines, visual formatting, or company design standards apply.",
+    "files": 2,
+    "bytes": 13580
+   },
+   {
+    "path": "skills/canvas-design",
+    "name": "canvas-design",
+    "description": "Create beautiful visual art in .png and .pdf documents using design philosophy. You should use this skill when the user asks to create a poster, piece of art, design, or other static piece. Create original visual designs, never copying existing artists' work to avoid copyright violations.",
+    "files": 83,
+    "bytes": 5554003
+   },
+   {
+    "path": "skills/claude-api",
+    "name": "claude-api",
+    "description": "Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration. TRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory;",
+    "files": 96,
+    "bytes": 2079868
+   },
+   {
+    "path": "skills/discernment-nudge",
+    "name": "discernment-nudge",
+    "description": "After you give a substantive answer or draft that the user may act on — advice or recommendations, drafted artifacts such as goals, plans, pitches, proposals, or emails, estimates or projections, analysis or interpretation of data, factual claims they may rely on, or a multi-step argument — invoke this skill BEFORE finalizing your reply and then, if it applies, append 2-3 short follow-up questions, each tied to something specific in what you just produced, that help the user check key facts, probe the reaso",
+    "files": 2,
+    "bytes": 21937
+   },
+   {
+    "path": "skills/doc-coauthoring",
+    "name": "doc-coauthoring",
+    "description": "Guide users through a structured workflow for co-authoring documentation. Use when user wants to write documentation, proposals, technical specs, decision docs, or similar structured content. This workflow helps users efficiently transfer context, refine content through iteration, and verify the doc works for readers. Trigger when user mentions writing docs, creating proposals, drafting specs, or similar documentation tasks.",
+    "files": 1,
+    "bytes": 15815
+   },
+   {
+    "path": "skills/docx",
+    "name": "docx",
+    "description": "Use this skill whenever the user wants to create, read, edit, or manipulate Word documents (.docx files) or Word templates (.dotx files). Triggers include: any mention of 'Word doc', 'word document', '.docx', '.dotx', or requests to produce professional documents with formatting like tables of contents, headings, page numbers, or letterheads. Also use when extracting or reorganizing content from .docx or .dotx files, inserting or replacing images in documents, performing find-and-replace in Word files, work",
+    "files": 61,
+    "bytes": 1128695
+   },
+   {
+    "path": "skills/frontend-design",
+    "name": "frontend-design",
+    "description": "Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults.",
+    "files": 2,
+    "bytes": 19564
+   },
+   {
+    "path": "skills/internal-comms",
+    "name": "internal-comms",
+    "description": "A set of resources to help me write all kinds of internal communications, using the formats that my company likes to use. Claude should use this skill whenever asked to write some sort of internal communications (status reports, leadership updates, 3P updates, company newsletters, FAQs, incident reports, project updates, etc.).",
+    "files": 6,
+    "bytes": 22393
+   },
+   {
+    "path": "skills/mcp-builder",
+    "name": "mcp-builder",
+    "description": "Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. Use when building MCP servers to integrate external APIs or services, whether in Python (FastMCP) or Node/TypeScript (MCP SDK).",
+    "files": 10,
+    "bytes": 121756
+   },
+   {
+    "path": "skills/pdf",
+    "name": "pdf",
+    "description": "Use this skill whenever the user wants to do anything with PDF files. This includes reading or extracting text/tables from PDFs, combining or merging multiple PDFs into one, splitting PDFs apart, rotating pages, adding watermarks, creating new PDFs, filling PDF forms, encrypting/decrypting PDFs, extracting images, and OCR on scanned PDFs to make them searchable. If the user mentions a .pdf file or asks to produce one, use this skill.",
+    "files": 12,
+    "bytes": 58692
+   },
+   {
+    "path": "skills/pptx",
+    "name": "pptx",
+    "description": "Use this skill any time a .pptx or .potx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx or .potx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates (.potx), layouts, speaker notes, or comments. Trigger whenever the user mentions",
+    "files": 56,
+    "bytes": 1139175
+   },
+   {
+    "path": "skills/skill-creator",
+    "name": "skill-creator",
+    "description": "Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy.",
+    "files": 18,
+    "bytes": 224992
+   },
+   {
+    "path": "skills/slack-gif-creator",
+    "name": "slack-gif-creator",
+    "description": "Knowledge and utilities for creating animated GIFs optimized for Slack. Provides constraints, validation tools, and animation concepts. Use when users request animated GIFs for Slack like \"make me a GIF of X doing Y for Slack.\"",
+    "files": 7,
+    "bytes": 43697
+   },
+   {
+    "path": "skills/theme-factory",
+    "name": "theme-factory",
+    "description": "Toolkit for styling artifacts with a theme. These artifacts can be slides, docs, reportings, HTML landing pages, etc. There are 10 pre-set themes with colors/fonts that you can apply to any artifact that has been creating, or can generate a new theme on-the-fly.",
+    "files": 13,
+    "bytes": 144094
+   },
+   {
+    "path": "skills/web-artifacts-builder",
+    "name": "web-artifacts-builder",
+    "description": "Suite of tools for creating elaborate, multi-component claude.ai HTML artifacts using modern frontend web technologies (React, Tailwind CSS, shadcn/ui). Use for complex artifacts requiring state management, routing, or shadcn/ui components - not for simple single-file HTML/JSX artifacts.",
+    "files": 5,
+    "bytes": 45840
+   },
+   {
+    "path": "skills/webapp-testing",
+    "name": "webapp-testing",
+    "description": "Toolkit for interacting with and testing local web applications using Playwright. Supports verifying frontend functionality, debugging UI behavior, capturing browser screenshots, and viewing browser logs.",
+    "files": 6,
+    "bytes": 22394
+   },
+   {
+    "path": "skills/xlsx",
+    "name": "xlsx",
+    "description": "Use this skill any time a spreadsheet file is the primary input or output. This means any task where the user wants to: open, read, edit, or fix an existing .xlsx, .xlsm, .xltx, .csv, or .tsv file (e.g., adding columns, computing formulas, formatting, charting, cleaning messy data); create a new spreadsheet from scratch or from other data sources; or convert between tabular file formats. Trigger especially when the user references a spreadsheet file by name or path — even casually (like \"the xlsx in my down",
+    "files": 53,
+    "bytes": 1102893
+   },
+   {
+    "path": "template",
+    "name": "template-skill",
+    "description": "Replace with description of the skill and when Claude should use it.",
+    "files": 1,
+    "bytes": 140
+   }
+  ]
+ },
+ "packages": {
+  "skills/claude-api": {
+   "name": "claude-api",
+   "description": "Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration. TRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory;",
+   "files": [
+    [
+     "LICENSE.txt",
+     11345
+    ],
+    [
+     "SKILL.md",
+     105146
+    ],
+    [
+     "csharp/claude-api/README.md",
+     18933
+    ],
+    [
+     "csharp/claude-api/batches.md",
+     413
+    ],
+    [
+     "csharp/claude-api/files-api.md",
+     900
+    ],
+    [
+     "csharp/claude-api/streaming.md",
+     787
+    ],
+    [
+     "csharp/claude-api/tool-use.md",
+     7623
+    ],
+    [
+     "curl/examples.md",
+     9714
+    ],
+    [
+     "curl/managed-agents.md",
+     10788
+    ],
+    [
+     "go/claude-api/README.md",
+     8477
+    ],
+    [
+     "go/claude-api/files-api.md",
+     936
+    ],
+    [
+     "go/claude-api/streaming.md",
+     1026
+    ],
+    [
+     "go/claude-api/tool-use.md",
+     10018
+    ],
+    [
+     "go/managed-agents/README.md",
+     22460
+    ],
+    [
+     "java/claude-api/README.md",
+     11946
+    ],
+    [
+     "java/claude-api/files-api.md",
+     1198
+    ],
+    [
+     "java/claude-api/streaming.md",
+     655
+    ],
+    [
+     "java/claude-api/tool-use.md",
+     11134
+    ],
+    [
+     "java/managed-agents/README.md",
+     20465
+    ],
+    [
+     "php/claude-api/README.md",
+     6554
+    ],
+    [
+     "php/claude-api/batches.md",
+     447
+    ],
+    [
+     "php/claude-api/files-api.md",
+     476
+    ],
+    [
+     "php/claude-api/streaming.md",
+     682
+    ],
+    [
+     "php/claude-api/tool-use.md",
+     9722
+    ],
+    [
+     "php/managed-agents/README.md",
+     16555
+    ],
+    [
+     "python/claude-api/README.md",
+     20623
+    ],
+    [
+     "python/claude-api/batches.md",
+     5723
+    ],
+    [
+     "python/claude-api/files-api.md",
+     4499
+    ],
+    [
+     "python/claude-api/sdk-upgrade.md",
+     28760
+    ],
+    [
+     "python/claude-api/streaming.md",
+     11940
+    ],
+    [
+     "python/claude-api/tool-use.md",
+     21411
+    ],
+    [
+     "python/managed-agents/README.md",
+     14823
+    ],
+    [
+     "ruby/claude-api/README.md",
+     4843
+    ],
+    [
+     "ruby/claude-api/streaming.md",
+     235
+    ],
+    [
+     "ruby/claude-api/tool-use.md",
+     2688
+    ],
+    [
+     "ruby/managed-agents/README.md",
+     12201
+    ],
+    [
+     "shared/admin-api.md",
+     11606
+    ],
+    [
+     "shared/agent-design.md",
+     8736
+    ],
+    [
+     "shared/anthropic-cli.md",
+     23999
+    ],
+    [
+     "shared/claude-platform-on-aws.md",
+     4420
+    ],
+    [
+     "shared/cost-optimization.md",
+     58448
+    ],
+    [
+     "shared/error-codes.md",
+     20796
+    ],
+    [
+     "shared/evals/build-eval.md",
+     54835
+    ],
+    [
+     "shared/evals/cost-hillclimb.md",
+     31711
+    ],
+    [
+     "shared/evals/eval-audit.md",
+     27892
+    ],
+    [
+     "shared/evals/eval-hillclimb.md",
+     69153
+    ],
+    [
+     "shared/evals/report/SCHEMA.md",
+     16121
+    ],
+    [
+     "shared/evals/report/build-report-lite.mjs",
+     27329
+    ],
+    [
+     "shared/evals/report/runner-scaffold.mjs",
+     33142
+    ],
+    [
+     "shared/live-sources.md",
+     17732
+    ],
+    [
+     "shared/managed-agents-api-reference.md",
+     35296
+    ],
+    [
+     "shared/managed-agents-client-patterns.md",
+     12095
+    ],
+    [
+     "shared/managed-agents-core.md",
+     33515
+    ],
+    [
+     "shared/managed-agents-environments.md",
+     14234
+    ],
+    [
+     "shared/managed-agents-events.md",
+     26015
+    ],
+    [
+     "shared/managed-agents-memory.md",
+     11362
+    ],
+    [
+     "shared/managed-agents-multiagent.md",
+     66616
+    ],
+    [
+     "shared/managed-agents-onboarding-from-quickstart.md",
+     19798
+    ],
+    [
+     "shared/managed-agents-onboarding-from-url.md",
+     32707
+    ],
+    [
+     "shared/managed-agents-onboarding.md",
+     16787
+    ],
+    [
+     "shared/managed-agents-outcomes.md",
+     8960
+    ],
+    [
+     "shared/managed-agents-overview.md",
+     14571
+    ],
+    [
+     "shared/managed-agents-quickstarts/bug-hunter.md",
+     8096
+    ],
+    [
+     "shared/managed-agents-quickstarts/contract-tracker.md",
+     1806
+    ],
+    [
+     "shared/managed-agents-quickstarts/data-analyst.md",
+     1561
+    ],
+    [
+     "shared/managed-agents-quickstarts/deep-researcher.md",
+     2430
+    ],
+    [
+     "shared/managed-agents-quickstarts/explainer-video-maker.md",
+     4886
+    ],
+    [
+     "shared/managed-agents-quickstarts/field-monitor.md",
+     2105
+    ],
+    [
+     "shared/managed-agents-quickstarts/incident-commander.md",
+     1723
+    ],
+    [
+     "shared/managed-agents-quickstarts/performance-tuner.md",
+     11394
+    ],
+    [
+     "shared/managed-agents-quickstarts/sprint-retro-facilitator.md",
+     2091
+    ],
+    [
+     "shared/managed-agents-quickstarts/structured-extractor.md",
+     1541
+    ],
+    [
+     "shared/managed-agents-quickstarts/support-agent.md",
+     1481
+    ],
+    [
+     "shared/managed-agents-quickstarts/support-to-eng-escalator.md",
+     1842
+    ],
+    [
+     "shared/managed-agents-quickstarts/watchlist-scanner.md",
+     5642
+    ],
+    [
+     "shared/managed-agents-scheduled-deployments.md",
+     9561
+    ],
+    [
+     "shared/managed-agents-self-hosted-sandboxes.md",
+     27926
+    ],
+    [
+     "shared/managed-agents-tools.md",
+     37869
+    ],
+    [
+     "shared/managed-agents-webhooks.md",
+     11321
+    ],
+    [
+     "shared/model-migration.md",
+     346255
+    ],
+    [
+     "shared/models.md",
+     17502
+    ],
+    [
+     "shared/platform-availability.md",
+     7415
+    ],
+    [
+     "shared/preserved-thinking-migration.md",
+     64049
+    ],
+    [
+     "shared/preserved-thinking-migration/causes.md",
+     39705
+    ],
+    [
+     "shared/preserved-thinking-migration/drop_block_probe.py",
+     66582
+    ],
+    [
+     "shared/preserved-thinking-migration/prefix_diff.py",
+     94008
+    ],
+    [
+     "shared/prompt-audit.md",
+     49344
+    ],
+    [
+     "shared/prompt-caching.md",
+     33116
+    ],
+    [
+     "shared/token-counting.md",
+     1603
+    ],
+    [
+     "shared/tool-use-concepts.md",
+     44359
+    ],
+    [
+     "typescript/claude-api/README.md",
+     15833
+    ],
+    [
+     "typescript/claude-api/batches.md",
+     2594
+    ],
+    [
+     "typescript/claude-api/files-api.md",
+     2384
+    ],
+    [
+     "typescript/claude-api/streaming.md",
+     9514
+    ],
+    [
+     "typescript/claude-api/tool-use.md",
+     24295
+    ],
+    [
+     "typescript/managed-agents/README.md",
+     14013
+    ]
+   ],
+   "scripts": [
+    "shared/evals/report/build-report-lite.mjs",
+    "shared/evals/report/runner-scaffold.mjs",
+    "shared/preserved-thinking-migration/drop_block_probe.py",
+    "shared/preserved-thinking-migration/prefix_diff.py"
+   ]
+  },
+  "skills/canvas-design": {
+   "name": "canvas-design",
+   "description": "Create beautiful visual art in .png and .pdf documents using design philosophy. You should use this skill when the user asks to create a poster, piece of art, design, or other static piece. Create original visual designs, never copying existing artists' work to avoid copyright violations.",
+   "files": [
+    [
+     "LICENSE.txt",
+     11345
+    ],
+    [
+     "SKILL.md",
+     11939
+    ],
+    [
+     "canvas-fonts/ArsenalSC-OFL.txt",
+     4373
+    ],
+    [
+     "canvas-fonts/ArsenalSC-Regular.ttf",
+     165848
+    ],
+    [
+     "canvas-fonts/BigShoulders-Bold.ttf",
+     94528
+    ],
+    [
+     "canvas-fonts/BigShoulders-OFL.txt",
+     4397
+    ],
+    [
+     "canvas-fonts/BigShoulders-Regular.ttf",
+     94396
+    ],
+    [
+     "canvas-fonts/Boldonse-OFL.txt",
+     4390
+    ],
+    [
+     "canvas-fonts/Boldonse-Regular.ttf",
+     77168
+    ],
+    [
+     "canvas-fonts/BricolageGrotesque-Bold.ttf",
+     90952
+    ],
+    [
+     "canvas-fonts/BricolageGrotesque-OFL.txt",
+     4403
+    ],
+    [
+     "canvas-fonts/BricolageGrotesque-Regular.ttf",
+     90920
+    ],
+    [
+     "canvas-fonts/CrimsonPro-Bold.ttf",
+     107352
+    ],
+    [
+     "canvas-fonts/CrimsonPro-Italic.ttf",
+     108828
+    ],
+    [
+     "canvas-fonts/CrimsonPro-OFL.txt",
+     4394
+    ],
+    [
+     "canvas-fonts/CrimsonPro-Regular.ttf",
+     106696
+    ],
+    [
+     "canvas-fonts/DMMono-OFL.txt",
+     4392
+    ],
+    [
+     "canvas-fonts/DMMono-Regular.ttf",
+     48852
+    ],
+    [
+     "canvas-fonts/EricaOne-OFL.txt",
+     4410
+    ],
+    [
+     "canvas-fonts/EricaOne-Regular.ttf",
+     24872
+    ],
+    [
+     "canvas-fonts/GeistMono-Bold.ttf",
+     78304
+    ],
+    [
+     "canvas-fonts/GeistMono-OFL.txt",
+     4388
+    ],
+    [
+     "canvas-fonts/GeistMono-Regular.ttf",
+     78232
+    ],
+    [
+     "canvas-fonts/Gloock-OFL.txt",
+     4381
+    ],
+    [
+     "canvas-fonts/Gloock-Regular.ttf",
+     95156
+    ],
+    [
+     "canvas-fonts/IBMPlexMono-Bold.ttf",
+     136008
+    ],
+    [
+     "canvas-fonts/IBMPlexMono-OFL.txt",
+     4363
+    ],
+    [
+     "canvas-fonts/IBMPlexMono-Regular.ttf",
+     133796
+    ],
+    [
+     "canvas-fonts/IBMPlexSerif-Bold.ttf",
+     161000
+    ],
+    [
+     "canvas-fonts/IBMPlexSerif-BoldItalic.ttf",
+     169840
+    ],
+    [
+     "canvas-fonts/IBMPlexSerif-Italic.ttf",
+     170004
+    ],
+    [
+     "canvas-fonts/IBMPlexSerif-Regular.ttf",
+     160380
+    ],
+    [
+     "canvas-fonts/InstrumentSans-Bold.ttf",
+     68084
+    ],
+    [
+     "canvas-fonts/InstrumentSans-BoldItalic.ttf",
+     70004
+    ],
+    [
+     "canvas-fonts/InstrumentSans-Italic.ttf",
+     69900
+    ],
+    [
+     "canvas-fonts/InstrumentSans-OFL.txt",
+     4403
+    ],
+    [
+     "canvas-fonts/InstrumentSans-Regular.ttf",
+     68028
+    ],
+    [
+     "canvas-fonts/InstrumentSerif-Italic.ttf",
+     70868
+    ],
+    [
+     "canvas-fonts/InstrumentSerif-Regular.ttf",
+     69312
+    ],
+    [
+     "canvas-fonts/Italiana-OFL.txt",
+     4394
+    ],
+    [
+     "canvas-fonts/Italiana-Regular.ttf",
+     27184
+    ],
+    [
+     "canvas-fonts/JetBrainsMono-Bold.ttf",
+     114828
+    ],
+    [
+     "canvas-fonts/JetBrainsMono-OFL.txt",
+     4399
+    ],
+    [
+     "canvas-fonts/JetBrainsMono-Regular.ttf",
+     114904
+    ],
+    [
+     "canvas-fonts/Jura-Light.ttf",
+     154308
+    ],
+    [
+     "canvas-fonts/Jura-Medium.ttf",
+     154488
+    ],
+    [
+     "canvas-fonts/Jura-OFL.txt",
+     4380
+    ],
+    [
+     "canvas-fonts/LibreBaskerville-OFL.txt",
+     4449
+    ],
+    [
+     "canvas-fonts/LibreBaskerville-Regular.ttf",
+     147584
+    ],
+    [
+     "canvas-fonts/Lora-Bold.ttf",
+     133828
+    ],
+    [
+     "canvas-fonts/Lora-BoldItalic.ttf",
+     140332
+    ],
+    [
+     "canvas-fonts/Lora-Italic.ttf",
+     139328
+    ],
+    [
+     "canvas-fonts/Lora-OFL.txt",
+     4423
+    ],
+    [
+     "canvas-fonts/Lora-Regular.ttf",
+     133888
+    ],
+    [
+     "canvas-fonts/NationalPark-Bold.ttf",
+     79208
+    ],
+    [
+     "canvas-fonts/NationalPark-OFL.txt",
+     4399
+    ],
+    [
+     "canvas-fonts/NationalPark-Regular.ttf",
+     76424
+    ],
+    [
+     "canvas-fonts/NothingYouCouldDo-OFL.txt",
+     4363
+    ],
+    [
+     "canvas-fonts/NothingYouCouldDo-Regular.ttf",
+     32020
+    ],
+    [
+     "canvas-fonts/Outfit-Bold.ttf",
+     55392
+    ],
+    [
+     "canvas-fonts/Outfit-OFL.txt",
+     4389
+    ],
+    [
+     "canvas-fonts/Outfit-Regular.ttf",
+     54912
+    ],
+    [
+     "canvas-fonts/PixelifySans-Medium.ttf",
+     51072
+    ],
+    [
+     "canvas-fonts/PixelifySans-OFL.txt",
+     4395
+    ],
+    [
+     "canvas-fonts/PoiretOne-OFL.txt",
+     4366
+    ],
+    [
+     "canvas-fonts/PoiretOne-Regular.ttf",
+     45244
+    ],
+    [
+     "canvas-fonts/RedHatMono-Bold.ttf",
+     34420
+    ],
+    [
+     "canvas-fonts/RedHatMono-OFL.txt",
+     4394
+    ],
+    [
+     "canvas-fonts/RedHatMono-Regular.ttf",
+     34488
+    ],
+    [
+     "canvas-fonts/Silkscreen-OFL.txt",
+     4394
+    ],
+    [
+     "canvas-fonts/Silkscreen-Regular.ttf",
+     31960
+    ],
+    [
+     "canvas-fonts/SmoochSans-Medium.ttf",
+     59704
+    ],
+    [
+     "canvas-fonts/SmoochSans-OFL.txt",
+     4396
+    ],
+    [
+     "canvas-fonts/Tektur-Medium.ttf",
+     76248
+    ],
+    [
+     "canvas-fonts/Tektur-OFL.txt",
+     4385
+    ],
+    [
+     "canvas-fonts/Tektur-Regular.ttf",
+     75604
+    ],
+    [
+     "canvas-fonts/WorkSans-Bold.ttf",
+     191304
+    ],
+    [
+     "canvas-fonts/WorkSans-BoldItalic.ttf",
+     175772
+    ],
+    [
+     "canvas-fonts/WorkSans-Italic.ttf",
+     174280
+    ],
+    [
+     "canvas-fonts/WorkSans-OFL.txt",
+     4397
+    ],
+    [
+     "canvas-fonts/WorkSans-Regular.ttf",
+     188916
+    ],
+    [
+     "canvas-fonts/YoungSerif-OFL.txt",
+     4398
+    ],
+    [
+     "canvas-fonts/YoungSerif-Regular.ttf",
+     105136
+    ]
+   ],
+   "scripts": []
+  }
+ }
+}

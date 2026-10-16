@@ -1,3 +1,7 @@
+/* Settings lists (rows that open their details), shared by the Settings
+   pages: components/settings/settingsList.css. */
+@import './components/settings/settingsList.css';
+
 * {
   box-sizing: border-box;
 }
@@ -16,7 +20,7 @@
   --danger: #e5484d;
   --text: #d6d9df;
   --text-strong: #f1f3f6;
-  --text-dim: #7f8795;
+  --text-dim: #8a92a0;
   --radius: 7px;
 }
 
@@ -2770,6 +2774,142 @@ kbd {
   filter: brightness(1.1);
 }
 
+/* Keyboard focus: the same 2 px accent ring as the Settings rows and
+   switches, on the buttons and segments that had none. */
+.exit-btn:focus-visible,
+.launch-seg-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A smaller one, for lists and their details: its text stays on one line
+   and it never shrinks (the group it is in moves to the next line). */
+.exit-btn.small {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.exit-btn.small svg {
+  flex: 0 0 auto;
+}
+
+/* Removes or signs out: always asks first (askConfirm). */
+.exit-btn.danger {
+  color: #ffb4b6;
+}
+
+.exit-btn.danger:hover {
+  background: color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+/* Small tags: a state, a scope, a version, an origin. One line each; one
+   longer than the line ends in an ellipsis (give it a title). Plain is
+   neutral; the variants color it. */
+.tag {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 400;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Where something applies (All projects, This project, a version). */
+.tag-scope {
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  line-height: 14px;
+}
+
+.tag-ok {
+  background: color-mix(in srgb, #3fb950 20%, transparent);
+  color: #a8e6b4;
+}
+
+.tag-info {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: #cfe0ff;
+}
+
+.tag-purple {
+  background: color-mix(in srgb, #a371f7 22%, transparent);
+  color: #d9c7ff;
+}
+
+.tag-warn {
+  background: color-mix(in srgb, #d29922 24%, transparent);
+  color: #ffd98f;
+}
+
+.tag-danger {
+  background: color-mix(in srgb, var(--danger) 24%, transparent);
+  color: #ffb4b6;
+}
+
+/* Update available: the one tag that asks for an action. */
+.tag-update {
+  background: color-mix(in srgb, #3fb950 30%, transparent);
+  color: #c8f5d1;
+  font-weight: 600;
+}
+
+/* Turned off. */
+.tag-off {
+  background: color-mix(in srgb, var(--text-dim) 18%, transparent);
+}
+
+/* Chips: filters and multi-selects, pressed while on; .chip-count is a
+   count inside one. */
+.chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chip:hover {
+  color: var(--text-strong);
+}
+
+.chip.on {
+  border-color: transparent;
+  background: var(--surface-3);
+  color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chip-count {
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
 /* An agent not installed on the pane's SSH host: its card over the shell. */
 .missing-agent {
   position: absolute;
@@ -3022,13 +3162,19 @@ kbd {
 }
 
 .set-side {
-  flex: 0 0 290px;
+  flex: 0 0 clamp(200px, 24vw, 290px);
   display: flex;
   flex-direction: column;
   padding: 14px 12px 18px;
   overflow-y: auto;
   background: var(--chrome);
   border-right: 1px solid var(--border);
+}
+
+/* Never squeezed in a short window: the sidebar scrolls instead (the
+   search box once shrank to a sliver under ~900 px of height). */
+.set-side > * {
+  flex-shrink: 0;
 }
 
 .set-back {
@@ -3152,6 +3298,11 @@ kbd {
   padding: 34px 40px 60px;
 }
 
+/* Skills: room for a repository's skills beside the one opened (Add). */
+.set-content.set-content-wide {
+  max-width: 1180px;
+}
+
 .set-page-head h2 {
   margin: 0;
   color: var(--text-strong);
@@ -3184,6 +3335,18 @@ kbd {
   font-size: 13px;
 }
 
+/* How many rows the search shows, and its words in them. */
+.set-count {
+  margin: 0 0 16px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+::highlight(settings-search) {
+  background-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  color: var(--text-strong);
+}
+
 .set-group {
   margin-bottom: 22px;
 }
@@ -3195,11 +3358,20 @@ kbd {
   font-weight: 600;
 }
 
+/* A sentence about the whole group, under its title, outside the card. */
+.set-group-desc {
+  margin: -4px 0 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .set-card {
   padding: 2px 18px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface-2);
+  container-type: inline-size;
 }
 
 .set-card.set-card-pad {
@@ -3225,6 +3397,19 @@ kbd {
 
 .set-card .set-row > :not(.set-label) {
   flex: 0 0 auto;
+}
+
+/* A narrow card (a small window, a long French label): a control that no
+   longer fits beside its label goes under it (after the rules above,
+   which it overrides). */
+@container (max-width: 520px) {
+  .set-card .set-row {
+    flex-wrap: wrap;
+  }
+
+  .set-card .set-row > .set-label {
+    flex: 1 1 240px;
+  }
 }
 
 .set-card > .set-row:last-child,
@@ -3259,10 +3444,6 @@ kbd {
 }
 
 @media (max-width: 760px) {
-  .set-side {
-    flex-basis: 210px;
-  }
-
   .set-content {
     padding: 24px 20px 40px;
   }
@@ -3303,6 +3484,63 @@ label.set-row {
 .set-hint {
   color: var(--text-dim);
   font-size: 11px;
+}
+
+/* A hint longer than a line: its first line, then the rest behind a
+   disclosure (<details class="set-more"><summary>Learn more</summary>…). */
+.set-more {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.set-more > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+}
+
+.set-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.set-more > summary::before {
+  content: '';
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  border-left: 4.5px solid currentColor;
+  transition: transform 0.12s ease;
+}
+
+.set-more[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.set-more > summary:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.set-more > :not(summary) {
+  margin: 4px 0 0;
+}
+
+/* A command in a hint: one line each, never cut in two. */
+.set-code {
+  display: inline-block;
+  margin: 2px 6px 0 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--text);
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 17px;
+  white-space: nowrap;
 }
 
 /* A setting's risk, shown while it is on. */
@@ -3480,6 +3718,59 @@ label.set-row {
   align-items: center;
   justify-content: space-between;
   margin-top: 14px;
+}
+
+/* A message in a page: .info (blue), .warn (amber) or .danger (red), with
+   an optional icon first. One human sentence; a raw error goes behind a
+   Details disclosure, never in the callout itself. */
+.set-callout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin: 8px 0;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.set-callout > svg {
+  flex: 0 0 auto;
+}
+
+.set-callout-text {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.set-callout.info {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.set-callout.info > svg {
+  color: var(--accent);
+}
+
+.set-callout.warn {
+  border-color: transparent;
+  background: color-mix(in srgb, #d29922 14%, transparent);
+}
+
+.set-callout.warn > svg {
+  color: var(--warn);
+}
+
+.set-callout.danger {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+.set-callout.danger > svg {
+  color: #ff9b9e;
 }
 
 

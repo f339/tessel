@@ -156,6 +156,27 @@ describe('Settings > SSH Hosts', () => {
     w.unmount()
   })
 
+  it('loading until the first read answers, then its error with Retry: never "No SSH targets" meanwhile', async () => {
+    remoteHostsState.loaded = false
+    remoteHostsState.error = ''
+    let answer
+    api.list = vi.fn(() => new Promise((resolve) => (answer = resolve)))
+    const w = mount(RemoteHostsSettings)
+    await flushPromises()
+    expect(w.find('[data-test="panel-loading"]').exists()).toBe(true)
+    expect(w.text()).not.toContain('No SSH targets configured.')
+    answer({ ok: false })
+    await flushPromises()
+    expect(w.get('[data-test="panel-error-text"]').text()).toBe('Failed to load SSH targets')
+    expect(w.text()).not.toContain('No SSH targets configured.')
+    api.list = vi.fn(async () => ({ ok: true, targets: [], states: {} }))
+    await w.get('[data-test="panel-retry"]').trigger('click')
+    await flushPromises()
+    expect(api.list).toHaveBeenCalledTimes(1)
+    expect(w.text()).toContain('No SSH targets configured.')
+    w.unmount()
+  })
+
   it('shows the empty state', async () => {
     api.state.targets = []
     const w = mount(RemoteHostsSettings)
@@ -253,7 +274,7 @@ describe('Settings > SSH Hosts', () => {
     const w = mount(RemoteHostsSettings, { attachTo: document.body })
     await flushPromises()
     await w.findAll('[aria-label="Remove target"]')[0].trigger('click')
-    expect(w.text()).toContain('Remove SSH Target')
+    expect(w.text()).toContain('Remove SSH target')
     const confirm = w.findAll('.confirm-btn').find((b) => b.text() === 'Remove')
     await confirm.trigger('click')
     await flushPromises()

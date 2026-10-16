@@ -1,6 +1,5 @@
 {
   "remote": {
-    "group": "Hôtes distants",
     "page": {
       "title": "Hôtes SSH",
       "desc": "Utilisez des machines existantes via SSH pour les fichiers, les terminaux, Git et les espaces de travail."

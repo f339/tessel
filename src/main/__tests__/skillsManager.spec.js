@@ -399,6 +399,94 @@ describe('install from GitHub', () => {
     await expect(packageFromGithub('big4/r', { fetchFn: fakeFetch(gz, { status: 404 }) })).rejects.toMatchObject({ code: 'SKILL_NOT_FOUND' })
   })
 
+  it('a skill picked from a list comes from the commit the list was read at, even once the branch has moved on', async () => {
+    const first = 'b'.repeat(40)
+    const moved = 'c'.repeat(40)
+    const repo = (commit, text) =>
+      tarGz(
+        [
+          { path: 'skills/pdf/SKILL.md', text: skillMd('pdf', text) },
+          { path: 'skills/docx/SKILL.md', text: skillMd('docx', 'Word.') }
+        ],
+        { commit }
+      )
+    const archives = { HEAD: repo(first, 'Old.'), [first]: repo(first, 'Old.') }
+    const calls = []
+    const fetchFn = async (u) => {
+      calls.push(u)
+      const gz = archives[/archive\/(\w+)\.tar\.gz$/.exec(u)[1]]
+      return { ok: true, status: 200, url: 'https://codeload.github.com/pin/r/tar.gz/x', headers: new Headers(), body: null, arrayBuffer: async () => gz.buffer.slice(gz.byteOffset, gz.byteOffset + gz.length) }
+    }
+    const list = await packageFromGithub('pin/r', { fetchFn, fresh: true })
+    expect(list.commit).toBe(first)
+    expect(list.total).toBe(2)
+    // The archive kept: read again for each skill picked at that commit.
+    const pdf = await packageFromGithub('pin/r', { fetchFn, pick: 'skills/pdf', commit: first })
+    expect(calls).toHaveLength(1)
+    expect(pdf.description).toBe('Old.')
+    // Later (the archive kept is gone, the branch has moved on): that commit
+    // is downloaded, never the branch; the skill still follows the branch for
+    // its updates (no ref recorded).
+    archives.HEAD = repo(moved, 'New.')
+    await packageFromGithub('other/r', { fetchFn: fakeFetch(tarGz([{ path: 'SKILL.md', text: skillMd('x', 'X.') }])) }) // another repository read meanwhile
+    const again = await packageFromGithub('pin/r', { fetchFn, pick: 'skills/pdf', commit: first })
+    expect(calls.at(-1)).toBe(`https://github.com/pin/r/archive/${first}.tar.gz`)
+    expect(again.description).toBe('Old.')
+    expect(again.source).toMatchObject({ ref: null, commit: first, path: 'skills/pdf' })
+    // No commit given (a lookup): the branch as it is now.
+    const now = await packageFromGithub('pin/r', { fetchFn, fresh: true, pick: 'skills/pdf' })
+    expect(now.description).toBe('New.')
+  })
+
+  it('a download that stalls is given up, with a sentence saying so', async () => {
+    const fetchFn = async (u, { signal }) => ({
+      ok: true,
+      status: 200,
+      url: 'https://codeload.github.com/slow/r/tar.gz/HEAD',
+      headers: new Headers(),
+      body: {
+        getReader: () => ({
+          read: () =>
+            new Promise((resolve, reject) => {
+              // One chunk, then nothing: the stall timer fires.
+              if (!fetchFn.sent) {
+                fetchFn.sent = true
+                return resolve({ done: false, value: new Uint8Array(10) })
+              }
+              signal.addEventListener('abort', () => reject(Object.assign(new Error('This operation was aborted'), { name: 'AbortError' })))
+            })
+        })
+      }
+    })
+    await expect(packageFromGithub('slow/r', { fetchFn, fresh: true, timeouts: { stall: 30, total: 5000 } })).rejects.toThrow(/^Could not download it: This operation was aborted/)
+  })
+
+  it('the biggest skills of anthropics/skills (their real files) are listed, picked and installed within the caps', async () => {
+    const real = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'src/renderer/src/__tests__/fixtures/anthropicSkills.json'), 'utf8'))
+    const entries = []
+    for (const [dir, p] of Object.entries(real.packages))
+      for (const [file, size] of p.files) entries.push({ path: `${dir}/${file}`, text: file === 'SKILL.md' ? skillMd(p.name, 'Big.').padEnd(size, ' ') : 'x'.repeat(size) })
+    const gz = tarGz(entries, { commit: real.list.commit })
+    const fetchFn = fakeFetch(gz)
+    const list = await packageFromGithub('anthropics-big/skills', { fetchFn, fresh: true })
+    for (const [dir, p] of Object.entries(real.packages))
+      expect(list.candidates.find((c) => c.path === dir)).toMatchObject({ files: p.files.length, bytes: p.files.reduce((n, [, size]) => n + size, 0) })
+    for (const [dir, p] of Object.entries(real.packages)) {
+      // Under the caps: picked whole...
+      expect(p.files.length).toBeLessThan(SKILL_CAPS.files)
+      const pkg = await packageFromGithub('anthropics-big/skills', { fetchFn, pick: dir, commit: real.list.commit })
+      expect(pkg.files).toHaveLength(p.files.length)
+      expect(pkg.totalBytes).toBeLessThan(SKILL_CAPS.bytes)
+      // ...and installed, for two agents, every file in place.
+      const res = await installSkill({ id: pkg.id, agents: ['claude', 'codex'], scope: 'user', home, env })
+      expect(res.results.map((r) => r.ok)).toEqual([true, true])
+      const dest = path.join(home, '.claude', 'skills', p.name)
+      const [last, size] = p.files.at(-1)
+      expect(fs.statSync(path.join(dest, ...last.split('/'))).size).toBe(size)
+    }
+    expect(fetchFn.calls).toHaveLength(1)
+  })
+
   it('reads the tar fixture as tar', () => {
     const gz = tarGz([{ path: 'a.txt', text: 'hi' }])
     const { entries, comment } = readTar(zlib.gunzipSync(gz))

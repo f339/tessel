@@ -7,6 +7,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Plus, Upload, Server, ServerOff, Pencil, Trash2, MonitorSmartphone, LoaderCircle } from 'lucide-vue-next'
 import ConfirmDialog from '../ConfirmDialog.vue'
 import RemoteHostForm from './RemoteHostForm.vue'
+import PanelState from '../ui/PanelState.vue'
 import { t } from '../../i18n'
 import {
   remoteHostsState,
@@ -28,6 +29,20 @@ import {
 import './remoteHosts.css'
 
 const targets = computed(() => remoteHostsState.targets)
+// The first read of the targets: loading until it answers (never "No SSH
+// targets configured." meanwhile), then its error with Retry if it failed.
+const hasApi = !!(typeof window !== 'undefined' && window.shellApi && window.shellApi.remoteHosts)
+const listLoading = computed(() => hasApi && !remoteHostsState.loaded && !targets.value.length)
+const listFailed = computed(() => !!remoteHostsState.error && !targets.value.length)
+const retrying = ref(false)
+async function retryList() {
+  retrying.value = true
+  try {
+    await refreshRemoteHosts()
+  } finally {
+    retrying.value = false
+  }
+}
 const formOpen = ref(false)
 const editingId = ref(null)
 const formInitial = ref(emptyForm())
@@ -216,15 +231,17 @@ function subtitle(target) {
         </button>
         <button type="button" class="rh-btn" data-test="remote-add" @click="openAdd">
           <Plus :size="12" aria-hidden="true" />
-          {{ t('remote.pane.addTarget', 'Add Target') }}
+          {{ t('remote.pane.addTarget', 'Add target') }}
         </button>
       </div>
     </div>
 
     <p v-if="notice.text" class="rh-notice" :class="notice.tone" role="status">{{ notice.text }}</p>
-    <p v-if="remoteHostsState.error" class="rh-notice bad" role="alert">{{ remoteHostsState.error }}</p>
+    <p v-if="remoteHostsState.error && !listFailed" class="rh-notice bad" role="alert">{{ remoteHostsState.error }}</p>
 
-    <div v-if="!targets.length" class="rh-empty">{{ t('remote.pane.empty', 'No SSH targets configured.') }}</div>
+    <PanelState v-if="listLoading" :rows="2" />
+    <PanelState v-else-if="listFailed" kind="error" :text="remoteHostsState.error" :busy="retrying" @retry="retryList" />
+    <div v-else-if="!targets.length" class="rh-empty">{{ t('remote.pane.empty', 'No SSH targets configured.') }}</div>
     <div v-else class="rh-list">
       <div
         v-for="target in targets"
@@ -318,7 +335,7 @@ function subtitle(target) {
     />
     <ConfirmDialog
       v-if="pendingRemove"
-      :title="t('remote.remove.title', 'Remove SSH Target')"
+      :title="t('remote.remove.title', 'Remove SSH target')"
       :text="t('remote.remove.description', 'This will remove the target and end any active remote terminals.') + ' ' + pendingRemove.label"
       :confirm-label="t('remote.remove.confirm', 'Remove')"
       danger

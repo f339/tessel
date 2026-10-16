@@ -861,7 +861,7 @@ describe('agent browser: helpers', () => {
 
   // M5: the shared cookie jar is said plainly.
   it('the setting says agents use the sites you are signed into (EN and FR)', () => {
-    const vue = fs.readFileSync(join(__dirname, '..', '..', 'renderer', 'src', 'components', 'SettingsDialog.vue'), 'utf8')
+    const vue = fs.readFileSync(join(__dirname, '..', '..', 'renderer', 'src', 'components', 'settings', 'SettingsAgents.vue'), 'utf8')
     expect(vue).toContain("All pages share the browser\\'s cookies: agents can use the sites you are signed into in Tessel\\'s browser.")
     const fr = JSON.parse(fs.readFileSync(join(__dirname, '..', '..', 'renderer', 'src', 'i18n', 'locales', 'fr', 'settings.json'), 'utf8'))
     expect(fr.settings.agents.browserHint).toMatch(/cookies du navigateur : les agents peuvent utiliser les sites auxquels vous êtes connecté/)
