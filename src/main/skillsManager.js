@@ -512,15 +512,25 @@ export function parseGithubSpec(input) {
 }
 
 // The archive, with a cap on its size and a check of where it came from.
-async function download(url, fetchFn, caps) {
+// Given up when GitHub sends nothing for `stall` ms, or after `total` ms in
+// all: a big repository on a slow connection can take minutes, a stalled one
+// should not keep the window waiting.
+export const DOWNLOAD_TIMEOUTS = { stall: 45000, total: 5 * 60 * 1000 }
+async function download(url, fetchFn, caps, timeouts = DOWNLOAD_TIMEOUTS) {
   const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), 60000)
+  let idle = setTimeout(() => ctrl.abort(), timeouts.stall)
+  const timer = setTimeout(() => ctrl.abort(), timeouts.total)
+  const alive = () => {
+    clearTimeout(idle)
+    idle = setTimeout(() => ctrl.abort(), timeouts.stall)
+  }
+  const failed = (err) => fail(t('main.skills.downloadFailed', 'Could not download it: {{error}}', { error: (err && err.message) || String(err) }))
   try {
     let res
     try {
       res = await fetchFn(url, { redirect: 'follow', signal: ctrl.signal, headers: { 'User-Agent': 'Tessel' } })
     } catch (err) {
-      throw fail(t('main.skills.downloadFailed', 'Could not download it: {{error}}', { error: (err && err.message) || String(err) }))
+      throw failed(err)
     }
     if (res.url && !/^https:\/\/(codeload\.)?github\.com\//i.test(res.url))
       throw fail(t('main.skills.badRedirect', 'GitHub sent the download somewhere else; it was not used.'))
@@ -533,40 +543,60 @@ async function download(url, fetchFn, caps) {
     if (res.body && typeof res.body.getReader === 'function') {
       const reader = res.body.getReader()
       for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        size += value.length
+        let chunk
+        try {
+          chunk = await reader.read()
+        } catch (err) {
+          throw failed(err) // cut off, or given up (no data for too long)
+        }
+        if (chunk.done) break
+        alive()
+        size += chunk.value.length
         if (size > caps.download) {
           ctrl.abort()
           throw tooBig()
         }
-        chunks.push(Buffer.from(value))
+        chunks.push(Buffer.from(chunk.value))
       }
     } else {
-      const buf = Buffer.from(await res.arrayBuffer())
+      let buf
+      try {
+        buf = Buffer.from(await res.arrayBuffer())
+      } catch (err) {
+        throw failed(err)
+      }
       if (buf.length > caps.download) throw tooBig()
       chunks.push(buf)
     }
     return Buffer.concat(chunks)
   } finally {
+    clearTimeout(idle)
     clearTimeout(timer)
   }
 }
 
-let lastArchive = null // { url, gz, at }: one repository, while choosing a skill in it
+let lastArchive = null // { url, repo, commit, gz, at }: one repository, while choosing skills in it
+const ARCHIVE_KEPT = 10 * 60 * 1000
+const COMMIT = /^[0-9a-f]{40}$/i
 
 // -> a package, or { candidates: [{ path, name, description }] } when the
 // repository holds several skills and none was picked (`pick`: its path).
-export async function packageFromGithub(input, { fetchFn = fetch, pick = null, fresh = false, caps = SKILL_CAPS } = {}) {
+// `commit`: the commit the list was read at. Each skill picked from that list
+// (its preview, several installed in one go) comes from that same commit,
+// even once the archive kept is gone and the branch has moved on.
+export async function packageFromGithub(input, { fetchFn = fetch, pick = null, fresh = false, commit = null, caps = SKILL_CAPS, timeouts = DOWNLOAD_TIMEOUTS } = {}) {
   const spec = typeof input === 'object' && input ? input : parseGithubSpec(input)
   if (!spec || !spec.owner) throw fail(t('main.skills.badRepo', 'Enter a GitHub repository: owner/repo, owner/repo/path, or its github.com address.'), 'SKILL_BAD_REPO')
-  const refPart = spec.ref ? encodeURIComponent(spec.ref) : 'HEAD'
+  const pinned = typeof commit === 'string' && COMMIT.test(commit) ? commit.toLowerCase() : null
+  const refPart = pinned || (spec.ref ? encodeURIComponent(spec.ref) : 'HEAD')
   const url = `https://github.com/${spec.owner}/${spec.repo}/archive/${refPart}.tar.gz` // i18n-ignore URL
+  const repoKey = `${spec.owner}/${spec.repo}`.toLowerCase()
+  const kept = !fresh && lastArchive && Date.now() - lastArchive.at < ARCHIVE_KEPT ? lastArchive : null
   let gz
-  if (!fresh && lastArchive && lastArchive.url === url && Date.now() - lastArchive.at < 10 * 60 * 1000) gz = lastArchive.gz
+  if (kept && (kept.url === url || (pinned && kept.repo === repoKey && kept.commit === pinned))) gz = kept.gz
   else {
-    gz = await download(url, fetchFn, caps)
-    lastArchive = { url, gz, at: Date.now() }
+    gz = await download(url, fetchFn, caps, timeouts)
+    lastArchive = { url, repo: repoKey, commit: null, gz, at: Date.now() }
   }
   let tar
   try {
@@ -575,6 +605,8 @@ export async function packageFromGithub(input, { fetchFn = fetch, pick = null, f
     if (err && err.code === 'SKILL_TOO_BIG') throw tooBig()
     throw fail(t('main.skills.badArchive', 'The download is not a readable archive.'))
   }
+  const archiveCommit = tar.comment && COMMIT.test(tar.comment) ? tar.comment.toLowerCase() : null
+  if (lastArchive && lastArchive.gz === gz) lastArchive.commit = archiveCommit
   // git archive puts everything in one "<repo>-<commit>/" folder: dropped.
   const strip = (p) => {
     const i = String(p).indexOf('/')
@@ -616,8 +648,10 @@ export async function packageFromGithub(input, { fetchFn = fetch, pick = null, f
           const meta = md ? skillFrontmatter(md.data.subarray(0, 64 * 1024).toString('utf8'), fallback) : null
           return { path: dir, name: (meta && meta.name) || fallback, description: (meta && meta.description) || null, ...sizes.get(dir) }
         }),
+        // More than shown (a list of hundreds): how many there are in all.
+        total: found.length,
         repo: where,
-        commit: tar.comment && /^[0-9a-f]{40}$/i.test(tar.comment) ? tar.comment : null
+        commit: archiveCommit
       }
     }
   }
@@ -641,10 +675,9 @@ export async function packageFromGithub(input, { fetchFn = fetch, pick = null, f
     if (files.length + 1 > caps.files || total > caps.bytes) throw tooBig()
     files.push({ rel, data: Buffer.from(e.data) })
   }
-  const commit = tar.comment && /^[0-9a-f]{40}$/i.test(tar.comment) ? tar.comment : null
   return makePackage(
     files,
-    { kind: 'github', owner: spec.owner, repo: spec.repo, ref: spec.ref || null, path: chosen, commit },
+    { kind: 'github', owner: spec.owner, repo: spec.repo, ref: spec.ref || null, path: chosen, commit: archiveCommit },
     path.posix.basename(chosen) || spec.repo,
     caps
   )
