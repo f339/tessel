@@ -84,8 +84,8 @@
         "desc": "Du texte envoyé au panneau actif depuis la palette de commandes."
       },
       "updates": {
-        "title": "Mises à jour",
-        "desc": "La version de Tessel et ses mises à jour."
+        "title": "À propos et mises à jour",
+        "desc": "La version de Tessel et ses mises à jour, de l’aide en cas de problème, et les licences."
       },
       "automations": {
         "title": "Automatisations",
@@ -106,7 +106,9 @@
     "common": {
       "on": "Activé",
       "off": "Désactivé",
-      "reset": "Réinitialiser"
+      "reset": "Réinitialiser",
+      "details": "Détails",
+      "learnMore": "En savoir plus"
     },
     "stats": {
       "analytics": "Statistiques d'utilisation",
@@ -500,7 +502,14 @@
       "volumeLabel": "Volume du son de notification",
       "suppress": "Masquer quand la fenêtre est active",
       "suppressHint": "Ignorer les notifications quand le worktree déclencheur est déjà visible.",
-      "test": "Envoyer une notification de test"
+      "test": "Envoyer une notification de test",
+      "systemGroup": "Notifications et son",
+      "preview": "Écouter le son",
+      "testRow": "Essayer",
+      "testHint": "Affiche une notification maintenant, avec le son choisi ci-dessus.",
+      "testShort": "Envoyer un test",
+      "inAppGroup": "Dans Tessel",
+      "soundVolume": "Son et volume"
     },
     "editor": {
       "autoSave": "Enregistrer automatiquement",
@@ -546,7 +555,17 @@
       "viewMode": "Vue de la gestion de code source",
       "viewModeHint": "Afficher les fichiers modifiés en arborescence de dossiers ou en liste simple.",
       "viewTree": "Arborescence",
-      "viewList": "Liste"
+      "viewList": "Liste",
+      "noPrefixHint": "Les nouvelles branches n’ont pas de préfixe.",
+      "customEmpty": "Saisissez le texte à placer devant le nom des branches.",
+      "branchesGroup": "Branches",
+      "branchPrefixHintShort": "Placé devant le nom de chaque nouvelle branche.",
+      "customPrefixShort": "Préfixe personnalisé",
+      "scmGroup": "Gestion de code source",
+      "groupOrderShort": "Ordre des groupes",
+      "groupOrderHintShort": "Le groupe que la gestion de code source affiche en premier.",
+      "viewModeShort": "Afficher les fichiers modifiés",
+      "viewModeHintShort": "Une arborescence de dossiers ou une liste simple."
     },
     "quick": {
       "intro": "Du texte envoyé au panneau actif depuis la palette de commandes (Ctrl+Maj+P, puis « Run: nom ») : une commande que vous tapez souvent, ou un prompt pour un agent.",
@@ -557,7 +576,18 @@
       "textPlaceholder": "Texte, p. ex. npm test",
       "textLabel": "Texte de la commande rapide",
       "pressEnter": "Appuyer sur Entrée",
-      "add": "Ajouter"
+      "add": "Ajouter",
+      "removeTitle": "Supprimer « {{name}} » ?",
+      "removeText": "Elle ne sera plus proposée dans la palette de commandes.",
+      "listTitle": "Vos commandes",
+      "paletteHint": "Appuyez sur Ctrl+Maj+P, puis tapez « Run: » et le nom : une commande que vous tapez souvent, ou un prompt pour un agent.",
+      "empty": "Aucune commande rapide pour l’instant : ajoutez la première ci-dessous.",
+      "entersTitle": "Appuie sur Entrée après le texte",
+      "entersTag": "Entrée",
+      "nameField": "Nom",
+      "textField": "Texte envoyé au panneau",
+      "pressEnterAfter": "Appuyer sur Entrée après le texte",
+      "addTitle": "Nouvelle commande"
     },
     "updates": {
       "checking": "Recherche de mises à jour…",
@@ -569,7 +599,27 @@
       "disabled": "Seule l'application installée se met à jour.",
       "idle": "Vérifie automatiquement toutes les quelques heures.",
       "restart": "Redémarrer et mettre à jour",
-      "check": "Rechercher des mises à jour"
+      "check": "Rechercher des mises à jour",
+      "lastChecked": "Dernière vérification {{when}}",
+      "versionGroup": "Version",
+      "checkingShort": "Vérification…",
+      "checkNow": "Vérifier maintenant",
+      "whatsNew": "Nouveautés",
+      "whatsNewHint": "Les notes de version de la {{version}}, sur GitHub.",
+      "releaseNotes": "Notes de version",
+      "troubleGroup": "Dépannage",
+      "report": "Signaler un problème",
+      "reportHint": "Ouvrez un ticket sur GitHub, avec le diagnostic collé dedans.",
+      "reportButton": "Nouveau ticket",
+      "licensesGroup": "Licences",
+      "license": "Licence de Tessel",
+      "licenseHint": "Logiciel libre, sous licence MIT.",
+      "view": "Voir",
+      "notices": "Mentions de tiers",
+      "noticesHint": "Le travail open source que Tessel inclut ou adapte, avec ses licences.",
+      "logsDiagnostics": "Journaux et diagnostic",
+      "logsDiagnosticsHint": "Le dossier des journaux et le diagnostic à coller dans un rapport, dans Général.",
+      "openInGeneral": "Ouvrir dans Général"
     },
     "accounts": {
       "actionFailed": "L'action sur le compte n'a pas pu être effectuée.",
@@ -672,7 +722,10 @@
         "refreshed": "{{who}} · renouvelée avec les identifiants de Gemini CLI",
         "expiredRun": "L'usage de Gemini ne peut pas être lu. Lancez gemini pour vous reconnecter.",
         "expiredHelp": "L'usage de Gemini ne peut pas être lu. Activez « Utiliser les identifiants de Gemini CLI » ci-dessous, ou lancez gemini pour vous reconnecter.",
-        "hintShort": "Renouvelle une connexion expirée de Gemini CLI avec les identifiants de la CLI (émis pour Gemini CLI, pas pour Tessel). Désactivé : l'usage n'est lu que tant que la connexion est valide. Peut cesser de fonctionner si Google modifie la CLI."
+        "hintShort": "Renouvelle une connexion expirée de Gemini CLI avec les identifiants de la CLI (émis pour Gemini CLI, pas pour Tessel). Désactivé : l'usage n'est lu que tant que la connexion est valide. Peut cesser de fonctionner si Google modifie la CLI.",
+        "readFailed": "Impossible de lire la connexion Gemini",
+        "hintOneLine": "Renouvelle une connexion expirée de Gemini CLI avec les identifiants de la CLI.",
+        "hintMore": "Ces identifiants sont émis pour Gemini CLI, pas pour Tessel. Désactivé : l’usage n’est lu que tant que la connexion est valide. Peut cesser de fonctionner si Google modifie la CLI."
       },
       "opencode": {
         "apiKey": "Clé API OpenCode Go",
@@ -744,7 +797,8 @@
         "cookieSaved": "Cookie de session enregistré",
         "notSetUp": "Non configuré",
         "used": "{{pct}} % utilisé",
-        "newSessions": "Nouvelles sessions : {{account}} · {{status}}"
+        "newSessions": "Nouvelles sessions : {{account}} · {{status}}",
+        "signInReadFailed": "Impossible de lire la connexion"
       },
       "finishInBrowserShort": "Terminez dans votre navigateur ; vous pouvez fermer les Paramètres.",
       "scopeCodexShort": "Les nouveaux terminaux Codex utilisent le compte sélectionné ; ceux déjà ouverts gardent le leur.",
@@ -757,7 +811,20 @@
       "forNewSessions": "Nouvelles sessions",
       "removeDefault": "Les nouvelles sessions utilisent ce compte. Une fois qu’il est supprimé, elles utilisent la connexion du système.",
       "removeInUseOne": "Un panneau ouvert utilise ce compte : il cessera de fonctionner une fois le compte supprimé. Fermez-le d'abord, ou laissez-le terminer.",
-      "removeInUse": "{{count}} panneaux ouverts utilisent ce compte : ils cesseront de fonctionner une fois le compte supprimé. Fermez-les d'abord, ou laissez-les terminer."
+      "removeInUse": "{{count}} panneaux ouverts utilisent ce compte : ils cesseront de fonctionner une fois le compte supprimé. Fermez-les d'abord, ou laissez-les terminer.",
+      "signInFailedShort": "Échec de la connexion",
+      "tryAgain": "Réessayez avec Ajouter un compte ou Se reconnecter.",
+      "progressFailedShort": "Progression illisible",
+      "scopeClaudeShort": "Chaque session Claude garde le compte avec lequel elle a démarré ; le compte coché sert aux nouvelles sessions.",
+      "scopeClaudeMore": "Vous pouvez en choisir un autre en démarrant une session. Les conversations, les réglages, les serveurs MCP et les skills sont partagés entre les comptes.",
+      "unsealedShort": "Les connexions ajoutées ici sont stockées sans chiffrement, comme {{name}} conserve la sienne.",
+      "unsealedMore": "Ce sont des fichiers de votre dossier utilisateur Windows : quiconque peut lire votre disque ou une sauvegarde peut les utiliser.",
+      "unsealedKeysShort": "Vos clés et cookies enregistrés sont stockés sans chiffrement. Enregistrez-les de nouveau pour les chiffrer.",
+      "unsealedKeysMore": "Quiconque peut lire votre disque ou une sauvegarde peut les lire.",
+      "staleTag": "Dernier usage connu",
+      "staleShort": "La dernière actualisation a échoué.",
+      "forgetTitle": "Oublier la valeur enregistrée de « {{label}} » ?",
+      "forgetText": "Tessel le supprime de cet ordinateur. Vous pourrez le coller de nouveau plus tard."
     },
     "usageVisibility": {
       "showInUsage": "Afficher dans Utilisation",
@@ -962,7 +1029,8 @@
     "unknownSignedOut": "déconnecté ; son compte n’est pas connu",
     "stateShort": {
       "unknown": "non vérifié",
-      "out": "déconnecté"
+      "out": "déconnecté",
+      "missing": "connexion requise"
     }
   }
 }

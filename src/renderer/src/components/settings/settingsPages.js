@@ -161,12 +161,13 @@ export const PAGES = {
     },
     icon: 'M9 1.5L3.5 9H8l-1 5.5L12.5 7H8z'
   },
+  // About & updates (its id stays 'updates': openSettings('updates')).
   updates: {
     get title() {
-      return t('settings.pages.updates.title', 'Updates')
+      return t('settings.pages.updates.title', 'About & updates')
     },
     get desc() {
-      return t('settings.pages.updates.desc', 'Tessel\'s version and updates.')
+      return t('settings.pages.updates.desc', 'Tessel\'s version and updates, help when something goes wrong, and the licenses.')
     },
     icon: 'M13 8a5 5 0 11-1.5-3.55M13 2.5V5h-2.5'
   },
@@ -240,6 +241,6 @@ export const PAGE_TITLES_EN = {
   git: 'Git & Source Control', // i18n-ignore
   automations: 'Automations', // i18n-ignore
   'quick-commands': 'Quick commands', // i18n-ignore
-  updates: 'Updates', // i18n-ignore
+  updates: 'About & updates', // i18n-ignore
   ssh: 'SSH Hosts', // i18n-ignore
 }

@@ -3,7 +3,7 @@
 // main process (encrypted there) and never comes back; the field shows only
 // whether one is saved. After Orca's accounts-pane-minimax-credentials.tsx
 // (MIT, Copyright (c) 2026 Lovecast Inc.).
-import { ref } from 'vue'
+import { inject, ref } from 'vue'
 import { t } from '../i18n'
 
 const props = defineProps({
@@ -18,6 +18,8 @@ const props = defineProps({
   forget: { type: Function, required: true }
 })
 const draft = ref('')
+// Forget removes a saved key: asked first (Tessel's own dialog, when there).
+const askConfirm = inject('askConfirm', null)
 
 async function submit() {
   const value = draft.value.trim()
@@ -26,6 +28,15 @@ async function submit() {
 }
 async function clear() {
   if (props.busy) return
+  if (askConfirm) {
+    const ok = await askConfirm({
+      title: t('settings.accounts.forgetTitle', 'Forget the saved value of “{{label}}”?', { label: props.label }),
+      text: t('settings.accounts.forgetText', 'Tessel deletes it from this computer. You can paste it again later.'),
+      confirmLabel: props.forgetLabel || t('settings.accounts.forget', 'Forget'),
+      danger: true
+    })
+    if (!ok) return
+  }
   await props.forget()
   draft.value = ''
 }
@@ -55,7 +66,7 @@ async function clear() {
       />
       <button
         type="button"
-        class="usage-btn"
+        class="exit-btn small"
         :disabled="busy || !draft.trim()"
         data-test="secret-save"
         @click="submit"
@@ -65,7 +76,7 @@ async function clear() {
       <button
         v-if="saved"
         type="button"
-        class="usage-btn quiet"
+        class="exit-btn small danger"
         :disabled="busy"
         data-test="secret-forget"
         @click="clear"

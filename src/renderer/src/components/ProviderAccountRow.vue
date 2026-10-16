@@ -18,8 +18,6 @@ const props = defineProps({
   // ok | warn | error | dim
   tone: { type: String, default: 'dim' },
   attention: { type: Boolean, default: false },
-  // 'details' (Details) or 'configure' (Configure)
-  toggle: { type: String, default: 'details' },
   hasDetails: { type: Boolean, default: true }
 })
 const open = ref(props.attention)
@@ -56,7 +54,7 @@ const detailsId = `provider-details-${props.provider}` // i18n-ignore
           data-test="provider-details-toggle"
           @click="open = !open"
         >
-          {{ toggle === 'configure' ? t('settings.accounts.row.configure', 'Configure') : t('settings.accounts.row.details', 'Details') }}<span
+          {{ t('settings.accounts.row.details', 'Details') }}<span
             class="prov-caret"
             aria-hidden="true"
           ></span>

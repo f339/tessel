@@ -42,8 +42,10 @@ export function createUpdater({ log, send, beforeInstall, onInstallFailed }) {
   const enabled = app.isPackaged || process.env.TESSEL_UPDATE_TEST === '1'
   let status = { state: enabled ? 'idle' : 'disabled', current: app.getVersion() }
 
+  // checkedAt: when a check last answered (Settings > About & updates says
+  // "Last checked …"); kept from one status to the next.
   const set = (next) => {
-    status = { current: app.getVersion(), ...next }
+    status = { current: app.getVersion(), checkedAt: status.checkedAt || null, ...next }
     send('update:status', status)
   }
 
@@ -70,9 +72,9 @@ export function createUpdater({ log, send, beforeInstall, onInstallFailed }) {
     autoUpdater.on('checking-for-update', () => {
       if (status.state !== 'downloading' && status.state !== 'ready') set({ state: 'checking' })
     })
-    autoUpdater.on('update-not-available', () => set({ state: 'none' }))
+    autoUpdater.on('update-not-available', () => set({ state: 'none', checkedAt: Date.now() }))
     autoUpdater.on('update-available', (info) =>
-      set({ state: 'downloading', version: info.version, percent: 0 })
+      set({ state: 'downloading', version: info.version, percent: 0, checkedAt: Date.now() })
     )
     autoUpdater.on('download-progress', (p) =>
       set({ state: 'downloading', version: status.version, percent: Math.round(p.percent || 0) })
@@ -90,7 +92,7 @@ export function createUpdater({ log, send, beforeInstall, onInstallFailed }) {
     autoUpdater.on('error', (err) => {
       log.warn('update', `update check failed: ${err && err.message}`)
       // Keep a finished download usable even if a later check fails.
-      if (status.state !== 'ready') set({ state: 'error', message: String(err && err.message) })
+      if (status.state !== 'ready') set({ state: 'error', message: String(err && err.message), checkedAt: Date.now() })
     })
   }
 

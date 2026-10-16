@@ -362,4 +362,49 @@ describe('provider account management', () => {
     )
     expect(section().find('.account-confirm').exists()).toBe(false)
   })
+
+  it('one verb for its details; actions are bordered buttons, Remove a danger one; the unencrypted note a warning', async () => {
+    await render()
+    expect(section().get('[data-test="provider-details-toggle"]').text()).toBe('Details')
+    expect(row().get('[data-test="account-reauth"]').classes()).toEqual(expect.arrayContaining(['exit-btn', 'small']))
+    expect(row().get('[data-test="account-remove"]').classes()).toEqual(expect.arrayContaining(['exit-btn', 'small', 'danger']))
+    expect(section().get('[data-test="accounts-unsealed"]').classes()).toEqual(expect.arrayContaining(['set-callout', 'warn']))
+  })
+
+  it('while the accounts are read: placeholder rows, never an empty list', async () => {
+    let answer
+    api.list.mockImplementationOnce(() => new Promise((r) => (answer = r)))
+    wrapper = mount(ProviderAccounts)
+    await flushPromises()
+    expect(wrapper.findAll('[data-test="accounts-skeleton"]')).toHaveLength(2)
+    expect(wrapper.find('[data-provider]').exists()).toBe(false)
+    answer(structuredClone(state))
+    await flushPromises()
+    expect(wrapper.find('[data-test="accounts-skeleton"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-provider]')).toHaveLength(2)
+  })
+
+  it('a failed first read: one sentence with Retry, the raw message behind Details, the rows still listed', async () => {
+    api.list.mockRejectedValueOnce(new Error('EACCES: permission denied, open accounts.json'))
+    await render()
+    const error = wrapper.get('[data-test="accounts-load-error"]')
+    expect(error.get('[data-test="panel-error-text"]').text()).toBe('Could not read your accounts.')
+    expect(error.get('details').text()).toContain('EACCES')
+    expect(error.get('details').attributes('open')).toBeUndefined()
+    expect(section('claude').get('[data-test="provider-status"]').text()).toBe('Accounts could not be read')
+    expect(section('codex').get('[data-test="account-add"]').element.disabled).toBe(true)
+    await error.get('[data-test="panel-retry"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="accounts-load-error"]').exists()).toBe(false)
+    expect(wrapper.findAll('.account-row')).toHaveLength(4)
+  })
+
+  it('a refresh that fails keeps the rows read before, with the error above them', async () => {
+    await render()
+    api.list.mockRejectedValueOnce(new Error('EBUSY'))
+    await row().get('.account-select').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="accounts-load-error"]').exists()).toBe(true)
+    expect(wrapper.findAll('.account-row')).toHaveLength(4)
+  })
 })

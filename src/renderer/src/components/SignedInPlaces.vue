@@ -187,6 +187,7 @@ function chipState(row) {
 function chipStateShort(row) {
   if (row.entry.state === 'signed-in') return ''
   if (row.entry.state === 'unknown') return t('signedIn.stateShort.unknown', 'not verified')
+  if (row.entry.state === 'missing') return t('signedIn.stateShort.missing', 'sign-in needed')
   return t('signedIn.stateShort.out', 'signed out')
 }
 function chipTitle(row) {

@@ -21,3 +21,28 @@ describe('createUpdater', () => {
     expect(await u.install()).toBe(false)
   })
 })
+
+describe('createUpdater: when it last checked', () => {
+  it('stamps checkedAt on each answer and keeps it from one status to the next', async () => {
+    const { autoUpdater } = await import('electron-updater')
+    autoUpdater.on.mockClear()
+    process.env.TESSEL_UPDATE_TEST = '1'
+    try {
+      const send = vi.fn()
+      const u = createUpdater({ log: { info() {}, warn() {}, error() {} }, send, beforeInstall: vi.fn() })
+      const on = (name) => autoUpdater.on.mock.calls.find((c) => c[0] === name)[1]
+      expect(u.status.checkedAt).toBeUndefined()
+      on('update-not-available')()
+      const at = u.status.checkedAt
+      expect(at).toBeGreaterThan(0)
+      on('checking-for-update')()
+      expect(u.status).toMatchObject({ state: 'checking', checkedAt: at })
+      on('error')(new Error('offline'))
+      expect(u.status.state).toBe('error')
+      expect(u.status.checkedAt).toBeGreaterThanOrEqual(at)
+      expect(send).toHaveBeenLastCalledWith('update:status', expect.objectContaining({ checkedAt: u.status.checkedAt }))
+    } finally {
+      delete process.env.TESSEL_UPDATE_TEST
+    }
+  })
+})

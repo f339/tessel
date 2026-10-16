@@ -3,13 +3,18 @@
 // AccountsPane (Lovecast, 2026). This Vue implementation is independent.
 import { computed, onBeforeUnmount, onMounted, ref, inject } from 'vue'
 import ProviderAccountRow from './ProviderAccountRow.vue'
+import PanelState from './ui/PanelState.vue'
 import { t, intlLocale } from '../i18n'
 import { applyAccountList, panesOnAccount } from '../accountChoices'
 
 const emit = defineEmits(['changed'])
 const providers = ref([])
 const loading = ref(true)
+// The accounts could not be read (the list), or an action failed: each has
+// its own sentence; the raw message is behind Details.
+const loadError = ref('')
 const error = ref('')
+const retrying = ref(false)
 const notice = ref('')
 const busy = ref({})
 const jobs = ref({})
@@ -67,6 +72,13 @@ function rows(provider) {
     ...(provider.accounts || [])
   ]
 }
+// A first read that failed still lists the providers, said not read, so the
+// page keeps its rows (the error and Retry above them).
+const shownProviders = computed(() =>
+  providers.value.length || !loadError.value
+    ? providers.value
+    : ['claude', 'codex'].map((provider) => ({ provider, placeholder: true, accounts: [] }))
+)
 function selected(provider, account) {
   return provider.selectedId === account.id
 }
@@ -76,7 +88,7 @@ function current(provider) {
   return list.find((account) => selected(provider, account)) || list[0] || null
 }
 function rowStatus(provider) {
-  if (provider.error) return t('settings.accounts.row.readFailed', 'Accounts could not be read')
+  if (provider.error || provider.placeholder) return t('settings.accounts.row.readFailed', 'Accounts could not be read')
   const account = current(provider)
   if (!account) return t('settings.accounts.row.none', 'No account yet')
   return t('settings.accounts.row.newSessions', 'New sessions: {{account}} · {{status}}', {
@@ -85,7 +97,7 @@ function rowStatus(provider) {
   })
 }
 function rowTone(provider) {
-  if (provider.error) return 'error'
+  if (provider.error || provider.placeholder) return 'warn'
   const status = current(provider)?.status
   return status === 'ready' ? 'ok' : status === 'missing' ? 'warn' : 'dim'
 }
@@ -150,13 +162,23 @@ async function load() {
       // and disable mutations until a successful refresh clears the error.
       return provider.error && previous ? { ...previous, error: provider.error } : provider
     })
+    loadError.value = ''
     error.value = ''
     mergeJobs(result.jobs)
   } catch (err) {
     if (alive && request === loadRequest)
-      error.value = message(err, t('settings.accounts.readFailed', 'Could not read your accounts.'))
+      loadError.value = message(err, t('settings.accounts.readFailed', 'Could not read your accounts.'))
   } finally {
     if (alive && request === loadRequest) loading.value = false
+  }
+}
+async function retry() {
+  if (retrying.value) return
+  retrying.value = true
+  try {
+    await load()
+  } finally {
+    if (alive) retrying.value = false
   }
 }
 async function changeAccount(provider, account) {
@@ -324,24 +346,39 @@ onBeforeUnmount(() => {
     <p v-if="!available" class="accounts-empty">
       {{ t('settings.accounts.unavailable', 'Account management is not available in this version.') }}
     </p>
-    <p v-else-if="loading" class="accounts-empty" role="status">
-      {{ t('settings.accounts.reading', 'Reading accounts…') }}
-    </p>
-    <div v-if="error" class="accounts-error accounts-banner" role="alert">
-      <span>{{ error }}</span>
-      <button type="button" class="exit-btn" data-test="accounts-retry" @click="load">
-        {{ t('settings.accounts.retry', 'Retry') }}
-      </button>
+    <!-- The first read: placeholder rows, never an empty list. -->
+    <template v-else-if="loading && !providers.length">
+      <p class="sr-only" role="status">{{ t('settings.accounts.reading', 'Reading accounts…') }}</p>
+      <div v-for="i in 2" :key="i" class="sl-skeleton prov-skel" aria-hidden="true" data-test="accounts-skeleton">
+        <span class="sl-skel-icon"></span>
+        <span class="sl-skel-lines"><span></span><span></span></span>
+      </div>
+    </template>
+    <div v-if="loadError" class="accounts-load-error" data-test="accounts-load-error">
+      <PanelState kind="error" :text="t('settings.accounts.readFailed', 'Could not read your accounts.')" :busy="retrying" @retry="retry" />
+      <details class="set-more accounts-raw">
+        <summary>{{ t('settings.common.details', 'Details') }}</summary>
+        <p>{{ loadError }}</p>
+      </details>
     </div>
-    <p v-if="notice" class="accounts-notice accounts-banner" role="status">{{ notice }}</p>
-    <div v-if="switchPending" class="accounts-notice accounts-banner" role="status" data-test="claude-switch-pending">
-      <span>{{ t('settings.accounts.switchPending', 'Claude sessions started before the update still use the system sign-in. Restart them so each runs on its own account (conversations resumed).') }}</span>
-      <button type="button" class="exit-btn" data-test="claude-switch-finish" @click="finishSwitch">
+    <div v-if="error" class="set-callout warn accounts-callout" role="alert" data-test="accounts-action-error">
+      <span class="set-callout-text">{{ t('settings.accounts.actionFailed', 'The account action could not be completed.') }}</span>
+      <details class="set-more accounts-raw">
+        <summary>{{ t('settings.common.details', 'Details') }}</summary>
+        <p>{{ error }}</p>
+      </details>
+    </div>
+    <p v-if="notice" class="set-callout info accounts-callout accounts-notice" role="status">
+      <span class="set-callout-text">{{ notice }}</span>
+    </p>
+    <div v-if="switchPending" class="set-callout info accounts-callout" role="status" data-test="claude-switch-pending">
+      <span class="set-callout-text">{{ t('settings.accounts.switchPending', 'Claude sessions started before the update still use the system sign-in. Restart them so each runs on its own account (conversations resumed).') }}</span>
+      <button type="button" class="exit-btn small" data-test="claude-switch-finish" @click="finishSwitch">
         {{ t('settings.accounts.switchRestart', 'Restart Claude sessions') }}
       </button>
     </div>
     <ProviderAccountRow
-      v-for="provider in providers"
+      v-for="provider in shownProviders"
       :key="provider.provider"
       :provider="provider.provider"
       :icon="provider.provider"
@@ -349,6 +386,7 @@ onBeforeUnmount(() => {
       :status="rowStatus(provider)"
       :tone="rowTone(provider)"
       :attention="rowAttention(provider)"
+      :has-details="!provider.placeholder"
     >
       <template #actions>
         <button
@@ -363,19 +401,21 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="exit-btn"
-          :disabled="isBusy(provider.provider)"
+          :disabled="provider.placeholder || isBusy(provider.provider)"
           data-test="account-add"
           @click="startLogin(provider.provider)"
         >
           {{ t('settings.accounts.add', 'Add account') }}
         </button>
       </template>
+      <!-- A failed read: the row says so; what was wrong is behind Details. -->
       <template v-if="provider.error" #note>
-        <span
-          class="accounts-error"
-          role="alert"
-          v-text="t('settings.accounts.providerReadFailed', 'Could not read accounts: {{error}}', { error: provider.error })"
-        ></span>
+        <div class="accounts-note" role="alert">
+          <details class="set-more accounts-raw">
+            <summary>{{ t('settings.common.details', 'Details') }}</summary>
+            <p>{{ provider.error }}</p>
+          </details>
+        </div>
       </template>
       <template #live>
         <div
@@ -394,14 +434,14 @@ onBeforeUnmount(() => {
               <template v-if="safeLoginUrl(jobs[provider.provider])"
                 ><button
                   type="button"
-                  class="exit-btn"
+                  class="exit-btn small"
                   data-test="account-login-open"
                   @click="openLogin(jobs[provider.provider])"
                 >
                   {{ t('settings.accounts.openSignIn', 'Open sign-in') }}</button
                 ><button
                   type="button"
-                  class="exit-btn"
+                  class="exit-btn small"
                   data-test="account-login-copy"
                   @click="copyLogin(jobs[provider.provider])"
                 >
@@ -414,7 +454,7 @@ onBeforeUnmount(() => {
               >
               <button
                 type="button"
-                class="account-btn account-quiet"
+                class="exit-btn small"
                 :disabled="!!busy[provider.provider] || jobs[provider.provider].cancelling"
                 data-test="account-login-cancel"
                 @click="cancelLogin(provider.provider)"
@@ -427,29 +467,38 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </template>
-          <p v-else-if="jobs[provider.provider].state === 'error'" class="accounts-error" role="alert">
-            {{ jobs[provider.provider].error || t('settings.accounts.signInFailed', 'Sign-in failed. Try again.') }}
-          </p>
+          <div v-else-if="jobs[provider.provider].state === 'error'" class="accounts-job-error" role="alert">
+            <span class="tag tag-warn">{{ t('settings.accounts.signInFailedShort', 'Sign-in failed') }}</span>
+            <span class="account-scope">{{ t('settings.accounts.tryAgain', 'Try again with Add account or Sign in again.') }}</span>
+            <details v-if="jobs[provider.provider].error" class="set-more accounts-raw">
+              <summary>{{ t('settings.common.details', 'Details') }}</summary>
+              <p>{{ jobs[provider.provider].error }}</p>
+            </details>
+          </div>
           <p v-else-if="jobs[provider.provider].state === 'cancelled'" class="account-scope">
             {{ t('settings.accounts.signInCancelled', 'Sign-in cancelled.') }}
           </p>
           <p v-else class="account-scope">{{ t('settings.accounts.signInComplete', 'Sign-in complete.') }}</p>
-          <p v-if="jobErrors[provider.provider]" class="accounts-error" role="alert">
-            {{ jobErrors[provider.provider] }}
-          </p>
+          <div v-if="jobErrors[provider.provider]" class="accounts-job-error" role="alert">
+            <span class="tag tag-warn">{{ t('settings.accounts.progressFailedShort', 'Progress not read') }}</span>
+            <details class="set-more accounts-raw">
+              <summary>{{ t('settings.common.details', 'Details') }}</summary>
+              <p>{{ jobErrors[provider.provider] }}</p>
+            </details>
+          </div>
         </div>
       </template>
 
       <!-- Details: the accounts to switch between. -->
-      <p class="account-scope">
-        {{
-          provider.provider === 'claude'
-            ? t(
-                'settings.accounts.scopeClaudeSessions',
-                'Each Claude session keeps the account it started with. The checked one is used for new sessions; you can pick another when you start one. Conversations, settings, MCP servers and skills are shared between accounts.'
-              )
-            : t('settings.accounts.scopeCodexShort', 'New Codex terminals use the selected account; open ones keep theirs.')
-        }}
+      <div v-if="provider.provider === 'claude'" class="account-scope">
+        <p>{{ t('settings.accounts.scopeClaudeShort', 'Each Claude session keeps the account it started with; the checked one is used for new sessions.') }}</p>
+        <details class="set-more">
+          <summary>{{ t('settings.common.learnMore', 'Learn more') }}</summary>
+          <p>{{ t('settings.accounts.scopeClaudeMore', 'You can pick another one when you start a session. Conversations, settings, MCP servers and skills are shared between accounts.') }}</p>
+        </details>
+      </div>
+      <p v-else class="account-scope">
+        {{ t('settings.accounts.scopeCodexShort', 'New Codex terminals use the selected account; open ones keep theirs.') }}
       </p>
       <div class="account-rows">
         <div
@@ -471,8 +520,8 @@ onBeforeUnmount(() => {
             <span class="account-info">
               <span class="account-title"
                 ><span>{{ accountName(account) }}</span
-                ><span v-if="account.system && account.email" class="account-badge" data-test="account-system-tag">{{ t('settings.accounts.systemTag', 'System sign-in') }}</span
-                ><span v-if="selected(provider, account)" class="account-badge">{{ t('settings.accounts.forNewSessions', 'New sessions') }}</span></span
+                ><span v-if="account.system && account.email" class="tag tag-scope" data-test="account-system-tag">{{ t('settings.accounts.systemTag', 'System sign-in') }}</span
+                ><span v-if="selected(provider, account)" class="tag tag-info">{{ t('settings.accounts.forNewSessions', 'New sessions') }}</span></span
               >
               <span class="account-meta"
                 ><span v-if="account.email && account.email !== accountName(account)">{{ account.email }}</span
@@ -489,7 +538,7 @@ onBeforeUnmount(() => {
           <div v-if="!account.system" class="account-actions">
             <button
               type="button"
-              class="account-btn account-quiet"
+              class="exit-btn small"
               :disabled="isBusy(provider.provider)"
               data-test="account-reauth"
               :aria-label="t('settings.accounts.reauthLabel', 'Sign in again to {{account}}', { account: accountName(account) })"
@@ -499,7 +548,7 @@ onBeforeUnmount(() => {
             </button>
             <button
               type="button"
-              class="account-btn account-quiet"
+              class="exit-btn small danger"
               :disabled="isBusy(provider.provider)"
               data-test="account-remove"
               :aria-label="t('settings.accounts.removeLabel', 'Remove {{account}}', { account: accountName(account) })"
@@ -511,21 +560,22 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <!-- Added accounts keep their sign-in the way the CLI does: a readable
-           file, not sealed by the OS. Said where they are managed (after Orca's
-           UnsealedCredentialNotice, MIT, Lovecast Inc. 2026). -->
-      <p
+           file, not sealed by the OS. Said where they are managed. -->
+      <div
         v-if="provider.accounts?.length"
-        class="account-scope account-unsealed"
+        class="set-callout warn accounts-callout"
         role="note"
         data-test="accounts-unsealed"
-        v-text="
-          t(
-            'settings.accounts.unsealedSignIns',
-            'The sign-ins of the accounts added here are stored unencrypted, in files of your Windows user folder (as {{name}} keeps its own): anyone who can read your disk or a backup of it can use them.',
-            { name: names[provider.provider] || provider.provider }
-          )
-        "
-      ></p>
+      >
+        <span
+          class="set-callout-text"
+          v-text="t('settings.accounts.unsealedShort', 'Sign-ins added here are stored unencrypted, as {{name}} keeps its own.', { name: names[provider.provider] || provider.provider })"
+        ></span>
+        <details class="set-more">
+          <summary>{{ t('settings.common.learnMore', 'Learn more') }}</summary>
+          <p>{{ t('settings.accounts.unsealedMore', 'They are files in your Windows user folder: anyone who can read your disk or a backup of it can use them.') }}</p>
+        </details>
+      </div>
       <div
         v-if="removeTarget?.provider === provider.provider"
         class="account-confirm"
@@ -555,7 +605,7 @@ onBeforeUnmount(() => {
             {{ t('settings.accounts.keep', 'Keep account') }}</button
           ><button
             type="button"
-            class="exit-btn account-danger"
+            class="exit-btn danger"
             :disabled="isBusy(provider.provider)"
             data-test="account-remove-confirm"
             @click="removeAccount"
@@ -586,6 +636,49 @@ onBeforeUnmount(() => {
   color: var(--text-dim);
   font-size: 11.5px;
   line-height: 1.45;
+}
+/* While the accounts are read: rows the size of the real ones. */
+.prov-skel {
+  min-height: 58px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.prov-skel:first-of-type {
+  border-top: 0;
+}
+.accounts-load-error {
+  padding-bottom: 8px;
+}
+.accounts-load-error :deep(.ps) {
+  padding: 12px 0 4px;
+}
+/* A raw message, behind Details. */
+.accounts-raw p {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.accounts-callout {
+  margin: 10px 0 2px;
+}
+.accounts-callout > .exit-btn {
+  flex: none;
+  white-space: nowrap;
+}
+/* Learn more, once open, under the sentence. */
+.accounts-callout > details[open] {
+  flex-basis: 100%;
+}
+.accounts-job-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.accounts-job-error .accounts-raw {
+  flex-basis: 100%;
 }
 /* Accounts: a plain list, one line each, no box around each one. */
 .account-rows {
@@ -658,13 +751,6 @@ onBeforeUnmount(() => {
 .account-meta > span {
   overflow-wrap: anywhere;
 }
-.account-badge {
-  color: var(--accent);
-  font-size: 10px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border-radius: 3px;
-  padding: 1px 4px;
-}
 .account-meta {
   display: flex;
   flex-wrap: wrap;
@@ -680,42 +766,17 @@ onBeforeUnmount(() => {
 }
 .account-actions {
   display: flex;
-  gap: 2px;
+  gap: 4px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-.account-btn {
-  min-height: 26px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  color: var(--text);
-  background: transparent;
-  font: inherit;
-  font-size: 11.5px;
-  padding: 3px 8px;
-  cursor: pointer;
-}
-.account-btn:hover:not(:disabled) {
-  color: var(--text-strong);
-  background: var(--surface-3);
-}
-.account-btn:disabled,
 .exit-btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
-.account-btn:focus-visible,
 .account-select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-}
-.account-quiet {
-  border-color: transparent;
-  color: var(--text-dim);
-}
-.account-danger {
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
 }
 /* Confirmation and sign-in progress: a tinted strip, not a box in a box. */
 .account-confirm,
@@ -751,29 +812,8 @@ onBeforeUnmount(() => {
 .account-confirm-actions {
   justify-content: flex-end;
 }
-.account-unsealed,
 .account-confirm .account-in-use {
   color: var(--warn);
-}
-.accounts-error {
-  color: var(--danger);
-  overflow-wrap: anywhere;
-}
-.accounts-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin: 10px 0 2px;
-  line-height: 1.5;
-}
-.accounts-notice {
-  color: var(--text-dim);
-}
-/* A banner's button keeps its label on one line, beside the text. */
-.accounts-banner > .exit-btn {
-  flex: none;
-  white-space: nowrap;
 }
 .account-pulse {
   display: inline-block;

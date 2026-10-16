@@ -170,8 +170,28 @@ describe('Where you’re signed in', () => {
     const unknown = accounts.find((a) => a.get('.si-who').text() === 'Unknown account')
     expect(unknown.get('.si-meta').text()).toBe('signed out; its account is not known')
     expect(chipsOf(unknown)[0].get('[data-test="signed-in-chip-state"]').text()).toBe('signed out')
+    // Nothing that is not signed in is listed as signed in.
+    expect(w.text()).not.toContain('Signed in (no account name)')
     // Signed in on this PC: no state word.
     expect(chipsOf(accounts[0])[0].find('[data-test="signed-in-chip-state"]').exists()).toBe(false)
+  })
+
+  it('a signed-out profile with no email is never listed as signed in; a sign-in to renew says so', async () => {
+    api.scan.mockResolvedValue(
+      ready([
+        hostEntries[0],
+        { agent: 'codex', scope: 'default', id: null, email: null, plan: null, state: 'profile', removable: false, signOut: false, lastSeen: null },
+        { ...hostEntries[1], state: 'missing' }
+      ])
+    )
+    await open()
+    const codex = w.findAll('[data-test="signed-in-provider"]').find((p) => p.text().includes('Codex'))
+    const unknown = codex.get('[data-test="signed-in-account"]')
+    expect(unknown.get('.si-who').text()).toBe('Unknown account')
+    expect(unknown.get('.si-meta').text()).toBe('signed out; its account is not known')
+    expect(chipsOf(unknown)[0].get('[data-test="signed-in-chip-state"]').text()).toBe('signed out')
+    const work = w.findAll('[data-test="signed-in-account"]').find((a) => a.get('.si-who').text() === 'work@corp.example')
+    expect(chipsOf(work)[0].get('[data-test="signed-in-chip-state"]').text()).toBe('sign-in needed')
   })
 
   it('Sign out names the panes on that login (main stops them); on a Mac it says the Keychain login stays; Refresh asks the login shells again', async () => {

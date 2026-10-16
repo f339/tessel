@@ -1,10 +1,11 @@
 // The Settings pages for the settings taken from Orca: each row is there with
 // Orca's label, and its control changes the shared settings.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import SettingsDialog from '../components/SettingsDialog.vue'
 import { settings, resetSettings } from '../settings'
+import { setSelectValue } from './selectTestUtils'
 
 describe('Settings: the Orca settings', () => {
   let wrapper, previousApi
@@ -134,11 +135,19 @@ describe('Settings: the Orca settings', () => {
   it('Notifications: master switch, bell, volume, suppress, test button', async () => {
     open('alerts')
     expect(wrapper.get('#set-alerts-title').text()).toBe('Notifications')
+    // The rows the master switch turns on are indented under it.
+    for (const label of ['Windows notifications', 'Terminal bell', 'Suppress while focused', 'Sound'])
+      expect(row(label).classes()).toContain('set-row-nested')
+    expect(row('In-app alerts').classes()).not.toContain('set-row-nested')
     await row('Terminal bell').get('input').setValue(true)
     expect(settings.notifyTerminalBell).toBe(true)
     expect(wrapper.find('#settings-volume').exists()).toBe(false) // no sound chosen
+    expect(wrapper.find('[data-test="alerts-preview"]').exists()).toBe(false)
     settings.alertSound = 'chime'
     await nextTick()
+    // Sound, volume and its preview on one row.
+    expect(row('Sound').find('#settings-volume').exists()).toBe(true)
+    expect(row('Sound').find('[data-test="alerts-preview"]').exists()).toBe(true)
     const vol = wrapper.get('#settings-volume')
     vol.element.value = '35'
     await vol.trigger('input')
@@ -151,6 +160,10 @@ describe('Settings: the Orca settings', () => {
     expect(settings.notificationsEnabled).toBe(false)
     expect(wrapper.get('[data-test="test-notification"]').attributes('disabled')).toBeDefined()
     expect(row('Terminal bell').get('input').attributes('disabled')).toBeDefined()
+    expect(row('Terminal bell').classes()).toContain('set-disabled')
+    expect(wrapper.get('[data-test="alerts-preview"]').attributes('disabled')).toBeDefined()
+    // In-app alerts do not depend on it.
+    expect(row('In-app alerts').get('input').attributes('disabled')).toBeUndefined()
   })
 
   it('General: running terminals, workspace directory, deleting workspaces', async () => {
@@ -173,18 +186,77 @@ describe('Settings: the Orca settings', () => {
     open('git')
     const feedback = () => wrapper.get('[data-test="branch-prefix-feedback"]')
     expect(feedback().text()).toBe('Branches will be named agent/feature')
-    const input = row('Branch prefix').get('input[aria-label="Custom branch prefix"]')
+    // The custom prefix on its own row, under the choice.
+    const input = wrapper.get('input[aria-label="Custom branch prefix"]')
+    expect(row('Branch prefix').find('input').exists()).toBe(false)
+    expect(input.element.closest('.set-row').classList.contains('set-row-nested')).toBe(true)
     await input.setValue('bad name')
     expect(feedback().text()).toMatch(/cannot contain spaces/)
+    expect(feedback().classes()).toContain('set-error')
     await input.setValue('team/')
     expect(feedback().text()).toBe('Branches will be named team/feature')
     await clickSeg('Branch prefix', 'None')
     expect(settings.branchPrefix).toBe('none')
-    expect(row('Branch prefix').find('input').exists()).toBe(false)
+    expect(wrapper.find('input[aria-label="Custom branch prefix"]').exists()).toBe(false)
+    expect(feedback().text()).toBe('New branches get no prefix.')
     await clickSeg('Branch prefix', 'Git username')
     expect(settings.branchPrefix).toBe('git-username')
-    await clickSeg('Source Control group order', 'Staged first')
+    expect(feedback().text()).toMatch(/github\.user/)
+    // The group order is a select (three long choices).
+    await setSelectValue(wrapper.get('#settings-group-order'), 'staged-first')
     expect(settings.sourceControlGroupOrder).toBe('staged-first')
+    await clickSeg('Show changed files as', 'List')
+    expect(settings.sourceControlViewMode).toBe('list')
+  })
+
+  it('About & updates: version, last checked, Check now, release notes, troubleshooting, licenses', async () => {
+    const openExternal = vi.fn(async () => ({ ok: true }))
+    window.shellApi = { openExternal }
+    wrapper = mount(SettingsDialog, {
+      props: { section: 'updates', updateStatus: { state: 'none', current: '1.16.0', checkedAt: Date.now() - 5 * 60e3 } },
+      attachTo: document.body
+    })
+    expect(wrapper.get('#set-updates-title').text()).toBe('About & updates')
+    expect(wrapper.get('.set-nav-item[data-page="updates"]').text()).toBe('About & updates')
+    expect(wrapper.get('[data-test="about-version"]').text()).toBe('1.16.0')
+    expect(wrapper.get('[data-test="update-status"]').text()).toMatch(/^You have the latest version · Last checked 5 min\.? ago$/)
+    await wrapper.get('[data-test="update-check"]').trigger('click')
+    expect(wrapper.emitted('check-updates')).toHaveLength(1)
+    await wrapper.get('[data-test="update-notes"]').trigger('click')
+    expect(openExternal).toHaveBeenLastCalledWith('https://github.com/mindkind1337/tessel/releases/tag/v1.16.0')
+    // Logs and diagnostics: General's Troubleshooting group, opened from here.
+    await wrapper.get('[data-test="about-troubleshooting"]').trigger('click')
+    expect(wrapper.findAll('.set-page').filter((p) => !p.element.hidden).map((p) => p.attributes('data-page'))).toEqual(['general'])
+    await wrapper.get('.set-nav-item[data-page="updates"]').trigger('click')
+    await wrapper.get('[data-test="about-notices"]').trigger('click')
+    expect(openExternal).toHaveBeenLastCalledWith('https://github.com/mindkind1337/tessel/blob/v1.16.0/THIRD_PARTY_NOTICES.md')
+    // A failed check: one sentence, what went wrong behind Details.
+    await wrapper.setProps({ updateStatus: { state: 'error', current: '1.16.0', message: 'net::ERR_NAME_NOT_RESOLVED' } })
+    expect(wrapper.get('[data-test="update-status"]').text()).toBe('Could not check for updates. Try again later.')
+    expect(wrapper.get('#set-updates details').text()).toContain('ERR_NAME_NOT_RESOLVED')
+    // Ready: Restart and update, and the new version's notes.
+    await wrapper.setProps({ updateStatus: { state: 'ready', current: '1.16.0', version: '1.17.0' } })
+    await wrapper.get('[data-test="update-restart"]').trigger('click')
+    expect(wrapper.emitted('open-update')).toHaveLength(1)
+    await wrapper.get('[data-test="update-notes"]').trigger('click')
+    expect(openExternal).toHaveBeenLastCalledWith('https://github.com/mindkind1337/tessel/releases/tag/v1.17.0')
+  })
+
+  it('search still finds the settings of the reworked pages', async () => {
+    open('general')
+    const shown = async (text) => {
+      await wrapper.get('input[type="search"]').setValue(text)
+      await nextTick()
+      await nextTick()
+      return wrapper.findAll('.set-page').filter((p) => !p.element.hidden).map((p) => p.attributes('data-page'))
+    }
+    expect(await shown('volume')).toEqual(['alerts'])
+    expect(await shown('group order')).toEqual(['git'])
+    expect(await shown('custom prefix')).toEqual(['git'])
+    expect(await shown('release notes')).toEqual(['updates'])
+    expect(await shown('third-party')).toEqual(['updates'])
+    expect(await shown('press enter')).toEqual(['quick-commands'])
+    expect(await shown('about')).toContain('updates')
   })
 
   it('search finds the new settings by their Orca names', async () => {

@@ -72,7 +72,7 @@ const name = computed(() => (props.provider === 'cursor' ? CURSOR : t('settings.
 // The row's one status line: who is signed in and the first usage number.
 const line = computed(() => {
   if (props.loading && !props.status) return { text: t('settings.accounts.loading', 'Loading…'), tone: 'dim' }
-  if (props.status?.error) return { text: props.status.error, tone: 'error' }
+  if (props.status?.error) return { text: t('settings.accounts.row.signInReadFailed', 'The sign-in could not be read'), tone: 'warn' }
   if (!signedIn.value)
     return {
       text:
@@ -183,7 +183,13 @@ onBeforeUnmount(() => {
         {{ refreshing ? t('settings.accounts.refreshing', 'Refreshing…') : t('settings.accounts.refreshUsage', 'Refresh usage') }}
       </button>
     </template>
-    <template v-if="help" #note>
+    <template v-if="status?.error" #note>
+      <details class="set-more usage-raw" role="alert">
+        <summary>{{ t('settings.common.details', 'Details') }}</summary>
+        <p>{{ status.error }}</p>
+      </details>
+    </template>
+    <template v-else-if="help" #note>
       <span data-test="usage-account-help">{{ help }}</span>
     </template>
 
@@ -210,12 +216,14 @@ onBeforeUnmount(() => {
         </li>
       </ul>
       <p v-if="reset" class="usage-hint">{{ reset }}</p>
-      <p
-        v-if="staleError"
-        class="usage-account-error"
-        role="alert"
-        v-text="t('settings.accounts.staleUsage', 'Last known usage — the latest refresh failed: {{reason}}', { reason: staleError })"
-      ></p>
+      <div v-if="staleError" class="usage-stale" role="alert">
+        <span class="tag tag-warn">{{ t('settings.accounts.staleTag', 'Last known usage') }}</span>
+        <span class="usage-hint">{{ t('settings.accounts.staleShort', 'The latest refresh failed.') }}</span>
+        <details class="set-more usage-raw">
+          <summary>{{ t('settings.common.details', 'Details') }}</summary>
+          <p>{{ staleError }}</p>
+        </details>
+      </div>
     </div>
     <p v-else-if="usage?.unlimited" class="usage-hint">{{ t('settings.accounts.cursor.unlimited', 'This Cursor plan has no usage limit.') }}</p>
     <div v-else-if="unavailable" class="usage-account-usage" data-test="usage-account-unavailable">
@@ -225,8 +233,11 @@ onBeforeUnmount(() => {
             ? t('settings.accounts.cursor.noAllowance', 'Cursor reported no usage allowance for this account.')
             : t('settings.accounts.grok.noPercentage', 'Grok reported no usage percentage for this account.')
         }}
-        {{ unavailable }}
       </p>
+      <details class="set-more usage-raw">
+        <summary>{{ t('settings.common.details', 'Details') }}</summary>
+        <p>{{ unavailable }}</p>
+      </details>
     </div>
     <div>
       <button type="button" class="usage-link" data-test="usage-account-link" @click="openLink">

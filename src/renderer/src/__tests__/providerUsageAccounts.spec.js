@@ -155,7 +155,7 @@ describe('usage-only provider sections', () => {
     expect(api.update).toHaveBeenCalledWith({ opencodeWorkspaceId: 'wrk_abc' })
   })
 
-  it('every row starts folded with a one-line status; Configure opens it', async () => {
+  it('every row starts folded with a one-line status; Details opens it', async () => {
     await mountIt()
     expect(wrapper.find('[data-test="providers-not-installed"]').exists()).toBe(false)
     for (const row of wrapper.findAll('[data-provider]')) {
@@ -167,7 +167,7 @@ describe('usage-only provider sections', () => {
     expect(wrapper.get('[data-provider="minimax"] [data-test="provider-status"]').text()).toBe('Not set up')
     const opencode = wrapper.get('[data-provider="opencode-go"]')
     await opencode.get('[data-test="provider-details-toggle"]').trigger('click')
-    expect(opencode.get('[data-test="provider-details-toggle"]').text()).toContain('Configure')
+    expect(opencode.get('[data-test="provider-details-toggle"]').text()).toContain('Details')
     expect(opencode.get('[data-test="provider-details"]').attributes('style') || '').not.toContain('display: none')
   })
 

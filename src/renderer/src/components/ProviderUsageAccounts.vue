@@ -3,7 +3,7 @@
 // whose sign-in Tessel does not manage, only reads for usage (Gemini, OpenCode
 // Go, MiniMax, a GLM Coding Plan, Grok, Cursor), in Orca's order (AccountsPane.tsx and its
 // provider sections; MIT, Copyright (c) 2026 Lovecast Inc.). One row each,
-// its keys and options folded under Configure. Keys and cookies go to the
+// its keys and options folded under Details. Keys and cookies go to the
 // main process and stay there (encrypted); this page only learns whether each
 // one is saved.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -11,6 +11,7 @@ import ProviderAccountRow from './ProviderAccountRow.vue'
 import SecretField from './SecretField.vue'
 import SignInUsageSection from './SignInUsageSection.vue'
 import ThemedSelect from './ui/ThemedSelect.vue'
+import PanelState from './ui/PanelState.vue'
 import { t } from '../i18n'
 
 // Product names and examples, the same in every language.
@@ -26,13 +27,15 @@ const WORKSPACE_EXAMPLE = 'opencode.ai/workspace/wrk_…/go' // i18n-ignore
 const DEFAULT_MODEL = 'general' // i18n-ignore
 const state = ref(null)
 const agents = ref(null) // installed agent ids, null when unknown
+const agentsRead = ref(false) // the installed agents asked (answered or not)
 const loading = ref(true)
+const retrying = ref(false)
 const busy = ref(false)
+// The settings could not be read: said in one sentence, what main answered
+// behind Details.
 const error = ref('')
 const notice = ref({}) // section -> message
 const drafts = ref({ opencodeWorkspaceId: '', minimaxGroupId: '', minimaxUsageModels: '' })
-const cookieHelp = ref(false)
-const advanced = ref(false)
 const revealed = ref(new Set()) // hidden providers shown on request
 const available = computed(() => !!window.shellApi?.providerSettings?.status)
 let alive = true
@@ -59,7 +62,10 @@ const relevant = computed(() => ({
 const visible = computed(() =>
   Object.fromEntries(ORDER.map((id) => [id, relevant.value[id] || revealed.value.has(id)]))
 )
-const notInstalled = computed(() => (loading.value ? [] : ORDER.filter((id) => !visible.value[id])))
+const notInstalled = computed(() => (pending.value ? [] : ORDER.filter((id) => !visible.value[id])))
+// The first read (settings and installed agents): placeholder rows, so the
+// rows do not appear and then vanish once the agents are known.
+const pending = computed(() => (loading.value && !state.value) || !agentsRead.value)
 function reveal(id) {
   revealed.value = new Set([...revealed.value, id])
 }
@@ -82,7 +88,7 @@ const geminiStatus = computed(() => {
   if (loading.value && !state.value) return { text: t('settings.accounts.loading', 'Loading…'), tone: 'dim' }
   const g = gemini.value
   if (!g) return { text: t('settings.accounts.gemini.readsCli', 'Reads the Gemini CLI sign-in'), tone: 'dim' }
-  if (g.error) return { text: g.error, tone: 'error' }
+  if (g.error) return { text: t('settings.accounts.gemini.readFailed', 'The Gemini sign-in could not be read'), tone: 'warn' }
   if (!g.signedIn) return { text: t('settings.accounts.gemini.signedOut', 'Not signed in — run gemini to sign in'), tone: 'dim' }
   if (geminiStuck.value) return { text: t('settings.accounts.row.expired', 'Sign-in expired'), tone: 'warn' }
   const who = g.email
@@ -159,6 +165,17 @@ async function loadAgents() {
     if (alive && Array.isArray(list)) agents.value = new Set(list.filter((a) => a?.available).map((a) => a.id))
   } catch {
     /* unknown: every section is shown */
+  } finally {
+    if (alive) agentsRead.value = true
+  }
+}
+async function retry() {
+  if (retrying.value) return
+  retrying.value = true
+  try {
+    await load()
+  } finally {
+    if (alive) retrying.value = false
   }
 }
 async function run(section, action, success) {
@@ -218,306 +235,325 @@ onBeforeUnmount(() => {
 
 <template>
   <div v-if="available" class="provider-usage-accounts" data-test="provider-usage-accounts">
-    <p v-if="error" class="usage-account-error usage-banner" role="alert">{{ error }}</p>
-
-    <!-- ============ Gemini ============ -->
-    <ProviderAccountRow
-      v-if="visible.gemini"
-      provider="gemini"
-      icon="gemini"
-      :name="NAMES.gemini"
-      :status="geminiStatus.text"
-      :tone="geminiStatus.tone"
-      :attention="geminiStuck"
-      toggle="configure"
-    >
-      <template v-if="geminiStuck" #note>
-        <span data-test="gemini-expired-help">{{
-          settings.geminiCliOAuth
-            ? t('settings.accounts.gemini.expiredRun', 'Gemini usage can’t be read. Run gemini to sign in again.')
-            : t('settings.accounts.gemini.expiredHelp', 'Gemini usage can’t be read. Turn on “Use Gemini CLI credentials” below, or run gemini to sign in again.')
-        }}</span>
-      </template>
-      <label class="usage-field usage-switch">
-        <span class="usage-field-text">
-          <span class="usage-label">{{ t('settings.accounts.gemini.label', 'Use Gemini CLI credentials (experimental)') }}</span>
-          <span class="usage-hint">{{
-            t('settings.accounts.gemini.hintShort', 'Renews an expired Gemini CLI login with the CLI’s own credentials (issued to Gemini CLI, not Tessel). Off: usage is read only while the login is valid. May break if Google changes the CLI.')
+    <div v-if="error" class="usage-load-error" data-test="usage-load-error">
+      <PanelState kind="error" :text="t('settings.accounts.providerSettingsFailed', 'Could not read the provider settings.')" :busy="retrying" @retry="retry" />
+      <details v-if="error !== t('settings.accounts.providerSettingsFailed', 'Could not read the provider settings.')" class="set-more usage-raw">
+        <summary>{{ t('settings.common.details', 'Details') }}</summary>
+        <p>{{ error }}</p>
+      </details>
+    </div>
+    <template v-if="pending">
+      <p class="sr-only" role="status">{{ t('settings.accounts.loading', 'Loading…') }}</p>
+      <div v-for="i in 3" :key="i" class="sl-skeleton usage-skel" aria-hidden="true" data-test="usage-skeleton">
+        <span class="sl-skel-icon"></span>
+        <span class="sl-skel-lines"><span></span><span></span></span>
+      </div>
+    </template>
+    <template v-else>
+      <!-- ============ Gemini ============ -->
+      <ProviderAccountRow
+        v-if="visible.gemini"
+        provider="gemini"
+        icon="gemini"
+        :name="NAMES.gemini"
+        :status="geminiStatus.text"
+        :tone="geminiStatus.tone"
+        :attention="geminiStuck"
+      >
+        <template v-if="gemini?.error" #note>
+          <details class="set-more usage-raw" role="alert">
+            <summary>{{ t('settings.common.details', 'Details') }}</summary>
+            <p>{{ gemini.error }}</p>
+          </details>
+        </template>
+        <template v-else-if="geminiStuck" #note>
+          <span data-test="gemini-expired-help">{{
+            settings.geminiCliOAuth
+              ? t('settings.accounts.gemini.expiredRun', 'Gemini usage can’t be read. Run gemini to sign in again.')
+              : t('settings.accounts.gemini.expiredHelp', 'Gemini usage can’t be read. Turn on “Use Gemini CLI credentials” below, or run gemini to sign in again.')
           }}</span>
-        </span>
-        <input
-          id="gemini-cli-oauth"
-          type="checkbox"
-          class="set-switch"
-          :checked="!!settings.geminiCliOAuth"
-          :disabled="busy || loading"
-          data-test="gemini-cli-oauth"
-          @change="update('gemini', { geminiCliOAuth: $event.target.checked })"
-        />
-      </label>
-      <p v-if="notice.gemini" class="usage-hint" role="status">{{ notice.gemini }}</p>
-    </ProviderAccountRow>
-
-    <!-- ============ OpenCode Go ============ -->
-    <ProviderAccountRow
-      v-if="visible.opencode"
-      provider="opencode-go"
-      icon="opencode"
-      :name="NAMES.opencode"
-      :status="opencodeStatus.text"
-      :tone="opencodeStatus.tone"
-      toggle="configure"
-    >
-      <p v-if="!secure" class="usage-account-error">{{ t('settings.accounts.noSecureStorage', 'Secure credential storage is unavailable on this computer, so keys and cookies cannot be saved.') }}</p>
-      <p v-if="unsealed" class="usage-account-error" role="alert" data-test="credentials-unsealed">{{ t('settings.accounts.unsealed', 'Your saved keys and cookies are stored unencrypted: anyone who can read your disk or a backup of it can read them. Save them again to encrypt them.') }}</p>
-      <SecretField
-        id="opencode-go-api-key"
-        :label="t('settings.accounts.opencode.apiKey', 'OpenCode Go API key')"
-        :placeholder="t('settings.accounts.opencode.apiKeyPlaceholderShort', 'Optional — blank uses /connect or OPENCODE_API_KEY')"
-        :saved="!!saved.opencodeGoApiKey"
-        :busy="busy || !secure"
-        :save="saveSecret('opencode', 'opencodeGoApiKey')"
-        :forget="forgetSecret('opencode', 'opencodeGoApiKey')"
-      />
-      <SecretField
-        id="opencode-go-cookie"
-        :label="t('settings.accounts.opencode.cookie', 'OpenCode Go session cookie')"
-        :placeholder="COOKIE_EXAMPLE"
-        :saved="!!saved.opencodeCookie"
-        :busy="busy || !secure"
-        :save="saveSecret('opencode', 'opencodeCookie')"
-        :forget="forgetSecret('opencode', 'opencodeCookie')"
-      >
-        <p class="usage-hint">
-          {{ t('settings.accounts.opencode.cookieHelpShort', 'Only for legacy console (OpenCode Black) accounts: the full Cookie header of an opencode.ai request in DevTools, with __Host-console_session.') }}
-        </p>
-      </SecretField>
-      <div class="usage-field">
-        <label class="usage-label" for="opencode-workspace">{{ t('settings.accounts.opencode.workspace', 'Workspace ID override') }}</label>
-        <div class="usage-row">
+        </template>
+        <label class="usage-field usage-switch">
+          <span class="usage-field-text">
+            <span class="usage-label">{{ t('settings.accounts.gemini.label', 'Use Gemini CLI credentials (experimental)') }}</span>
+            <span class="usage-hint">{{ t('settings.accounts.gemini.hintOneLine', 'Renews an expired Gemini CLI login with the CLI’s own credentials.') }}</span>
+            <details class="set-more">
+              <summary>{{ t('settings.common.learnMore', 'Learn more') }}</summary>
+              <p>{{ t('settings.accounts.gemini.hintMore', 'Those credentials are issued to Gemini CLI, not Tessel. Off: usage is read only while the login is valid. It may break if Google changes the CLI.') }}</p>
+            </details>
+          </span>
           <input
-            id="opencode-workspace"
-            v-model="drafts.opencodeWorkspaceId"
-            class="usage-input"
-            type="text"
-            spellcheck="false"
-            :disabled="busy"
-            :placeholder="t('settings.accounts.opencode.workspacePlaceholder', 'wrk_… (leave blank for automatic lookup)')"
-            data-test="opencode-workspace"
-            @change="commitText('opencode', 'opencodeWorkspaceId')"
-            @keydown.enter.prevent="commitText('opencode', 'opencodeWorkspaceId')"
+            id="gemini-cli-oauth"
+            type="checkbox"
+            class="set-switch"
+            :checked="!!settings.geminiCliOAuth"
+            :disabled="busy || loading"
+            data-test="gemini-cli-oauth"
+            @change="update('gemini', { geminiCliOAuth: $event.target.checked })"
           />
-          <button
-            v-if="settings.opencodeWorkspaceId"
-            type="button"
-            class="usage-btn quiet"
-            :disabled="busy"
-            @click="clearText('opencode', 'opencodeWorkspaceId')"
-          >
-            {{ t('settings.accounts.clear', 'Clear') }}
-          </button>
-        </div>
-        <p class="usage-hint">
-          {{ t('settings.accounts.opencode.workspaceHelpShort', 'Only if the automatic lookup fails. It is in the opencode.ai URL:') }}
-          <code>{{ WORKSPACE_EXAMPLE }}</code>
-        </p>
-      </div>
-      <p v-if="notice.opencode" class="usage-hint" role="status">{{ notice.opencode }}</p>
-    </ProviderAccountRow>
+        </label>
+        <p v-if="notice.gemini" class="usage-hint" role="status">{{ notice.gemini }}</p>
+      </ProviderAccountRow>
 
-    <!-- ============ MiniMax ============ -->
-    <ProviderAccountRow
-      v-if="visible.minimax"
-      provider="minimax"
-      icon="minimax"
-      :icon-label="NAMES.minimax"
-      icon-accent="#e2367a"
-      :name="NAMES.minimax"
-      :status="minimaxStatus.text"
-      :tone="minimaxStatus.tone"
-      toggle="configure"
-    >
-      <template #actions>
-        <button type="button" class="exit-btn" data-test="minimax-console" @click="openLink(minimaxConsole)">
-          {{ t('settings.accounts.minimax.openConsole', 'Open console') }} <span aria-hidden="true">↗</span>
-        </button>
-      </template>
-      <p v-if="!secure" class="usage-account-error">{{ t('settings.accounts.noSecureStorage', 'Secure credential storage is unavailable on this computer, so keys and cookies cannot be saved.') }}</p>
-      <p v-if="unsealed" class="usage-account-error" role="alert" data-test="credentials-unsealed">{{ t('settings.accounts.unsealed', 'Your saved keys and cookies are stored unencrypted: anyone who can read your disk or a backup of it can read them. Save them again to encrypt them.') }}</p>
-      <div class="usage-field">
-        <label class="usage-label" for="minimax-endpoint">{{ t('settings.accounts.minimax.endpoint', 'MiniMax endpoint') }}</label>
-        <ThemedSelect
-          id="minimax-endpoint"
-          class="usage-input"
-          :model-value="settings.minimaxEndpoint || 'overseas'"
-          :disabled="busy"
-          data-test="minimax-endpoint"
-          @update:model-value="(value) => value !== settings.minimaxEndpoint && update('minimax', { minimaxEndpoint: value })"
+      <!-- ============ OpenCode Go ============ -->
+      <ProviderAccountRow
+        v-if="visible.opencode"
+        provider="opencode-go"
+        icon="opencode"
+        :name="NAMES.opencode"
+        :status="opencodeStatus.text"
+        :tone="opencodeStatus.tone"
+      >
+        <p v-if="!secure" class="set-callout warn usage-callout"><span class="set-callout-text">{{ t('settings.accounts.noSecureStorage', 'Secure credential storage is unavailable on this computer, so keys and cookies cannot be saved.') }}</span></p>
+        <div v-if="unsealed" class="set-callout warn usage-callout" role="alert" data-test="credentials-unsealed">
+          <span class="set-callout-text">{{ t('settings.accounts.unsealedKeysShort', 'Your saved keys and cookies are stored unencrypted. Save them again to encrypt them.') }}</span>
+          <details class="set-more">
+            <summary>{{ t('settings.common.learnMore', 'Learn more') }}</summary>
+            <p>{{ t('settings.accounts.unsealedKeysMore', 'Anyone who can read your disk or a backup of it can read them.') }}</p>
+          </details>
+        </div>
+        <SecretField
+          id="opencode-go-api-key"
+          :label="t('settings.accounts.opencode.apiKey', 'OpenCode Go API key')"
+          :placeholder="t('settings.accounts.opencode.apiKeyPlaceholderShort', 'Optional — blank uses /connect or OPENCODE_API_KEY')"
+          :saved="!!saved.opencodeGoApiKey"
+          :busy="busy || !secure"
+          :save="saveSecret('opencode', 'opencodeGoApiKey')"
+          :forget="forgetSecret('opencode', 'opencodeGoApiKey')"
+        />
+        <SecretField
+          id="opencode-go-cookie"
+          :label="t('settings.accounts.opencode.cookie', 'OpenCode Go session cookie')"
+          :placeholder="COOKIE_EXAMPLE"
+          :saved="!!saved.opencodeCookie"
+          :busy="busy || !secure"
+          :save="saveSecret('opencode', 'opencodeCookie')"
+          :forget="forgetSecret('opencode', 'opencodeCookie')"
         >
-          <option value="overseas">{{ t('settings.accounts.minimax.overseas', 'Overseas (platform.minimax.io)') }}</option>
-          <option value="cn">{{ t('settings.accounts.minimax.china', 'China (platform.minimaxi.com)') }}</option>
-        </ThemedSelect>
-        <p class="usage-hint">{{ t('settings.accounts.minimax.endpointShort', 'The host that matches your account.') }}</p>
-      </div>
-      <SecretField
-        id="minimax-api-key"
-        :label="t('settings.accounts.minimax.apiKey', 'MiniMax API key')"
-        :placeholder="t('settings.accounts.minimax.apiKeyPlaceholder', 'Paste your MiniMax API key')"
-        :saved="!!saved.minimaxApiKey"
-        :busy="busy || !secure"
-        :forget-label="t('settings.accounts.minimax.forgetKey', 'Forget key')"
-        :save="saveSecret('minimax', 'minimaxApiKey', t('settings.accounts.minimax.apiKeySaved', 'MiniMax API key saved.'))"
-        :forget="forgetSecret('minimax', 'minimaxApiKey')"
+          <p class="usage-hint">
+            {{ t('settings.accounts.opencode.cookieHelpShort', 'Only for legacy console (OpenCode Black) accounts: the full Cookie header of an opencode.ai request in DevTools, with __Host-console_session.') }}
+          </p>
+        </SecretField>
+        <div class="usage-field">
+          <label class="usage-label" for="opencode-workspace">{{ t('settings.accounts.opencode.workspace', 'Workspace ID override') }}</label>
+          <div class="usage-row">
+            <input
+              id="opencode-workspace"
+              v-model="drafts.opencodeWorkspaceId"
+              class="usage-input"
+              type="text"
+              spellcheck="false"
+              :disabled="busy"
+              :placeholder="t('settings.accounts.opencode.workspacePlaceholder', 'wrk_… (leave blank for automatic lookup)')"
+              data-test="opencode-workspace"
+              @change="commitText('opencode', 'opencodeWorkspaceId')"
+              @keydown.enter.prevent="commitText('opencode', 'opencodeWorkspaceId')"
+            />
+            <button
+              v-if="settings.opencodeWorkspaceId"
+              type="button"
+              class="exit-btn small"
+              :disabled="busy"
+              @click="clearText('opencode', 'opencodeWorkspaceId')"
+            >
+              {{ t('settings.accounts.clear', 'Clear') }}
+            </button>
+          </div>
+          <p class="usage-hint">
+            {{ t('settings.accounts.opencode.workspaceHelpShort', 'Only if the automatic lookup fails. It is in the opencode.ai URL:') }}
+            <code>{{ WORKSPACE_EXAMPLE }}</code>
+          </p>
+        </div>
+        <p v-if="notice.opencode" class="usage-hint" role="status">{{ notice.opencode }}</p>
+      </ProviderAccountRow>
+
+      <!-- ============ MiniMax ============ -->
+      <ProviderAccountRow
+        v-if="visible.minimax"
+        provider="minimax"
+        icon="minimax"
+        :icon-label="NAMES.minimax"
+        icon-accent="#e2367a"
+        :name="NAMES.minimax"
+        :status="minimaxStatus.text"
+        :tone="minimaxStatus.tone"
       >
-        <p class="usage-hint">{{ t('settings.accounts.minimax.apiKeyHelpShort', 'From your MiniMax console → API keys. Used before the cookie.') }}</p>
-      </SecretField>
-      <SecretField
-        id="minimax-cookie"
-        :label="t('settings.accounts.minimax.cookie', 'MiniMax session cookie')"
-        :placeholder="t('settings.accounts.minimax.cookiePlaceholder', 'Paste the Cookie header from DevTools')"
-        :saved="!!saved.minimaxCookie"
-        :busy="busy || !secure"
-        :forget-label="t('settings.accounts.minimax.forgetCookie', 'Forget cookie')"
-        :save="saveSecret('minimax', 'minimaxCookie', t('settings.accounts.minimax.cookieSaved', 'MiniMax cookie saved.'))"
-        :forget="forgetSecret('minimax', 'minimaxCookie')"
-      >
-        <template #help>
-          <button
-            type="button"
-            class="usage-link"
-            :aria-expanded="cookieHelp"
-            data-test="minimax-cookie-help"
-            @click="cookieHelp = !cookieHelp"
-          >
-            {{ t('settings.accounts.minimax.howToCopy', 'How to copy') }}
+        <template #actions>
+          <button type="button" class="exit-btn" data-test="minimax-console" @click="openLink(minimaxConsole)">
+            {{ t('settings.accounts.minimax.openConsole', 'Open console') }} <span aria-hidden="true">↗</span>
           </button>
         </template>
-        <ol v-if="cookieHelp" class="usage-steps">
-          <li v-text="t('settings.accounts.minimax.step1', 'Open {{url}} in your browser and sign in.', { url: minimaxConsole })"></li>
-          <li>{{ t('settings.accounts.minimax.step2', 'Open DevTools.') }}</li>
-          <li>{{ t('settings.accounts.minimax.step3', 'Go to the Network tab and enable Preserve log.') }}</li>
-          <li>{{ t('settings.accounts.minimax.step4', 'Reload the page.') }}</li>
-          <li>{{ t('settings.accounts.minimax.step5', 'Filter for remains and select the coding_plan/remains request.') }}</li>
-          <li>{{ t('settings.accounts.minimax.step6', 'Under Request Headers, copy the Cookie value.') }}</li>
-          <li>{{ t('settings.accounts.minimax.step7', 'Paste it here and click Save.') }}</li>
-        </ol>
-        <p class="usage-hint">{{ t('settings.accounts.minimax.cookieExpires', 'Cookie expires when you sign out in the browser.') }}</p>
-      </SecretField>
-      <p v-if="notice.minimax" class="usage-hint" role="status">{{ notice.minimax }}</p>
-      <div class="usage-advanced">
-        <button
-          type="button"
-          class="usage-link"
-          :aria-expanded="advanced"
-          aria-controls="minimax-advanced"
-          data-test="minimax-advanced"
-          @click="advanced = !advanced"
-        >
-          {{ t('settings.accounts.minimax.advancedOptions', 'Advanced options') }}
-        </button>
-        <div v-show="advanced" id="minimax-advanced" class="usage-advanced-body">
-          <p class="usage-hint">{{ t('settings.accounts.minimax.advancedShort', 'Change these only if usage points at the wrong group or model.') }}</p>
-          <div class="usage-field">
-            <label class="usage-label" for="minimax-group">{{ t('settings.accounts.minimax.group', 'Group ID override') }}</label>
-            <input
-              id="minimax-group"
-              v-model="drafts.minimaxGroupId"
-              class="usage-input"
-              type="text"
-              spellcheck="false"
-              :disabled="busy"
-              :placeholder="t('settings.accounts.minimax.groupPlaceholder', 'Use group ID from cookie')"
-              data-test="minimax-group"
-              @change="commitText('minimax', 'minimaxGroupId')"
-              @keydown.enter.prevent="commitText('minimax', 'minimaxGroupId')"
-            />
-          </div>
-          <div class="usage-field">
-            <label class="usage-label" for="minimax-models">{{ t('settings.accounts.minimax.models', 'Usage model names') }}</label>
-            <input
-              id="minimax-models"
-              v-model="drafts.minimaxUsageModels"
-              class="usage-input"
-              type="text"
-              spellcheck="false"
-              :disabled="busy"
-              :placeholder="DEFAULT_MODEL"
-              data-test="minimax-models"
-              @change="commitText('minimax', 'minimaxUsageModels')"
-              @keydown.enter.prevent="commitText('minimax', 'minimaxUsageModels')"
-            />
-            <p class="usage-hint">{{ t('settings.accounts.minimax.modelsShort', 'Comma-separated.') }}</p>
-          </div>
+        <p v-if="!secure" class="set-callout warn usage-callout"><span class="set-callout-text">{{ t('settings.accounts.noSecureStorage', 'Secure credential storage is unavailable on this computer, so keys and cookies cannot be saved.') }}</span></p>
+        <div v-if="unsealed" class="set-callout warn usage-callout" role="alert" data-test="credentials-unsealed">
+          <span class="set-callout-text">{{ t('settings.accounts.unsealedKeysShort', 'Your saved keys and cookies are stored unencrypted. Save them again to encrypt them.') }}</span>
+          <details class="set-more">
+            <summary>{{ t('settings.common.learnMore', 'Learn more') }}</summary>
+            <p>{{ t('settings.accounts.unsealedKeysMore', 'Anyone who can read your disk or a backup of it can read them.') }}</p>
+          </details>
         </div>
-      </div>
-    </ProviderAccountRow>
-
-    <!-- ============ GLM Coding Plan ============ -->
-    <ProviderAccountRow
-      v-if="visible.glm"
-      provider="zcode"
-      icon="zcode"
-      icon-label="GLM"
-      icon-accent="#3859ff"
-      :name="NAMES.glm"
-      :status="glmStatus.text"
-      :tone="glmStatus.tone"
-      toggle="configure"
-    >
-      <template #actions>
-        <button type="button" class="exit-btn" data-test="glm-console" @click="openLink(glmConsole)">
-          {{ t('settings.accounts.glm.openConsole', 'Get a key') }} <span aria-hidden="true">↗</span>
-        </button>
-      </template>
-      <p v-if="!secure" class="usage-account-error">{{ t('settings.accounts.noSecureStorage', 'Secure credential storage is unavailable on this computer, so keys and cookies cannot be saved.') }}</p>
-      <p v-if="unsealed" class="usage-account-error" role="alert" data-test="credentials-unsealed">{{ t('settings.accounts.unsealed', 'Your saved keys and cookies are stored unencrypted: anyone who can read your disk or a backup of it can read them. Save them again to encrypt them.') }}</p>
-      <div class="usage-field">
-        <label class="usage-label" for="glm-site">{{ t('settings.accounts.glm.site', 'Plan site') }}</label>
-        <ThemedSelect
-          id="glm-site"
-          class="usage-input"
-          :model-value="settings.zcodePlanSite || 'zai'"
-          :disabled="busy"
-          data-test="glm-site"
-          @update:model-value="(value) => value !== settings.zcodePlanSite && update('glm', { zcodePlanSite: value })"
+        <div class="usage-field">
+          <label class="usage-label" for="minimax-endpoint">{{ t('settings.accounts.minimax.endpoint', 'MiniMax endpoint') }}</label>
+          <ThemedSelect
+            id="minimax-endpoint"
+            class="usage-input"
+            :model-value="settings.minimaxEndpoint || 'overseas'"
+            :disabled="busy"
+            data-test="minimax-endpoint"
+            @update:model-value="(value) => value !== settings.minimaxEndpoint && update('minimax', { minimaxEndpoint: value })"
+          >
+            <option value="overseas">{{ t('settings.accounts.minimax.overseas', 'Overseas (platform.minimax.io)') }}</option>
+            <option value="cn">{{ t('settings.accounts.minimax.china', 'China (platform.minimaxi.com)') }}</option>
+          </ThemedSelect>
+          <p class="usage-hint">{{ t('settings.accounts.minimax.endpointShort', 'The host that matches your account.') }}</p>
+        </div>
+        <SecretField
+          id="minimax-api-key"
+          :label="t('settings.accounts.minimax.apiKey', 'MiniMax API key')"
+          :placeholder="t('settings.accounts.minimax.apiKeyPlaceholder', 'Paste your MiniMax API key')"
+          :saved="!!saved.minimaxApiKey"
+          :busy="busy || !secure"
+          :forget-label="t('settings.accounts.minimax.forgetKey', 'Forget key')"
+          :save="saveSecret('minimax', 'minimaxApiKey', t('settings.accounts.minimax.apiKeySaved', 'MiniMax API key saved.'))"
+          :forget="forgetSecret('minimax', 'minimaxApiKey')"
         >
-          <option value="zai">{{ t('settings.accounts.glm.zai', 'Z.ai (api.z.ai)') }}</option>
-          <option value="bigmodel">{{ t('settings.accounts.glm.bigmodel', 'BigModel, China (open.bigmodel.cn)') }}</option>
-        </ThemedSelect>
-        <p class="usage-hint">{{ t('settings.accounts.glm.siteShort', 'Where your Coding Plan was bought.') }}</p>
-      </div>
-      <SecretField
-        id="glm-plan-key"
-        :label="t('settings.accounts.glm.apiKey', 'GLM Coding Plan key')"
-        :placeholder="t('settings.accounts.glm.apiKeyPlaceholder', 'Paste your Coding Plan API key')"
-        :saved="!!saved.zcodePlanApiKey"
-        :busy="busy || !secure"
-        :forget-label="t('settings.accounts.glm.forgetKey', 'Remove key')"
-        :save="saveSecret('glm', 'zcodePlanApiKey', t('settings.accounts.glm.apiKeySaved', 'GLM Coding Plan key saved.'))"
-        :forget="forgetSecret('glm', 'zcodePlanApiKey')"
-      >
-        <p class="usage-hint">{{ t('settings.accounts.glm.apiKeyHelp', 'Shows this plan’s quota in Usage, even without ZCode. Used before ZCode’s own key, and sent only to the plan site’s quota service over HTTPS.') }}</p>
-      </SecretField>
-      <p v-if="notice.glm" class="usage-hint" role="status">{{ notice.glm }}</p>
-    </ProviderAccountRow>
+          <p class="usage-hint">{{ t('settings.accounts.minimax.apiKeyHelpShort', 'From your MiniMax console → API keys. Used before the cookie.') }}</p>
+        </SecretField>
+        <SecretField
+          id="minimax-cookie"
+          :label="t('settings.accounts.minimax.cookie', 'MiniMax session cookie')"
+          :placeholder="t('settings.accounts.minimax.cookiePlaceholder', 'Paste the Cookie header from DevTools')"
+          :saved="!!saved.minimaxCookie"
+          :busy="busy || !secure"
+          :forget-label="t('settings.accounts.minimax.forgetCookie', 'Forget cookie')"
+          :save="saveSecret('minimax', 'minimaxCookie', t('settings.accounts.minimax.cookieSaved', 'MiniMax cookie saved.'))"
+          :forget="forgetSecret('minimax', 'minimaxCookie')"
+        >
+          <p class="usage-hint">{{ t('settings.accounts.minimax.cookieExpires', 'Cookie expires when you sign out in the browser.') }}</p>
+          <details class="set-more usage-howto">
+            <summary data-test="minimax-cookie-help">{{ t('settings.accounts.minimax.howToCopy', 'How to copy') }}</summary>
+            <ol class="usage-steps">
+              <li v-text="t('settings.accounts.minimax.step1', 'Open {{url}} in your browser and sign in.', { url: minimaxConsole })"></li>
+              <li>{{ t('settings.accounts.minimax.step2', 'Open DevTools.') }}</li>
+              <li>{{ t('settings.accounts.minimax.step3', 'Go to the Network tab and enable Preserve log.') }}</li>
+              <li>{{ t('settings.accounts.minimax.step4', 'Reload the page.') }}</li>
+              <li>{{ t('settings.accounts.minimax.step5', 'Filter for remains and select the coding_plan/remains request.') }}</li>
+              <li>{{ t('settings.accounts.minimax.step6', 'Under Request Headers, copy the Cookie value.') }}</li>
+              <li>{{ t('settings.accounts.minimax.step7', 'Paste it here and click Save.') }}</li>
+            </ol>
+          </details>
+        </SecretField>
+        <p v-if="notice.minimax" class="usage-hint" role="status">{{ notice.minimax }}</p>
+        <details class="set-more usage-advanced">
+          <summary data-test="minimax-advanced">{{ t('settings.accounts.minimax.advancedOptions', 'Advanced options') }}</summary>
+          <div id="minimax-advanced" class="usage-advanced-body">
+            <p class="usage-hint">{{ t('settings.accounts.minimax.advancedShort', 'Change these only if usage points at the wrong group or model.') }}</p>
+            <div class="usage-field">
+              <label class="usage-label" for="minimax-group">{{ t('settings.accounts.minimax.group', 'Group ID override') }}</label>
+              <input
+                id="minimax-group"
+                v-model="drafts.minimaxGroupId"
+                class="usage-input"
+                type="text"
+                spellcheck="false"
+                :disabled="busy"
+                :placeholder="t('settings.accounts.minimax.groupPlaceholder', 'Use group ID from cookie')"
+                data-test="minimax-group"
+                @change="commitText('minimax', 'minimaxGroupId')"
+                @keydown.enter.prevent="commitText('minimax', 'minimaxGroupId')"
+              />
+            </div>
+            <div class="usage-field">
+              <label class="usage-label" for="minimax-models">{{ t('settings.accounts.minimax.models', 'Usage model names') }}</label>
+              <input
+                id="minimax-models"
+                v-model="drafts.minimaxUsageModels"
+                class="usage-input"
+                type="text"
+                spellcheck="false"
+                :disabled="busy"
+                :placeholder="DEFAULT_MODEL"
+                data-test="minimax-models"
+                @change="commitText('minimax', 'minimaxUsageModels')"
+                @keydown.enter.prevent="commitText('minimax', 'minimaxUsageModels')"
+              />
+              <p class="usage-hint">{{ t('settings.accounts.minimax.modelsShort', 'Comma-separated.') }}</p>
+            </div>
+          </div>
+        </details>
+      </ProviderAccountRow>
 
-    <!-- ============ Grok, Cursor ============ -->
-    <SignInUsageSection v-if="visible.grok" provider="grok" :status="state?.grok || null" :loading="loading" @reload="load" />
-    <SignInUsageSection v-if="visible.cursor" provider="cursor" :status="state?.cursor || null" :loading="loading" @reload="load" />
-
-    <!-- Not installed, nothing saved: one quiet line, each name shows its row. -->
-    <p v-if="notInstalled.length" class="usage-hidden" data-test="providers-not-installed">
-      {{ t('settings.accounts.notInstalled', 'Not installed:') }}
-      <template v-for="(id, i) in notInstalled" :key="id"
-        >{{ i ? ', ' : '' }}<button
-          type="button"
-          class="usage-link"
-          :title="t('settings.accounts.showProvider', 'Show {{name}}', { name: NAMES[id] })"
-          :data-test="`reveal-${id}`"
-          @click="reveal(id)"
-        >{{ NAMES[id] }}</button></template
+      <!-- ============ GLM Coding Plan ============ -->
+      <ProviderAccountRow
+        v-if="visible.glm"
+        provider="zcode"
+        icon="zcode"
+        icon-label="GLM"
+        icon-accent="#3859ff"
+        :name="NAMES.glm"
+        :status="glmStatus.text"
+        :tone="glmStatus.tone"
       >
-    </p>
+        <template #actions>
+          <button type="button" class="exit-btn" data-test="glm-console" @click="openLink(glmConsole)">
+            {{ t('settings.accounts.glm.openConsole', 'Get a key') }} <span aria-hidden="true">↗</span>
+          </button>
+        </template>
+        <p v-if="!secure" class="set-callout warn usage-callout"><span class="set-callout-text">{{ t('settings.accounts.noSecureStorage', 'Secure credential storage is unavailable on this computer, so keys and cookies cannot be saved.') }}</span></p>
+        <div v-if="unsealed" class="set-callout warn usage-callout" role="alert" data-test="credentials-unsealed">
+          <span class="set-callout-text">{{ t('settings.accounts.unsealedKeysShort', 'Your saved keys and cookies are stored unencrypted. Save them again to encrypt them.') }}</span>
+          <details class="set-more">
+            <summary>{{ t('settings.common.learnMore', 'Learn more') }}</summary>
+            <p>{{ t('settings.accounts.unsealedKeysMore', 'Anyone who can read your disk or a backup of it can read them.') }}</p>
+          </details>
+        </div>
+        <div class="usage-field">
+          <label class="usage-label" for="glm-site">{{ t('settings.accounts.glm.site', 'Plan site') }}</label>
+          <ThemedSelect
+            id="glm-site"
+            class="usage-input"
+            :model-value="settings.zcodePlanSite || 'zai'"
+            :disabled="busy"
+            data-test="glm-site"
+            @update:model-value="(value) => value !== settings.zcodePlanSite && update('glm', { zcodePlanSite: value })"
+          >
+            <option value="zai">{{ t('settings.accounts.glm.zai', 'Z.ai (api.z.ai)') }}</option>
+            <option value="bigmodel">{{ t('settings.accounts.glm.bigmodel', 'BigModel, China (open.bigmodel.cn)') }}</option>
+          </ThemedSelect>
+          <p class="usage-hint">{{ t('settings.accounts.glm.siteShort', 'Where your Coding Plan was bought.') }}</p>
+        </div>
+        <SecretField
+          id="glm-plan-key"
+          :label="t('settings.accounts.glm.apiKey', 'GLM Coding Plan key')"
+          :placeholder="t('settings.accounts.glm.apiKeyPlaceholder', 'Paste your Coding Plan API key')"
+          :saved="!!saved.zcodePlanApiKey"
+          :busy="busy || !secure"
+          :forget-label="t('settings.accounts.glm.forgetKey', 'Remove key')"
+          :save="saveSecret('glm', 'zcodePlanApiKey', t('settings.accounts.glm.apiKeySaved', 'GLM Coding Plan key saved.'))"
+          :forget="forgetSecret('glm', 'zcodePlanApiKey')"
+        >
+          <p class="usage-hint">{{ t('settings.accounts.glm.apiKeyHelp', 'Shows this plan’s quota in Usage, even without ZCode. Used before ZCode’s own key, and sent only to the plan site’s quota service over HTTPS.') }}</p>
+        </SecretField>
+        <p v-if="notice.glm" class="usage-hint" role="status">{{ notice.glm }}</p>
+      </ProviderAccountRow>
+
+      <!-- ============ Grok, Cursor ============ -->
+      <SignInUsageSection v-if="visible.grok" provider="grok" :status="state?.grok || null" :loading="loading" @reload="load" />
+      <SignInUsageSection v-if="visible.cursor" provider="cursor" :status="state?.cursor || null" :loading="loading" @reload="load" />
+
+      <!-- Not installed, nothing saved: one quiet line, each name shows its row. -->
+      <p v-if="notInstalled.length" class="usage-hidden" data-test="providers-not-installed">
+        {{ t('settings.accounts.notInstalled', 'Not installed:') }}
+        <template v-for="(id, i) in notInstalled" :key="id"
+          >{{ i ? ', ' : '' }}<button
+            type="button"
+            class="usage-link"
+            :title="t('settings.accounts.showProvider', 'Show {{name}}', { name: NAMES[id] })"
+            :data-test="`reveal-${id}`"
+            @click="reveal(id)"
+          >{{ NAMES[id] }}</button></template
+        >
+      </p>
+    </template>
   </div>
 </template>
 

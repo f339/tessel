@@ -160,7 +160,24 @@
       "tooFrequent": "Espacez les exécutions d’au moins {{min}} minutes : chacune ouvre un panneau et, selon le mode choisi, une copie de travail.",
       "templateHint": "Choisir un exemple remplace le nom, les instructions, la planification et le délai de rattrapage.",
       "localTime": "Les horaires utilisent le fuseau horaire de cet ordinateur, même pour les projets distants.",
-      "savedPaused": "L’automatisation sera enregistrée en pause. Aucun lancement planifié n’aura lieu avant son activation. « Exécuter maintenant » reste disponible."
+      "savedPaused": "L’automatisation sera enregistrée en pause. Aucun lancement planifié n’aura lieu avant son activation. « Exécuter maintenant » reste disponible.",
+      "close": "Fermer",
+      "taskGroup": "Tâche",
+      "templateHintShort": "Remplit le nom, les instructions, la planification et le délai.",
+      "nameShort": "Nom",
+      "defaultModelShort": "Celui par défaut de l’agent",
+      "whereShort": "Travaille dans",
+      "ownCopyShort": "Sa propre copie",
+      "directShort": "Dossier du projet",
+      "minuteShort": "Minute après l’heure",
+      "graceShort": "Si une exécution est manquée",
+      "graceHintShort": "Tessel fermé ou en veille : une exécution manquée démarre à son retour, dans ce délai.",
+      "onceSavedShort": "S’exécute seule une fois enregistrée, quand Tessel est ouvert.",
+      "savedPausedShort": "Enregistrée en pause : elle ne s’exécute que si vous cliquez sur Exécuter maintenant.",
+      "saveChangesShort": "Enregistrer",
+      "ownCopyRemoteShort": "Projet distant : dans son dossier seulement.",
+      "ownCopyHintShort": "Une branche par exécution, dans son propre dossier : vous la fusionnez.",
+      "directHintShort": "Les modifications arrivent tout de suite : pour les rapports et vérifications."
     },
     "perms": {
       "title": "Ce que {{agent}} peut faire sans surveillance",
@@ -169,7 +186,8 @@
       "unknown": "Choisissez un agent pour voir ses permissions.",
       "manual": "Mode manuel : l’agent demande votre autorisation avant d’agir. L’exécution attend votre réponse dans son panneau ; vous recevez une notification.",
       "account": "L’agent utilise le compte sélectionné dans Paramètres > Comptes de fournisseurs d’IA et la configuration définie dans Paramètres > Agents.",
-      "change": "Modifier dans Paramètres > Agents"
+      "change": "Modifier dans Paramètres > Agents",
+      "changeShort": "Réglages de l’agent"
     },
     "page": {
       "projectMissing": "{{name}} (n’est pas ouvert)",
@@ -198,7 +216,13 @@
       "actionFailed": "Impossible d’appliquer la modification. Réessayez.",
       "runFailed": "Impossible de mettre cette exécution en file d’attente. Réessayez.",
       "deleteFailed": "Impossible de supprimer cette automatisation. Réessayez.",
-      "scheduleFor": "Exécutions planifiées : {{name}}"
+      "scheduleFor": "Exécutions planifiées : {{name}}",
+      "listTitle": "Vos automatisations",
+      "newShort": "Nouvelle automatisation",
+      "runNowShort": "Exécuter maintenant",
+      "maxConcurrentShort": "Exécutions simultanées",
+      "sameNeverTwice": "Une même automatisation ne s’exécute jamais deux fois en même temps.",
+      "maxConcurrentHintShort": "Pour toutes les automatisations ; les autres attendent leur tour."
     },
     "confirm": {
       "title": "Laisser « {{name}} » s'exécuter sans surveillance ?",
@@ -209,7 +233,8 @@
     "delete": {
       "title": "Supprimer l'automatisation",
       "text": "Supprimer « {{name}} » et son historique d’exécution ? Les copies de travail et les cartes créées lors des exécutions précédentes seront conservées.",
-      "ok": "Supprimer"
+      "ok": "Supprimer",
+      "titleShort": "Supprimer cette automatisation ?"
     },
     "history": {
       "times": "{{times}} fois",
@@ -231,7 +256,9 @@
       "runText": "À l’heure prévue, l’agent démarre dans un nouveau panneau du projet, dans une copie de travail ou dans le dossier du projet. Une carte est créée sur le tableau.",
       "reviewTitle": "Consulter les résultats",
       "reviewText": "Consultez les exécutions récentes, ouvrez leur panneau ou leur carte et poursuivez le travail si nécessaire.",
-      "onlyOpen": "Les automatisations fonctionnent uniquement lorsque Tessel est ouvert ; aucune tâche n’est planifiée dans Windows. Après une fermeture ou une mise en veille, une seule exécution manquée est rattrapée si le délai de rattrapage le permet. Les échéances plus anciennes sont ignorées."
+      "onlyOpen": "Les automatisations fonctionnent uniquement lorsque Tessel est ouvert ; aucune tâche n’est planifiée dans Windows. Après une fermeture ou une mise en veille, une seule exécution manquée est rattrapée si le délai de rattrapage le permet. Les échéances plus anciennes sont ignorées.",
+      "onlyOpenShort": "Les automatisations fonctionnent uniquement lorsque Tessel est ouvert : rien n’est planifié dans Windows.",
+      "missedMore": "Après une fermeture ou une mise en veille, une seule exécution manquée est rattrapée si le délai de rattrapage le permet. Les échéances plus anciennes sont ignorées."
     },
     "detail": {
       "where": "Lieu d'exécution",

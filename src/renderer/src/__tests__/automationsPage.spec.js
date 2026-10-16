@@ -10,9 +10,9 @@ const flush = async () => {
   await new Promise((r) => setTimeout(r, 0))
 }
 
-function mountPage({ yolo = false, confirm = true, snapshot = null, sig = 'p1:sig:1' } = {}) {
+function mountPage({ yolo = false, confirm = true, snapshot = null, sig = 'p1:sig:1', list = null } = {}) {
   const api = {
-    list: vi.fn(async () => snapshot || { loaded: true, automations: [], runs: [], settings: { maxConcurrent: 2 } }),
+    list: list || vi.fn(async () => snapshot || { loaded: true, automations: [], runs: [], settings: { maxConcurrent: 2 } }),
     create: vi.fn(async (input) => ({ ok: true, automation: { id: 'auto-1', ...input } })),
     update: vi.fn(async () => ({ ok: true })),
     setEnabled: vi.fn(async () => ({ ok: true })),
@@ -54,6 +54,40 @@ describe('Settings > Automations', () => {
     await flush()
     expect(wrapper.get('[data-test="au-only-open"]').text()).toMatch(/only while Tessel is open/)
     expect(wrapper.find('[data-test="au-empty"]').exists()).toBe(true)
+    // How they work is open while there is none; the limit is in a card.
+    expect(wrapper.find('.au-how-fold').exists()).toBe(false)
+    expect(wrapper.get('[data-test="au-max"]').element.closest('.set-card')).not.toBeNull()
+  })
+
+  it('the editor is a dialog over the page, made of Settings rows and switches; nothing is said in orange before you type', async () => {
+    const m = mountPage()
+    wrapper = m.wrapper
+    await flush()
+    await wrapper.get('[data-test="au-new"]').trigger('click')
+    await flush()
+    const dialog = wrapper.get('[role="dialog"][data-test="automation-editor"]')
+    expect(dialog.attributes('aria-modal')).toBe('true')
+    expect(wrapper.get('.au-body').attributes('inert')).toBeDefined()
+    // No native checkbox or time input; its switches are Settings' own.
+    expect(dialog.findAll('input[type="time"]')).toHaveLength(0)
+    for (const box of dialog.findAll('input[type="checkbox"]')) expect(box.classes()).toContain('set-switch')
+    expect(dialog.find('.au-label').exists()).toBe(false)
+    // What is missing is a plain hint; Create waits for it.
+    expect(dialog.find('[data-test="au-error"]').exists()).toBe(false)
+    expect(dialog.get('[data-test="au-missing"]').text()).toMatch(/name/)
+    expect(dialog.get('[data-test="au-save"]').element.disabled).toBe(true)
+    await wrapper.get('[data-test="au-name"]').setValue('Nightly')
+    await wrapper.get('[data-test="au-prompt"]').setValue('Do it')
+    expect(dialog.find('[data-test="au-missing"]').exists()).toBe(false)
+    expect(dialog.get('[data-test="au-save"]').element.disabled).toBe(false)
+    // The time of day is a select of the shared look.
+    await setSelectValue(wrapper.get('[data-test="au-time"]'), '07:30')
+    expect(wrapper.get('[data-test="au-next"]').text()).toMatch(/Daily at 7:30/)
+    // Escape closes it.
+    await dialog.trigger('keydown', { key: 'Escape' })
+    await flush()
+    expect(wrapper.find('[data-test="automation-editor"]').exists()).toBe(false)
+    expect(wrapper.get('.au-body').attributes('inert')).toBeUndefined()
   })
 
   it('creates one from a template, with your confirmation that it may run unattended (Yolo shown)', async () => {
@@ -131,8 +165,13 @@ describe('Settings > Automations', () => {
     wrapper = m.wrapper
     await flush()
     expect(wrapper.text()).toMatch(/Weekdays at/)
-    await wrapper.get('.au-main').trigger('click')
+    // Its actions are in its details, not on the row.
+    expect(wrapper.find('[data-test="au-run-now"]').exists()).toBe(false)
+    // Once there is one, how they work folds away.
+    expect(wrapper.get('.au-how-fold').attributes('open')).toBeUndefined()
+    await wrapper.get('.sl-row').trigger('click')
     await flush()
+    expect(wrapper.get('[data-test="au-delete"]').classes()).toContain('danger')
     expect(wrapper.findAll('[data-run]')).toHaveLength(2)
     expect(wrapper.text()).toMatch(/past its missed-run grace/)
     await wrapper.get('[data-test="au-show-pane"]').trigger('click')
@@ -153,6 +192,7 @@ describe('Settings > Automations', () => {
     wrapper = m.wrapper
     await flush()
     expect(wrapper.find('[data-test="au-needs-confirm"]').exists()).toBe(true)
+    await wrapper.get('.sl-row').trigger('click')
     await wrapper.get('[data-test="au-run-now"]').trigger('click')
     await flush()
     expect(m.askConfirm).toHaveBeenCalledTimes(1)
@@ -165,6 +205,7 @@ describe('Settings > Automations', () => {
     const m = mountPage({ snapshot: { loaded: true, settings: { maxConcurrent: 2 }, automations: [base], runs: [] } })
     wrapper = m.wrapper
     await flush()
+    await wrapper.get('.sl-row').trigger('click')
     await wrapper.get('[data-test="au-edit"]').trigger('click')
     await wrapper.get('[data-test="au-name"]').setValue('Daily 2')
     await wrapper.get('[data-test="automation-editor"]').trigger('submit')
@@ -175,5 +216,40 @@ describe('Settings > Automations', () => {
     await wrapper.get('[data-test="automation-editor"]').trigger('submit')
     await flush()
     expect(m.askConfirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('Delete asks first, as a danger', async () => {
+    const now = Date.now()
+    const base = { id: 'auto-4', name: 'Weekly', prompt: 'p', agentId: 'claude', wsId: 'ws-1', projectName: 'App', projectCwd: 'C:\\code\\app', isolation: 'project', schedule: '0 9 * * 1', enabled: true, confirmedAt: now - 1000, confirmedSig: 'p1:sig:1', nextRunAt: now + 3600_000, missedRunGraceMinutes: 720, after: { notify: true } }
+    const m = mountPage({ snapshot: { loaded: true, settings: { maxConcurrent: 2 }, automations: [base], runs: [] }, confirm: false })
+    wrapper = m.wrapper
+    await flush()
+    await wrapper.get('.sl-row').trigger('click')
+    await wrapper.get('[data-test="au-delete"]').trigger('click')
+    await flush()
+    expect(m.askConfirm).toHaveBeenCalledWith(expect.objectContaining({ danger: true }))
+    expect(m.api.remove).not.toHaveBeenCalled()
+  })
+
+  it('while loading: placeholder rows; a failed load: the error with Retry, never an empty list', async () => {
+    applySnapshot({ loaded: false, automations: [], runs: [], settings: { maxConcurrent: 2 } })
+    let answer
+    const m = mountPage({ list: vi.fn(() => new Promise((r) => (answer = r))) })
+    wrapper = m.wrapper
+    await flush()
+    expect(wrapper.findAll('.sl-skeleton').length).toBeGreaterThan(0)
+    expect(wrapper.find('[data-test="au-empty"]').exists()).toBe(false)
+    answer({ loaded: true, automations: [], runs: [], settings: { maxConcurrent: 2 } })
+    await flush()
+    expect(wrapper.find('.sl-skeleton').exists()).toBe(false)
+    expect(wrapper.find('[data-test="au-empty"]').exists()).toBe(true)
+    wrapper.unmount()
+    applySnapshot({ loaded: false, automations: [], runs: [], settings: { maxConcurrent: 2 } })
+    const failing = mountPage({ list: vi.fn(async () => { throw new Error('EACCES: automations.json') }) })
+    wrapper = failing.wrapper
+    await flush()
+    expect(wrapper.get('[data-test="panel-error-text"]').text()).toBe('Automations could not be loaded.')
+    expect(wrapper.find('[data-test="au-empty"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('EACCES')
   })
 })
