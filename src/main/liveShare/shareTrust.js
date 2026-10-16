@@ -62,8 +62,13 @@ export function createTrustStore({ entries = [], save = () => {}, onChange = () 
     return [...map.values()].map((e) => ({ key: e.key.toString('base64'), name: e.name, grant: { projects: [...e.grant.projects], rights: { ...e.grant.rights } }, since: e.since, lastSeen: e.lastSeen }))
   }
 
+  // A project list it may have: valid ids, at most MAX_TRUSTED_PROJECTS
+  // (more is refused, never cut).
+  const fits = (list) => Array.isArray(list) && new Set(list).size <= MAX_TRUSTED_PROJECTS
+
   return {
     get: (fp) => map.get(fp) || null,
+    isFull: () => map.size >= MAX_TRUSTED,
     byId: (id) => (isTrustId(id) ? map.get(id.slice(2)) || null : null),
     list: () => [...map.values()],
     // Trusts the holder of this identity key, with these projects and rights
@@ -83,7 +88,7 @@ export function createTrustStore({ entries = [], save = () => {}, onChange = () 
     // What a trusted person gets: its projects, its rights, its name.
     setGrant(fp, { projects, rights } = {}) {
       const e = map.get(fp)
-      if (!e) return false
+      if (!e || (projects !== undefined && !fits(projects))) return false
       if (projects !== undefined) e.grant.projects = cleanProjectIds(projects, MAX_TRUSTED_PROJECTS)
       if (rights !== undefined) e.grant.rights = cleanRights(rights)
       changed()
@@ -96,6 +101,7 @@ export function createTrustStore({ entries = [], save = () => {}, onChange = () 
       if (project !== undefined) {
         const has = e.grant.projects.includes(project)
         if (!!on === has) return true
+        if (on && e.grant.projects.length >= MAX_TRUSTED_PROJECTS) return false
         return this.setGrant(fp, { projects: on ? [...e.grant.projects, project] : e.grant.projects.filter((p) => p !== project) })
       }
       if (!isRightId(right)) return false

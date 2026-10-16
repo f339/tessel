@@ -13,11 +13,14 @@ export const MAX_PROJECTS = 16
 export const isProjectId = (id) => typeof id === 'string' && /^[\w-]{1,80}$/.test(id)
 export const cleanProjectIds = (list, max = MAX_PROJECTS) => [...new Set((Array.isArray(list) ? list : []).filter(isProjectId))].slice(0, max)
 
-// A name or a label as given ('' when none: the window says "A guest").
+// A name or a label as given ('' when none: the window says "A guest"),
+// without what could make it read as something else: control characters,
+// format characters (bidi overrides and isolates, zero-width ones, the
+// byte-order mark...) and line or paragraph separators.
 export const cleanName = (name) =>
   String(name || '')
     // eslint-disable-next-line no-control-regex -- control characters are what it removes
-    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[\u0000-\u001f\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}]/gu, '')
     .trim()
     .slice(0, 40)
 

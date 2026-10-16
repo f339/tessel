@@ -382,11 +382,14 @@ describe('Live Share trusted people over the wire', () => {
     await until(() => s.host.guests().length === 0)
     await settled(guest(s, inv.id, 'Simpa', { identityKey }))
     expect(s.t.asked).toHaveLength(1)
+    // No longer trusted: removed at once (connected), and its reconnect key
+    // lets it in no more.
+    const second = s.host.guests()[0]
     expect(s.host.untrust(trustId(entry.fp))).toBe(true)
-    expect(s.host.guests()[0]).toMatchObject({ trusted: false, projects: ['ws-a'] })
-    s.host.guests().forEach((x) => s.host.removeGuest(x.id))
     await until(() => s.host.guests().length === 0)
-    // Not trusted any more: the prompt again (after the pause a removal makes).
+    expect(s.host.offlineGuests()).toEqual([])
+    expect(s.host.guests().some((x) => x.id === second.id)).toBe(false)
+    // Not trusted any more: the prompt again.
     s.t.answers.Simpa = () => new Promise(() => {})
     clock.now += 16000
     const back = guest(s, inv.id, 'Simpa', { identityKey })
@@ -557,6 +560,14 @@ describe('Live Share: what a guest opens, and what the host sees of it', () => {
     r.client.write('a1', 'ls\r')
     await until(() => host.presence()[0]?.guests[0].typing)
     expect(host.presence()).toEqual([{ id: 'a1', guests: [{ id: gid, watching: true, typing: true, reading: false }] }])
+    // Typing that goes on is said again every few seconds.
+    const said = t.presence
+    for (let i = 0; i < 5; i++) {
+      clock.now += 1000
+      r.client.write('a1', 'x')
+      await until(() => t.writes.length === i + 2)
+    }
+    expect(t.presence).toBe(said + 1)
     clock.now += 3001
     expect(host.presence()).toEqual([{ id: 'a1', guests: [{ id: gid, watching: true, typing: false, reading: false }] }])
     // A pane of a project it does not see: nothing (and its focus is gone).
@@ -566,7 +577,7 @@ describe('Live Share: what a guest opens, and what the host sees of it', () => {
     r.client.write('b1', 'x')
     await wait(40)
     expect(host.presence()).toEqual([])
-    expect(t.writes).toEqual([['a1', 'ls\r']])
+    expect(t.writes.filter(([id]) => id === 'b1')).toEqual([])
   })
 
   it('presence comes from a guest a couple of times a second at most, the latest', async () => {
@@ -681,3 +692,106 @@ function rawJoin(url, secret, makeJoin) {
     ws.on('error', done)
   })
 }
+
+// The review's probe (trusted person vs the caps and the room), turned
+// around: what it showed must not happen.
+describe('Live Share: a trusted identity keeps its caps and its one place', () => {
+  const hosts = []
+  afterEach(() => {
+    for (const h of hosts.splice(0)) h.stop()
+  })
+  async function share(clock) {
+    const t = fakeTessel({ 'ws-a': ['a1'] })
+    t.answers = new Proxy({}, { get: () => false, has: () => true })
+    const trust = createTrustStore()
+    const host = createShareHost({ hostName: 'Ada', callbacks: t.callbacks, trust, now: () => clock.t })
+    hosts.push(host)
+    const port = await host.start()
+    return { host, port, t, trust }
+  }
+  function guestOf(s, invId, name, opts = {}) {
+    const c = s.host.inviteCode(invId)
+    const r = recorder()
+    r.client = createShareGuest({ url: `ws://127.0.0.1:${s.port}/i/${c.path}`, secret: c.secret, name, signingKey: newSigningKey(), callbacks: r.callbacks, ...opts })
+    r.client.connect()
+    return r
+  }
+
+  it('leaving and joining again (a new reconnect key each time) resets none of its caps: 12 opens in all, never 36', async () => {
+    const clock = { t: 1_000_000 }
+    const s = await share(clock)
+    const identityKey = newSigningKey()
+    s.trust.add({ key: identityKey.publicRaw, name: 'T', projects: ['ws-a'], rights: { open: true } })
+    const inv = s.host.createInvite({ label: 'friends', lifetime: 'never', projects: ['ws-a'] }).invite
+    for (let round = 0; round < 3; round++) {
+      const r = guestOf(s, inv.id, 'T', { identityKey })
+      await until(() => r.projects || r.closed)
+      expect(r.closed).toBe(null)
+      for (let minute = 0; minute < 5; minute++) {
+        for (let i = 0; i < 4; i++) r.client.open({ kind: 'terminal', project: 'ws-a' })
+        await wait(80)
+        clock.t += 61_000
+      }
+      r.client.leave()
+      await until(() => s.host.guests().length === 0)
+    }
+    expect(s.t.opened).toHaveLength(12)
+    expect(s.t.asked).toHaveLength(0)
+    // One use of the invitation, however many times it came.
+    expect(s.host.invites()[0].uses).toBe(1)
+  })
+
+  it('one connection at a time: each join replaces the one it had, a few a minute; the room stays open to others', async () => {
+    const clock = { t: 1_000_000 }
+    const s = await share(clock)
+    const identityKey = newSigningKey()
+    s.trust.add({ key: identityKey.publicRaw, name: 'T', projects: ['ws-a'] })
+    const inv = s.host.createInvite({ label: 'friends', lifetime: 'never', projects: ['ws-a'] }).invite
+    const clones = []
+    for (let i = 0; i < 10; i++) {
+      const r = guestOf(s, inv.id, `T${i}`, { identityKey })
+      await until(() => r.projects || r.closed)
+      clones.push(r)
+    }
+    // Three joins in its minute (each replacing the one before), then busy.
+    expect(clones.slice(0, 3).every((r) => r.states.includes('joined'))).toBe(true)
+    await until(() => clones[0].closed && clones[1].closed)
+    expect([clones[0].closed, clones[1].closed]).toEqual(['replaced', 'replaced'])
+    expect(clones[2].closed).toBe(null)
+    expect(clones.slice(3).map((r) => r.closed)).toEqual(Array(7).fill('busy'))
+    expect(s.host.guests().filter((g) => g.state === 'joined')).toHaveLength(1)
+    // Its one person entry, not ten.
+    expect(s.host.accessState().people).toHaveLength(1)
+    // Someone else is still asked (here: the host says no).
+    const outsider = guestOf(s, inv.id, 'Bob')
+    await until(() => outsider.closed)
+    expect(outsider.closed).toBe('denied')
+    expect(s.t.asked.map((g) => g.name)).toEqual(['Bob'])
+    // A minute later it may join again (replacing its connection).
+    clock.t += 61_000
+    const later = guestOf(s, inv.id, 'T', { identityKey })
+    await until(() => later.projects || later.closed)
+    expect(later.closed).toBe(null)
+    await until(() => clones[2].closed)
+    expect(clones[2].closed).toBe('replaced')
+  })
+
+  it('at most three guests wait for the host in all, whatever their invitations', async () => {
+    const clock = { t: 1_000_000 }
+    const s = await share(clock)
+    s.t.answers = new Proxy({}, { get: () => () => new Promise(() => {}), has: () => true })
+    const invs = ['A', 'B', 'C', 'D'].map((label) => s.host.createInvite({ label, projects: ['ws-a'] }).invite)
+    const waiting = []
+    for (const inv of invs.slice(0, 3)) {
+      const r = guestOf(s, inv.id, inv.label)
+      await until(() => r.states.includes('waiting') || r.closed)
+      waiting.push(r)
+    }
+    expect(waiting.every((r) => r.states.includes('waiting'))).toBe(true)
+    const fourth = guestOf(s, invs[3].id, 'D')
+    await until(() => fourth.closed)
+    expect(fourth.closed).toBe('busy')
+    // Not counted against D (other invitations filled the line): D is not blocked.
+    expect(s.host.accessState().invites.find((i) => i.id === invs[3].id).guard.unfinished).toEqual([])
+  })
+})

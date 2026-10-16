@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import crypto from 'crypto'
 import { createAccess, pathOfUrl, cleanInviteSpec, secretId, keyHash, personId, LIFETIMES, MAX_INVITES, MAX_PEOPLE, UNFINISHED_MAX, ROOM_FULL_FREE, OFFLINE_KEEP_MS } from '../liveShare/shareAccess'
-import { createTrustStore, MAX_TRUSTED, trustId, isTrustId } from '../liveShare/shareTrust'
+import { createTrustStore, MAX_TRUSTED, MAX_TRUSTED_PROJECTS, trustId, isTrustId } from '../liveShare/shareTrust'
 import { SHARE_RIGHTS, RIGHT_IDS, cleanRights, defaultRights, NO_RIGHTS, isRightId, sameRights } from '../../shared/liveShareRights'
 import { newSigningKey, identityFingerprint } from '../liveShare/shareCrypto'
 
@@ -256,15 +256,64 @@ describe('people and trust', () => {
     expect(access.trustPerson(old.hash)).toBe(null)
   })
 
-  it('no longer trusted: its people keep what they had, as their own', () => {
+  it('no longer trusted: its people go (to come back, the host’s yes again), with its counts', () => {
     const trust = createTrustStore()
     const { access } = model({ trust })
+    const other = access.addPerson({ key: key(), name: 'Bea', sid: 's', grant: {} })
     const p = access.addPerson({ key: key(), name: 'Simpa', sid: 's', identity: key(), grant: { projects: ['ws-a'], rights: { close: true } } })
     const e = access.trustPerson(p.hash)
-    expect(access.untrust(e.fp)).toBe(true)
+    access.trustCounters(e.fp).opened = 5
+    expect(access.untrust(e.fp)).toEqual({ people: [p.hash] })
     expect(trust.list()).toEqual([])
-    expect(p.trust).toBe(null)
-    expect(access.grantOf(p)).toEqual({ projects: ['ws-a'], rights: { type: false, open: false, close: true } })
+    expect(access.people()).toEqual([other])
+    expect(access.toJSON().counters).toEqual([])
+    expect(access.untrust(e.fp)).toBe(null)
+  })
+
+  it('a trusted identity has one person entry: each join takes it over (new reconnect key), its counts and uses are its identity’s', () => {
+    const trust = createTrustStore()
+    const { access } = model({ trust })
+    const identity = key()
+    const e = trust.add({ key: identity, name: 'Simpa', projects: ['ws-a'] })
+    const inv = access.createInvite({ maxUses: 2 }).invite
+    const sid = access.codeOf(inv.id).sid
+    const first = access.claimTrusted(e.fp, { key: key(), name: 'Simpa', sid, via: inv.id, identity })
+    expect(first.replaced).toEqual([])
+    access.countersOf(first.person).opened = 7
+    expect(access.usedBy(inv, e.fp)).toBe(false)
+    const again = access.claimTrusted(e.fp, { key: key(), name: 'Simpa 2', sid, via: inv.id, identity })
+    expect(again.person).toBe(first.person)
+    expect(again.replaced).toHaveLength(1)
+    expect(access.people()).toHaveLength(1)
+    expect(access.countersOf(again.person).opened).toBe(7)
+    // The same invitation again: no new use (two uses would have used it up).
+    access.usedBy(inv, e.fp)
+    access.usedBy(inv, e.fp)
+    expect(inv.uses).toBe(1)
+    // Its counts are kept with the share.
+    const next = model({ trust, saved: access.toJSON() })
+    expect(next.access.trustCounters(e.fp)).toMatchObject({ opened: 7, invites: [inv.id] })
+  })
+
+  it('a trusted identity never pushes out someone the host let in; a few noes in a row pause every invitation', () => {
+    const trust = createTrustStore()
+    const online = new Set()
+    const { access, clock } = model({ trust, online })
+    const inv = access.createInvite({}).invite
+    const sid = access.codeOf(inv.id).sid
+    for (let i = 0; i < MAX_PEOPLE; i++) access.addPerson({ key: key(), name: `p${i}`, sid, grant: {} })
+    const identity = key()
+    const e = trust.add({ key: identity, name: 'Simpa' })
+    expect(access.claimTrusted(e.fp, { key: key(), name: 'Simpa', sid, via: inv.id, identity })).toBe(null)
+    expect(access.people()).toHaveLength(MAX_PEOPLE)
+    const b = access.createInvite({}).invite
+    access.noteDenied(inv.id)
+    access.noteDenied(inv.id)
+    expect(access.pausingAll()).toBe(false)
+    access.noteDenied(b.id)
+    expect(access.pausingAll()).toBe(true)
+    clock.now += 15001
+    expect(access.pausingAll()).toBe(false)
   })
 
   it('a trusted person’s projects stay when they are not shared (seen again when shared); a person’s and an invitation’s go', () => {
@@ -371,6 +420,18 @@ describe('saving and taking a share back', () => {
     expect(next.access.people()[0].grant.projects).toEqual(['ws-a'])
   })
 
+  it('a share taken back: a person whose trust is gone meanwhile is gone too', () => {
+    const trust = createTrustStore()
+    const { access } = model({ trust })
+    const sid = access.codeOf(access.createInvite({}).invite.id).sid
+    const p = access.addPerson({ key: key(), name: 'Simpa', sid, identity: key(), grant: {} })
+    access.addPerson({ key: key(), name: 'Bea', sid, grant: {} })
+    access.trustPerson(p.hash)
+    const saved = access.toJSON()
+    const next = model({ trust: createTrustStore(), saved })
+    expect(next.access.people().map((x) => x.name)).toEqual(['Bea'])
+  })
+
   it('a saved share is checked: bad codes, invitations and people are dropped', () => {
     const { access } = model()
     const inv = access.createInvite({}).invite
@@ -439,8 +500,51 @@ describe('the trusted people (shareTrust.js)', () => {
     expect(again.remove(e.fp)).toBe(true)
     const many = createTrustStore()
     for (let i = 0; i < MAX_TRUSTED; i++) expect(many.add({ key: key(), name: `p${i}` })).not.toBe(null)
+    expect(many.isFull()).toBe(true)
     expect(many.add({ key: key(), name: 'one more' })).toBe(null)
+    // Projects: 64 at most, the 65th refused (never cut).
+    const one = many.list()[0]
+    for (let i = 0; i < MAX_TRUSTED_PROJECTS; i++) expect(many.change(one.fp, { project: `ws-${i}`, on: true })).toBe(true)
+    expect(many.change(one.fp, { project: 'ws-x', on: true })).toBe(false)
+    expect(many.setGrant(one.fp, { projects: Array.from({ length: 65 }, (_, i) => `p-${i}`) })).toBe(false)
+    expect(one.grant.projects).toHaveLength(MAX_TRUSTED_PROJECTS)
     // A file with bad entries: they are left out.
     expect(createTrustStore({ entries: [{ key: 'AAAA' }, null, { key: Buffer.alloc(32).toString('base64') }] }).list()).toEqual([])
+  })
+})
+
+describe('names, labels and the files that keep them', () => {
+  it('names and labels lose what could make them read as something else (bidi overrides, zero-width, format characters)', async () => {
+    const { cleanName } = await import('../liveShare/shareGrant')
+    expect(cleanName('Simpa\u202Egnp.exe')).toBe('Simpagnp.exe')
+    expect(cleanName('\u2066Dev\u2069 \u200Bteam\u200D\uFEFF')).toBe('Dev team')
+    expect(cleanName('A\u00ADB\u2028C\u2029D\u0085E')).toBe('ABCDE')
+    expect(cleanName('Équipe café ☕')).toBe('Équipe café ☕')
+    const store = createTrustStore()
+    expect(store.add({ key: key(), name: '\u202Eevil' }).name).toBe('evil')
+  })
+
+  it('a kept file says whether it is missing or unreadable (so it is never written over by mistake)', async () => {
+    const fs = await import('fs')
+    const os = await import('os')
+    const { join } = await import('path')
+    const { createKeptFile } = await import('../liveShare/sharePersist')
+    const dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-kept-'))
+    try {
+      const file = createKeptFile(join(dir, 'sub', 'kept.json'))
+      expect(file.read()).toEqual({ status: 'missing' })
+      expect(file.write({ key: 'x' })).toBe(true)
+      expect(file.read()).toEqual({ status: 'ok', data: { key: 'x', v: 1 } })
+      fs.writeFileSync(join(dir, 'sub', 'kept.json'), '{ broken')
+      expect(file.read()).toEqual({ status: 'unreadable' })
+      fs.writeFileSync(join(dir, 'sub', 'kept.json'), JSON.stringify({ v: 2 }))
+      expect(file.read()).toEqual({ status: 'unreadable' })
+      // A temporary file left by a crash does not stop the next write.
+      fs.writeFileSync(join(dir, 'sub', 'kept.json.tmp'), 'left over')
+      expect(file.write({ key: 'y' })).toBe(true)
+      expect(file.read().data.key).toBe('y')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

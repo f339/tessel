@@ -54,8 +54,8 @@ import { join } from 'path'
 import { Terminal as HeadlessTerminal } from '@xterm/headless'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { createShareHost, cleanAgents, isAgentId } from './liveShare/shareHost.js'
-import { cleanProjectIds, isProjectId, MAX_PROJECTS } from './liveShare/shareGrant.js'
-import { createTrustStore, isTrustId, trustId } from './liveShare/shareTrust.js'
+import { cleanProjectIds, cleanName, isProjectId, MAX_PROJECTS } from './liveShare/shareGrant.js'
+import { createTrustStore, isTrustId, trustId, MAX_TRUSTED, MAX_TRUSTED_PROJECTS } from './liveShare/shareTrust.js'
 import { cleanRights, isRightId } from '../shared/liveShareRights'
 import { createShareGuest } from './liveShare/shareGuest.js'
 import { encodeInvite, decodeInvite, newSigningKey, exportSigningKey, importSigningKey } from './liveShare/shareCrypto.js'
@@ -272,23 +272,40 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   const identityFile = createKeptFile(join(dataDir, 'liveshare-identity.json'))
   let suspended = false
 
-  // The people this host trusts (kept across shares and restarts).
+  // The people this host trusts (kept across shares and restarts). A file
+  // that is there but can't be read is never written over (its trust would
+  // be lost): this Tessel then trusts no one, and changes are not kept.
+  const trustRead = trustFile.read()
+  if (trustRead.status === 'unreadable') warn('the trusted people file can not be read: it is kept as it is, and no one is trusted until it can')
   const trust = createTrustStore({
-    entries: (trustFile.read() || {}).trusted,
-    save: (trusted) => trustFile.write({ trusted }),
+    entries: trustRead.status === 'ok' ? trustRead.data.trusted : [],
+    save: (trusted) => trustRead.status !== 'unreadable' && trustFile.write({ trusted }),
     onChange: () => pushHost(),
     log: info
   })
-  // This Tessel's identity key as a guest: made the first time it joins.
+  // This Tessel's identity key as a guest: made the first time it joins, and
+  // only then (a file there that can't be read is kept: this Tessel then
+  // joins without an identity, asked like anyone, rather than lose the trust
+  // hosts gave it). One key for every host it joins: a host trusts that key,
+  // and hosts that compared notes could tell it is the same Tessel (its
+  // public half only; a key per host would need the host's lasting identity
+  // before the join, which a share does not have).
   let identityKey = null
   function guestIdentity() {
     if (identityKey) return identityKey
-    const saved = identityFile.read()
-    identityKey = (saved && importSigningKey(saved.key)) || null
-    if (!identityKey) {
-      identityKey = newSigningKey()
-      identityFile.write({ key: exportSigningKey(identityKey) })
+    const read = identityFile.read()
+    if (read.status === 'ok') {
+      identityKey = importSigningKey(read.data.key)
+      if (!identityKey) warn('the Live Share identity file can not be used: joining without an identity')
+      return identityKey
     }
+    if (read.status === 'unreadable') {
+      warn('the Live Share identity file can not be read: joining without an identity')
+      return null
+    }
+    const made = newSigningKey()
+    if (!identityFile.write({ key: exportSigningKey(made) })) return null
+    identityKey = made
     return identityKey
   }
   // The agents the host's window lists for guests ([{ id, name }]).
@@ -569,6 +586,33 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     })
   }
 
+  // Requests to open sent to the window (opened at once with the right, or
+  // asked of the host without it: { action, request, spec, guest }), kept
+  // until the window is done with them (liveShare:requestDone) or a while
+  // has passed: one that no longer stands (the guest gone, its project or,
+  // for one opened with the right, that right taken away) is called off
+  // ({ action: 'cancel', request }).
+  const REQUEST_KEEP_MS = 2 * 60 * 1000
+  const MAX_REQUESTS = 32
+  const hostRequests = new Map() // request id -> { action, guestId, spec, at }
+  let nextRequest = 1
+  function requestOpen(action, spec, guest) {
+    const t0 = Date.now()
+    for (const [id, r] of [...hostRequests]) if (t0 - r.at > REQUEST_KEEP_MS) hostRequests.delete(id)
+    if (hostRequests.size >= MAX_REQUESTS) hostRequests.delete(hostRequests.keys().next().value)
+    const request = `r${nextRequest++}`
+    hostRequests.set(request, { action, guestId: guest.id, spec, at: t0 })
+    send('liveShare:hostRequest', { action, request, spec, guest })
+  }
+  function checkRequests(list) {
+    for (const [request, r] of [...hostRequests]) {
+      const g = list.find((x) => x.id === r.guestId && x.state === 'joined')
+      if (g && g.projects.includes(r.spec.project) && (r.action !== 'open' || (g.rights && g.rights.open))) continue
+      hostRequests.delete(request)
+      send('liveShare:hostRequest', { action: 'cancel', request })
+    }
+  }
+
   // extra: what a share taken back had (access: its invitations, codes and
   // people; or, saved before invitations, its one code: secret, known,
   // secrets, guard, inviteExpires, knownAt).
@@ -589,8 +633,8 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         snapshot,
         write: (id, data) => host.send('write', { id, data }),
         agents: () => hostAgents,
-        openPane: (spec, guest) => send('liveShare:hostRequest', { action: 'open', spec, guest }),
-        askOpen: (spec, guest) => send('liveShare:hostRequest', { action: 'ask-open', spec, guest }),
+        openPane: (spec, guest) => requestOpen('open', spec, guest),
+        askOpen: (spec, guest) => requestOpen('ask-open', spec, guest),
         closePane: (id, guest) => send('liveShare:hostRequest', { action: 'close', id, guest }),
         askApproval: (guest) =>
           new Promise((resolve) => {
@@ -600,6 +644,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         onGuests: (list) => {
           s.guests = list
           for (const id of [...asks.keys()]) if (!list.some((g) => g.id === id && g.state === 'waiting')) asks.delete(id)
+          checkRequests(list)
           pushHost()
         },
         onInviteBlocked: (id) => {
@@ -639,6 +684,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     }
     for (const resolve of asks.values()) resolve(false)
     asks.clear()
+    hostRequests.clear()
     clearTimeout(presenceTimer)
     presenceTimer = null
     hostFile.clear()
@@ -1090,7 +1136,7 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
         },
         onState: (state, extra) => {
           if (joined !== g || g.client !== client) return
-          if (extra?.host) g.host = str(extra.host, 40)
+          if (extra?.host) g.host = cleanName(extra.host)
           if (extra?.code) g.code = str(extra.code, 12)
           // Back in: every pane's screen comes again.
           if (state === 'joined' && g.admitted) for (const pane of g.panes.values()) resetPane(pane)
@@ -1389,13 +1435,18 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     const id = subjectId(subject)
     const change = project !== undefined ? (isProjectId(project) ? { project, on: !!on } : null) : isRightId(right) ? { right, on: !!on } : null
     if (!id || !change) return { ok: false }
-    if (!sharing || sharing.state !== 'sharing') {
-      // Not sharing: only a trusted person can change (its projects: any of
-      // this window's).
-      const e = trust.byId(id)
-      return { ok: !!e && trust.change(e.fp, change) }
-    }
-    return withServer((server) => ({ ok: !!server.change(id, change) }))
+    const live = sharing && sharing.state === 'sharing' && sharing.server
+    // The trusted entry the change goes to, if any (a trusted person, or a
+    // guest or person linked to one).
+    const person = live ? sharing.server.personOf(id) : null
+    const entry = trust.byId(id) || (person && person.trust ? trust.get(person.trust) : null)
+    // Not sharing: only a trusted person can change (its projects: any of
+    // this window's).
+    const ok = live ? !!sharing.server.change(id, change) : !!entry && trust.change(entry.fp, change)
+    if (ok) return { ok: true }
+    // A trusted person has a project cap: said as such.
+    if (entry && change.project !== undefined && change.on && !entry.grant.projects.includes(change.project) && entry.grant.projects.length >= MAX_TRUSTED_PROJECTS) return { ok: false, reason: 'trust-projects', max: MAX_TRUSTED_PROJECTS }
+    return { ok: false }
   })
   // A trusted person renamed (the label the host knows it by).
   ipcMain.handle('liveShare:renameTrusted', (_evt, { id, name } = {}) => {
@@ -1421,15 +1472,26 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
   }))
   // The host's answer to a guest waiting: the shared projects it gets (the
   // ones listed; none when no list comes), its rights, and whether it is
-  // trusted from now on.
+  // trusted from now on. Trusting needs room in the list: when it is full,
+  // the guest is let in untrusted and the answer says so (reason
+  // 'trust-full'), for the host to see.
   ipcMain.handle('liveShare:approve', (_evt, { guestId, yes, projects, rights, trust: trustIt } = {}) => {
     const resolve = asks.get(guestId)
+    if (!resolve) return { ok: false }
     asks.delete(guestId)
-    if (resolve) resolve(yes ? { yes: true, projects: cleanProjectIds(projects), rights: cleanRights(rights), trust: trustIt === true } : false)
-    return { ok: !!resolve }
+    const full = !!yes && trustIt === true && trust.isFull()
+    resolve(yes ? { yes: true, projects: cleanProjectIds(projects), rights: cleanRights(rights), trust: trustIt === true && !full } : false)
+    return full ? { ok: true, reason: 'trust-full', max: MAX_TRUSTED } : { ok: true }
   })
   // Trust a guest let in (connected or offline), or stop trusting someone.
-  ipcMain.handle('liveShare:trust', (_evt, { guestId } = {}) => withServer((server) => ({ ok: !!server.trust(subjectId(guestId)) })))
+  ipcMain.handle('liveShare:trust', (_evt, { guestId } = {}) =>
+    withServer((server) => {
+      const id = subjectId(guestId)
+      const person = server.personOf(id)
+      if (person && person.identity && !person.trust && trust.isFull()) return { ok: false, reason: 'trust-full', max: MAX_TRUSTED }
+      return { ok: !!server.trust(id) }
+    })
+  )
   ipcMain.handle('liveShare:untrust', (_evt, { id } = {}) => {
     const tid = subjectId(id)
     if (!isTrustId(tid)) return { ok: false }
@@ -1438,15 +1500,21 @@ export function registerLiveShare({ ipcMain, send, host, dataDir, queueData, sen
     return { ok: !!e && trust.remove(e.fp) }
   })
   // A guest removed (connected, or offline: k- id): it can't come back with
-  // its reconnect key; untrust: it is no longer trusted either.
-  ipcMain.handle('liveShare:removeGuest', (_evt, { guestId, untrust = false } = {}) =>
+  // its reconnect key. A trusted one is no longer trusted either (or it
+  // would come back with any invitation), unless untrust is false.
+  ipcMain.handle('liveShare:removeGuest', (_evt, { guestId, untrust = true } = {}) =>
     withServer((server) => {
       const id = subjectId(guestId)
       const person = server.personOf(id)
-      if (untrust && person && person.trust) server.untrust(trustId(person.trust))
+      // (No longer trusted: its people go, connected ones too.)
+      if (untrust !== false && person && person.trust) return { ok: !!server.untrust(trustId(person.trust)) }
       return { ok: id.startsWith('k-') ? !!server.removeKnown(id) : !!server.removeGuest(id) }
     })
   )
+  // The window is done with a request to open (opened, answered, or let go).
+  ipcMain.on('liveShare:requestDone', (_evt, request) => {
+    if (typeof request === 'string') hostRequests.delete(request)
+  })
   // The agents the window lists for guests (the ones it can start).
   ipcMain.on('liveShare:agents', (_evt, list) => {
     hostAgents = cleanAgents(list)

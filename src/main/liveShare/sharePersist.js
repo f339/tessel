@@ -6,29 +6,42 @@
 // invitations' secrets and a guest's reconnect key, like the other sign-ins
 // in that folder. What lasts longer (the host's trusted people, a guest's
 // identity key) is in files of its own (createKeptFile): no age, written
-// whole each time.
+// whole each time. Every one of them is written for this user only (0600, its
+// folder 0700, as Tessel's other secret stores; Windows keeps the data
+// folder's own access rights).
 import fs from 'fs'
 import { dirname } from 'path'
 
 export const RESUME_MS = 10 * 60 * 1000
 
 function writeWhole(path, data) {
-  fs.mkdirSync(dirname(path), { recursive: true })
+  fs.mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   const tmp = `${path}.tmp`
-  fs.writeFileSync(tmp, JSON.stringify(data))
+  // A temporary file left by a crash goes first: the new one is made for
+  // this user only.
+  fs.rmSync(tmp, { force: true })
+  fs.writeFileSync(tmp, JSON.stringify(data), { mode: 0o600, flag: 'wx' })
   fs.renameSync(tmp, path)
 }
 
-// A file kept until it is replaced: { v: 1, ...data }. read() gives null
-// when there is none or it can't be read.
+// A file kept until it is replaced: { v: 1, ...data }. read() says whether
+// it is there: { status: 'ok', data }, { status: 'missing' } (none yet), or
+// { status: 'unreadable' } (there, but it can't be read: whoever reads it
+// must not replace it, so nothing in it is lost by a passing error).
 export function createKeptFile(path) {
   return {
     read() {
+      let text
       try {
-        const saved = JSON.parse(fs.readFileSync(path, 'utf8'))
-        return saved && saved.v === 1 ? saved : null
+        text = fs.readFileSync(path, 'utf8')
+      } catch (err) {
+        return { status: err && err.code === 'ENOENT' ? 'missing' : 'unreadable' }
+      }
+      try {
+        const saved = JSON.parse(text)
+        return saved && typeof saved === 'object' && saved.v === 1 ? { status: 'ok', data: saved } : { status: 'unreadable' }
       } catch {
-        return null
+        return { status: 'unreadable' }
       }
     },
     write(data) {
