@@ -233,12 +233,12 @@ describe('wslAccounts', () => {
     expect(await wsl.scan('bad name')).toEqual({ ok: false })
   })
 
-  it('later scans pass back the login shell’s folders (its profile not run again); a folder that cannot be quoted is left out', async () => {
+  it('later scans pass back the login shell’s folders (its profile not run again), quoted (a quote in a name too)', async () => {
     const { spawnImpl, calls } = fakeSpawn((args) => (args[0] === '-l' ? { out: utf16('Ubuntu\r\n') } : { out: '@h Linux /home/u\n' }))
     const wsl = createWslAccounts({ wslExe: 'wsl.exe', spawnImpl })
     await wsl.scan('Ubuntu', { dirs: { claude: '/opt/claude alt', codex: "/opt/it's" } })
     const input = calls.find((c) => c.args[0] === '-d').input.join('')
-    expect(input).toContain("__t_accts dirs '/opt/claude alt' -\n")
+    expect(input).toContain("__t_accts dirs '/opt/claude alt' '/opt/it'\\''s'\n")
     expect(input).not.toContain('__t_accts login')
   })
 

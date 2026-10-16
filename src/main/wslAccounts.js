@@ -5,11 +5,13 @@
 // distro that is not running is not started by a scan nobody asked for:
 // it is listed as stopped, and checked only when you ask (start: true).
 import { spawn } from 'child_process'
-import { ACCOUNTS_SHELL, parseAccounts } from './remoteAgent/remoteAccounts'
+import { ACCOUNTS_SHELL, parseAccounts, shellQuote } from './remoteAgent/remoteAccounts'
 
 export const DISTRO = /^[\w.-]{1,64}$/
-// A folder put back in the script as an argument: no quote, no control.
-const SAFE_ARG = /^\/[\p{L}\p{N}._@+/ -]{1,1023}$/u
+// A folder put back in the script as an argument (single-quoted, a quote
+// in it written '\''): absolute, no control character.
+// eslint-disable-next-line no-control-regex
+const SAFE_ARG = /^\/[^\u0000-\u001f\u007f]{0,1023}$/
 // Docker Desktop's own distros hold no agent.
 const SKIPPED = new Set(['docker-desktop', 'docker-desktop-data'])
 const MAX_OUT = 256 * 1024
@@ -112,7 +114,7 @@ export function createWslAccounts({ wslExe, spawnImpl = spawn, exists = () => tr
       const now = await runOnce(['-l', '--running', '-q'], { ms: listTimeoutMs, cap: 64 * 1024 })
       if (!now.ok || !distroNames(now.out).includes(name)) return { ok: false, stopped: true }
     }
-    const arg = (d) => (typeof d === 'string' && SAFE_ARG.test(d) ? `'${d}'` : '-')
+    const arg = (d) => (typeof d === 'string' && SAFE_ARG.test(d) ? shellQuote(d) : '-')
     const call = dirs ? `__t_accts dirs ${arg(dirs.claude)} ${arg(dirs.codex)}` : '__t_accts login'
     const res = await runOnce(['-d', name, '-e', 'sh', '-s'], { input: `${ACCOUNTS_SHELL}\n${call}\n`, ms: timeoutMs })
     if (!res.ok) return { ok: false, ...(res.timeout ? { timeout: true } : {}) }

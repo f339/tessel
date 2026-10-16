@@ -40,7 +40,7 @@ import { createAddProject, registerAddProject } from './addProject'
 import { createSshAskpass, registerSshAskpass, askpassExePath } from './sshAskpass'
 import { createAskpassPipeHost } from './askpassPipeHost'
 import { createRemoteFs, registerRemoteFs, remoteRootsOfLayout, SESSION_PREFIX as REMOTE_FS_PREFIX } from './remoteFs'
-import { createRemoteAccounts, publicDetection, copyPolicy as copyRemotePolicy } from './remoteAgent/remoteAccounts'
+import { createRemoteAccounts, publicDetection, chatsOnLogin, copyPolicy as copyRemotePolicy } from './remoteAgent/remoteAccounts'
 import { createSignedInPlaces, copilotRows } from './signedInPlaces'
 import { createWslAccounts } from './wslAccounts'
 import { createUsageProviderSources } from './usageProviderSources'
@@ -2009,7 +2009,7 @@ const remoteAccounts = createRemoteAccounts({
     return (target && target.label) || hostId
   },
   confirm: (q) => confirmRemoteAccount(q),
-  stopPanes: (hostId, ids) => stopAccountPanes(hostId, ids),
+  stopPanes: (hostId, ids, login) => stopAccountPanes(hostId, ids, login),
   // A new folder gets the team tools and hooks from the shim's install.
   afterChange: (hostId) => {
     remoteShims.forget(hostId)
@@ -2019,17 +2019,17 @@ const remoteAccounts = createRemoteAccounts({
 })
 // The panes still running on a login that is about to be removed or signed
 // out of (the window names them): their terminals on that host are ended,
-// their chats closed, and Tessel waits until they are gone (a running agent
-// would write its sign-in back). -> { ok }
-async function stopAccountPanes(hostId, ids) {
+// their chats closed (only the ones main sees on that host and account), and
+// Tessel waits until they are gone (a running agent would write its sign-in
+// back). login: { agent, account } (account null: the agent's own). -> { ok }
+async function stopAccountPanes(hostId, ids, login = {}) {
   const onHost = new Set(remoteHosts.panesOf(hostId))
-  const chats = new Set(chatSessions.list().map((c) => c.paneId))
   const terms = ids.filter((id) => onHost.has(id))
   for (const id of terms) {
     remoteHosts.paneClosing(id)
     host.send('kill', { id })
   }
-  await Promise.all(ids.filter((id) => chats.has(id)).map((paneId) => chatSessions.close({ paneId }).catch(() => null)))
+  await Promise.all(chatsOnLogin(chatSessions.list(), ids, { hostId, agent: login.agent, account: login.account }).map((paneId) => chatSessions.close({ paneId }).catch(() => null)))
   for (let i = 0; i < 40; i++) {
     const left = new Set(remoteHosts.panesOf(hostId))
     if (!terms.some((id) => left.has(id))) return { ok: true }

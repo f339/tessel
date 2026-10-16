@@ -1041,7 +1041,8 @@
       "removeOrphanTitle": "Retirer la connexion laissée sur {{host}} ?",
       "removeOrphanMessage": "Un agent qui a continué de tourner après le retrait de son dossier de compte a réécrit une connexion pour {{account}} ({{agent}}) sur {{host}}. Tessel retire ce dossier et sa connexion.",
       "keptCodex": "Gardé : ses conversations (sessions et sessions archivées) et son historique de requêtes vont dans le dossier Codex propre de l’hôte (~/.codex).",
-      "keptClaude": "Gardé : ses conversations sont déjà dans le dossier Claude propre de l’hôte (~/.claude) ; son historique de requêtes est ajouté à celui de ce dossier."
+      "keptClaude": "Gardé : ses conversations sont déjà dans le dossier Claude propre de l’hôte (~/.claude) ; son historique de requêtes est ajouté à celui de ce dossier.",
+      "unsafeHome": "Les dossiers de compte ne peuvent pas être utilisés sur {{host}} : le nom de votre dossier personnel là-bas contient un caractère que Tessel ne peut pas transmettre sans risque à la commande de l’agent (une barre oblique inverse, un ! ou un caractère invisible). La connexion propre de l’agent là-bas fonctionne toujours."
     },
     "signedIn": {
       "startTitle": "Démarrer {{name}} ?",

@@ -263,6 +263,8 @@ describe('chat sessions on an SSH host', () => {
     expect(r.ok).toBe(true)
     expect(remote.accountFolder).toHaveBeenCalledWith({ hostId: HOST, agent: 'claude', id: 'abc123' })
     expect(remote.spawnFor).toHaveBeenCalledWith({ hostId: HOST, cwd: '/home/me/app', env: { TESSEL_PANE_ID: paneId, TESSEL_AGENT_PROVIDER: 'claude', CLAUDE_CONFIG_DIR: '/home/me/.tessel-server/accounts/claude/abc123' } })
+    // Its host and account, for main to stop it before that login is removed.
+    expect(chat.list().find((c) => c.paneId === paneId)).toMatchObject({ hostId: HOST, hostAccount: 'abc123' })
     await chat.close({ paneId })
     const codex = await chat.open({ paneId: 'pane-r2', agent: 'codex', cwd, projectDir: cwd, permissions: 'manual', hostAccount: 'abc123' })
     expect(codex.ok).toBe(true)

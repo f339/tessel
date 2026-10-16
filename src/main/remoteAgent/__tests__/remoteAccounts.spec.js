@@ -8,8 +8,11 @@ import fs from 'fs'
 import os from 'os'
 import { join } from 'path'
 import { createRemoteSession, sessionArgs, FUNCTIONS, prelude } from '../../remoteShell'
+import { spawnSync } from 'child_process'
 import {
   parseAccounts,
+  chatsOnLogin,
+  shellQuote,
   createRemoteAccounts,
   publicDetection,
   folderPrefix,
@@ -252,17 +255,41 @@ describe('entryState, folderPrefix, copyPolicy', () => {
     expect(folderPrefix('claude', '/home/u/.tessel-server/accounts/claude/abc123', 'abc123')).toBe("CLAUDE_CONFIG_DIR='/home/u/.tessel-server/accounts/claude/abc123' ")
     expect(folderPrefix('codex', '/home/u/.tessel-server/accounts/codex/def456', 'def456')).toBe("CODEX_HOME='/home/u/.tessel-server/accounts/codex/def456' ")
     expect(folderPrefix('claude', '/home/u/.claude', 'abc123')).toBeNull()
-    expect(folderPrefix('claude', "/home/o'x/.tessel-server/accounts/claude/abc123", 'abc123')).toBeNull()
+    expect(folderPrefix('claude', "/home/o'x/.tessel-server/accounts/claude/abc123", 'abc123')).toBe("CLAUDE_CONFIG_DIR='/home/o'\\''x/.tessel-server/accounts/claude/abc123' ")
     expect(folderPrefix('claude', '/home/u/.tessel-server/accounts/codex/abc123', 'abc123')).toBeNull()
     expect(folderPrefix('gemini', '/home/u/.tessel-server/accounts/gemini/abc123', 'abc123')).toBeNull()
     expect(folderPrefix('claude', 'relative/.tessel-server/accounts/claude/abc123', 'abc123')).toBeNull()
-    // Never a $, a backquote, a backslash, a control or direction character.
-    expect(folderPrefix('claude', '/home/u$(id)`id`/.tessel-server/accounts/claude/abc123', 'abc123')).toBeNull()
+    // Never a backslash or a ! (fish and csh read them inside quotes), a control or direction character.
     expect(folderPrefix('claude', '/home/a\\b/.tessel-server/accounts/claude/abc123', 'abc123')).toBeNull()
+    expect(folderPrefix('claude', '/home/hey!/.tessel-server/accounts/claude/abc123', 'abc123')).toBeNull()
     expect(folderPrefix('claude', `/home/u${String.fromCharCode(0x9b)}/.tessel-server/accounts/claude/abc123`, 'abc123')).toBeNull()
     expect(folderPrefix('claude', `/home/u${String.fromCharCode(0x202e)}x/.tessel-server/accounts/claude/abc123`, 'abc123')).toBeNull()
     expect(folderPrefix('claude', '/home/josé dupont/.tessel-server/accounts/claude/abc123', 'abc123')).toBe("CLAUDE_CONFIG_DIR='/home/josé dupont/.tessel-server/accounts/claude/abc123' ")
   })
+  it.skipIf(!gitSh())('a home with a quote, parentheses, $ or #: quoted so the shell gets the folder exactly', () => {
+    for (const home of ["/home/o'brien", '/home/u (work) #1', '/home/u$(id)`id`', "/srv/it's'here"]) {
+      const dir = `${home}/.tessel-server/accounts/claude/abc123`
+      const prefix = folderPrefix('claude', dir, 'abc123')
+      expect(prefix).toBe(`CLAUDE_CONFIG_DIR=${shellQuote(dir)} `)
+      const r = spawnSync(gitSh(), ['-c', `${prefix}sh -c 'printf %s "$CLAUDE_CONFIG_DIR"'`], { encoding: 'utf8' })
+      expect(r.stdout).toBe(dir)
+    }
+  })
+
+  it('the chats main stops before a login is removed: only those it sees on that host, agent and account', () => {
+    const chats = [
+      { paneId: 'pane-a', agent: 'claude', hostId: 'ssh-1', hostAccount: 'abc123' },
+      { paneId: 'pane-b', agent: 'claude', hostId: 'ssh-1', hostAccount: null },
+      { paneId: 'pane-c', agent: 'claude', hostId: 'ssh-2', hostAccount: 'abc123' },
+      { paneId: 'pane-d', agent: 'codex', hostId: 'ssh-1', hostAccount: 'abc123' },
+      { paneId: 'pane-e', agent: 'claude', hostId: null, hostAccount: null }
+    ]
+    const ids = ['pane-a', 'pane-b', 'pane-c', 'pane-d', 'pane-e']
+    expect(chatsOnLogin(chats, ids, { hostId: 'ssh-1', agent: 'claude', account: 'abc123' })).toEqual(['pane-a'])
+    expect(chatsOnLogin(chats, ids, { hostId: 'ssh-1', agent: 'claude', account: null })).toEqual(['pane-b'])
+    expect(chatsOnLogin(chats, ['pane-c'], { hostId: 'ssh-1', agent: 'claude', account: 'abc123' })).toEqual([])
+  })
+
   it('copying a sign-in to a host is refused for every agent, with the reason', () => {
     for (const agent of ['claude', 'codex', 'gemini']) {
       const p = copyPolicy(agent)
@@ -388,6 +415,21 @@ describe('createRemoteAccounts', () => {
     expect(await service.launchEnv('ssh-1', 'claude', '../../x')).toMatchObject({ ok: false })
   })
 
+  it('a home whose name the command cannot carry: said clearly; a folder just made there is taken away again', async () => {
+    const calls = []
+    const service = createRemoteAccounts({
+      run: async (hostId, fn, args) => {
+        calls.push(`${fn} ${args.join(' ')}`)
+        return { rc: 0, out: Buffer.from(`/home/hey!/.tessel-server/accounts/${args[0]}/${args[1]}\n`) }
+      },
+      label: () => 'box',
+      newId: () => 'a1b2c3'
+    })
+    expect(await service.launchEnv('ssh-1', 'claude', 'abc123')).toMatchObject({ ok: false, error: expect.stringContaining('Account folders cannot be used on box') })
+    expect(await service.create('ssh-1', 'claude')).toMatchObject({ ok: false, error: expect.stringContaining('home folder') })
+    expect(calls).toContain('__t_acctrm claude a1b2c3')
+  })
+
   it('removing a folder: nothing happens without your yes', async () => {
     const confirm = vi.fn(async () => false)
     const { service, calls } = make({ confirm })
@@ -427,17 +469,17 @@ describe('createRemoteAccounts', () => {
         order.push(`confirm ${q.kind} ${q.panes}`)
         return true
       },
-      stopPanes: async (hostId, ids) => {
-        order.push(`stop ${ids.join(',')}`)
+      stopPanes: async (hostId, ids, login) => {
+        order.push(`stop ${ids.join(',')} ${login.agent}/${login.account}`)
         return { ok: stopOk }
       }
     })
     expect(await service.remove('ssh-1', 'claude', 'abc123', { panes: ['pane-a', 'pane-b', 'bad id', 'pane-a'] })).toEqual({ ok: true })
-    expect(order).toEqual(['confirm remove 2', 'stop pane-a,pane-b', 'run __t_acctrm claude abc123'])
+    expect(order).toEqual(['confirm remove 2', 'stop pane-a,pane-b claude/abc123', 'run __t_acctrm claude abc123'])
     order.length = 0
     stopOk = false
     expect(await service.signOut('ssh-1', 'codex', { panes: ['pane-c'] })).toMatchObject({ ok: false, error: expect.stringContaining('did not stop') })
-    expect(order).toEqual(['confirm signOut 1', 'stop pane-c'])
+    expect(order).toEqual(['confirm signOut 1', 'stop pane-c codex/null'])
     order.length = 0
     stopOk = true
     // A folder that lost its marker: removed as such (its own dialog).
@@ -723,5 +765,42 @@ describe.skipIf(!gitSh())('remoteAccounts.sh on a POSIX sh (fake ssh)', () => {
     expect(parseAccounts(res.out.toString('utf8')).entries.filter((e) => e.scope === 'tessel').map((e) => e.id)).toEqual(['zzzz99'])
     expect((await s.run('__t_acctmk', ['claude', 'one000', 'new'], { cap: 8192, timeoutMs: 30000 })).rc).toBe(97)
     expect(fs.existsSync(join(dir, '.tessel-server', 'accounts', 'claude', 'one000'))).toBe(false)
+  }, 60000)
+
+  it('an unmarked folder holding only an API key is a left-over sign-in; removal deletes .claude.json first; a check or a launch cleans removal leftovers', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-accts-'))
+    write(dir, '.tessel-server/accounts/claude/def456/.claude.json', { primaryApiKey: 'sk-ant-api03-FAKEKEY', oauthAccount: { emailAddress: 'c@example.com' } })
+    const s = await open(dir)
+    let res = await s.run('__t_accts', [], { cap: 64 * 1024, timeoutMs: 30000 })
+    expect(res.out.toString('utf8')).not.toContain('FAKEKEY')
+    expect(parseAccounts(res.out.toString('utf8')).entries.find((e) => e.id === 'def456')).toMatchObject({ scope: 'orphan', method: 'apikey', email: 'c@example.com' })
+    expect((await s.run('__t_acctrm', ['claude', 'def456', 'orphan'], { cap: 8192, timeoutMs: 30000 })).rc).toBe(0)
+    expect(fs.existsSync(join(dir, '.tessel-server', 'accounts', 'claude', 'def456'))).toBe(false)
+    // A removal cut short after its move: the leftover goes at the next check...
+    write(dir, '.tessel-server/accounts/.trash-claude-aaa111-1/.claude.json', { primaryApiKey: 'sk-ant-api03-FAKEKEY' })
+    res = await s.run('__t_accts', [], { cap: 64 * 1024, timeoutMs: 30000 })
+    expect(res.out.toString('utf8')).not.toContain('aaa111')
+    expect(fs.existsSync(join(dir, '.tessel-server', 'accounts', '.trash-claude-aaa111-1'))).toBe(false)
+    // ...or at the next launch on a folder.
+    write(dir, '.tessel-server/accounts/.trash-codex-bbb222-1/auth.json', { OPENAI_API_KEY: 'sk-proj-FAKE' })
+    expect((await s.run('__t_acctmk', ['claude', 'ccc333', 'new'], { cap: 8192, timeoutMs: 30000 })).rc).toBe(0)
+    expect(fs.existsSync(join(dir, '.tessel-server', 'accounts', '.trash-codex-bbb222-1'))).toBe(false)
+    // A folder Tessel made: its .claude.json (profile, API key) goes with its sign-in.
+    write(dir, '.tessel-server/accounts/claude/ccc333/.claude.json', { primaryApiKey: 'sk-ant-api03-FAKEKEY' })
+    write(dir, '.claude/.credentials.json', { claudeAiOauth: { refreshToken: 'sk-ant-ort-OWN' } })
+    expect((await s.run('__t_acctrm', ['claude', 'ccc333'], { cap: 8192, timeoutMs: 30000 })).rc).toBe(0)
+    expect(fs.existsSync(join(dir, '.claude', '.credentials.json'))).toBe(true)
+  }, 60000)
+
+  it('the watchdog freezes the whole tree and ends it parent first: a parent cannot start a fallback when its child ends', async () => {
+    dir = fs.mkdtempSync(join(os.tmpdir(), 'tessel-accts-'))
+    const home = posixPath(dir)
+    write(dir, 'fallsh', `#!/bin/sh\nsh -c 'sleep 20 || { (sleep 3; echo late >>"$HOME/late") </dev/null >/dev/null 2>&1 & }'\nexec /bin/sh -c "$2"\n`)
+    fs.chmodSync(join(dir, 'fallsh'), 0o755)
+    const s = await open(dir, { SHELL: `${home}/fallsh` })
+    const res = await s.run('__t_accts', ['login'], { cap: 64 * 1024, timeoutMs: 30000 })
+    expect(res.rc).toBe(0)
+    await new Promise((r) => setTimeout(r, 5000))
+    expect(fs.existsSync(join(dir, 'late'))).toBe(false)
   }, 60000)
 })

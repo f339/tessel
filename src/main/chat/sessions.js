@@ -1334,6 +1334,9 @@ export function createChatSessions(deps) {
     const s = {
       paneId,
       agent,
+      // On an SSH host's account folder: its id (main stops the chats on a
+      // login before it is removed, by host and account).
+      hostAccount: onHost && hostAccount ? hostAccount : null,
       adapter: null,
       // Codex and OpenCode name a new conversation themselves: known once it started.
       sessionId: resumeId || (agent === 'codex' || agent === 'opencode' ? null : randomUUID()),
@@ -2128,7 +2131,7 @@ export function createChatSessions(deps) {
   }
 
   function list() {
-    return [...sessions.values()].map((s) => ({ paneId: s.paneId, agent: s.agent, sessionId: s.sessionId, status: s.status, model: s.model, launchToken: s.launchToken }))
+    return [...sessions.values()].map((s) => ({ paneId: s.paneId, agent: s.agent, sessionId: s.sessionId, status: s.status, model: s.model, launchToken: s.launchToken, hostId: remoteFolder(s.cwd)?.hostId || null, hostAccount: s.hostAccount || null }))
   }
 
   // ---- IPC -------------------------------------------------------------------

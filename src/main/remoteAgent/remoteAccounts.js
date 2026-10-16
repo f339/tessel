@@ -43,8 +43,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const EMAIL = /^[^\s@"'<>\\]{1,64}@[^\s@"'<>\\]{1,190}\.[^\s@"'<>\\]{2,63}$/
 // eslint-disable-next-line no-control-regex
 const POSIX_DIR = /^\/[^\u0000-\u001f\u007f-\u009f]{0,1023}$/
-// A folder whose name may go in a shell command: letters, digits and . _ @ + - / and spaces.
-const SAFE_DIR = /^\/[\p{L}\p{N}._@+/ -]{1,1023}$/u
 // Characters that change how a text reads: C0/C1 controls, bidi controls,
 // zero-width and other invisible ones. Removed from names and emails (they
 // reach a confirmation dialog). The joiners and variation selectors in it
@@ -53,6 +51,9 @@ const SAFE_DIR = /^\/[\p{L}\p{N}._@+/ -]{1,1023}$/u
 const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb]/g
 // A key or token where a name should be (known prefixes, a JWT): never kept,
 // whatever the field.
+// The same characters, one test (no global state).
+// eslint-disable-next-line no-misleading-character-class
+const HIDDEN = new RegExp(INVISIBLE.source)
 const SECRET = /(?:^|[^A-Za-z0-9])(?:sk-|sk_|rk_live|pk_live|AIza|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_|xox[abposr]-|glpat-|ya29\.|npm_|eyJ[\w-]{8,}\.)/
 
 // JSON's own escapes in a value (\u00e9, \/), read as JSON reads them.
@@ -191,24 +192,41 @@ export function copyPolicy(agent) {
   }
 }
 
-// An account folder Tessel made, safe to name in a shell command: letters,
-// digits, . _ @ + - / and spaces only (never a quote, $, `, \ or a control
-// or direction character), ending in its own place.
+// An account folder in its own place (~/.tessel-server/accounts/<agent>/<id>).
+const inPlace = (agent, dir, id) =>
+  !!FOLDER_ENV[agent] && typeof dir === 'string' && ID.test(String(id || '')) && POSIX_DIR.test(dir) && dir.endsWith(`/.tessel-server/accounts/${agent}/${id}`)
+// ...whose name the agent's command can carry, single-quoted (shellQuote):
+// any character but a backslash or a ! (fish reads a backslash inside
+// quotes, csh a !), a control, an invisible or a direction character. A home
+// folder with one of those: account folders are not offered there (said).
 export function safeFolder(agent, dir, id) {
-  return !!FOLDER_ENV[agent] && typeof dir === 'string' && ID.test(String(id || '')) && SAFE_DIR.test(dir) && dir.endsWith(`/.tessel-server/accounts/${agent}/${id}`)
+  return inPlace(agent, dir, id) && !/[\\!]/.test(dir) && !HIDDEN.test(dir)
 }
+// POSIX single quotes; a quote in it written '\'' (sh, bash, zsh and fish read it so).
+export const shellQuote = (value) => `'${String(value).replace(/'/g, "'\\''")}'`
 
 // The words the shell prefix puts before the agent's command on the host:
 // CLAUDE_CONFIG_DIR='/home/u/.tessel-server/accounts/claude/<id>' (one
 // assignment, a folder Tessel made, checked by safeFolder).
 export function folderPrefix(agent, dir, id) {
-  return safeFolder(agent, dir, id) ? `${FOLDER_ENV[agent]}='${dir}' ` : null
+  return safeFolder(agent, dir, id) ? `${FOLDER_ENV[agent]}=${shellQuote(dir)} ` : null
+}
+
+// The chats (chat sessions' list rows: { paneId, agent, hostId, hostAccount })
+// among `ids` that run on that login of that host: the only ones main stops
+// before the login is removed (account null: the agent's own sign-in).
+export function chatsOnLogin(chats, ids, { hostId, agent, account = null } = {}) {
+  const want = new Set(Array.isArray(ids) ? ids : [])
+  return (Array.isArray(chats) ? chats : [])
+    .filter((c) => c && want.has(c.paneId) && c.hostId === hostId && c.agent === agent && (c.hostAccount || null) === (account || null))
+    .map((c) => c.paneId)
 }
 
 // run(hostId, fn, args, { cap, timeoutMs, user }) -> remoteFs.accountCall's
 // answer ({ rc, out } | { error, notConnected? }). confirm({ kind, host,
 // agent, email, panes, keychain }) -> true only when you said yes (a dialog
-// in main, never the window's word). stopPanes(hostId, paneIds) -> { ok }:
+// in main, never the window's word). stopPanes(hostId, paneIds, { agent,
+// account }) -> { ok }:
 // the panes still running on a login, stopped before it is removed (a
 // running agent would write its sign-in back). afterChange(hostId): a folder
 // was made or removed (the shim's install sets up the team tools in the new
@@ -318,10 +336,17 @@ export function createRemoteAccounts({
     return p
   }
 
+  // The folder the host printed: { dir }, { unsafe } (its home's name has a
+  // character the command cannot carry), or {} (not the one asked for).
   const folderOf = (res, agent, id) => {
-    const dir = outText(res).split('\n')[0].trim()
-    return safeFolder(agent, dir, id) ? dir : null
+    const dir = outText(res).split('\n')[0].replace(/\r$/, '')
+    if (safeFolder(agent, dir, id)) return { dir }
+    return inPlace(agent, dir, id) ? { unsafe: true } : {}
   }
+  const unsafeHome = (hostId) => ({
+    ok: false,
+    error: t('main.remoteAccounts.unsafeHome', 'Account folders cannot be used on {{host}}: the name of your home folder there has a character Tessel cannot pass safely to the agent’s command (a backslash, a ! or an invisible character). The agent’s own sign-in there still works.', { host: hostName(hostId) })
+  })
 
   // A new folder for one more account of `agent` there (you sign in to it in
   // a pane). -> { ok, id, dir } | { ok: false, error }
@@ -335,7 +360,13 @@ export function createRemoteAccounts({
     if (!res || res.error || res.notConnected || typeof res.rc !== 'number') return failed(hostId, res)
     if (res.rc === 97)
       return { ok: false, error: t('main.remoteAccounts.tooMany', '{{host}} already has too many account folders: remove one first (Settings > AI provider accounts > Where you’re signed in).', { host: hostName(hostId) }) }
-    const dir = res.rc === 0 ? folderOf(res, agent, id) : null
+    const made = res.rc === 0 ? folderOf(res, agent, id) : {}
+    if (made.unsafe) {
+      // Made but never usable: taken away again.
+      await run(hostId, '__t_acctrm', [agent, id], { cap: 4096, timeoutMs: 20_000, user: true })
+      return unsafeHome(hostId)
+    }
+    const dir = made.dir
     if (!dir) return { ok: false, error: t('main.remoteAccounts.createFailed', 'Tessel could not make the account folder on {{host}}.', { host: hostName(hostId) }) }
     cache.delete(hostId)
     try {
@@ -355,7 +386,9 @@ export function createRemoteAccounts({
     const res = await run(hostId, '__t_acctmk', [agent, id], { cap: 8192, timeoutMs: 20_000, user: true })
     if (!res || res.error || res.notConnected || typeof res.rc !== 'number') return failed(hostId, res)
     if (res.rc === 91) return { ok: false, missing: true, error: t('main.remoteAccounts.gone', 'This account’s folder is no longer on {{host}}. Start the agent on another account.', { host: hostName(hostId) }) }
-    const dir = res.rc === 0 ? folderOf(res, agent, id) : null
+    const found = res.rc === 0 ? folderOf(res, agent, id) : {}
+    if (found.unsafe) return unsafeHome(hostId)
+    const dir = found.dir
     if (!dir) return { ok: false, error: t('main.remoteAccounts.unusable', 'This account’s folder on {{host}} cannot be used safely (it was changed outside Tessel).', { host: hostName(hostId) }) }
     return { ok: true, prefix: folderPrefix(agent, dir, id), dir, name: FOLDER_ENV[agent] }
   }
@@ -380,7 +413,7 @@ export function createRemoteAccounts({
     if (!(await asked({ kind: orphan ? 'removeOrphan' : 'remove', host: hostName(hostId), agent, email: (entry && entry.email) || null, panes: running.length }))) return { ok: false, cancelled: true }
     if (running.length) {
       const stopped = await Promise.resolve()
-        .then(() => stopPanes(hostId, running))
+        .then(() => stopPanes(hostId, running, { agent, account: id }))
         .catch(() => null)
       if (!stopped || !stopped.ok) return notStopped(hostId)
     }
@@ -410,7 +443,7 @@ export function createRemoteAccounts({
     if (!(await asked({ kind: 'signOut', host: hostName(hostId), agent, email: (entry && entry.email) || null, panes: running.length, keychain }))) return { ok: false, cancelled: true }
     if (running.length) {
       const stopped = await Promise.resolve()
-        .then(() => stopPanes(hostId, running))
+        .then(() => stopPanes(hostId, running, { agent, account: null }))
         .catch(() => null)
       if (!stopped || !stopped.ok) return notStopped(hostId)
     }

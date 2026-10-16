@@ -28,7 +28,14 @@ __ta_mt() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null; }
 # A process and everything it started (procps and BusyBox ps; MSYS ps has
 # no -o: its plain listing starts with PID PPID).
 __ta_kids() { { ps -A -o pid= -o ppid= 2>/dev/null || ps -o pid= -o ppid= 2>/dev/null || ps 2>/dev/null | awk 'NR>1{print $1, $2}'; } | awk -v p="$1" '$2==p{print $1}'; }
-__ta_kill() { for __k in $(__ta_kids "$1"); do __ta_kill "$__k"; done; kill -TERM "$1" 2>/dev/null; }
+__ta_tree() { printf '%s\n' "$1"; for __k in $(__ta_kids "$1"); do __ta_tree "$__k"; done; }
+# The whole tree is frozen first, then ended parent first: none of them can
+# react to another's end (a `cmd || fallback` starting something new).
+__ta_kill() {
+  __kl=$(__ta_tree "$1")
+  for __k in $__kl; do kill -STOP "$__k" 2>/dev/null; done
+  for __k in $__kl; do kill -TERM "$__k" 2>/dev/null; kill -CONT "$__k" 2>/dev/null; done
+}
 # A command given at most $1 seconds (its output once it ended). The shell's
 # own watchdog: stock macOS and BusyBox have no timeout command. Past its
 # time the command and what it started are ended. Self-made (this file also
@@ -163,6 +170,18 @@ __ta_others() {
   fi
   return 0
 }
+# A folder holding a sign-in: a credentials file, or an API key in its .claude.json.
+__ta_signed() { [ -f "$1/.credentials.json" ] || [ -f "$1/auth.json" ] || [ "$(__ta_flat "$1/.claude.json" | __ta_set primaryApiKey)" = 1 ]; }
+# Leftovers of a removal cut short after its move (accounts/.trash-*, only
+# ever made by __t_acctrm): their sign-in first, then the rest.
+__ta_trash() {
+  for __x in "$HOME/.tessel-server/accounts"/.trash-*; do
+    [ -d "$__x" ] && [ ! -L "$__x" ] && [ -O "$__x" ] || continue
+    rm -f -- "$__x/.credentials.json" "$__x/auth.json" "$__x/.claude.json"
+    rm -rf -- "$__x"
+  done
+  return 0
+}
 # Folders Tessel made for one account each: the marker names the agent and id.
 __ta_mark() { [ -f "$1/.tessel-account" ] && [ ! -L "$1/.tessel-account" ] && [ "$(head -c 200 "$1/.tessel-account" 2>/dev/null)" = "tessel-account $2 $3" ]; }
 __ta_id() { case $1 in ''|*[!0-9a-z]*) return 1 ;; esac; [ ${#1} -le 40 ]; }
@@ -216,13 +235,15 @@ __t_accts() {
       __i=${__d##*/}
       __ta_id "$__i" || continue
       if __ta_mark "$__d" "$__ag" "$__i"; then __sc=tessel
-      elif [ -f "$__d/.credentials.json" ] || [ -f "$__d/auth.json" ]; then __sc=orphan
+      elif __ta_signed "$__d"; then __sc=orphan
       else continue; fi
       __n=$((__n+1)); [ "$__n" -le 50 ] || break
       if [ "$__ag" = claude ]; then __ta_claude "$__sc" "$__i" "$__d" "$__d/.claude.json"; else __ta_codex "$__sc" "$__i" "$__d"; fi
     done
   done
   __ta_others
+  # The one thing a check ever deletes: Tessel's own leftovers of a removal.
+  __ta_trash
   return 0
 }
 # Make (new) or repair the folder of one account: ~/.tessel-server/accounts/
@@ -238,6 +259,7 @@ __t_acctmk() {
   case $1 in claude|codex) ;; *) return 90 ;; esac
   __ta_id "$2" || return 90
   __s="$HOME/.tessel-server"
+  [ -d "$__s/accounts" ] && [ ! -L "$__s/accounts" ] && __ta_trash
   for __x in "$__s" "$__s/accounts" "$__s/accounts/$1" "$__s/accounts/$1/$2"; do
     [ -L "$__x" ] && return 98
     if [ -e "$__x" ]; then
@@ -303,7 +325,7 @@ __ta_keep() {
 }
 # Remove a folder Tessel made (its marker checked; never another folder, and
 # never the agent's own), or, orphan, a folder there that lost its marker but
-# still holds a sign-in. The sign-in goes first: a removal cut short never
+# still holds a sign-in (__ta_signed). The sign-in goes first: a removal cut short never
 # leaves a login behind. Then its conversations and history are kept
 # (__ta_keep), the folder is moved aside at once (a running agent can no
 # longer write into it) and deleted. Its links go, never what they point to
@@ -319,16 +341,16 @@ __t_acctrm() {
   [ -d "$__d" ] && [ ! -L "$__d" ] && [ -O "$__d" ] || return 91
   if [ "$3" = orphan ]; then
     { [ -e "$__d/.tessel-account" ] || [ -L "$__d/.tessel-account" ]; } && return 98
-    [ -f "$__d/.credentials.json" ] || [ -f "$__d/auth.json" ] || return 98
+    __ta_signed "$__d" || return 98
   else
     __ta_mark "$__d" "$1" "$2" || return 98
   fi
-  rm -f -- "$__d/.credentials.json" "$__d/auth.json" || return 98
-  { [ -e "$__d/.credentials.json" ] || [ -e "$__d/auth.json" ]; } && return 98
+  # Its sign-in first: the credentials, and .claude.json (its profile and
+  # any API key in it). A link goes, never what it points to.
+  rm -f -- "$__d/.credentials.json" "$__d/auth.json" "$__d/.claude.json" || return 98
+  { [ -e "$__d/.credentials.json" ] || [ -e "$__d/auth.json" ] || [ -e "$__d/.claude.json" ]; } && return 98
   __ta_keep "$1" "$__d" || return 98
-  for __x in "$__s/accounts"/.trash-*; do
-    [ -d "$__x" ] && [ ! -L "$__x" ] && rm -rf -- "$__x"
-  done
+  __ta_trash
   __tr="$__s/accounts/.trash-$1-$2-$$"
   mv -- "$__d" "$__tr" || return 98
   rm -rf -- "$__tr"
