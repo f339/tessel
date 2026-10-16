@@ -12,6 +12,7 @@ import { localHistoryState } from '../editor/localHistory'
 import { timelineEntries, splitPath, repoTopOf } from '../explorer/timeline'
 import { rowPadding, ROW_HEIGHT } from '../explorerRows'
 import { usePaneResize } from '../explorer/paneResize'
+import { isLsharePath } from '../../../shared/liveSharePath'
 import Codicon from './Codicon.vue'
 import TimelineHover from './TimelineHover.vue'
 
@@ -70,9 +71,12 @@ async function load({ more = false } = {}) {
   data.loading = true
   const api = (typeof window !== 'undefined' && window.shellApi) || {}
   const [dir] = splitPath(path)
+  // Local History is this computer's: a Live Share host's file keeps none
+  // here (editor/localHistory.js).
+  const local = localOn.value && !isLsharePath(path)
   const [g, l] = await Promise.all([
     gitOn.value && api.scm && api.scm.fileHistory ? Promise.resolve(api.scm.fileHistory({ root: dir, path, limit })).catch(() => null) : null,
-    localOn.value && api.localHistory && api.localHistory.list ? Promise.resolve(api.localHistory.list({ path })).catch(() => null) : null
+    local && api.localHistory && api.localHistory.list ? Promise.resolve(api.localHistory.list({ path })).catch(() => null) : null
   ])
   if (my !== seq) return
   Object.assign(data, {

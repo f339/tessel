@@ -41,6 +41,7 @@ function fakeTessel(projects) {
       write: (id, data) => t.writes.push([id, data]),
       openPane: (spec, guest) => t.opened.push([guest.name, spec]),
       closePane: (id, guest) => t.closed.push([guest.name, id]),
+      agents: () => [{ id: 'codex', name: 'Codex' }],
       askApproval: async (g) => (g.name in t.answers ? t.answers[g.name] : true)
     }
   }
@@ -132,7 +133,7 @@ describe('Live Share: several projects, each guest its own', () => {
     t.answers.Alex = { yes: true, projects: ['ws-a'] }
     const conn = await share(t)
     const alex = await joined(conn, 'Alex')
-    host.setRights(guestOf('Alex').id, ALL)
+    host.setGrant(guestOf('Alex').id, { rights: ALL })
     await until(() => alex.rights.length === 2)
     await until(() => alex.screens.a1)
     alex.client.write('b1', 'rm -rf /\r')
@@ -163,7 +164,7 @@ describe('Live Share: several projects, each guest its own', () => {
     expect(guestOf('Alex').projects).toEqual(['ws-a'])
     host.sendData('b1', 'NOT-YET')
 
-    expect(host.setProjects(guestOf('Alex').id, ['ws-a', 'ws-b', 'ws-not-shared'])).toBe(true)
+    expect(host.setGrant(guestOf('Alex').id, { projects: ['ws-a', 'ws-b', 'ws-not-shared'] })).toBe(true)
     await until(() => alex.screens.b1 === 'screen of b1')
     expect(ids(alex)).toEqual(['ws-a', 'ws-b'])
     expect(guestOf('Alex').projects).toEqual(['ws-a', 'ws-b'])
@@ -172,12 +173,12 @@ describe('Live Share: several projects, each guest its own', () => {
     expect(JSON.stringify(alex.data)).not.toContain('NOT-YET')
 
     // Taken back: nothing more of it, at once.
-    host.setProjects(guestOf('Alex').id, ['ws-b'])
+    host.setGrant(guestOf('Alex').id, { projects: ['ws-b'] })
     host.sendData('a1', 'PRIVATE-A')
     await until(() => ids(alex).join() === 'ws-b')
     await wait(40)
     expect(JSON.stringify(alex.data)).not.toContain('PRIVATE-A')
-    expect(host.setProjects('g-unknown', ['ws-a'])).toBe(false)
+    expect(host.setGrant('g-unknown', { projects: ['ws-a'] })).toBe(false)
   })
 
   it('a project taken out of the share: no request about it is taken from that moment (one in flight too), and its panes vanish for everyone', async () => {
@@ -185,7 +186,7 @@ describe('Live Share: several projects, each guest its own', () => {
     const conn = await share(t)
     const alex = await joined(conn, 'Alex')
     const bea = await joined(conn, 'Bea')
-    for (const name of ['Alex', 'Bea']) host.setRights(guestOf(name).id, ALL)
+    for (const name of ['Alex', 'Bea']) host.setGrant(guestOf(name).id, { rights: ALL })
     await until(() => alex.rights.length === 2 && bea.rights.length === 2)
     await until(() => alex.screens.b1 && bea.screens.b1)
     // Taken out on the host; the guests have not heard yet: what they send
@@ -218,7 +219,7 @@ describe('Live Share: several projects, each guest its own', () => {
     t.answers.Alex = { yes: true, projects: ['ws-a'] }
     const conn = await share(t)
     const alex = await joined(conn, 'Alex')
-    host.setRights(guestOf('Alex').id, ALL)
+    host.setGrant(guestOf('Alex').id, { rights: ALL })
     await until(() => alex.rights.length === 2 && alex.screens.a2)
     // a2 moves to ws-b on the host (before the guests are told).
     t.shared = { 'ws-a': ['a1'], 'ws-b': ['b1', 'a2'] }
@@ -259,7 +260,7 @@ describe('Live Share: several projects, each guest its own', () => {
     const conn = await share(t)
     const alex = join(conn, 'Alex')
     await until(() => finish.a1 && finish.b1)
-    host.setProjects(guestOf('Alex').id, ['ws-a'])
+    host.setGrant(guestOf('Alex').id, { projects: ['ws-a'] })
     finish.b1('PRIVATE-SCREEN')
     finish.a1('screen a')
     await until(() => alex.screens.a1 === 'screen a')
@@ -303,12 +304,12 @@ describe('Live Share: several projects, each guest its own', () => {
     createShareGuest({ url: `ws://127.0.0.1:${conn.port}/`, secret: conn.secret, name: 'Alex', signingKey: alex.key, back: true, hostKey: alex.hostKey, callbacks: back.callbacks }).connect()
     await until(() => back.states.includes('joined') && back.projects)
     expect(ids(back)).toEqual(['ws-b'])
-    const known = host.knownGuests()
-    expect(known.map((k) => k.projects)).toEqual([['ws-b']])
+    const saved = host.accessState()
+    expect(saved.people.map((k) => k.grant.projects)).toEqual([['ws-b']])
     host.stop()
     // The next Tessel takes the share back: ws-b is not shared any more.
     const t2 = fakeTessel({ 'ws-a': ['a1'] })
-    host = createShareHost({ secret: conn.secret, hostName: 'Ada', callbacks: t2.callbacks, known, hostKey })
+    host = createShareHost({ hostName: 'Ada', callbacks: t2.callbacks, access: saved, hostKey })
     const port = await host.start()
     const again = recorder()
     createShareGuest({ url: `ws://127.0.0.1:${port}/`, secret: conn.secret, name: 'Alex', signingKey: alex.key, back: true, hostKey: alex.hostKey, callbacks: again.callbacks }).connect()
@@ -320,7 +321,7 @@ describe('Live Share: several projects, each guest its own', () => {
     host.panesChanged()
     await until(() => again.lists.length === 2)
     expect(ids(again)).toEqual([])
-    expect(host.knownGuests().map((k) => k.projects)).toEqual([[]])
+    expect(host.accessState().people.map((k) => k.grant.projects)).toEqual([[]])
   })
 
   it('lists, for the host, each guest’s projects, offline ones too', async () => {
@@ -342,24 +343,24 @@ describe('Live Share: several projects, each guest its own', () => {
     const id = guestOf('Alex').id
     // Both made from what the window last heard (Alex sees ws-a): ws-a taken,
     // then ws-b given. The second does not give ws-a back.
-    expect(host.changeProject(id, 'ws-a', false)).toBe(true)
-    expect(host.changeProject(id, 'ws-b', true)).toBe(true)
+    expect(host.change(id, { project: 'ws-a', on: false })).toBe(true)
+    expect(host.change(id, { project: 'ws-b', on: true })).toBe(true)
     await until(() => ids(alex).join() === 'ws-b')
     expect(guestOf('Alex').projects).toEqual(['ws-b'])
     host.sendData('a1', 'PRIVATE-A')
     await wait(40)
     expect(JSON.stringify(alex.data)).not.toContain('PRIVATE-A')
-    expect(host.changeRight(id, 'type', true)).toBe(true)
-    expect(host.changeRight(id, 'close', true)).toBe(true)
+    expect(host.change(id, { right: 'type', on: true })).toBe(true)
+    expect(host.change(id, { right: 'close', on: true })).toBe(true)
     await until(() => alex.rights.length === 3)
     expect(alex.rights.at(-1)).toEqual({ type: true, open: false, close: true })
     expect(guestOf('Alex').rights).toEqual({ type: true, open: false, close: true })
     // Only real rights, shared projects and guests.
-    for (const right of ['__proto__', 'constructor', 'toString', 'hasOwnProperty', ['type']]) expect(host.changeRight(id, right, true)).toBe(false)
-    expect(host.changeProject(id, 'ws-gone', true)).toBe(false)
-    expect(host.changeProject(id, '../x', true)).toBe(false)
-    expect(host.changeProject('g-unknown', 'ws-a', true)).toBe(false)
-    expect(host.changeRight('k-unknown', 'type', true)).toBe(false)
+    for (const right of ['__proto__', 'constructor', 'toString', 'hasOwnProperty', ['type']]) expect(host.change(id, { right: right, on: true })).toBe(false)
+    expect(host.change(id, { project: 'ws-gone', on: true })).toBe(false)
+    expect(host.change(id, { project: '../x', on: true })).toBe(false)
+    expect(host.change('g-unknown', { project: 'ws-a', on: true })).toBe(false)
+    expect(host.change('k-unknown', { right: 'type', on: true })).toBe(false)
     expect(guestOf('Alex').rights).toEqual({ type: true, open: false, close: true })
   })
 
@@ -370,14 +371,14 @@ describe('Live Share: several projects, each guest its own', () => {
     alex.client.disconnect()
     await until(() => host.offlineGuests().length === 1)
     const [offline] = host.offlineGuests()
-    expect(host.changeProject(offline.id, 'ws-a', false)).toBe(true)
-    expect(host.changeRight(offline.id, 'type', true)).toBe(true)
+    expect(host.change(offline.id, { project: 'ws-a', on: false })).toBe(true)
+    expect(host.change(offline.id, { right: 'type', on: true })).toBe(true)
     expect(host.offlineGuests()[0]).toMatchObject({ id: offline.id, projects: ['ws-b'], rights: { type: true, open: false, close: false } })
-    expect(host.knownGuests()[0]).toMatchObject({ projects: ['ws-b'], rights: { type: true, open: false, close: false } })
-    expect(host.setProjects(offline.id, [])).toBe(true)
-    expect(host.setRights(offline.id, { open: true })).toBe(true)
+    expect(host.accessState().people[0]).toMatchObject({ grant: { projects: ['ws-b'], rights: { type: true, open: false, close: false } } })
+    expect(host.setGrant(offline.id, { projects: [] })).toBe(true)
+    expect(host.setGrant(offline.id, { rights: { open: true } })).toBe(true)
     expect(host.offlineGuests()[0]).toMatchObject({ projects: [], rights: { type: false, open: true, close: false } })
-    expect(host.changeProject(offline.id, 'ws-b', true)).toBe(true)
+    expect(host.change(offline.id, { project: 'ws-b', on: true })).toBe(true)
     // Back: with ws-b only, and what it may do now.
     const back = recorder()
     createShareGuest({ url: `ws://127.0.0.1:${conn.port}/`, secret: conn.secret, name: 'Alex', signingKey: alex.key, back: true, hostKey: alex.hostKey, callbacks: back.callbacks }).connect()
@@ -388,7 +389,7 @@ describe('Live Share: several projects, each guest its own', () => {
     expect(back.snapshots).toEqual(['b1'])
     // Its k- id names it while it is in, too: the change goes to its connection.
     expect(host.offlineGuests()).toEqual([])
-    expect(host.changeProject(offline.id, 'ws-a', true)).toBe(true)
+    expect(host.change(offline.id, { project: 'ws-a', on: true })).toBe(true)
     await until(() => ids(back).join() === 'ws-a,ws-b')
   })
 

@@ -62,13 +62,17 @@ import {
 } from '../scmLabels'
 import LucideIcon from './LucideIcon.vue'
 import NotesSendMenu from './NotesSendMenu.vue'
-import { isRemotePath } from '../../../shared/remotePath'
+import { isVirtualPath, isLsharePath } from '../../../shared/liveSharePath'
+import { accessOf, stateOfAnswer, accessStateText, localOnlyText } from '../liveShareGuestAccess'
 import { t, intlLocale } from '../i18n'
 
 const props = defineProps({
   root: { type: String, default: null },
   // Only this workspace's task copies (null: every one).
-  workspaceId: { type: String, default: null }
+  workspaceId: { type: String, default: null },
+  // Nothing can be staged, unstaged, discarded or committed (a Live Share
+  // host's project without the git right is read-only by itself).
+  readOnly: { type: Boolean, default: false }
 })
 const emit = defineEmits(['open', 'open-diff', 'review', 'create-pr', 'toast'])
 
@@ -76,8 +80,11 @@ const askConfirm = inject('askConfirm', null)
 const api = () => window.shellApi && window.shellApi.scm
 
 // --- Which repository: the project, or a task's copy --------------------------------
+// A Live Share host's project has none of this computer's task copies.
 const copies = computed(() =>
-  tasks.filter((k) => k.worktree && k.worktree.path && (!props.workspaceId || k.wsId === props.workspaceId) && k.column !== 'done')
+  isLsharePath(props.root)
+    ? []
+    : tasks.filter((k) => k.worktree && k.worktree.path && (!props.workspaceId || k.wsId === props.workspaceId) && k.column !== 'done')
 )
 const target = ref('project') // 'project' | task id
 const copyTask = computed(() => (target.value === 'project' ? null : copies.value.find((k) => k.id === target.value) || null))
@@ -107,10 +114,46 @@ onBeforeUnmount(() => clearTimeout(refreshingTimer))
 const entries = computed(() => (data.value && data.value.repo ? data.value.entries || [] : []))
 const top = computed(() => (data.value && data.value.top) || repoRoot.value)
 
+// --- A Live Share host's project: what the host lets this guest do ----------------
+// Its git runs on the host. Stage, unstage, discard and commit only with the
+// host's git right for this project (liveShareAccess.js), and while its last
+// status did not say read-only; push, pull, fetch, sync and Generate never
+// (the host's credentials, its agents). The access taken away, or a host's
+// Tessel too old to share git, shows that instead of the list. Both follow
+// the host live.
+const lshare = computed(() => isLsharePath(repoRoot.value))
+const access = computed(() => accessOf(repoRoot.value))
+const accessState = computed(() => {
+  if (!lshare.value) return null
+  if (access.value && access.value.state !== 'ok') return access.value.state
+  return stateOfAnswer({ code: state.value && state.value.code })
+})
+const accessText = computed(() => accessStateText(accessState.value))
+const readOnly = computed(
+  () => props.readOnly || (lshare.value && (!!(data.value && data.value.readOnly) || !access.value || !access.value.git || !!accessState.value))
+)
+function refuseReadOnly() {
+  emit('toast', t('changes.readOnly', 'Read-only: the host has not let you stage, commit or discard here.'))
+  return false
+}
+// Lost while a menu was open: it closes.
+watch(readOnly, (ro) => {
+  if (ro) closeMenu()
+})
+// Given back: read again.
+watch(
+  () => !!(access.value && access.value.state === 'ok'),
+  (ok, before) => {
+    if (ok && before === false) refreshAll()
+  }
+)
+
 let disposed = false
 async function load() {
   const root = repoRoot.value
   if (!root || !api()) return
+  // A Live Share project the window says this guest cannot read: not asked.
+  if (access.value && access.value.state !== 'ok') return
   lastLoad = Date.now()
   await refreshStatus(root)
   if (disposed) return
@@ -171,7 +214,7 @@ const rowsBySection = computed(() => {
 // shows only part of what it holds).
 function dirActions(node) {
   const a = getSourceControlDirectoryActionPaths(node)
-  const f = !!normalizedFilter.value
+  const f = !!normalizedFilter.value || readOnly.value
   return {
     canStage: !f && a.stagePaths.length > 0,
     canUnstage: !f && a.unstagePaths.length > 0,
@@ -502,6 +545,7 @@ async function afterMutation() {
   await load()
 }
 async function runGit(fn, failure) {
+  if (readOnly.value) return refuseReadOnly()
   let res = null
   try {
     res = await fn()
@@ -547,6 +591,7 @@ async function confirmDiscard(copy, pathText) {
   return (await askConfirm({ title: copy.title, text: `${copy.description}\n${pathText}`, confirmLabel: copy.confirmLabel, danger: true })) === true
 }
 async function requestDiscardEntry(entry) {
+  if (readOnly.value) return refuseReadOnly()
   const root = repoRoot.value
   const copy = discardEntryCopy(entry, { remote: remoteRepo.value })
   if (!(await confirmDiscard(copy, entry.path))) return
@@ -558,6 +603,7 @@ async function requestDiscardEntry(entry) {
 }
 async function requestDiscardAllInArea(area, paths) {
   if (!paths.length || isExecutingBulk.value) return
+  if (readOnly.value) return refuseReadOnly()
   const root = repoRoot.value
   const copy = discardAreaCopy(area, paths.length, { remote: remoteRepo.value })
   const n = paths.length
@@ -585,7 +631,7 @@ function sectionActions(section) {
   const stageAll = getStageAllPaths(items)
   const unstageAll = getUnstageAllPaths(items)
   const discardAll = section.area === 'staged' ? [] : getDiscardAllPaths(items, section.area)
-  const f = !!normalizedFilter.value
+  const f = !!normalizedFilter.value || readOnly.value
   return {
     canStageAll: !f && stageAll.length > 0,
     canUnstageAll: !f && unstageAll.length > 0,
@@ -610,8 +656,10 @@ const isGenerating = ref(false)
 let generatingRoot = null
 const generateError = ref('')
 
+// A Live Share host's project: no upstream to offer (push, pull, sync and
+// publish stay the host's), so the main button stages or commits only.
 const upstreamStatus = computed(() =>
-  data.value && data.value.repo
+  data.value && data.value.repo && !lshare.value
     ? { hasUpstream: !!data.value.hasUpstream, ahead: data.value.ahead || 0, behind: data.value.behind || 0, upstreamName: data.value.upstream || '' }
     : null
 )
@@ -655,6 +703,7 @@ const generateTooltip = computed(() => {
 async function commit() {
   const message = commitMessage.value.trim()
   if (!message || isCommitting.value) return false
+  if (readOnly.value) return refuseReadOnly()
   isCommitting.value = true
   commitError.value = ''
   const root = repoRoot.value
@@ -694,6 +743,11 @@ function remoteFailure(kind) {
 }
 async function remote(kind) {
   if (remoteOp.value || !REMOTE[kind]) return false
+  // Push, pull, fetch and sync use the host's credentials: never from here.
+  if (lshare.value) {
+    emit('toast', localOnlyText())
+    return false
+  }
   remoteOp.value = kind
   remoteActionError.value = ''
   let res = null
@@ -765,6 +819,8 @@ function onRootKeydown(e) {
 
 async function generate() {
   if (isGenerateDisabled.value || !api()) return
+  // It runs this computer's agent on the staged changes: not for a host's.
+  if (lshare.value) return emit('toast', localOnlyText())
   isGenerating.value = true
   generateError.value = ''
   const root = repoRoot.value
@@ -813,10 +869,13 @@ function onMoreOutside(e) {
 // agents work on this machine's folders, so not yet. Create PR runs gh here on
 // the host's repository (named from its remote, githubService.js), so it
 // names the project folder (the one saved root the main process accepts).
-const remoteRepo = computed(() => isRemotePath(repoRoot.value))
-const canCreatePr = computed(() => !!(data.value && data.value.repo && data.value.branch && (data.value.remotes || []).length))
+// A Live Share host's project too: not generated here, and no pull request
+// (GitHub acts with the host's identity).
+const remoteRepo = computed(() => isVirtualPath(repoRoot.value))
+const canCreatePr = computed(() => !lshare.value && !!(data.value && data.value.repo && data.value.branch && (data.value.remotes || []).length))
 function createPr() {
   closeMore()
+  if (lshare.value) return
   emit('create-pr', { cwd: remoteRepo.value ? repoRoot.value : top.value, taskId: copyTask.value ? copyTask.value.id : null })
 }
 const branchTitle = computed(() => {
@@ -1073,7 +1132,7 @@ function draftStore() {
         <button type="button" class="ctx-menu-item" role="menuitem" @click="refreshAll">
           <span class="sc-menu-row"><LucideIcon name="refreshCw" :size="14" />{{ t('changes.menu.refresh', 'Refresh') }}</span>
         </button>
-        <button type="button" class="ctx-menu-item" role="menuitem" :disabled="!canCreatePr" @click="createPr">
+        <button v-if="!lshare" type="button" class="ctx-menu-item" role="menuitem" :disabled="!canCreatePr" @click="createPr">
           <span class="sc-menu-row"><LucideIcon name="gitPullRequestArrow" :size="14" />{{ t('changes.menu.createPr', 'Create PR…') }}</span>
         </button>
         <template v-if="notes.length">
@@ -1195,6 +1254,14 @@ function draftStore() {
         }}
       </div>
       <PanelState
+        v-else-if="accessState"
+        kind="error"
+        :text="accessText"
+        :retry="!access || access.state === 'ok'"
+        data-test="changes-access"
+        @retry="refreshAll"
+      />
+      <PanelState
         v-else-if="loaded && error"
         kind="error"
         class="explorer-error"
@@ -1229,8 +1296,13 @@ function draftStore() {
           </div>
         </div>
 
-        <!-- The commit area stays mounted (Orca keeps it on clean trees too). -->
-        <div v-if="data && data.repo" class="sc-commit" data-test="sc-commit">
+        <!-- The commit area stays mounted (Orca keeps it on clean trees too);
+             read-only (a Live Share host's project without the git right):
+             a line saying so instead. -->
+        <p v-if="data && data.repo && readOnly" class="sc-notice sc-read-only" data-test="sc-read-only">
+          {{ t('changes.readOnlyNote', 'Read-only: the host has not let you stage, commit or discard changes.') }}
+        </p>
+        <div v-else-if="data && data.repo" class="sc-commit" data-test="sc-commit">
           <div class="sc-composer">
             <textarea
               v-model="commitMessage"
@@ -1283,6 +1355,7 @@ function draftStore() {
               {{ scmText(primaryAction.label) }}
             </button>
             <button
+              v-if="!lshare"
               ref="chevronEl"
               type="button"
               class="sc-chevron"
@@ -1488,7 +1561,7 @@ function draftStore() {
                   </span>
                   <span class="sc-status" :style="{ color: STATUS_COLORS[node.entry.status] }">{{ STATUS_LABELS[node.entry.status] }}</span>
                 </template>
-                <div class="sc-row-actions" @click.stop @dblclick.stop>
+                <div v-if="!readOnly" class="sc-row-actions" @click.stop @dblclick.stop>
                   <button
                     v-if="canDiscardStatusEntry(node.entry)"
                     type="button"

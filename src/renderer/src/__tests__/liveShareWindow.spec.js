@@ -33,15 +33,15 @@ function setup() {
       }
       return { ok: true, projectIds: [...hostIds] }
     }),
-    approve: vi.fn(),
-    setRights: vi.fn(),
-    setGuestProjects: vi.fn(),
-    newInvite: vi.fn(),
+    approve: vi.fn(async () => ({ ok: true })),
     stop: vi.fn(),
-    open: vi.fn(),
-    leave: vi.fn()
+    open: vi.fn(async () => ({ ok: true, asked: false })),
+    leave: vi.fn(),
+    setAgents: vi.fn(),
+    focus: vi.fn(),
+    requestDone: vi.fn()
   }
-  for (const name of ['onHost', 'onGuest', 'onAsk', 'onHostRequest', 'onNotice']) {
+  for (const name of ['onHost', 'onGuest', 'onAsk', 'onHostRequest', 'onNotice', 'onPresence', 'onInviteBlocked']) {
     api[name] = (cb) => {
       listeners[name] = name === 'onGuest' ? (s) => cb(guestStatus(s)) : cb
       return () => delete listeners[name]
@@ -55,6 +55,8 @@ function setup() {
   const currentWsId = ref(null)
   const maximizedId = ref(null)
   const layoutReady = ref(false)
+  const agentList = ref([{ id: 'claude', name: 'Claude Code' }])
+  const activePane = ref(null)
   const seeded = {}
   const toasts = []
   let made = 0
@@ -79,12 +81,16 @@ function setup() {
     killPty: vi.fn(),
     adoptLeaves: vi.fn(),
     hasAgent: (id) => id !== 'nope',
+    agentName: (id) => ({ claude: 'Claude Code' })[id] || null,
+    agentList: () => agentList.value,
+    activePaneId: () => activePane.value,
     layoutReady: () => layoutReady.value
   }
   const ls = createLiveShareWindow(deps)
-  return { ls, api, listeners, deps, workspaces, currentWsId, maximizedId, layoutReady, seeded, toasts, hostIds }
+  return { ls, api, listeners, deps, workspaces, currentWsId, maximizedId, layoutReady, seeded, toasts, hostIds, agentList, activePane }
 }
 
+const NO = { type: false, open: false, close: false }
 const pane = (id, extra = {}) => ({ id, title: id, kind: 'shell', cols: 120, rows: 30, ...extra })
 const leaf = (id, view = 'terminal') => ({ type: 'leaf', id, view, title: id, kind: 'shell' })
 
@@ -429,7 +435,7 @@ describe('Live Share in the window, as the host', () => {
     sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g1', name: 'Alex', state: 'waiting' }, { id: 'g2', name: 'Bea', state: 'waiting' }] })
     t.listeners.onAsk({ guestId: 'g1', name: 'Alex', code: '123 456' })
     t.listeners.onAsk({ guestId: 'g2', name: 'Bea', code: '654 321' })
-    expect(t.ls.state.asks[0]).toEqual({ kind: 'join', key: 'g1', guestId: 'g1', name: 'Alex', code: '123 456' })
+    expect(t.ls.state.asks[0]).toEqual({ kind: 'join', key: 'g1', guestId: 'g1', name: 'Alex', code: '123 456', invite: null, offer: null, trustable: false })
     // Alex leaves before the answer: a yes meant for Alex never lets Bea in.
     sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g2', name: 'Bea', state: 'waiting' }] })
     t.ls.answerAsk({ key: 'g1', yes: true })
@@ -437,23 +443,132 @@ describe('Live Share in the window, as the host', () => {
     expect(t.ls.state.asks.map((a) => a.key)).toEqual(['g2'])
     // Only shared projects are given.
     t.ls.answerAsk({ key: 'g2', yes: true, projects: ['ws-2', 'ws-9'] })
-    expect(t.api.approve).toHaveBeenCalledWith({ guestId: 'g2', yes: true, projects: ['ws-2'] })
+    expect(t.api.approve).toHaveBeenCalledWith({ guestId: 'g2', yes: true, projects: ['ws-2'], rights: NO, trust: false })
     // A yes without projects gives none (never every shared one).
     t.listeners.onAsk({ guestId: 'g3', name: 'Cy' })
     sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g3', name: 'Cy', state: 'waiting' }] })
     t.ls.answerAsk({ key: 'g3', yes: true })
-    expect(t.api.approve).toHaveBeenLastCalledWith({ guestId: 'g3', yes: true, projects: [] })
+    expect(t.api.approve).toHaveBeenLastCalledWith({ guestId: 'g3', yes: true, projects: [], rights: NO, trust: false })
     sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g2', name: 'Bea', state: 'joined' }] })
     sharingNow(['ws-1', 'ws-2'], { guests: [] })
     expect(t.toasts.filter((x) => /Bea/.test(x)).length).toBe(2)
   })
 
-  it('sets what each guest may do, and which shared projects it sees', () => {
-    t.ls.setRights('g1', { type: true, open: 0, close: 'yes' })
-    expect(t.api.setRights).toHaveBeenCalledWith({ guestId: 'g1', rights: { type: true, open: false, close: true } })
-    sharingNow(['ws-1', 'ws-2'])
-    t.ls.setGuestProjects('g1', ['ws-2', 'ws-7'])
-    expect(t.api.setGuestProjects).toHaveBeenCalledWith({ guestId: 'g1', projects: ['ws-2'] })
+  it('the prompt comes with the invitation, its offer and whether to trust; the answer carries the rights and trust', async () => {
+    twoProjects()
+    sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g1', name: 'Alex', state: 'waiting' }, { id: 'g2', name: 'Bea', state: 'waiting' }] })
+    t.listeners.onAsk({ guestId: 'g1', name: 'Alex', code: '1', invite: { id: 'iv-aaaaaaaaaa', label: 'Team' }, offer: { projects: ['ws-2'], rights: { open: true, made: true } }, trustable: true })
+    expect(t.ls.state.asks[0]).toMatchObject({ invite: { id: 'iv-aaaaaaaaaa', label: 'Team' }, offer: { projects: ['ws-2'], rights: { type: false, open: true, close: false } }, trustable: true })
+    t.ls.answerAsk({ key: 'g1', yes: true, projects: ['ws-2'], rights: { type: 1, open: true, made: true }, trust: true })
+    expect(t.api.approve).toHaveBeenLastCalledWith({ guestId: 'g1', yes: true, projects: ['ws-2'], rights: { type: false, open: true, close: false }, trust: true })
+    // An older guest (no identity key) is never trusted; a no gives nothing.
+    t.listeners.onAsk({ guestId: 'g2', name: 'Bea', trustable: false })
+    t.ls.answerAsk({ key: 'g2', yes: false, projects: ['ws-1'], rights: { type: true }, trust: true })
+    expect(t.api.approve).toHaveBeenLastCalledWith({ guestId: 'g2', yes: false, projects: [], rights: NO, trust: false })
+  })
+
+  it('a full trusted list: the guest is let in, and the host is told plainly it was not trusted', async () => {
+    t.api.approve.mockResolvedValue({ ok: true, reason: 'trust-full', max: 50 })
+    twoProjects()
+    sharingNow(['ws-1'], { guests: [{ id: 'g1', name: 'Alex', state: 'waiting' }] })
+    t.listeners.onAsk({ guestId: 'g1', name: 'Alex', code: '1', trustable: true })
+    t.ls.answerAsk({ key: 'g1', yes: true, projects: ['ws-1'], trust: true })
+    await flush()
+    expect(t.toasts.at(-1)).toBe('Trusted list full (50): Alex joined without being trusted. Remove someone from Trusted people to trust them.')
+  })
+
+  it('a guest whose Tessel can not be trusted: main says so, and the toast says it joined untrusted', async () => {
+    t.api.approve.mockResolvedValue({ ok: true, reason: 'not-trustable' })
+    twoProjects()
+    sharingNow(['ws-1'], { guests: [{ id: 'g1', name: 'Alex', state: 'waiting' }] })
+    t.listeners.onAsk({ guestId: 'g1', name: 'Alex', code: '1', trustable: false })
+    t.ls.answerAsk({ key: 'g1', yes: true, projects: ['ws-1'], trust: true })
+    // Main decides whether it can be trusted.
+    expect(t.api.approve).toHaveBeenLastCalledWith(expect.objectContaining({ guestId: 'g1', yes: true, trust: true }))
+    await flush()
+    expect(t.toasts.at(-1)).toBe('Alex joined without being trusted: their Tessel is too old to be trusted (it needs an update).')
+  })
+
+  it('says who joined which project, trusted people let in at once included', async () => {
+    twoProjects()
+    sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g1', name: 'Simpa', state: 'joined', trusted: true, projects: ['ws-1'] }] })
+    expect(t.toasts.at(-1)).toBe('Simpa joined tessel.')
+    sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g1', name: 'Simpa', state: 'joined', projects: ['ws-1'] }, { id: 'g2', name: 'Eve', state: 'joined', projects: ['ws-1', 'ws-2'] }] })
+    expect(t.toasts.at(-1)).toBe('Eve joined tessel and 1 more.')
+    sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g2', name: 'Eve', state: 'joined', projects: ['ws-1', 'ws-2'] }] })
+    expect(t.toasts.at(-1)).toBe('Simpa left your Live Share.')
+  })
+
+  it('a guest without the right to open asks: you are asked, and it opens on your yes (checked again)', async () => {
+    twoProjects()
+    const alexIn = (projects = ['ws-1']) => sharingNow(['ws-1', 'ws-2'], { guests: [{ id: 'g1', name: 'Alex', state: 'joined', rights: { open: false }, projects }] })
+    alexIn()
+    let n = 0
+    const ask = (spec) => t.listeners.onHostRequest({ action: 'ask-open', request: `r${++n}`, spec, guest: { id: 'g1', name: 'Alex' } })
+    ask({ kind: 'agent', agent: 'claude', project: 'ws-1' })
+    ask({ kind: 'terminal', project: 'ws-2' }) // a project Alex does not see
+    ask({ kind: 'agent', agent: 'nope', project: 'ws-1' }) // an agent this host does not have
+    expect(t.deps.launch).not.toHaveBeenCalled()
+    expect(t.ls.state.asks.map((a) => [a.kind, a.request, a.agentName, a.projectName])).toEqual([['open', 'r1', 'Claude Code', 'tessel']])
+    // The two dropped at once are done with.
+    expect(t.api.requestDone.mock.calls).toEqual([['r2'], ['r3']])
+    // An 'open' without the right is not done either (and done with).
+    t.listeners.onHostRequest({ action: 'open', request: 'r9', spec: { kind: 'terminal', project: 'ws-1' }, guest: { id: 'g1', name: 'Alex' } })
+    expect(t.deps.launch).not.toHaveBeenCalled()
+    expect(t.api.requestDone).toHaveBeenLastCalledWith('r9')
+    t.ls.answerAsk({ key: t.ls.state.asks[0].key, yes: true })
+    expect(t.deps.launch).toHaveBeenCalledWith({ kind: 'agent', id: 'claude' }, 'pane-1', 'right')
+    expect(t.toasts.at(-1)).toBe('Alex opened Claude Code in your Tessel.')
+    expect(t.api.requestDone).toHaveBeenLastCalledWith('r1')
+    // Asked, then the project taken from Alex: the ask goes, nothing opens.
+    ask({ kind: 'terminal', project: 'ws-1' })
+    expect(t.ls.state.asks).toHaveLength(1)
+    alexIn([])
+    expect(t.ls.state.asks).toEqual([])
+    // At most three asks per guest wait at once.
+    alexIn()
+    for (let i = 0; i < 5; i++) ask({ kind: 'terminal', project: 'ws-1' })
+    expect(t.ls.state.asks).toHaveLength(3)
+    t.ls.answerAsk({ key: t.ls.state.asks[0].key, yes: false })
+    expect(t.deps.launch).toHaveBeenCalledTimes(1)
+  })
+
+  it('main calls a request off: its prompt goes and nothing opens; one opened with the right is done with', async () => {
+    twoProjects()
+    sharingNow(['ws-1'], { guests: [{ id: 'g1', name: 'Alex', state: 'joined', rights: { open: false }, projects: ['ws-1'] }] })
+    t.listeners.onHostRequest({ action: 'ask-open', request: 'r1', spec: { kind: 'terminal', project: 'ws-1' }, guest: { id: 'g1', name: 'Alex' } })
+    t.listeners.onHostRequest({ action: 'ask-open', request: 'r2', spec: { kind: 'terminal', project: 'ws-1' }, guest: { id: 'g1', name: 'Alex' } })
+    expect(t.ls.state.asks.map((a) => a.request)).toEqual(['r1', 'r2'])
+    t.listeners.onHostRequest({ action: 'cancel', request: 'r1' })
+    t.listeners.onHostRequest({ action: 'cancel', request: 'r-unknown' })
+    expect(t.ls.state.asks.map((a) => a.request)).toEqual(['r2'])
+    t.ls.answerAsk({ key: t.ls.state.asks[0].key, yes: false })
+    expect(t.deps.launch).not.toHaveBeenCalled()
+    expect(t.api.requestDone).toHaveBeenLastCalledWith('r2')
+    sharingNow(['ws-1'], { guests: [{ id: 'g1', name: 'Alex', state: 'joined', rights: { open: true }, projects: ['ws-1'] }] })
+    t.listeners.onHostRequest({ action: 'open', request: 'r3', spec: { kind: 'terminal', project: 'ws-1' }, guest: { id: 'g1', name: 'Alex' } })
+    expect(t.deps.launch).toHaveBeenCalledTimes(1)
+    expect(t.api.requestDone).toHaveBeenLastCalledWith('r3')
+  })
+
+  it('a trusted person’s new connection replacing the old one is neither a join nor a leave', async () => {
+    twoProjects()
+    const tess = (id, since) => ({ id, name: 'Tess', state: 'joined', trusted: true, trustId: 't-1', since, projects: ['ws-1'] })
+    sharingNow(['ws-1'], { guests: [tess('g1', 1)] })
+    expect(t.toasts.at(-1)).toBe('Tess joined tessel.')
+    const said = t.toasts.length
+    sharingNow(['ws-1'], { guests: [tess('g2', 2)] })
+    expect(t.toasts.length).toBe(said)
+    // Both for a moment: presence shows the newest only.
+    sharingNow(['ws-1'], { guests: [tess('g2', 2), tess('g3', 3)], presence: [{ id: 'pane-1', guests: [{ id: 'g2', watching: true }, { id: 'g3', watching: true }] }] })
+    expect(t.ls.presenceOf('pane-1').map((p) => p.id)).toEqual(['g3'])
+  })
+
+  it('tells main the agents guests may ask for, at once and when they change', async () => {
+    expect(t.api.setAgents).toHaveBeenLastCalledWith([{ id: 'claude', name: 'Claude Code' }])
+    t.agentList.value = [{ id: 'claude', name: 'Claude Code' }, { id: 'codex' }, { name: 'no id' }]
+    await flush()
+    expect(t.api.setAgents).toHaveBeenLastCalledWith([{ id: 'claude', name: 'Claude Code' }, { id: 'codex', name: 'codex' }])
   })
 
   it('opens what guests ask in the project they asked in, beside its active pane, only a shared project they see', async () => {
@@ -746,9 +861,10 @@ describe('Live Share in the window: what the review found', () => {
     expect(t.toasts.at(-1)).toMatch(/runs on your computer/)
   })
 
-  it('tells the host when the code got blocked', () => {
-    t.listeners.onHost({ state: 'sharing', invite: 'x', guests: [], inviteBlocked: true })
-    expect(t.toasts.at(-1)).toMatch(/no longer lets anyone in/)
+  it('tells the host when an invitation got blocked, by its label', () => {
+    t.listeners.onHost({ state: 'sharing', projectIds: [], invites: [{ id: 'iv-aaaaaaaaaa', label: 'Design', state: 'blocked' }], guests: [] })
+    t.listeners.onInviteBlocked({ id: 'iv-aaaaaaaaaa' })
+    expect(t.toasts.at(-1)).toBe('Several connections used the code of “Design” without joining: it no longer lets anyone in. Make a new code for it in Live Share.')
   })
 })
 
@@ -769,7 +885,7 @@ describe('Live Share, as a guest: your own view of a host’s agent pane', () =>
   const layoutOf = (...children) => ({ project: 'site', tree: children.length === 1 ? children[0] : { type: 'split', dir: 'row', sizes: children.map(() => 100 / children.length), children }, activeId: null, maximizedId: null })
   const chatOf = (id, terminal = true) => ({ id, project: 'ws-a', title: id, agentId: 'claude', accent: null, terminal })
   // Everything that would reach the host's pane or this window's terminals.
-  const reachedHost = () => [t.api.open, t.api.leave, t.api.approve, t.api.setRights, t.api.stop, t.deps.killPty, t.deps.closeLeaf, t.deps.launch].some((fn) => fn.mock.calls.length)
+  const reachedHost = () => [t.api.open, t.api.leave, t.api.approve, t.api.stop, t.deps.killPty, t.deps.closeLeaf, t.deps.launch].some((fn) => fn.mock.calls.length)
   const leafOf = (id) => {
     const find = (n) => (!n ? null : n.type === 'leaf' ? (n.id === id ? n : null) : n.children.map(find).find(Boolean) || null)
     return find(t.workspaces.value[0].tree)
@@ -820,6 +936,42 @@ describe('Live Share, as a guest: your own view of a host’s agent pane', () =>
     expect(reachedHost()).toBe(false)
   })
 
+  it('your text size for a host terminal: fit at first, yours only, kept for the session, forgotten after it', async () => {
+    const status = (session = 1, ids = ['pane-ls1-ps', 'pane-ls1-b']) => ({ state: 'joined', host: 'Ada', session, panes: ids.map((id) => pane(id)), layout: layoutOf(...ids.map((id) => leaf(id))) })
+    t.listeners.onGuest(status())
+    await flush()
+    const first = leafOf('pane-ls1-ps')
+    expect(first.liveShare.textSize).toBe('fit')
+    const attaches = window.shellApi.attachPty.mock.calls.length
+    expect(t.ls.setGuestTextSize('pane-ls1-ps', 'normal')).toBe(true)
+    expect(first.liveShare.textSize).toBe('normal')
+    expect(t.ls.setGuestTextSize('pane-ls1-ps', 'width')).toBe(true)
+    expect(first.liveShare.textSize).toBe('width')
+    // Not a text size, or not a pane of the host's: nothing.
+    expect(t.ls.setGuestTextSize('pane-ls1-ps', 'huge')).toBe(false)
+    expect(t.ls.setGuestTextSize('pane-nope', 'fit')).toBe(false)
+    expect(first.liveShare.textSize).toBe('width')
+    // Nothing went to the host, nor to a terminal.
+    expect(reachedHost()).toBe(false)
+    expect(window.shellApi.attachPty.mock.calls.length).toBe(attaches)
+    // The pane closed and opened again in the session: your choice.
+    t.listeners.onGuest(status(1, ['pane-ls1-b']))
+    await flush()
+    expect(leafOf('pane-ls1-ps')).toBe(null)
+    await flush()
+    t.listeners.onGuest(status())
+    await flush()
+    const again = leafOf('pane-ls1-ps')
+    expect(again).not.toBe(first)
+    expect(again.liveShare.textSize).toBe('width')
+    // A new session: fit again.
+    t.listeners.onGuest({ state: 'ended', host: 'Ada', session: 1, panes: [], layout: null, reason: 'left' })
+    await flush()
+    t.listeners.onGuest(status(2))
+    await flush()
+    expect(leafOf('pane-ls1-ps').liveShare.textSize).toBe('fit')
+  })
+
   it('a pane the host has in chat mode shows as a chat (no terminal attached)', async () => {
     t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-ps')], layout: layoutOf(leaf('pane-ls1-ps'), leaf('pane-ls1-c', 'chat')), chat: true, chats: [chatOf('pane-ls1-c', false)] })
     await flush()
@@ -864,32 +1016,112 @@ describe('Live Share, as a guest: your own view of a host’s agent pane', () =>
   })
 })
 
-describe('Live Share, as the host: who reads which conversation', () => {
+describe('Live Share, as the host: who is at which pane', () => {
+  let t
+  beforeEach(async () => {
+    t = setup()
+    await t.ls.init()
+  })
+  afterEach(() => {
+    t.ls.dispose()
+    vi.useRealTimers()
+  })
+  const guests = [
+    { id: 'g1', name: 'Alex', state: 'joined' },
+    { id: 'g2', name: '', state: 'joined' },
+    { id: 'g3', name: 'Cy', state: 'waiting' }
+  ]
+
+  it('names the guests reading a pane’s conversation now, only while sharing (from presence)', () => {
+    expect(t.ls.readersOf('pane-1')).toEqual([])
+    const reading = (id) => ({ id, watching: false, typing: false, reading: true })
+    t.listeners.onHost({ state: 'sharing', projectIds: ['ws-1'], guests, presence: [{ id: 'pane-1', guests: [reading('g1'), reading('g2'), reading('g3')] }] })
+    expect(t.ls.readersOf('pane-1')).toEqual(['Alex', 'A guest'])
+    expect(t.ls.readersOf('pane-2')).toEqual([])
+    t.listeners.onHost({ state: 'sharing', projectIds: ['ws-1'], guests: [{ id: 'g1', name: 'Alex', state: 'joined' }] })
+    expect(t.ls.readersOf('pane-1')).toEqual([])
+    t.listeners.onHost({ state: 'off', guests: [], presence: [{ id: 'pane-1', guests: [reading('g1')] }] })
+    expect(t.ls.readersOf('pane-1')).toEqual([])
+  })
+
+  it('watching and typing, with initials, from the presence pushes', () => {
+    t.listeners.onHost({ state: 'sharing', projectIds: ['ws-1'], guests })
+    t.listeners.onPresence([{ id: 'pane-1', guests: [{ id: 'g1', watching: true, typing: true, reading: false }, { id: 'g9', watching: true, typing: false, reading: false }] }])
+    expect(t.ls.presenceOf('pane-1')).toEqual([{ id: 'g1', name: 'Alex', initials: 'AL', watching: true, typing: true, reading: false }])
+    // Main says the typing ended.
+    t.listeners.onPresence([{ id: 'pane-1', guests: [{ id: 'g1', watching: true, typing: false, reading: false }] }])
+    expect(t.ls.presenceOf('pane-1')[0].typing).toBe(false)
+    t.listeners.onPresence([])
+    expect(t.ls.presenceOf('pane-1')).toEqual([])
+  })
+
+  it('a typing mark main never ended goes after a few seconds', () => {
+    vi.useFakeTimers()
+    t.listeners.onHost({ state: 'sharing', projectIds: ['ws-1'], guests })
+    t.listeners.onPresence([{ id: 'pane-1', guests: [{ id: 'g1', watching: false, typing: true, reading: false }] }])
+    expect(t.ls.presenceOf('pane-1')).toHaveLength(1)
+    const tick = t.ls.state.presenceTick
+    vi.advanceTimersByTime(13000)
+    expect(t.ls.state.presenceTick).toBe(tick + 1)
+    expect(t.ls.presenceOf('pane-1')).toEqual([])
+  })
+})
+
+describe('Live Share, as a guest: asking the host to open, and what is on screen', () => {
   let t
   beforeEach(async () => {
     t = setup()
     await t.ls.init()
   })
   afterEach(() => t.ls.dispose())
+  const joined = (extra = {}) => t.listeners.onGuest({ state: 'joined', host: 'Ada', session: 1, panes: [pane('pane-ls1-a')], layout: { project: 'x', tree: leaf('pane-ls1-a'), activeId: null, maximizedId: null }, rights: NO, agents: [{ id: 'claude', name: 'Claude Code' }], ...extra })
 
-  it('names the guests reading a pane’s conversation now, only while sharing', () => {
-    expect(t.ls.readersOf('pane-1')).toEqual([])
-    t.listeners.onHost({
-      state: 'sharing',
-      invite: 'x',
-      projectIds: ['ws-1'],
-      guests: [
-        { id: 'g1', name: 'Alex', state: 'joined' },
-        { id: 'g2', name: '', state: 'joined' },
-        { id: 'g3', name: 'Cy', state: 'waiting' }
-      ],
-      reading: [{ id: 'pane-1', guests: ['g1', 'g2', 'g3'] }]
-    })
-    expect(t.ls.readersOf('pane-1')).toEqual(['Alex', 'A guest'])
-    expect(t.ls.readersOf('pane-2')).toEqual([])
-    t.listeners.onHost({ state: 'sharing', invite: 'x', projectIds: ['ws-1'], guests: [{ id: 'g1', name: 'Alex', state: 'joined' }] })
-    expect(t.ls.readersOf('pane-1')).toEqual([])
-    t.listeners.onHost({ state: 'off', guests: [], reading: [{ id: 'pane-1', guests: ['g1'] }] })
-    expect(t.ls.readersOf('pane-1')).toEqual([])
+  it('a host that lists its agents: the "+" menu offers them, and without the right the host is asked', async () => {
+    joined()
+    await flush()
+    const ws = t.workspaces.value[0]
+    expect(t.ls.hostMenu(ws)).toEqual({ host: 'Ada', agents: [{ id: 'claude', name: 'Claude Code' }], canOpen: false })
+    t.api.open.mockResolvedValue({ ok: true, asked: true })
+    await t.ls.openOnHost({ kind: 'agent', agent: 'claude' }, ws)
+    expect(t.api.open).toHaveBeenCalledWith({ kind: 'agent', agent: 'claude', project: 'ws-a' })
+    expect(t.toasts.at(-1)).toBe('Asked Ada to open it: it opens once they say yes.')
+    t.api.open.mockResolvedValue({ ok: false, reason: 'agent' })
+    await t.ls.openOnHost({ kind: 'agent', agent: 'gone' }, ws)
+    expect(t.toasts.at(-1)).toBe('Ada does not have that agent.')
+    t.listeners.onNotice({ code: 'agent' })
+    expect(t.toasts.at(-1)).toBe('Ada does not have that agent.')
+    // With the right: opened at once.
+    joined({ rights: { type: false, open: true, close: false } })
+    await flush()
+    expect(t.ls.hostMenu(ws).canOpen).toBe(true)
+    t.api.open.mockResolvedValue({ ok: true, asked: false })
+    await t.ls.openOnHost({ kind: 'terminal' }, ws)
+    expect(t.toasts.at(-1)).toBe('Opening it on Ada’s computer…')
+  })
+
+  it('a host from before that list: no host menu, and nothing asked without the right', async () => {
+    joined({ agents: null })
+    await flush()
+    const ws = t.workspaces.value[0]
+    expect(t.ls.hostMenu(ws)).toBe(null)
+    await t.ls.openOnHost({ kind: 'terminal' }, ws)
+    expect(t.api.open).not.toHaveBeenCalled()
+    expect(t.toasts.at(-1)).toMatch(/has not let you open/)
+  })
+
+  it('says which of the host’s panes is on screen; none on a project of yours', async () => {
+    const mine = reactive({ id: 'ws-mine', name: 'mine', tree: { type: 'leaf', id: 'pane-1', kind: 'shell' }, activeId: 'pane-1' })
+    t.workspaces.value.push(mine)
+    joined()
+    await flush()
+    const ws = t.workspaces.value.find((w) => w.liveShare)
+    t.currentWsId.value = ws.id
+    t.activePane.value = 'pane-ls1-a'
+    await flush()
+    expect(t.api.focus).toHaveBeenLastCalledWith('pane-ls1-a')
+    t.currentWsId.value = 'ws-mine'
+    t.activePane.value = 'pane-1'
+    await flush()
+    expect(t.api.focus).toHaveBeenLastCalledWith(null)
   })
 })

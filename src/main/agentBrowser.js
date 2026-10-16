@@ -40,6 +40,7 @@ import { allowedBrowserUrl, normalizeBrowserInput, BLANK_URL } from '../shared/b
 import { buildSnapshot, MAX_SNAPSHOT_CHARS, MAX_FRAMES } from './agentBrowserSnapshot'
 import { BrowserInputError, resolveRef, click, putText, pressKey, wheel, elementCenter, frameElementCenter, focusedField, navigationKey, parseKeyCombo, isolatedWorld, rememberSecrets } from './agentBrowserInput'
 import { shortcutOf } from './browserGuest'
+import { leaseDebugger } from './pageDebugger'
 
 export const AGENT_OPS = ['pages', 'open', 'navigate', 'snapshot', 'click', 'fill', 'type', 'press', 'scroll', 'screenshot', 'console', 'wait']
 // An answer's text, at most (characters).
@@ -176,7 +177,7 @@ export function createAgentBrowser({ verify, enabled = () => true, ask, guestByI
   function stateOf(guest) {
     let s = pages.get(guest.id)
     if (!s) {
-      s = { refMap: null, navKey: null, queue: Promise.resolve(), idle: null, agent: null, console: [], attached: false, listener: null, world: null, secretIds: new Set(), frames: new Map() }
+      s = { refMap: null, navKey: null, queue: Promise.resolve(), idle: null, agent: null, console: [], attached: false, lease: null, listener: null, world: null, secretIds: new Set(), frames: new Map() }
       pages.set(guest.id, s)
       guest.once('destroyed', () => forget(guest.id))
     }
@@ -186,6 +187,7 @@ export function createAgentBrowser({ verify, enabled = () => true, ask, guestByI
   function forget(id) {
     const s = pages.get(id)
     if (s && s.idle) clearTimeout(s.idle)
+    if (s && s.lease) s.lease.release()
     pages.delete(id)
     revoked.delete(id)
   }
@@ -201,6 +203,9 @@ export function createAgentBrowser({ verify, enabled = () => true, ask, guestByI
   }
 
   // --- The debugger -------------------------------------------------------------
+  // The page's debugger is shared (pageDebugger.js: Live Share may watch the
+  // page too): the agents hold a lease on it while one drives the page, and
+  // letting it go detaches it only if nobody else holds it.
   function sender(guest, sessionId = null) {
     return sessionId ? (method, params = {}) => guest.debugger.sendCommand(method, params, sessionId) : (method, params = {}) => guest.debugger.sendCommand(method, params)
   }
@@ -237,12 +242,22 @@ export function createAgentBrowser({ verify, enabled = () => true, ask, guestByI
     if (revoked.has(guest.id)) throw fail('stopped_by_user', 'The user stopped agents from driving this page. Ask them, or open another page with browser_open.')
     if (!enabled()) throw fail('disabled', 'The user turned off "Let agents use the browser" (Tessel Settings > Agents).')
   }
+  // The debugger went away on its own (the page closed, its devtools opened).
+  function dropped(s) {
+    s.lease = null
+    s.listener = null
+    s.attached = false
+    s.world = null
+    s.frames.clear()
+  }
   async function attach(guest, s) {
     allowed(guest)
-    const dbg = guest.debugger
-    if (!dbg.isAttached()) {
+    if (!s.lease || !s.lease.active) {
+      s.lease = null
+      s.listener = null
+      s.attached = false
       try {
-        dbg.attach('1.3')
+        s.lease = leaseDebugger(guest, 'agent', { onDetach: () => dropped(s) })
       } catch (err) {
         throw fail('debugger_busy', `Tessel could not take this page's debugger (${String(err && err.message).slice(0, 120)}). Close its devtools and try again.`)
       }
@@ -270,14 +285,7 @@ export function createAgentBrowser({ verify, enabled = () => true, ask, guestByI
           sender(guest, sessionId)('Page.handleJavaScriptDialog', { accept: !!params && params.type === 'alert' }).catch(() => {})
         }
       }
-      dbg.on('message', s.listener)
-      dbg.once('detach', () => {
-        dbg.removeListener('message', s.listener)
-        s.listener = null
-        s.attached = false
-        s.world = null
-        s.frames.clear()
-      })
+      s.lease.on(s.listener)
     }
     if (!s.attached) {
       const cdp = sender(guest)
@@ -293,13 +301,27 @@ export function createAgentBrowser({ verify, enabled = () => true, ask, guestByI
     }
     return sender(guest)
   }
+  // The agents let the page's debugger go. Another holder keeps it attached:
+  // what the agents turned on is undone as a detach would (the page no longer
+  // behaves as focused, no more frames attached for them); their listener
+  // goes with their lease (dialogs are the page's own again).
   function detach(guest, s) {
-    try {
-      if (guest && !guest.isDestroyed() && guest.debugger.isAttached()) guest.debugger.detach()
-    } catch {
-      // gone
+    const lease = s && s.lease
+    if (lease) {
+      s.lease = null
+      if (lease.active && !lease.alone && guest && !guest.isDestroyed()) {
+        lease.send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => {})
+        lease.send('Target.setAutoAttach', { autoAttach: false, waitForDebuggerOnStart: false, flatten: true }).catch(() => {})
+        for (const sessionId of s.frames.keys()) lease.send('Target.detachFromTarget', { sessionId }).catch(() => {})
+      }
+      try {
+        lease.release()
+      } catch {
+        // gone
+      }
     }
     if (s) {
+      s.listener = null
       s.attached = false
       s.world = null
       s.frames.clear()
@@ -317,8 +339,8 @@ export function createAgentBrowser({ verify, enabled = () => true, ask, guestByI
     const s = pages.get(id)
     if (s && s.idle) clearTimeout(s.idle)
     if (s) s.idle = null
-    const guest = guestById(id)
-    if (guest) detach(guest, s)
+    // The lease goes even when the window no longer names the page.
+    if (s) detach(guestById(id) || null, s)
     send('browser:agentControl', { webContentsId: id, active: false, ...(stopped ? { stopped: true } : {}) })
   }
 

@@ -25,11 +25,14 @@
 // Both sides say what they speak beyond the protocol version in the sealed
 // join and welcome (SHARE_FEATURES): an older Tessel sends none and ignores
 // them, so a host and a guest of different versions still work together
-// (only without the conversation).
+// (only without the conversation). Besides 'chat' (this file): 'agents' (the
+// host lists the agents a guest may ask for, and a guest without the right
+// to open asks the host instead) and 'presence' (the guest says which of the
+// host's panes it has on screen, for the host's eyes only), shareHost.js.
 
 import { KNOWN_HARNESS_TAG_NAMES } from '../../shared/harnessInjectedTurns.js'
 
-export const SHARE_FEATURES = Object.freeze(['chat'])
+export const SHARE_FEATURES = Object.freeze(['chat', 'agents', 'presence'])
 export const cleanFeatures = (list) => (Array.isArray(list) ? [...new Set(list.filter((f) => typeof f === 'string' && SHARE_FEATURES.includes(f)))] : [])
 
 export const CHAT_LIMITS = Object.freeze({

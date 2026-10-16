@@ -2,6 +2,10 @@
 // One place to open anything: pick a terminal or an agent, and where it goes.
 // Used from the toolbar's "New" button and from a pane's own menu (then the
 // new pane opens next to that pane). App owns what actually happens.
+// In a Live Share project (hostMenu), it lists what opens on the host's
+// computer instead: the host's shell and the agents the host offers; the
+// host places it beside their active pane, and without the right to open,
+// the host is asked first.
 import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 import { settings } from '../settings'
@@ -21,6 +25,9 @@ const props = defineProps({
   // A project on this computer: Claude Code and Codex may start on another
   // of their accounts (on an SSH host, they use the host's sign-in).
   accountChoice: { type: Boolean, default: true },
+  // A Live Share project of a host that lists its agents: { host, agents:
+  // [{ id, name }], canOpen } (null: this computer's menu).
+  hostMenu: { type: Object, default: null },
   x: { type: Number, default: 0 },
   y: { type: Number, default: 0 }
 })
@@ -68,6 +75,9 @@ const placements = computed(() => [
     line: 'M1.5 8h13'
   }
 ])
+
+const hostAgents = computed(() => (props.hostMenu && Array.isArray(props.hostMenu.agents) ? props.hostMenu.agents : []))
+const hostName = computed(() => (props.hostMenu && props.hostMenu.host) || '?')
 
 const whereText = computed(() => {
   if (!props.targetTitle) return t('pane.launch.opensHere', 'Opens in this workspace')
@@ -147,6 +157,32 @@ onMounted(async () => {
     @keydown="onKeydown"
     @pointerdown.stop
   >
+    <!-- A Live Share project: what opens on the host's computer. -->
+    <template v-if="hostMenu">
+      <div class="launch-where">
+        <div class="launch-where-text" data-test="launch-host-where" v-text="t('liveShare.launch.where', 'Opens on {{host}}’s computer, beside their active pane', { host: hostName })"></div>
+      </div>
+      <div class="launch-section" v-text="t('liveShare.launch.section', 'On {{host}}’s computer', { host: hostName })"></div>
+      <div class="launch-row">
+        <button class="launch-item is-default" role="menuitem" data-test="launch-host-terminal" @click="emit('launch', { kind: 'shell', id: 'host' })">
+          <BrandIcon kind="terminal" :size="16" />
+          <span class="launch-name" v-text="t('liveShare.launch.terminal', 'Terminal ({{host}}’s shell)', { host: hostName })"></span>
+        </button>
+      </div>
+      <div v-for="agent in hostAgents" :key="agent.id" class="launch-row">
+        <button class="launch-item" role="menuitem" :data-test="'launch-host-agent-' + agent.id" @click="emit('launch', { kind: 'agent', id: agent.id })">
+          <BrandIcon :kind="agent.id" :label="agent.name" :size="16" />
+          <span class="launch-name">{{ agent.name }}</span>
+        </button>
+      </div>
+      <p v-if="!hostAgents.length" class="launch-empty" data-test="launch-host-no-agents" v-text="t('liveShare.launch.noAgents', '{{host}} offers no agents.', { host: hostName })"></p>
+      <p v-if="!hostMenu.canOpen" class="launch-empty" data-test="launch-host-asks" v-text="t('liveShare.launch.asks', '{{host}} is asked first: it opens once they say yes.', { host: hostName })"></p>
+      <div class="launch-foot">
+        <kbd>↑</kbd><kbd>↓</kbd> {{ t('pane.launch.keysMove', 'to move,') }} <kbd>Enter</kbd> {{ t('pane.launch.keysOpen', 'to open,') }}
+        <kbd>Esc</kbd> {{ t('pane.launch.keysClose', 'to close') }}
+      </div>
+    </template>
+    <template v-else>
     <div class="launch-where">
       <div class="launch-seg" role="radiogroup" :aria-label="t('pane.launch.whereToOpen', 'Where to open')">
         <button
@@ -343,5 +379,6 @@ onMounted(async () => {
       <kbd>↑</kbd><kbd>↓</kbd> {{ t('pane.launch.keysMove', 'to move,') }} <kbd>Enter</kbd> {{ t('pane.launch.keysOpen', 'to open,') }}
       <kbd>Esc</kbd> {{ t('pane.launch.keysClose', 'to close') }}
     </div>
+    </template>
   </div>
 </template>

@@ -299,9 +299,11 @@
       "renameLabel": "Renommer le projet",
       "actions": "Actions du projet",
       "createWorkspace": "Créer un espace de travail pour {{name}}",
-      "liveHost": "Vous partagez ce projet en Live Share",
       "liveGuest": "Une session Live Share : ces panneaux tournent sur l’ordinateur de l’hôte",
-      "liveBadge": "LIVE"
+      "liveBadge": "LIVE",
+      "liveHostWho": "Vous partagez ce projet en Live Share. Connectés ici : {{names}}",
+      "liveHostNobody": "Vous partagez ce projet en Live Share. Personne n'est encore connecté ici.",
+      "liveWho": "Connectés ici :"
     },
     "message": {
       "teamPlaceholder": "Écrire à chaque agent de {{team}}… (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)",

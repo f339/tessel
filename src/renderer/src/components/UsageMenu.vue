@@ -10,14 +10,24 @@ import ThemedSelect from './ui/ThemedSelect.vue'
 // Roster and provider flyout patterns inspired by Orca UsageRosterPanel,
 // ProviderPanel and CodexSwitcherMenu (MIT, Lovecast, 2026); independent Vue UI.
 // Amber from 60 %, red from 80 % (the reference's thresholds); an old reading says so.
+// A Live Share guest the host lets see its usage also gets a section of the
+// host's readings (hostUsage), read only: no refresh, accounts, reset or
+// history there.
 import { RefreshCw } from 'lucide-vue-next'
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import BrandIcon from './BrandIcon.vue'
 import { settings } from '../settings'
 import { displayedUsagePercent, usagePercentLabel } from '../usagePercent'
 import { loadUsageProviders } from '../usageProviders'
+import { cleanHostUsage, latestUpdate } from '../hostUsage'
 import { t, intlLocale } from '../i18n'
 
+const props = defineProps({
+  // A Live Share host's usage, as its Tessel sent it (hostUsage.js), or null.
+  hostUsage: { type: Object, default: null },
+  // That host's name, for the section's title.
+  hostName: { type: String, default: '' }
+})
 const emit = defineEmits(['details', 'accounts'])
 const NAMES = {
   claude: 'Claude Code', // i18n-ignore
@@ -922,6 +932,21 @@ function toggle() {
 const shownPct = (used) => displayedUsagePercent(used, settings.usagePercentageDisplay)
 const pctLabel = (used) => usagePercentLabel(used, settings.usagePercentageDisplay)
 const emptyTitle = () => t('usage.menu.buttonTitleEmpty', "Usage of your agents' quotas")
+
+// --- A Live Share host's usage -------------------------------------------------------
+// Only the fields hostUsage.js keeps (never an account), shown with the view
+// chosen here (Detailed / Compact); nothing in it reads, signs in or resets.
+const hostProviders = computed(() => cleanHostUsage(props.hostUsage))
+const hostTitle = computed(() => t('usage.menu.hostUsage', '{{host}}’s usage', { host: props.hostName || t('usage.menu.theHost', 'The host') }))
+const hostUpdated = computed(() => updatedText({ updatedAt: latestUpdate(hostProviders.value) }))
+// A provider the host could not read: a fixed label for why (its own words
+// never come).
+function hostStatusText(p) {
+  if (p.status === 'signin') return t('usage.menu.hostSignIn', 'The host needs to sign in again')
+  if (p.status === 'unsupported') return t('usage.menu.unsupported', 'No longer supported')
+  if (p.status === 'error') return t('usage.menu.couldNotRead', 'Usage could not be read')
+  return t('usage.menu.hostNoReading', 'No reading yet')
+}
 </script>
 
 <template>
@@ -1126,6 +1151,45 @@ const emptyTitle = () => t('usage.menu.buttonTitleEmpty', "Usage of your agents'
             <p v-if="a.observedAt && windows(a).length" class="usage-observed">
               {{ observedText(a.observedAt) }}
             </p>
+          </div>
+        </section>
+        <!-- A Live Share host's usage: read only (no refresh, accounts,
+             reset or history), with when the host last read it. -->
+        <section v-if="hostUsage" class="usage-host" data-test="usage-host">
+          <header class="usage-host-head">
+            <strong>{{ hostTitle }}</strong><span data-test="usage-host-updated">{{ hostUpdated }}</span>
+          </header>
+          <p v-if="!hostProviders.length" class="notif-empty">{{ t('usage.menu.hostEmpty', 'The host has no usage to show yet.') }}</p>
+          <div v-for="a in hostProviders" :key="a.id" class="usage-agent" :data-test="'usage-host-row-' + a.id">
+            <div class="usage-roster-row usage-host-row">
+              <span class="usage-brand"
+                ><BrandIcon :kind="a.id === 'opencode-go' ? 'opencode' : a.id" :size="16" :label="agentName(a)"
+              /></span>
+              <span class="usage-roster-name"
+                >{{ agentName(a) }}<span v-if="a.plan" class="usage-plan"> &middot; {{ a.plan }}</span></span
+              >
+              <span v-if="mode === 'compact' && summaryWindow(a)" class="usage-summary" :class="{ stale: stale(a, summaryWindow(a)) }" :title="summaryTitle(a)">
+                <span v-if="stale(a, summaryWindow(a))" class="usage-old">{{ t('usage.menu.lastSeen', 'last seen') }}</span>
+                <span v-else-if="shortReset(summaryWindow(a).resetsAt)" class="usage-countdown">{{ shortReset(summaryWindow(a).resetsAt) }}</span>
+                <span class="usage-summary-pct" :class="'usage-level-' + level(summaryWindow(a).usedPct)">{{ shownPct(summaryWindow(a).usedPct) }}%</span>
+              </span>
+              <span v-else-if="!a.windows.length" class="usage-no-data">{{ hostStatusText(a) }}</span>
+            </div>
+            <div v-if="mode === 'detailed'" class="usage-provider-detail">
+              <p v-if="!a.windows.length" class="usage-none">{{ hostStatusText(a) }}</p>
+              <div v-for="w in a.windows" :key="w.label" class="usage-window" :class="{ stale: stale(a, w) }">
+                <div class="usage-line">
+                  <span>{{ windowLabel(w.label) }}</span><span class="usage-pct" :class="'usage-level-' + level(w.usedPct)">{{ shownPct(w.usedPct) }}%</span>
+                </div>
+                <div class="usage-bar">
+                  <div class="usage-fill" :class="level(w.usedPct)" :style="{ width: shownPct(w.usedPct) + '%' }"></div>
+                </div>
+                <div class="usage-reset">
+                  {{ resetText(w.resetsAt) }}<span v-if="stale(a, w)"> &middot; {{ t('usage.menu.lastKnownReadingLower', 'last known reading') }}</span>
+                </div>
+              </div>
+              <p v-if="a.windows.length" class="usage-observed">{{ updatedText(a) }}</p>
+            </div>
           </div>
         </section>
       </div>
@@ -1809,6 +1873,31 @@ const emptyTitle = () => t('usage.menu.buttonTitleEmpty', "Usage of your agents'
 .usage-roster.compact .usage-roster-row {
   padding-top: 6px;
   padding-bottom: 6px;
+}
+/* A Live Share host's usage: its own titled block, rows that open nothing. */
+.usage-host {
+  border-top: 1px solid var(--border);
+}
+.usage-host-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 10px 13px 4px;
+}
+.usage-host-head strong {
+  margin-right: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.usage-host-head > span {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+.usage-host-row,
+.usage-host-row:hover {
+  background: transparent;
+  cursor: default;
 }
 .usage-brand {
   flex: 0 0 23px;

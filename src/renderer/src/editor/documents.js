@@ -16,12 +16,15 @@ import { pathKey, fileName, autoSaveDelay, minimalEdit, mainEol } from './editor
 import { pickLanguage } from '../../../shared/editorLanguage'
 import { createSaveQueue } from './saveQueue'
 import { keepSavedVersion } from './localHistory'
+import { isLsharePath } from '../../../shared/liveSharePath'
+import { accessOf } from '../liveShareGuestAccess'
 import { t } from '../i18n'
 
 const unknownError = () => t('editor.doc.unknownError', 'unknown error')
 
 // key -> { path, key, name, loading, error, errorCode, dirty, deleted,
-//          external, saving, bom, sig, language }
+//          external, saving, bom, sig, language, readOnly }
+// readOnly: a Live Share host's answer said this guest may not save it.
 export const docs = reactive({})
 // key -> { model, savedAlt, baseline, owners: Set, autoTimer, sub, applying,
 //          recentWrite, diskText }
@@ -40,6 +43,21 @@ export const getDoc = (path) => docs[pathKey(path)] || null
 export const modelOf = (path) => inner.get(pathKey(path))?.model || null
 export const ownersOf = (path) => [...(inner.get(pathKey(path))?.owners || [])]
 export const diskTextOf = (path) => inner.get(pathKey(path))?.diskText ?? null
+
+// --- A Live Share host's file ------------------------------------------------------
+// Saved only while the host lets this guest edit that project's files
+// (liveShareAccess.js) and its last read did not say read-only. Once the
+// session ended or the access was taken away, its tab is disconnected: the
+// text stays, read-only, to copy; nothing is read or watched again.
+export function isReadOnlyDoc(d) {
+  if (!d || !isLsharePath(d.path)) return false
+  const access = accessOf(d.path)
+  return !!d.readOnly || !access || !access.edit || access.state !== 'ok'
+}
+export function isDisconnectedDoc(d) {
+  const access = d ? accessOf(d.path) : null
+  return !!access && (access.state === 'ended' || access.state === 'no-access')
+}
 
 // Called on every user edit of a document (panes pin its preview tab).
 export function onDocEdited(fn) {
@@ -65,7 +83,8 @@ export function acquireDoc(path, owner) {
       saving: false,
       bom: false,
       sig: null,
-      language: 'plaintext'
+      language: 'plaintext',
+      readOnly: false
     }
     inner.set(key, {
       model: null,
@@ -159,6 +178,7 @@ async function load(key) {
   i.diskHash = res.hash || null
   d.language = lang
   d.deleted = false
+  if (isLsharePath(d.path)) d.readOnly = !!res.readOnly
   i.sub = model.onDidChangeContent(() => onEdit(key))
 }
 
@@ -193,7 +213,7 @@ function updateDirty(key) {
 // Auto-save waits while the file changed on disk under unsaved edits (the
 // banner asks what to do), and never brings back a deleted file (Orca).
 function autoSaveAllowed(d) {
-  return !!settings.editorAutoSave && d.dirty && !d.external && !d.deleted && !d.error
+  return !!settings.editorAutoSave && d.dirty && !d.external && !d.deleted && !d.error && !isReadOnlyDoc(d)
 }
 
 function scheduleAutoSave(key) {
@@ -221,6 +241,14 @@ export function saveDoc(path, { trigger = 'user' } = {}) {
     const i = inner.get(key)
     if (!d || !i || !i.model) return { ok: false, skipped: true, error: d && d.error ? d.error : t('editor.doc.notOpen', 'The file is not open.') }
     if (trigger === 'autosave' && !autoSaveAllowed(d)) return { ok: false, skipped: true }
+    // A Live Share host's file this guest may not save (any more).
+    if (isReadOnlyDoc(d)) {
+      const error = isDisconnectedDoc(d)
+        ? t('editor.doc.disconnected', 'The Live Share session for {{name}} ended: copy your text to keep it.', { name: d.name })
+        : t('editor.doc.readOnly', '{{name}} is read-only: the host has not let you edit files.', { name: d.name })
+      hooks.toast(error, { kind: 'error', timeout: 8000 })
+      return { ok: false, readOnly: true, error }
+    }
     // Changed on disk under unsaved edits: not written over until the banner's
     // "Keep My Edits" (or Reload) says which version wins.
     if (d.external) {
@@ -401,6 +429,8 @@ async function onDiskChange(change) {
   const d = docs[key]
   const i = inner.get(key)
   if (!d || !i) return
+  // Disconnected (the Live Share session ended): its text stays as it is.
+  if (isDisconnectedDoc(d)) return
   if (!change.exists) {
     d.deleted = true
     clearTimeout(i.autoTimer)
@@ -434,6 +464,7 @@ function absorbDisk(key, d, res) {
   d.sig = res.sig || null
   d.bom = !!res.bom
   i.diskHash = res.hash || null
+  if (isLsharePath(d.path)) d.readOnly = !!res.readOnly
   const model = i.model
   const sameText = normEol(res.text, model.getEOL()) === normEol(i.baseline, model.getEOL())
   const sameEol = !mainEol(res.text) || mainEol(res.text) === model.getEOL()

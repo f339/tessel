@@ -14,7 +14,7 @@ import { join } from 'path'
 import { createShareHost } from '../liveShare/shareHost'
 import { createShareGuest } from '../liveShare/shareGuest'
 import { newSecret, newSigningKey } from '../liveShare/shareCrypto'
-import { guestChatPayload, cleanChatMessage, mergeChatEvents, guestText, cleanRoots, CHAT_LIMITS, SHARE_FEATURES } from '../liveShare/shareChat'
+import { guestChatPayload, cleanChatMessage, mergeChatEvents, guestText, cleanRoots, CHAT_LIMITS } from '../liveShare/shareChat'
 import WebSocket from 'ws'
 import { registerLiveShare, cleanHostChats } from '../liveShare'
 
@@ -190,7 +190,8 @@ describe('Live Share conversations over the wire', () => {
     t.answers = { Alex: { yes: true, projects: ['ws-a'] } }
     const conn = await share(t)
     const alex = await joined(conn, 'Alex')
-    expect(alex.features).toEqual(SHARE_FEATURES)
+    // What this host speaks (no agents listed, no presence shown here).
+    expect(alex.features).toEqual(['chat'])
     expect(alex.projects.map((p) => [p.id, p.chats.map((c) => c.id)])).toEqual([['ws-a', ['a1', 'a2']]])
 
     // Not asked: nothing read, nothing sent.
@@ -276,7 +277,7 @@ describe('Live Share conversations over the wire', () => {
     alex.client.chat('a1', true)
     alex.client.chat('b1', true)
     await until(() => t.watching.length === 2)
-    host.setProjects(guestOf('Alex').id, ['ws-b'])
+    host.setGrant(guestOf('Alex').id, { projects: ['ws-b'] })
     await until(() => t.watching.some(([id, on]) => id === 'a1' && !on))
     const before = alex.chats.length
     host.sendChat('a1', { ok: true, events: [{ type: 'assistant', messageId: 'm1', text: 'AFTER', imported: true }] })
@@ -381,7 +382,7 @@ describe('registerLiveShare: a guest looks at a host’s agent pane as a chat', 
       { id: 'ws-1', layout: { project: 'site', tree, activeId: 'pane-1-cc' }, chats },
       { id: 'ws-2', layout: { project: 'other', tree: leaf('pane-9-cc'), activeId: null }, chats: [{ id: 'pane-9-cc', agentId: 'claude', sessionId: UUID, terminal: true, roots: [] }] }
     ])
-    await guest.handle['liveShare:join'](null, { invite: started.invite, name: 'Alex' })
+    await guest.handle['liveShare:join'](null, { invite: started.invites[0].code, name: 'Alex' })
     const ask = await until(() => host.last('liveShare:ask'))
     await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true, projects })
     const joined = await until(() => guest.events('liveShare:guest').find((s) => s.state === 'joined' && s.chats && s.chats.length))
@@ -431,7 +432,7 @@ describe('registerLiveShare: a guest looks at a host’s agent pane as a chat', 
     await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: true })
     await until(() => reader.opened.length)
     expect(reader.opened[0]).toEqual({ agent: 'claude', sessionId: UUID, paneId: 'pane-1-cc', accountId: null })
-    await host.handle['liveShare:guestProject'](null, { guestId, project: 'ws-1', on: false })
+    await host.handle['liveShare:access'](null, { subject: guestId, project: 'ws-1', on: false })
     await until(() => reader.closed.length)
     await until(() => guest.last('liveShare:guest').chats.length === 0)
     expect(await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: true })).toEqual({ ok: false, code: 'missing' })
@@ -442,29 +443,29 @@ describe('registerLiveShare: a guest looks at a host’s agent pane as a chat', 
     await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: true })
     const first = await until(() => guest.last('liveShare:chat'))
     const n = first.events.length
-    await until(() => host.last('liveShare:host').reading?.length)
-    expect(host.last('liveShare:host').reading).toEqual([{ id: 'pane-1-cc', guests: [guestId] }])
+    await until(() => host.last('liveShare:presence')?.length)
+    expect(host.last('liveShare:presence')).toEqual([{ id: 'pane-1-cc', guests: [{ id: guestId, watching: false, typing: false, reading: true }] }])
     // The file grows by one answer: the window gets the whole conversation.
     reader.send('transcriptView:event', { viewId: 'tv-1', ...hostRead(), events: [...hostRead().events, { type: 'assistant', messageId: 'm9', text: 'one more', at: 9 }] })
     const next = await until(() => guest.events('liveShare:chat').find((m) => m.events && m.events.length === n + 1), 3000)
     expect(next.events.at(-1).text).toBe('one more')
     expect(next.events.slice(0, n)).toEqual(first.events)
     await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: false })
-    await until(() => host.last('liveShare:host').reading.length === 0)
+    await until(() => host.last('liveShare:presence').length === 0)
   })
 
   it('guests starting and stopping a watch over and over: the host’s window is told at most every 250 ms', async () => {
     const { host, guest } = await sharedAndJoined()
-    const before = host.events('liveShare:host').length
+    const before = host.events('liveShare:presence').length
     for (let i = 0; i < 10; i++) {
       await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: true })
       await guest.handle['liveShare:chatWatch'](null, { id: 'pane-ls1-1-cc', on: false })
     }
     await wait(700)
-    const told = host.events('liveShare:host').length - before
+    const told = host.events('liveShare:presence').length - before
     expect(told).toBeGreaterThan(0)
     expect(told).toBeLessThanOrEqual(4)
-    expect(host.last('liveShare:host').reading).toEqual([])
+    expect(host.last('liveShare:presence')).toEqual([])
   })
 
   it('a conversation file not there: read again a few times, less and less often, then left alone', async () => {
@@ -485,7 +486,7 @@ describe('registerLiveShare: a guest looks at a host’s agent pane as a chat', 
     mains.push(host, guest)
     const started = await host.handle['liveShare:start'](null, { name: 'Cedric', projects: ['ws-1'] })
     host.on['liveShare:layouts'](null, [{ id: 'ws-1', layout: { project: 'site', tree, activeId: null }, chats }])
-    await guest.handle['liveShare:join'](null, { invite: started.invite, name: 'Alex' })
+    await guest.handle['liveShare:join'](null, { invite: started.invites[0].code, name: 'Alex' })
     const ask = await until(() => host.last('liveShare:ask'))
     await host.handle['liveShare:approve'](null, { guestId: ask.guestId, yes: true, projects: ['ws-1'] })
     const joined = await until(() => guest.events('liveShare:guest').find((s) => s.state === 'joined' && s.panes.length))

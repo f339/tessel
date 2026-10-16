@@ -26,6 +26,7 @@ import { computed, inject, nextTick, onBeforeUnmount, onMounted, provide, reacti
 import { Ellipsis } from 'lucide-vue-next'
 import BrandIcon from '../BrandIcon.vue'
 import LiveShareReaders from '../LiveShareReaders.vue'
+import LiveSharePresence from '../LiveSharePresence.vue'
 import AgentChildren from '../AgentChildren.vue'
 import NativeChatView from './orca/NativeChatView.vue'
 import { isFocusApprovalKey } from './orca/native-chat-approval-card.js'
@@ -765,7 +766,8 @@ defineExpose({ start, send, interrupt, focusPendingApproval, focusComposer: () =
         <PaneHoverDetails :info="hoverInfo" />
       </HoverCardContent>
       <div class="pane-nav-actions" @mousedown.stop>
-        <!-- Live Share host: guests reading this conversation now -->
+        <!-- Live Share host: guests watching, typing in, reading this pane now -->
+        <LiveSharePresence :pane-id="node.id" />
         <LiveShareReaders :pane-id="node.id" />
         <!-- The same conversation in a terminal (as the terminal agents' chat
              toggle): it goes on there, resumed. -->

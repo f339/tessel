@@ -21,20 +21,30 @@
 // (shareChat.js SHARE_FEATURES), the welcome what the host does (onFeatures;
 // an older host says nothing: none). With 'chat' on both sides, chat(id, on)
 // starts or stops watching an agent pane's conversation (read only), which
-// comes with onChat(id, message).
+// comes with onChat(id, message). With 'agents', the host lists the agents
+// this guest may ask for (onAgents), and asking without the right to open
+// asks the host. With 'presence', focus(id) tells the host which of its panes
+// this guest has on screen (only for the host's eyes; at most twice a second,
+// the latest).
+// The guest's identity key (identityKey: made once on this computer, kept in
+// liveshare-identity.json by liveShare.js): its public half and a proof that it holds it (shareCrypto.js
+// signIdentity, bound to this connection) go with a new join, so a host that
+// trusts it lets it in without asking. An older host ignores them.
 //
 // Tessel itself is reached only through the callbacks, so this file runs
 // (and is tested) without Electron.
 import WebSocket from 'ws'
 import { fallbackLookup } from './shareDns.js'
-import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitment, signBinding, bindingSigned, NONCE_BYTES, KX_BYTES } from './shareCrypto.js'
+import { newNonce, newKeyPair, sharedSecret, sessionKeys, createChannel, commitment, signBinding, bindingSigned, signIdentity, NONCE_BYTES, KX_BYTES } from './shareCrypto.js'
 import { SHARE_FEATURES, cleanFeatures } from './shareChat.js'
+import { cleanRights } from '../../shared/liveShareRights'
 
 const CONNECT_TIMEOUT_MS = 20000
 const SILENCE_MS = 70000
 const MAX_FRAME = 64 * 1024 * 1024 // a snapshot of a screen
 // shareHost.js SHARE_PROTOCOL: 4, several projects.
 const PROTOCOL = 4
+const FOCUS_MS = 500
 
 // The host closed before the handshake: why (shareHost.js CLOSE_*).
 const CLOSE_REASONS = { 4001: 'expired', 4002: 'busy', 1013: 'busy', 4003: 'outdated' }
@@ -47,7 +57,8 @@ const BYE_REASONS = new Set(['stopped', 'restarting', 'denied', 'removed', 'repl
 // projects this guest sees: [{ id, layout, panes }]),
 // onSnapshot(id, data, cols, rows), onData(id, data), onExit(id, exitCode),
 // onRestart(id) (the pane restarted on the host: a new screen follows),
-// onRights(rights), onNotice(code), onClosed(reason) (once, at the end).
+// onRights(rights), onNotice(code), onClosed(reason) (once, at the end),
+// onAgents(list) (the agents the host lists: [{ id, name }], unchecked).
 // onHostKey(raw) (the host's key, from the first welcome). onFeatures(list)
 // (what the host speaks beyond the protocol, from each welcome), onChat(id,
 // message) (an agent pane's conversation: { ok, events, truncated, code }).
@@ -55,7 +66,7 @@ const BYE_REASONS = new Set(['stopped', 'restarting', 'denied', 'removed', 'repl
 // back: coming back with it (shareHost.js rejoin), no question; hostKey:
 // the host's key kept from the first welcome (a Buffer). features: what this
 // Tessel speaks beyond the protocol (SHARE_FEATURES; an older Tessel: none).
-export function createShareGuest({ url, secret, name, signingKey, back = false, hostKey = null, callbacks, features: speaks = SHARE_FEATURES }) {
+export function createShareGuest({ url, secret, name, signingKey, identityKey = null, back = false, hostKey = null, callbacks, features: speaks = SHARE_FEATURES }) {
   let socket = null
   let channel = null
   let code = null
@@ -65,12 +76,20 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
   let mine = null // { nonce, keys } until the host's keys came
   let binding = null // this connection's, as both sides see it
   let welcomed = false // the host's welcome came, its signature checked
+  let hostSpeaks = new Set() // what the host speaks beyond the protocol (its welcome)
+  // The pane this guest has on screen, as last said to the host, and the
+  // next one to say (presence).
+  let focusSent = null
+  let focusWanted = null
+  let focusTimer = null
+  let focusAt = 0
 
   function finish(reason) {
     if (closed) return
     closed = true
     clearTimeout(timer)
     clearTimeout(silence)
+    clearTimeout(focusTimer)
     try {
       socket?.close(1000)
     } catch {
@@ -90,7 +109,24 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
     socket.send(channel.seal(message))
   }
 
-  const rightsOf = (r) => (r && typeof r === 'object' ? { type: !!r.type, open: !!r.open, close: !!r.close } : null)
+  // The pane on screen, to a host that listens (once welcomed): at most every
+  // FOCUS_MS, the latest.
+  function sayFocus() {
+    if (!welcomed || !hostSpeaks.has('presence') || focusTimer || closed) return
+    const go = () => {
+      focusTimer = null
+      if (closed || focusWanted === focusSent) return
+      focusSent = focusWanted
+      focusAt = Date.now()
+      send({ t: 'focus', id: focusSent })
+    }
+    const later = focusAt + FOCUS_MS - Date.now()
+    if (later > 0) focusTimer = setTimeout(go, later)
+    else go()
+  }
+
+  // Rights as this Tessel knows them (an id it does not know is never kept).
+  const rightsOf = (r) => (r && typeof r === 'object' ? cleanRights(r) : null)
 
   // Before the host's checked welcome, only its welcome, its "wait for my
   // answer" (a new guest only) and its goodbye count: anything else is
@@ -114,9 +150,13 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
         welcomed = true
         // What it may do first: the window takes it as the starting point.
         if (msg.rights) callbacks.onRights?.(rightsOf(msg.rights))
-        callbacks.onFeatures?.(cleanFeatures(msg.features))
+        hostSpeaks = new Set(cleanFeatures(msg.features))
+        callbacks.onFeatures?.([...hostSpeaks])
+        if (hostSpeaks.has('agents') && Array.isArray(msg.agents)) callbacks.onAgents?.(msg.agents)
         callbacks.onState?.('joined', { host: String(msg.host || '') })
         callbacks.onProjects?.(Array.isArray(msg.projects) ? msg.projects : [])
+        // A pane on screen before the welcome (or before a reconnect).
+        if (focusWanted !== null) sayFocus()
         return
       }
       case 'projects':
@@ -127,6 +167,9 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
         return
       case 'notice':
         callbacks.onNotice?.(String(msg.code || ''))
+        return
+      case 'agents':
+        if (hostSpeaks.has('agents') && Array.isArray(msg.agents)) callbacks.onAgents?.(msg.agents)
         return
       case 'snapshot':
         callbacks.onSnapshot?.(msg.id, String(msg.data || ''), msg.cols | 0, msg.rows | 0)
@@ -187,7 +230,10 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
     const sig = signBinding(signingKey, binding).toString('base64')
     const features = cleanFeatures(speaks)
     if (back) send({ t: 'join', name, features, rejoin: { key, sig } })
-    else send({ t: 'join', name, features, key, sig })
+    else {
+      const identity = identityKey ? { key: identityKey.publicRaw.toString('base64'), sig: signIdentity(identityKey, binding).toString('base64') } : undefined
+      send({ t: 'join', name, features, key, sig, ...(identity ? { identity } : {}) })
+    }
   }
 
   return {
@@ -229,6 +275,12 @@ export function createShareGuest({ url, secret, name, signingKey, back = false, 
     // The pane's screen again (this window reloaded).
     resync(id) {
       send({ t: 'resync', id })
+    },
+    // The host's pane this guest has on screen (null: none of the host's):
+    // said to a host that listens, at most every FOCUS_MS, the latest.
+    focus(id) {
+      focusWanted = typeof id === 'string' ? id : null
+      sayFocus()
     },
     // An agent pane's conversation watched (on) or no longer: read only.
     chat(id, on) {
